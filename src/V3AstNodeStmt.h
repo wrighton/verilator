@@ -1641,6 +1641,7 @@ public:
 };
 class AstAssignForce final : public AstNodeAssign {
     // Procedural 'force' statement
+    // @astgen op4 := activep : Optional[AstVarRef]  // Enables a live function RHS updater
 public:
     AstAssignForce(FileLine* fl, AstNodeExpr* lhsp, AstNodeExpr* rhsp)
         : ASTGEN_SUPER_AssignForce(fl, lhsp, rhsp) {}

@@ -74,6 +74,7 @@ public:
         bool m_isExternal = false;  // Synthetic force for the public force controls
         bool m_skipRdRefresh = false;  // finalizeRhsVars's force-rd-update block refreshes forceRd
         AstVarScope* m_rhsVarVscp = nullptr;  // Scope of the var containing RHSID
+        AstVarScope* m_activeVscp = nullptr;  // Enables evaluation of a live function RHS
         AstNodeExpr* m_rhsExprp = nullptr;  // Expression on RHS of this force assignment
         bool m_hasOpaquePath = false;  // Forces a member of a variable that is not bitwise
         // Owner index of the public force value bits this force keeps in sync with its RHS;
@@ -737,6 +738,9 @@ public:
                                                     hasArraySel, nullptr, rhsExprp});
         ForceInfo& finfo = pair.first->second;
         finfo.m_isExternal = forceStmtp->user2();
+        if (AstVarRef* const activep = forceStmtp->activep()) {
+            finfo.m_activeVscp = activep->varScopep();
+        }
         finfo.m_hasOpaquePath
             = !isBitwiseDType(varp) && !hasArraySel && !VN_IS(forceStmtp->lhsp(), VarRef);
         finfo.m_skipRdRefresh = skipRdRefresh;
@@ -832,9 +836,13 @@ public:
         return resultp;
     }
 
-    static AstNodeExpr* buildRhsDataExpr(FileLine* flp, const ForceInfo& finfo) {
+    static AstCExpr* newRhsAddrp(FileLine* flp, const ForceInfo& finfo) {
         UASSERT(finfo.m_rhsVarVscp, "RHS var scope not assigned");
-        return new AstVarRef{flp, finfo.m_rhsVarVscp, VAccess::READ};
+        AstCExpr* const addrp = new AstCExpr{flp, AstCExpr::Pure{}};
+        addrp->add("&(");
+        addrp->add(new AstVarRef{flp, finfo.m_rhsVarVscp, VAccess::READ});
+        addrp->add(")");
+        return addrp;
     }
 
     // A variable of the scope of 'info', named after its variable
@@ -991,6 +999,26 @@ public:
                 varp->addNextHere(rhsVarp);
                 finfo.m_rhsVarVscp = new AstVarScope{rhsFlp, scopep, rhsVarp};
                 scopep->addVarsp(finfo.m_rhsVarVscp);
+
+                // The RHS expression may call a method on a receiver that only exists
+                // while the force owns some of its original range.
+                if (finfo.m_activeVscp) {
+                    AstCMethodHard* const hasp = new AstCMethodHard{
+                        flp, new AstVarRef{flp, info.m_forceVecVscp, VAccess::READ},
+                        VCMethod::FORCE_HAS, makeConst32(flp, finfo.m_forceId)};
+                    hasp->addPinsp(makeConst32(flp, finfo.m_rangeLsb));
+                    hasp->addPinsp(makeConst32(flp, finfo.m_rangeMsb));
+                    hasp->dtypeSetBit();
+                    AstAssign* const activeAssignp = new AstAssign{
+                        flp, new AstVarRef{flp, finfo.m_activeVscp, VAccess::WRITE}, hasp};
+                    AstActive* const activep = new AstActive{
+                        flp, "force-rhs-active",
+                        new AstSenTree{flp, new AstSenItem{flp, AstSenItem::Combo{}}}};
+                    activep->senTreeStorep(activep->sentreep());
+                    activep->addProcsp(
+                        new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr, activeAssignp});
+                    scopep->addBlocksp(activep);
+                }
 
                 // always_comb forceRHS[id] = rhsExpr;
                 AstAssign* const rhsAssignp = new AstAssign{
@@ -1468,16 +1496,11 @@ class ForceConvertVisitor final : public VNVisitor {
             = info.m_hasArraySel && selLhsp && ForceState::getArraySelInfo(lhsp).m_hasBitSel
               && ForceState::isBitwiseDType(selLhsp->fromp())
               && (info.m_padMsb - info.m_padLsb + 1) < selLhsp->fromp()->width();
-        AstNodeExpr* const rhsDatap = ForceState::buildRhsDataExpr(flp, info);
-        AstCExpr* const rhsAddrp = new AstCExpr{flp};
-        rhsAddrp->add("&(");
-        rhsAddrp->add(rhsDatap);
-        rhsAddrp->add(")");
         AstCMethodHard* const addForceCallp = new AstCMethodHard{
             flp, new AstVarRef{flp, varInfop->m_forceVecVscp, VAccess::WRITE}, VCMethod::FORCE_ADD,
             ForceState::makeConst32(flp, info.m_rangeLsb)};
         addForceCallp->addPinsp(ForceState::makeConst32(flp, info.m_rangeMsb));
-        addForceCallp->addPinsp(rhsAddrp);
+        addForceCallp->addPinsp(ForceState::newRhsAddrp(flp, info));
         addForceCallp->addPinsp(
             ForceState::makeConst32(flp, arrayBitSel ? info.m_padLsb : info.m_rangeLsb));
         if (arrayBitSel) {
@@ -1485,6 +1508,7 @@ class ForceConvertVisitor final : public VNVisitor {
             addForceCallp->addPinsp(ForceState::makeConst32(flp, info.m_padMsb));
             addForceCallp->addPinsp(ForceState::makeConst32(flp, selLhsp->fromp()->width()));
         }
+        addForceCallp->addPinsp(ForceState::makeConst32(flp, info.m_forceId));
         addForceCallp->dtypeSetVoid();
         AstNodeStmt* const stmtp = addForceCallp->makeStmt();
 

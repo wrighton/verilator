@@ -2824,39 +2824,30 @@ class TaskVisitor final : public VNVisitor {
         }
     }
     void visit(AstAssignForce* nodep) override {
-        // Force statements cannot be converted to always blocks outside of a logic block
-        // This causes function calls on RHS of force assignments to be improperly inlined and
-        // called just once. To prevent this, we create a temporary variable for each function
-        // reference on RHS. This variable is declared in the nearest scope and gets a continuous
-        // assignment of the function, so it can be converted to always and properly inlined This
-        // temporary variable becomes the RHS of the force assignment
-        std::vector<AstNodeFTaskRef*> refs;
-        nodep->rhsp()->foreach([&refs](AstNodeFTaskRef* refp) { refs.push_back(refp); });
-        for (AstNodeFTaskRef* const refp : refs) {
+        AstExprStmt* const rhsp = VN_CAST(nodep->rhsp(), ExprStmt);
+        if (!rhsp) return;
 
-            // Create the temporary variable and its scope. Every function call gets its own
-            // variable in each scope, which is shared with the same call in other instances.
-            AstVarScope* const interVscp
-                = m_forceTmps.make(refp->fileline(), m_scopep, refp->dtypep(), refp->name());
+        FileLine* const flp = nodep->fileline();
+        AstVarScope* const vscp = m_forceTmps.make(flp, m_scopep, rhsp->dtypep());
+        AstVarScope* const activeVscp = m_forceTmps.make(flp, m_scopep, 1, "active");
+        nodep->activep(new AstVarRef{flp, activeVscp, VAccess::WRITE});
+        // An inactive RHS need not be evaluable (for example, it can have a null receiver).
+        AstAssign* const updatep
+            = new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, rhsp->cloneTree(false)};
+        AstIf* const ifp = new AstIf{flp, new AstVarRef{flp, activeVscp, VAccess::READ}, updatep};
+        AstSenTree* const sentreep = new AstSenTree{flp, new AstSenItem{flp, AstSenItem::Combo{}}};
+        AstActive* const activep = new AstActive{flp, "force-func-update", sentreep};
+        activep->senTreeStorep(activep->sentreep());
+        activep->addProcsp(new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr, ifp});
+        m_scopep->addBlocksp(activep);
 
-            // Recompute the helper in a combo block so any inlined function body stays
-            // inside schedulable logic rather than spilling statements at module scope.
-            AstAssign* const assignp = new AstAssign{
-                nodep->fileline(), new AstVarRef{nodep->fileline(), interVscp, VAccess::WRITE},
-                nodep->rhsp()->cloneTreePure(false)};
-            AstSenTree* const senTreep = new AstSenTree{
-                nodep->fileline(), new AstSenItem{nodep->fileline(), AstSenItem::Combo{}}};
-            AstActive* const activep
-                = new AstActive{nodep->fileline(), "force-func-update", senTreep};
-            activep->senTreeStorep(activep->sentreep());
-            activep->addProcsp(
-                new AstAlways{nodep->fileline(), VAlwaysKwd::ALWAYS, nullptr, assignp});
-            m_scopep->addBlocksp(activep);
-
-            // Replace RHS of force assignment with the temporary variable
-            refp->replaceWith(new AstVarRef{nodep->fileline(), interVscp, VAccess::READ});
-            VL_DO_DANGLING(refp->deleteTree(), refp);
-        }
+        // The force itself can run before combo logic sees newly assigned arguments.
+        // Sample the same pure RHS here so an immediately following read sees it.
+        rhsp->replaceWith(new AstVarRef{flp, vscp, VAccess::READ});
+        AstAssign* const samplep
+            = new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, rhsp};
+        nodep->addHereThisAsNext(samplep);
+        iterate(samplep);
     }
     void visit(AstForeach* nodep) override {  // LCOV_EXCL_LINE
         nodep->v3fatalSrc(

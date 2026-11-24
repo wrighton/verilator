@@ -1073,6 +1073,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(EVENT_IS_FIRED,                     "isFired",                PURE,   CLEAN,  false,      "") \
     macro(EVENT_IS_TRIGGERED,                 "isTriggered",            PURE,   CLEAN,  false,      "") \
     macro(FORCE_ADD,                          "addForce",               false,  CLEAN,  false,      "rrrr+") \
+    macro(FORCE_HAS,                          "hasForce",               PURE,   CLEAN,  false,      "rrr") \
     macro(FORCE_READ,                         "read",                   PURE,   CLEAN,  false,      "r") \
     macro(FORCE_READ_INDEX,                   "readIndex",              PURE,   CLEAN,  false,      "rr") \
     macro(FORCE_READ_SEL,                     "readSel",                PURE,   CLEAN,  false,      "TODO") \
