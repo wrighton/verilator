@@ -278,6 +278,42 @@ module t;
     qv = qe.map() with (item * 2);
     `checkh(qv.size, 0);
 
+    begin  // unique and unique_index of queues that differ in length or element order
+      int qq[$][$];
+      int qqv[$][$];
+      int qqi[$];
+      int lng[$];
+      int shrt[$];
+      for (int j = 0; j < 4096; ++j) lng.push_back(-1);
+      shrt.push_back(-1);
+      qq = '{lng, shrt, lng, shrt, '{0, 9}, '{9, 0}, '{0, 9}};
+      qqv = qq.unique;
+      `checkh(qqv.size, 4);
+      qqi = qq.unique_index;
+      `checkh(qqi.size, 4);
+    end
+    begin  // unique of dynamic arrays and of string queues
+      int qd[$][];
+      int qdv[$][];
+      string qs[$][$];
+      string qsv[$][$];
+      int lng[];
+      lng = new[4096];
+      qd = '{lng, '{0}, lng, '{0}};
+      qdv = qd.unique;
+      `checkh(qdv.size, 2);
+      qs = '{'{"b", "a"}, '{"a", "b"}, '{"b"}, '{"a", "b"}, '{"b", "a"}};
+      qsv = qs.unique;
+      `checkh(qsv.size, 3);
+    end
+    begin  // unique of fixed-size arrays that differ in element order
+      int qa[$][2];
+      int qav[$][2];
+      qa = '{'{0, 9}, '{9, 0}, '{0, 9}, '{9, 0}};
+      qav = qa.unique;
+      `checkh(qav.size, 2);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
