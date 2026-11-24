@@ -50,6 +50,9 @@ module lp_par (
     input bit do_off
 );
   localparam int LP = 2;
+  if (1) begin : cfg
+    localparam int I = 3;
+  end
   for (genvar i = 0; i < 4; ++i) begin : g
     int failures = 0;
     initial begin
@@ -63,6 +66,7 @@ module lp_par (
     task off();
       $assertoff(0, g[LP]);
       $assertoff(0, g[LP - 1]);
+      $assertoff(0, g[cfg.I]);
     endtask
   endclass
   initial begin
@@ -179,7 +183,7 @@ module t;
     `checkd(l0.g[0].failures, 1);
     `checkd(l0.g[1].failures, 0);
     `checkd(l0.g[2].failures, 0);
-    `checkd(l0.g[3].failures, 1);
+    `checkd(l0.g[3].failures, 0);
     `checkd(l1.g[0].failures, 1);
     `checkd(l1.g[1].failures, 1);
     `checkd(l1.g[2].failures, 1);
