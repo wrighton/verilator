@@ -1,0 +1,42 @@
+%Warning-PINMISSING: t/t_interface_param_unconn_bad.v:35:8: Instance has missing pin: 'port'
+   35 |   leaf c ();
+      |        ^
+                     t/t_interface_param_unconn_bad.v:22:9: ... Location of port declaration
+   22 |     ifc port,
+      |         ^~~~
+                     ... For warning description see https://verilator.org/warn/PINMISSING?v=latest
+                     ... Use "/* verilator lint_off PINMISSING */" and lint_on around source to disable this message.
+%Warning-PINMISSING: t/t_interface_param_unconn_bad.v:35:8: Instance has missing pin: 'mport'
+   35 |   leaf c ();
+      |        ^
+                     t/t_interface_param_unconn_bad.v:23:12: ... Location of port declaration
+   23 |     ifc.mp mport
+      |            ^~~~~
+%Error: t/t_interface_param_unconn_bad.v:35:8: Interface port 'port' is not connected to interface/modport pin expression
+                                             : ... note: In instance 't'
+   35 |   leaf c ();
+      |        ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_interface_param_unconn_bad.v:35:8: Interface port 'mport' is not connected to interface/modport pin expression
+                                             : ... note: In instance 't'
+   35 |   leaf c ();
+      |        ^
+%Error: t/t_interface_param_unconn_bad.v:22:5: Interface 'ifc' not connected as parent's interface not connected
+                                             : ... note: In instance 't.c'
+                                             : ... Perhaps caused by another error on the parent interface that needs resolving
+                                             : ... Or, perhaps intended an interface instantiation but are missing parenthesis (IEEE 1800-2023 25.3)?
+   22 |     ifc port,
+      |     ^~~
+%Error: t/t_interface_param_unconn_bad.v:23:5: Interface 'ifc' not connected as parent's interface not connected
+                                             : ... note: In instance 't.c'
+                                             : ... Perhaps caused by another error on the parent interface that needs resolving
+                                             : ... Or, perhaps intended an interface instantiation but are missing parenthesis (IEEE 1800-2023 25.3)?
+   23 |     ifc.mp mport
+      |     ^~~
+%Error: t/t_interface_param_unconn_bad.v:15:5: Interface 'ifc' not connected as parent's interface not connected
+                                             : ... note: In instance 't.c.c'
+                                             : ... Perhaps caused by another error on the parent interface that needs resolving
+                                             : ... Or, perhaps intended an interface instantiation but are missing parenthesis (IEEE 1800-2023 25.3)?
+   15 |     ifc port
+      |     ^~~
+%Error: Exiting due to
