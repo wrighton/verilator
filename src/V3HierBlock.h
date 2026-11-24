@@ -66,6 +66,8 @@ class V3HierBlock final : public V3GraphVertex {
     const std::vector<AstVar*> m_params;
     // Types parameters that are overridden by #(.param(value)) syntax.
     const std::vector<AstParamTypeDType*> m_typeParams;
+    // A scoped assertion control above it selects its assertions (see V3LinkDot)
+    bool m_assertCtl = false;
 
     // METHODS
     static StrGParams stringifyParams(const std::vector<AstVar*>& params,
@@ -84,6 +86,8 @@ public:
     VL_UNMOVABLE(V3HierBlock);
 
     const AstModule* modp() const { return m_modp; }
+    bool assertCtl() const { return m_assertCtl; }
+    void assertCtl(bool flag) { m_assertCtl = flag; }
 
     // Whether a string parameter value can be passed to a hierarchical block's Verilation
     static bool stringParamPassable(const string& value) VL_PURE;

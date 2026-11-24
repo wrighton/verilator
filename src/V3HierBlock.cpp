@@ -67,8 +67,10 @@
 //    (which block uses other blocks..)
 // 9) In V3EmitMk.cpp, ${prefix}_hier.mk is created in run a).
 //
-// There are three hidden command options:
+// There are four hidden command options:
 //   --hierarchical-child is added to Verilator run b).
+//   --hierarchical-assert-control is added to Verilator run b) for a block that a scoped
+//       assertion control selects from above (see AstNodeModule::hierAssertCtl).
 //   --hierarchical-block module_name,mangled_name,name0,value0,name1,value1,...
 //       module_name  :The original modulename
 //       mangled_name :Mangled name of parameterized modules (named in V3Param.cpp).
@@ -210,6 +212,7 @@ VStringList V3HierBlock::commandArgs(bool forMkJson) const {
     if (v3Global.opt.protectKeyProvided())
         opts.push_back(" --protect-key " + v3Global.opt.protectKeyDefaulted());
     opts.push_back(" --hierarchical-child " + cvtToStr(v3Global.opt.threads()));
+    if (m_assertCtl) opts.push_back(" --hierarchical-assert-control");
 
     const StrGParams gparamsStr = stringifyParams(m_params, true);
     for (const StrGParam& param : gparamsStr) {
@@ -421,6 +424,15 @@ class HierBlockUsageCollectVisitor final : public VNVisitorConst {
         m_graphp->removeRedundantEdgesSum(&V3GraphEdge::followAlwaysTrue);
         // Topologically sorder the graph
         m_graphp->order();  // This is a bit heavy weight, but does produce a topological ordering
+        // A block forwards a selection of all its assertions to each block below it
+        for (V3GraphVertex& vtx : m_graphp->vertices()) {
+            V3HierBlock* const blockp = vtx.as<V3HierBlock>();
+            if (blockp->modp()->hierAssertCtl()) blockp->assertCtl(true);
+            if (!blockp->assertCtl()) continue;
+            for (const V3GraphEdge& edge : vtx.outEdges()) {
+                edge.top()->as<V3HierBlock>()->assertCtl(true);
+            }
+        }
         if (dumpGraphLevel() >= 3) m_graphp->dumpDotFilePrefixed("hierblocks");
     }
 

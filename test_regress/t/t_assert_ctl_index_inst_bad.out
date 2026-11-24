@@ -1,0 +1,32 @@
+%Error: t/t_assert_ctl_index_inst_bad.v:42:25: Assertion control scope index reads parameter 'LQ' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   42 |     $assertoff(0, g[gbw.LQ + 1]);
+      |                         ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_ctl_index_inst_bad.v:43:25: Assertion control scope index reads parameter 'LQ' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   43 |     $assertoff(0, g[gbw.LQ]);
+      |                         ^~
+%Error: t/t_assert_ctl_index_inst_bad.v:44:24: Assertion control scope index reads parameter 'P' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   44 |     $assertoff(0, g[i7.P]);
+      |                        ^
+%Error: t/t_assert_ctl_index_inst_bad.v:15:23: Assertion control scope index reads parameter 'P' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   15 |     $assertoff(0, g[s.P]);
+      |                       ^
+%Error: t/t_assert_ctl_index_inst_bad.v:16:23: Assertion control scope index reads parameter 'P' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   16 |     $assertoff(0, g[s.P - 1]);
+      |                       ^
+%Error: t/t_assert_ctl_index_inst_bad.v:17:26: Assertion control scope index reads parameter 'P' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   17 |     $assertoff(0, g[s.si.P]);
+      |                          ^
+%Error: t/t_assert_ctl_index_inst_bad.v:25:26: Assertion control scope index reads parameter 'P' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   25 |     $assertoff(0, g[t.i7.P]);
+      |                          ^
+%Error: t/t_assert_ctl_index_inst_bad.v:26:32: Assertion control scope index reads parameter 'P' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   26 |     $assertoff(0, g[$root.t.i7.P]);
+      |                                ^
+%Error: t/t_assert_ctl_index_inst_bad.v:30:26: Assertion control scope index reads parameter 'P' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   30 |       $assertoff(0, g[i7.P]);
+      |                          ^
+%Error: t/t_assert_ctl_index_inst_bad.v:31:26: Assertion control scope index reads parameter 'Q' of another instance, which a constant expression cannot (IEEE 1800-2023 A.8.4, 11.2.1).
+   31 |       $assertoff(0, g[i3.Q]);
+      |                          ^
+%Error: Exiting due to

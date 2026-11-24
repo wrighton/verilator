@@ -263,11 +263,16 @@ class AstAssertCtlTarget final : public AstNode {
     int m_depth;  // Module hierarchy distance; zero for the selected scope itself
     uint32_t m_ordinal = 0;  // Order before partitioning shared and caller-local targets
     const bool m_moduleRelative;  // Normalized path starts from the caller module, not a block
+    // State is the handle of a hierarchical block instance; selects all of the block's sites
+    const bool m_forward;
+
 public:
-    AstAssertCtlTarget(FileLine* fl, AstNodeVarRef* statep, int depth, bool moduleRelative = false)
+    AstAssertCtlTarget(FileLine* fl, AstNodeVarRef* statep, int depth, bool moduleRelative = false,
+                       bool forward = false)
         : ASTGEN_SUPER_AssertCtlTarget(fl)
         , m_depth{depth}
-        , m_moduleRelative{moduleRelative} {
+        , m_moduleRelative{moduleRelative}
+        , m_forward{forward} {
         this->statep(statep);
     }
     ASTGEN_MEMBERS_AstAssertCtlTarget;
@@ -276,10 +281,11 @@ public:
     uint32_t ordinal() const { return m_ordinal; }
     void ordinal(uint32_t value) { m_ordinal = value; }
     bool moduleRelative() const { return m_moduleRelative; }
+    bool forward() const { return m_forward; }
     bool sameNode(const AstNode* samep) const override {
         const AstAssertCtlTarget* const targetp = VN_DBG_AS(samep, AssertCtlTarget);
         return depth() == targetp->depth() && ordinal() == targetp->ordinal()
-               && moduleRelative() == targetp->moduleRelative();
+               && moduleRelative() == targetp->moduleRelative() && forward() == targetp->forward();
     }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;

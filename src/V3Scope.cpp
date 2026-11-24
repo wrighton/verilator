@@ -407,6 +407,12 @@ class ScopeVisitor final : public VNVisitor {
         std::vector<AstAssertCtlApply*> applies;
         rootp->foreach([&](AstAssertCtlApply* applyp) { applies.push_back(applyp); });
         std::unordered_map<AstAssertCtlTargetSet*, uint32_t> sourceSets;
+        // Selected from outside the model, by a control above this hierarchical block
+        if (AstAssertCtlTargetSet* const setp = rootp->assertCtlExportp()) {
+            setp->user3(true);
+            m_assertCtlTargetSets.push_back(setp);
+            separateAbsoluteTargets(setp->targetsp(), sourceSets[setp], nullptr);
+        }
         for (AstAssertCtlApply* const applyp : applies) {
             AstAssertCtlTargetSet* const sourcep = applyp->targetSetp();
             uint32_t ordinal = 0;
