@@ -14,6 +14,13 @@ function int F_unknown(Cls obj);
   return obj.randomize() with (m_x, m_z) { m_x > 0; };
 endfunction
 
+// 'm_w' is not a member of the object randomized by super.randomize().
+class SubCls extends Cls;
+  function int f_super();
+    return super.randomize() with (m_x, m_w) { m_x > 0; };
+  endfunction
+endclass
+
 // 'm_y' is a class member but never referenced in the constraint -- flagged unused.
 function int F_unused(Cls obj);
   return obj.randomize() with (m_x, m_y) { m_x > 0; };

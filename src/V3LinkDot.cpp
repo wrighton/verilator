@@ -4404,6 +4404,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
     static bool isDotThisReference(const AstDot* nodep) {
         return VN_IS(nodep->lhsp(), ParseRef) && nodep->lhsp()->name() == "this";
     }
+    static bool isDotSuperReference(const AstDot* nodep) {
+        return VN_IS(nodep->lhsp(), ParseRef) && nodep->lhsp()->name() == "super";
+    }
 
     void visit(AstDot* nodep) override {
         // Legal under a DOT: AstDot, AstParseRef, AstPackageRef, AstNodeSel, AstPackArrayDType
@@ -4443,7 +4446,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     m_ds.m_dotSymp = classSymp;
                     UINFO(8, indent() << "this. " << m_ds.ascii());
                 }
-            } else if (VN_IS(nodep->lhsp(), ParseRef) && nodep->lhsp()->name() == "super") {
+            } else if (isDotSuperReference(nodep)) {
                 const VSymEnt* classSymp = getThisClassSymp();
                 if (!classSymp) {
                     nodep->v3error("'super' used outside class (IEEE 1800-2023 8.15)");
@@ -5725,7 +5728,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
             // They may be visitted even if the current node can't be linked now.
             const bool thisRandWith = nodep->name() == "randomize" && nodep->withp()
                                       && VN_IS(m_modp, Class)
-                                      && (!m_ds.m_dotp || isDotThisReference(m_ds.m_dotp));
+                                      && !VN_IS(nodep->classOrPackagep(), Package)
+                                      && (!m_ds.m_dotp || isDotThisReference(m_ds.m_dotp)
+                                          || isDotSuperReference(m_ds.m_dotp));
             VL_RESTORER_COPY(m_ds);
             VL_RESTORER(m_randSymp);
             m_ds.init(m_curSymp);

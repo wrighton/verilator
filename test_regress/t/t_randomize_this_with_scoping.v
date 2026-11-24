@@ -16,6 +16,9 @@ class derived extends base #(2);
   function int apply_inherited(int x);
     return randomize() with {x == 42;};
   endfunction
+  function int apply_super_inherited(int x);
+    return super.randomize() with {x == local::x;};
+  endfunction
 endclass
 class other;
   localparam int OW = 16;
@@ -55,12 +58,23 @@ class item;
     return std::randomize(a) with {a == y;};
   endfunction
 endclass
+// 'super.randomize() with' randomizes this object (IEEE 1800-2023 18.7)
+class sub_item extends item;
+  rand int z;
+  function int apply_super(int y);
+    return super.randomize() with {x == local::y + 1;};
+  endfunction
+  function int apply_super_rel();
+    return super.randomize() with {x == z + 1;};
+  endfunction
+endclass
 module t;
   initial begin
 
     automatic item it = new;
     automatic derived d = new;
     automatic other o = new;
+    automatic sub_item si = new;
     int a;
     int ok;
     it.x = -1;
@@ -80,6 +94,9 @@ module t;
     ok = d.apply_inherited(7);
     `checkd(ok, 1);
     `checkd(d.x, 42);
+    ok = d.apply_super_inherited(7);
+    `checkd(ok, 1);
+    `checkd(d.x, 7);
     ok = std::randomize(a) with {a == 3;};
     `checkd(ok, 1);
     `checkd(a, 3);
@@ -98,6 +115,14 @@ module t;
     ok = it.apply_other(o);
     `checkd(ok, 1);
     `checkd(o.v, 7);
+    ok = si.apply_super(7);
+    `checkd(ok, 1);
+    `checkd(si.x, 8);
+    repeat (5) begin
+      ok = si.apply_super_rel();
+      `checkd(ok, 1);
+      `checkd(si.x, si.z + 1);
+    end
     $display("*-* All Finished *-*");
     $finish;
   end
