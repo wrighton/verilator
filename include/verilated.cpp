@@ -4671,9 +4671,8 @@ void* VerilatedScope::exportFind(const VerilatedScope* scopep, int funcnum) VL_M
     // If function is registered only once across all scopes, fast path it.
     // UVM for example expects to find uvm_polling_value_change_notify
     // from a different scope than where decared.
-    VL_DEBUG_IFDEF(assert(funcnum < VerilatedImp::exportFlatCbs().size()););
     {
-        void* const cbp = VerilatedImp::exportFlatCbs()[funcnum];
+        void* const cbp = VerilatedImp::exportFlatCb(funcnum);
         if (VL_LIKELY(cbp)) return cbp;
     }
     // Else specific scope-based export call

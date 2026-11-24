@@ -447,9 +447,26 @@ protected:
     ExportNameMap m_exportMap VL_GUARDED_BY(m_exportMutex);
     int m_exportNext VL_GUARDED_BY(m_exportMutex) = 0;  // Next export funcnum
 
-    // No guard, as init-time loaded
-    std::vector<void*> m_exportFlatCbs;  // Exports when only single scope registered
-    std::vector<bool> m_exportFlatMulti;  // Multiple scopes registerd; cannot use m_exportScopes
+    // Callback of each export registered by only one scope, else nullptr. Read without the
+    // lock, so never resized; a larger table replaces it
+    struct ExportFlatTable final {
+        // Each entry is constructed as nullptr, as before C++20 a default-constructed atomic
+        // holds no value
+        struct Slot final {
+            std::atomic<void*> m_cbp{nullptr};  // Callback, or nullptr
+        };
+        explicit ExportFlatTable(size_t size)
+            : m_size{size}
+            , m_slotsp{new Slot[size]} {}
+        const size_t m_size;  // Number of entries
+        const std::unique_ptr<Slot[]> m_slotsp;  // Entry for each funcnum
+    };
+    std::atomic<ExportFlatTable*> m_exportFlatp{nullptr};  // Current table
+    // Every table, current or replaced, as readers may still hold a replaced one; freed only
+    // when the runtime is destroyed
+    std::vector<std::unique_ptr<ExportFlatTable>> m_exportFlatTables VL_GUARDED_BY(m_exportMutex);
+    // Multiple scopes registered; cannot use m_exportScopes
+    std::vector<bool> m_exportFlatMulti VL_GUARDED_BY(m_exportMutex);
 
     // CONSTRUCTORS
     VerilatedImpData() = default;
@@ -560,32 +577,36 @@ public:
     // in the design that also happen to have our same callback function.
     // Rather than a 2D map, the integer scheme saves 500ish ns on a likely
     // miss at the cost of a multiply, and all lookups move to slowpath.
-private:
-    static int exportInsertName(const char* namep) VL_MT_SAFE {
-        const VerilatedLockGuard lock{s().m_exportMutex};
-        const auto it = s().m_exportMap.find(namep);
-        if (it == s().m_exportMap.end()) {
-            s().m_exportMap.emplace(namep, s().m_exportNext++);
-            return s().m_exportNext++;
-        }
-        return it->second;
-    }
-
 public:
     static int exportInsert(const char* namep, void* cbp) VL_MT_SAFE {
-        const int funcnum = VerilatedImp::exportInsertName(namep);
-        const VerilatedLockGuard lock{s().m_exportMutex};
         // Slow ok - called once/function at creation
-        if (funcnum >= s().m_exportFlatCbs.size()) {
-            s().m_exportFlatCbs.resize(funcnum + 1);
-            s().m_exportFlatMulti.resize(funcnum + 1);
+        // Number and table entry are made together, so a number found is always in the table
+        const VerilatedLockGuard lock{s().m_exportMutex};
+        const int funcnum = s().m_exportMap.emplace(namep, s().m_exportNext).first->second;
+        if (funcnum == s().m_exportNext) ++s().m_exportNext;
+        VerilatedImpData::ExportFlatTable* tablep
+            = s().m_exportFlatp.load(std::memory_order_relaxed);
+        if (!tablep || static_cast<size_t>(funcnum) >= tablep->m_size) {
+            VerilatedImpData::ExportFlatTable* const newp
+                = new VerilatedImpData::ExportFlatTable{tablep ? 2 * tablep->m_size : 1};
+            for (size_t i = 0; tablep && i < tablep->m_size; ++i) {
+                newp->m_slotsp[i].m_cbp.store(
+                    tablep->m_slotsp[i].m_cbp.load(std::memory_order_relaxed),
+                    std::memory_order_relaxed);
+            }
+            s().m_exportFlatTables.emplace_back(newp);
+            s().m_exportFlatMulti.resize(newp->m_size);
+            s().m_exportFlatp.store(newp, std::memory_order_release);
+            tablep = newp;
         }
+        std::atomic<void*>& entry = tablep->m_slotsp[funcnum].m_cbp;
         if (!s().m_exportFlatMulti[funcnum]) {
-            if (s().m_exportFlatCbs[funcnum] == cbp) {  // Duplicate
-            } else if (!s().m_exportFlatCbs[funcnum]) {  // First
-                s().m_exportFlatCbs[funcnum] = cbp;
+            void* const firstp = entry.load(std::memory_order_relaxed);
+            if (firstp == cbp) {  // Duplicate
+            } else if (!firstp) {  // First
+                entry.store(cbp, std::memory_order_relaxed);
             } else {  // Multiple registrants
-                s().m_exportFlatCbs[funcnum] = nullptr;
+                entry.store(nullptr, std::memory_order_relaxed);
                 s().m_exportFlatMulti[funcnum] = true;
             }
         }
@@ -600,7 +621,13 @@ public:
         VL_FATAL_MT("unknown", 0, "", msg.c_str());
         return -1;
     }
-    static const std::vector<void*>& exportFlatCbs() VL_MT_SAFE { return s().m_exportFlatCbs; }
+    static void* exportFlatCb(int funcnum) VL_MT_SAFE {
+        // Without the lock, as may be called every cycle while another model is constructed
+        const VerilatedImpData::ExportFlatTable* const tablep
+            = s().m_exportFlatp.load(std::memory_order_acquire);
+        VL_DEBUG_IFDEF(assert(static_cast<size_t>(funcnum) < tablep->m_size););
+        return tablep->m_slotsp[funcnum].m_cbp.load(std::memory_order_relaxed);
+    }
     static const char* exportName(int funcnum) VL_MT_SAFE {
         // Slowpath; find name for given export; errors only so no map to reverse-map it
         const VerilatedLockGuard lock{s().m_exportMutex};
