@@ -19,8 +19,20 @@
                                                       : ... note: In instance 't'
    42 |   initial #1 force selected = source[nested_random_index()];
       |                                     ^
-%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:53:31: Unsupported: Force of tristate net with a value that may be high impedance: 'indirect'
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:48:37: Unsupported: Force of tristate net with a value that may be high impedance: 'selected'
                                                       : ... note: In instance 't'
-   53 |   initial #1 force indirect = indirect_value();
+   48 |   initial #1 force selected = source[mirrored_index(position)];
+      |                                     ^
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:50:37: Unsupported: Force of tristate net with a value that may be high impedance: 'selected'
+                                                      : ... note: In instance 't'
+   50 |   initial #1 force selected = source[dpi_index(position)];
+      |                                     ^
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:66:31: Unsupported: Force of tristate net with a value that may be high impedance: 'selected'
+                                                      : ... note: In instance 't'
+   66 |     #1 force selected = source[handle.pick()];
+      |                               ^
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:78:31: Unsupported: Force of tristate net with a value that may be high impedance: 'indirect'
+                                                      : ... note: In instance 't'
+   78 |   initial #1 force indirect = indirect_value();
       |                               ^~~~~~~~~~~~~~
 %Error: Exiting due to

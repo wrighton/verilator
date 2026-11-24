@@ -40,6 +40,31 @@ module t;
   endfunction
   initial #1 force selected = source[random_index()];
   initial #1 force selected = source[nested_random_index()];
+  // A selector index calling a function or method is unsupported
+  function automatic int mirrored_index(int position);
+    return 6 - position;
+  endfunction
+  int position = 1;
+  initial #1 force selected = source[mirrored_index(position)];
+  import "DPI-C" pure function int dpi_index(input int position);
+  initial #1 force selected = source[dpi_index(position)];
+  class Base;
+    virtual function int pick();
+      return 0;
+    endfunction
+  endclass
+  class Derived extends Base;
+    virtual function int pick();
+      return $urandom & 1;
+    endfunction
+  endclass
+  Base handle;
+  initial begin
+    Derived derived;
+    derived = new;
+    handle = derived;
+    #1 force selected = source[handle.pick()];
+  end
 
   function automatic void set_z(output logic value);
     value = 1'bz;

@@ -922,8 +922,6 @@ class TristateVisitor final : public TristateBaseVisitor {
     // No absolute address-independent traversal order is claimed here.
     std::vector<AstVar*> m_ifaceContribVarps;
     std::unordered_map<const AstNodeFTask*, bool> m_forceFuncNoZ;  // Cached return-state proofs
-    // Cached whether a function draws a random number, also through its calls
-    std::unordered_map<const AstNodeFTask*, bool> m_randomFuncs;
 
     // STATS
     VDouble0 m_statTriSigs;  // stat tracking
@@ -2095,28 +2093,14 @@ class TristateVisitor final : public TristateBaseVisitor {
         while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
         return VN_CAST(lhsp, NodeVarRef);
     }
-    // Whether a function draws a random number, also through the functions it calls. A
-    // recursive call is assumed to.
-    bool drawsRandom(const AstNodeFTask* taskp) {
-        if (!m_randomFuncs.emplace(taskp, true).second) return m_randomFuncs[taskp];
-        const bool found = taskp->exists([this](const AstNode* nodep) {
-            if (VN_IS(nodep, Rand) || VN_IS(nodep, RandRNG)) return true;
-            const AstNodeFTaskRef* const callp = VN_CAST(nodep, NodeFTaskRef);
-            return callp && drawsRandom(callp->taskp());
-        });
-        m_randomFuncs[taskp] = found;
-        return found;
-    }
-    // The DATA and ENABLE of a force value select each evaluate its index, so the index must
-    // give the same value each time, also through the functions it calls
-    bool isRepeatableIndex(AstNodeExpr* exprp) {
-        return exprp->isRepeatable() && !exprp->exists([this](const AstNodeFTaskRef* callp) {
-            return drawsRandom(callp->taskp());
-        });
-    }
-    AstNodeVarRef* forceRhsRefp(AstNodeExpr* rhsp) {
+    static AstNodeVarRef* forceRhsRefp(AstNodeExpr* rhsp) {
         while (const AstSel* const selp = VN_CAST(rhsp, Sel)) {
-            if (!isRepeatableIndex(selp->lsbp())) return nullptr;
+            // DATA and ENABLE each evaluate the index, so it must give the same value each
+            // time. A call is not followed into its function body, so none is accepted.
+            if (!selp->lsbp()->isRepeatable()
+                || selp->lsbp()->exists([](const AstNodeFTaskRef*) { return true; })) {
+                return nullptr;
+            }
             rhsp = selp->fromp();
         }
         return VN_CAST(rhsp, NodeVarRef);
