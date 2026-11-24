@@ -1022,8 +1022,7 @@ class ParamProcessor final {
         V3Stats::addStatSum("IfaceCapture, Ledger fixups in V3Param", fixedCount);
     }
 
-    // Return true on success, false on error
-    bool deepCloneModule(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
+    void deepCloneModule(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
                          const string& newname, const IfaceRefRefs& ifaceRefRefs) {
         // Deep clone of new module
         // Note all module internal variables will be re-linked to the new modules by clone
@@ -1061,7 +1060,8 @@ class ParamProcessor final {
             ifErrorp->v3error("Exceeded maximum --module-recursion-depth of "
                               << v3Global.opt.moduleRecursionDepth());
             VL_DO_DANGLING(newModp->deleteTree(), newModp);
-            return false;
+            // The instance tree cannot be completed, so elaborating further is pointless
+            V3Error::abortIfErrors();
         }
 
         if (AstClass* const newClassp = VN_CAST(newModp, Class)) {
@@ -1158,8 +1158,6 @@ class ParamProcessor final {
                 }
             }
         }
-
-        return true;
     }
     const ModInfo* moduleFindOrClone(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
                                      const string& newname, const IfaceRefRefs& ifaceRefRefs) {
@@ -1168,9 +1166,7 @@ class ParamProcessor final {
         if (it != m_modNameMap.end()) {
             UINFO(4, "     De-parameterize to prev: " << it->second.m_modp);
         } else {
-            if (!deepCloneModule(srcModp, ifErrorp, paramsp, newname, ifaceRefRefs)) {
-                return nullptr;
-            }
+            deepCloneModule(srcModp, ifErrorp, paramsp, newname, ifaceRefRefs);
             it = m_modNameMap.find(newname);
             UASSERT(it != m_modNameMap.end(), "should find just-made module");
         }
@@ -2228,7 +2224,6 @@ class ParamProcessor final {
                 = srcModp->hierBlock() ? longname : moduleCalcName(srcModp, longname);
             const ModInfo* const modInfop
                 = moduleFindOrClone(srcModp, nodep, paramsp, newname, ifaceRefRefs);
-            if (!modInfop) return nullptr;
             // We need to relink the pins to the new module
             relinkPinsByName(pinsp, modInfop->m_modp);
             UINFO(8, "     Done with " << modInfop->m_modp);
