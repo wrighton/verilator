@@ -1377,7 +1377,7 @@ int V3PreProcImp::getStateToken() {
                                        << V3PreLex::cleanDbgStrg(value) << "'");
                     define(fileline(), m_lastSym, value, formals, false);
                 }
-            } else {
+            } else if (tok != VP_EOF) {  // EOF follows an error the lexer reported in the value
                 v3fatalSrc("Bad define text, unexpected "s + tokenName(tok) + "\n");
             }
             statePop();
