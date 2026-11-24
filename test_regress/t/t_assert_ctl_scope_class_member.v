@@ -45,9 +45,37 @@ module par;
   end
 endmodule
 
+// A parameter-indexed scope, from a class in a module instantiated twice
+module lp_par (
+    input bit do_off
+);
+  localparam int LP = 2;
+  for (genvar i = 0; i < 4; ++i) begin : g
+    int failures = 0;
+    initial begin
+      #0.5;
+      check :
+      assert (1'b0)
+      else failures++;
+    end
+  end
+  class MC;
+    task off();
+      $assertoff(0, g[LP]);
+      $assertoff(0, g[LP - 1]);
+    endtask
+  endclass
+  initial begin
+    automatic MC mc = new;
+    if (do_off) mc.off();
+  end
+endmodule
+
 module t;
   par q0 ();
   par q1 ();
+  lp_par l0 (.do_off(1'b1));
+  lp_par l1 (.do_off(1'b0));
 
   // A task's block and a nested block are scopes within the class, named with '.'
   // (IEEE 1800-2023 23.6, 20.11)
@@ -148,6 +176,14 @@ module t;
     `checkd(q1.tk_seen, 0);
     `checkd(q0.blk_seen, 0);
     `checkd(q1.blk_seen, 0);
+    `checkd(l0.g[0].failures, 1);
+    `checkd(l0.g[1].failures, 0);
+    `checkd(l0.g[2].failures, 0);
+    `checkd(l0.g[3].failures, 1);
+    `checkd(l1.g[0].failures, 1);
+    `checkd(l1.g[1].failures, 1);
+    `checkd(l1.g[2].failures, 1);
+    `checkd(l1.g[3].failures, 1);
     $display("*-* All Finished *-*");
     $finish;
   end
