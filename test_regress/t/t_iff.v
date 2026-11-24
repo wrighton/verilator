@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2019 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t (
     input clk
 );
@@ -17,6 +22,15 @@ module t (
   wire [63:0] result;  // From test of Test.v
   // End of automatics
   Test test (.*);
+
+  // An event on a constant runs at initialization only when its 'iff' condition is true
+  localparam bit P = 1'b1;
+  logic en_0 = 1'b0;
+  logic en_1 = 1'b1;
+  int cnt_0 = 0;
+  int cnt_1 = 0;
+  always @(P iff en_0) cnt_0 = cnt_0 + 1;
+  always @(P iff en_1) cnt_1 = cnt_1 + 1;
 
   // Test loop
   always @(posedge clk) begin
@@ -42,6 +56,8 @@ module t (
       // What checksum will we end up with (above print should match)
       `define EXPECTED_SUM 64'hd55eb7da9ba3354a
       if (sum !== `EXPECTED_SUM) $stop;
+      `checkd(cnt_0, 0);
+      `checkd(cnt_1, 1);
       $write("*-* All Finished *-*\n");
       $finish;
     end

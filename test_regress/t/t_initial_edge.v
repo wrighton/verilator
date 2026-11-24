@@ -25,6 +25,11 @@
 
 `timescale 1ns / 1ns
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t (
     input clk
 );
@@ -35,6 +40,14 @@ module t (
   reg rst_n;
 
   integer count = 0;
+
+  // An event qualified with 'iff' fires initially only when its condition is true
+  reg en_0 = 1'b0;
+  reg en_1 = 1'b1;
+  reg res_iff_0 = 1'b0;
+  reg res_iff_1 = 1'b0;
+  always @(posedge rst iff en_0) res_iff_0 <= 1'b1;
+  always @(negedge rst_n iff en_1) res_iff_1 <= 1'b1;
 
   initial_edge i_edge (
       .res(res),
@@ -54,6 +67,8 @@ module t (
 
     if (count == 3) begin
       if ((res == 1) && (res_n == 1)) begin
+        `checkd(res_iff_0, 1'b0);
+        `checkd(res_iff_1, 1'b1);
         $write("*-* All Finished *-*\n");
         $finish;
       end
