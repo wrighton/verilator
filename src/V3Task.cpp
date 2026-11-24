@@ -40,6 +40,7 @@
 #include "V3Graph.h"
 #include "V3LanguageWords.h"
 #include "V3LinkLValue.h"
+#include "V3SenExprBuilder.h"
 #include "V3SharedTmps.h"
 #include "V3Stats.h"
 
@@ -2829,24 +2830,74 @@ class TaskVisitor final : public VNVisitor {
 
         FileLine* const flp = nodep->fileline();
         AstVarScope* const vscp = m_forceTmps.make(flp, m_scopep, rhsp->dtypep());
-        AstVarScope* const activeVscp = m_forceTmps.make(flp, m_scopep, 1, "active");
-        nodep->activep(new AstVarRef{flp, activeVscp, VAccess::WRITE});
-        // An inactive RHS need not be evaluable (for example, it can have a null receiver).
-        AstAssign* const updatep
-            = new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, rhsp->cloneTree(false)};
-        AstIf* const ifp = new AstIf{flp, new AstVarRef{flp, activeVscp, VAccess::READ}, updatep};
-        AstSenTree* const sentreep = new AstSenTree{flp, new AstSenItem{flp, AstSenItem::Combo{}}};
-        AstActive* const activep = new AstActive{flp, "force-func-update", sentreep};
-        activep->senTreeStorep(activep->sentreep());
-        activep->addProcsp(new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr, ifp});
-        m_scopep->addBlocksp(activep);
+        // Use the variables read by the source RHS, rather than the temporaries written by
+        // lifting or the implementation state of called functions.
+        std::unordered_set<const AstVarScope*> written;
+        rhsp->foreach([&](const AstVarRef* const refp) {
+            if (refp->access().isWriteOrRW()) written.insert(refp->varScopep());
+        });
+        AstNodeStmt* storep = nullptr;
+        AstNodeExpr* changedp = nullptr;
+        AstSenItem* itemsp = nullptr;
+        const auto addInput = [&](AstNodeExpr* const inputp) {
+            AstVarScope* const prevp = m_forceTmps.make(flp, m_scopep, inputp->dtypep(), "prev");
+            itemsp = AstNode::addNext(
+                itemsp, new AstSenItem{flp, VEdgeType::ET_CHANGED, inputp->cloneTreePure(false)});
+            AstNodeExpr* termp = SenExprBuilder::newChangedp(
+                flp, inputp->cloneTreePure(false), new AstVarRef{flp, prevp, VAccess::READ});
+            AstNodeStmt* assignp
+                = new AstAssign{flp, new AstVarRef{flp, prevp, VAccess::WRITE}, inputp};
+            if (AstNodeExpr* const validp = SenExprBuilder::newNullGuard(inputp)) {
+                termp = new AstLogAnd{flp, validp->cloneTreePure(false), termp};
+                assignp = new AstIf{flp, validp, assignp};
+            }
+            changedp = changedp ? new AstLogOr{flp, changedp, termp} : termp;
+            storep = AstNode::addNext(storep, assignp);
+        };
+        rhsp->foreach([&](AstMemberRef* const refp) {
+            // Observe a readable member's value, not just the object handle. A receiver
+            // computed by the RHS itself must not be evaluated separately for this check.
+            if (!refp->access().isReadOnly() || !refp->forall([&](const AstNode* const childp) {
+                    if (const AstVarRef* const varp = VN_CAST(childp, VarRef)) {
+                        return !written.count(varp->varScopep());
+                    }
+                    return VN_IS(childp, MemberRef) || VN_IS(childp, Const) || VN_IS(childp, Sel)
+                           || VN_IS(childp, ArraySel);
+                })) {
+                return;
+            }
+            addInput(refp->cloneTreePure(false));
+        });
+        rhsp->foreach([&](const AstVarRef* const refp) {
+            AstVarScope* const inputp = refp->varScopep();
+            if (refp->access().isReadOrRW() && written.insert(inputp).second) {
+                addInput(new AstVarRef{flp, inputp, VAccess::READ});
+            }
+        });
 
-        // The force itself can run before combo logic sees newly assigned arguments.
-        // Sample the same pure RHS here so an immediately following read sees it.
+        if (changedp) {
+            AstVarScope* const activeVscp = m_forceTmps.make(flp, m_scopep, 1, "active");
+            nodep->activep(new AstVarRef{flp, activeVscp, VAccess::WRITE});
+            // Ownership alone is not a dependency change. Record the current inputs before
+            // both evaluations so activation cannot repeat a side effect or a random draw.
+            AstNodeStmt* const updatep = storep->cloneTree(true);
+            updatep->addNext(new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE},
+                                           rhsp->cloneTree(false)});
+            AstNodeExpr* const guardp
+                = new AstLogAnd{flp, new AstVarRef{flp, activeVscp, VAccess::READ}, changedp};
+            AstIf* const ifp = new AstIf{flp, guardp, updatep};
+            AstSenTree* const sentreep = new AstSenTree{flp, itemsp};
+            AstActive* const activep = new AstActive{flp, "force-func-update", sentreep};
+            activep->senTreeStorep(activep->sentreep());
+            activep->addProcsp(new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr, ifp});
+            m_scopep->addBlocksp(activep);
+        }
+
+        // Sample before returning to the process that executed the force.
         rhsp->replaceWith(new AstVarRef{flp, vscp, VAccess::READ});
         AstAssign* const samplep
             = new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, rhsp};
-        nodep->addHereThisAsNext(samplep);
+        nodep->addHereThisAsNext(AstNode::addNext(storep, samplep));
         iterate(samplep);
     }
     void visit(AstForeach* nodep) override {  // LCOV_EXCL_LINE
