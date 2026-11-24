@@ -2844,9 +2844,10 @@ class TaskVisitor final : public VNVisitor {
         const auto activeRef = [&]() { return new AstVarRef{flp, activeVscp, VAccess::READ}; };
         const auto addInput = [&](AstNodeExpr* const inputp) {
             AstNodeDType* const dtypep = inputp->dtypep()->skipRefp();
-            if (dtypep->isDynamicallySized() && !SenExprBuilder::isSupportedDType(dtypep)) {
-                inputp->v3warn(E_UNSUPPORTED, "Unsupported: force RHS change tracking for a whole "
-                                              "dynamically-sized value");
+            if (!SenExprBuilder::isSupportedDType(dtypep)) {
+                inputp->v3warn(E_UNSUPPORTED, "Unsupported: force RHS change tracking for a "
+                                              "whole value of type "
+                                                  << dtypep->prettyDTypeNameQ());
                 inputp->deleteTree();
                 return;
             }

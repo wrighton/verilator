@@ -1,5 +1,11 @@
-%Error-UNSUPPORTED: t/t_force_rhs_container_unsup.v:15:11: Unsupported: force RHS change tracking for a whole dynamically-sized value
-   15 |   initial force dst = total(q);
-      |           ^~~~~
+%Error-UNSUPPORTED: t/t_force_rhs_container_unsup.v:27:5: Unsupported: force RHS change tracking for a whole value of type 'logic[6:0]$[$]'
+   27 |     force dst = total(q);
+      |     ^~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_rhs_container_unsup.v:28:5: Unsupported: force RHS change tracking for a whole value of type 'logic[6:0]$[$]$[0:1]'
+   28 |     force qsum = total_q(queue_bank);
+      |     ^~~~~
+%Error-UNSUPPORTED: t/t_force_rhs_container_unsup.v:29:5: Unsupported: force RHS change tracking for a whole value of type 'logic[6:0]$[]$[0:1]'
+   29 |     force vsum = total_v(vector_bank);
+      |     ^~~~~
 %Error: Exiting due to
