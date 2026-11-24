@@ -408,6 +408,9 @@ class TimingKit final {
 public:
     ProcessList m_procList;  // Processes that resume timing schedulers
     AstNodeStmt* m_postUpdatesp = nullptr;  // Post updates for the trigger eval function
+    // Flag set by writes after a zero delay that logic reads, see createEval
+    AstVarScope* m_zeroDelayDirtyp = nullptr;
+    std::set<uint32_t> m_delayTriggers;  // Triggers of the delay scheduler, set by createResume
     // Resumes of the schedulers of the reactive region set, made by createResume
     AstNodeStmt* m_reactResumesp = nullptr;
     std::set<uint32_t> m_reactTriggers;  // Their triggers, set by createResume
@@ -427,10 +430,12 @@ public:
 
     TimingKit() = default;
     TimingKit(ProcessList&& procList, AstNodeStmt* postUpdatesp,
-              std::map<const AstVarScope*, std::set<AstSenTree*>>&& externalDomains)
+              std::map<const AstVarScope*, std::set<AstSenTree*>>&& externalDomains,
+              AstVarScope* zeroDelayDirtyp)
         : m_externalDomains{externalDomains}
         , m_procList{std::move(procList)}
-        , m_postUpdatesp{postUpdatesp} {}
+        , m_postUpdatesp{postUpdatesp}
+        , m_zeroDelayDirtyp{zeroDelayDirtyp} {}
     VL_UNCOPYABLE(TimingKit);
     TimingKit(TimingKit&&) = default;
     TimingKit& operator=(TimingKit&&) = default;

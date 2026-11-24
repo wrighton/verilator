@@ -109,8 +109,18 @@ AstCCall* TimingKit::createResume(AstVarScope* trigVscp) {
             } else if (schedrefp->varScopep()->dtypep()->basicp()->isDelayScheduler()) {
                 FileLine* const flp = trigVscp->fileline();
                 const std::set<uint32_t>& triggers = m_procList.triggers(process.m_senTreep);
-                AstTriggered* const condp
+                UASSERT_OBJ(m_delayTriggers.empty(), schedrefp, "Multiple delay schedulers");
+                m_delayTriggers = triggers;
+                AstNodeExpr* condp
                     = new AstTriggered{flp, trigVscp, {triggers.begin(), triggers.end()}};
+                if (m_zeroDelayDirtyp) {
+                    // The 'inact' region also fires them, see createEval, maybe when no process
+                    // is due
+                    AstCMethodHard* const awaitingp = new AstCMethodHard{
+                        flp, schedrefp->cloneTree(false), VCMethod::SCHED_AWAITING_CURRENT_TIME};
+                    awaitingp->dtypeSetBit();
+                    condp = new AstLogAnd{flp, condp, awaitingp};
+                }
                 dlyShedIfp = new AstIf{flp, condp};
                 dlyShedIfp->addThensp(actionp);
             } else {
