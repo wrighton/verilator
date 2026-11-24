@@ -37,6 +37,8 @@ module registered_leaf (
     input bit clk
 );
   logic [6:0] state;
+  logic [6:0] continuously_sampled;
+  assign continuously_sampled = p;
   initial state = 7'h40;
   always @(posedge clk) state <= p;
 endmodule
@@ -115,6 +117,13 @@ module t;
     #1 sample_clk = 1;
     #1;
     `checkh(sampler.state, 7'h03);
+    `checkh(sampler.continuously_sampled, 7'h03);
+    force sampler.p = 7'bzzzzzzz;
+    #1;
+    `checkh(sampler.p === 7'bzzzzzzz, 1'b1);
+    // Continuous variable forwarding preserves the sampled net's Z state.
+    `checkh(sampler.continuously_sampled === 7'bzzzzzzz, 1'b1);
+    release sampler.p;
   end
 
   // An interface net connection reads the resolved interface net.

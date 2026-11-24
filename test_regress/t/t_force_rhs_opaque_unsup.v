@@ -31,6 +31,7 @@ module t;
     return count % 7;
   endfunction
   initial #1 force selected = source[next_index()];
+  initial #1 force selected = source[$urandom&1];
 
   function automatic void set_z(output logic value);
     value = 1'bz;

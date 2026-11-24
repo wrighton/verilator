@@ -2095,7 +2095,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     }
     static AstNodeVarRef* forceRhsRefp(AstNodeExpr* rhsp) {
         while (const AstSel* const selp = VN_CAST(rhsp, Sel)) {
-            if (!selp->lsbp()->isPure()) return nullptr;
+            if (!selp->lsbp()->isRepeatable()) return nullptr;
             rhsp = selp->fromp();
         }
         return VN_CAST(rhsp, NodeVarRef);
@@ -3503,7 +3503,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (inDeclProcessing && forceNetVarp) {
                 m_tgraph.setTristate(forceNetVarp);
                 forceNetVarp->setForcedByCode();
-                getCreateEnVarp(forceNetVarp, false)->setForcedByCode();
+                getCreateEnVarp(forceNetVarp, false, m_modp)->setForcedByCode();
             }
             const bool unconnected = !nodep->exprp();
             const bool bufferInput
