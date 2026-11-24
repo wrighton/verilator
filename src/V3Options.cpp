@@ -1615,6 +1615,7 @@ void V3Options::parseOptsList(FileLine* fl, const string& optdir, int argc,
     });
 
     DECL_OPTION("-hierarchical", OnOff, &m_hierarchical);
+    DECL_OPTION("-hierarchical-assert-control", Set, &m_hierAssertCtl);
     DECL_OPTION("-hierarchical-block", CbVal, [this](const char* valp) {
         const V3HierarchicalBlockOption opt{valp};
         m_hierBlocks.emplace(opt.mangledName(), opt);

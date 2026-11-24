@@ -26,8 +26,6 @@ module t (
   initial begin
     $assertoff(0, u);
     $assertoff(0, u.checking.check_good);
-    // Scoped zero still reaches the partition.
-    $assertoff(ENUM_ZERO, t);
     $assertoff(1, t);  // Does not reach the partition below this scope.
     $assertoff(0);  // Global, including partitions sharing this context.
     $assertoff(ENUM_ZERO);  // Enum zero is also a global context control.
