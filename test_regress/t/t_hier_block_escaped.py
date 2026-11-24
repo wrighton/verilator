@@ -18,6 +18,6 @@ test.execute()
 test.file_grep(test.stats, r'HierBlock,\s+Hierarchical blocks\s+(\d+)', 3)
 # The parent uses the wrappers rather than the original modules
 test.file_grep(test.obj_dir + "/V" + test.name + "__hier.dir/V" + test.name + "__stats.txt",
-               r'Optimizations, Hierarchical DPI wrappers with costs\s+(\d+)', 6)
+               r'Optimizations, Hierarchical DPI wrappers with costs\s+(\d+)', 7)
 
 test.passes()
