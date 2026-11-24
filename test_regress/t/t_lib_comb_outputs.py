@@ -17,7 +17,7 @@ libs = []
 # Also dumping the tree, for the dump of the outputs the wrapper takes from the clock update alone
 for module, lib, extra in (("blk", "blklib", [
         test.t_dir + "/t_hier_block_comb_outputs.cpp", "--dumpi-tree 3", "--dumpi-tree-json 3"
-]), ("blk_t", "blktlib", []), ("blk_q", "blkqlib", [])):
+]), ("blk_t", "blktlib", []), ("blk_q", "blkqlib", []), ("blk_c", "blkclib", [])):
     lib_dir = test.obj_dir + "/" + lib
     test.mkdir_ok(lib_dir)
     test.run(
@@ -33,7 +33,7 @@ for module, lib, extra in (("blk", "blklib", [
 
 test.compile(verilator_flags2=[
     "--binary", "--timing", "--top-module", "t", "+define+BLK=blklib", "+define+BLK_T=blktlib",
-    "+define+BLK_Q=blkqlib"
+    "+define+BLK_Q=blkqlib", "+define+BLK_C=blkclib"
 ] + libs)
 
 test.execute()
