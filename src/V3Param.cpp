@@ -5531,6 +5531,9 @@ class ParamVisitor final : public VNVisitor {
                     if (const AstEnumItemRef* const refp = VN_CAST(subp, EnumItemRef)) {
                         return !refp->itemp();
                     }
+                    if (const AstFuncRef* const refp = VN_CAST(subp, FuncRef)) {
+                        return !refp->taskp() || V3LinkDot::assertCtlRuntimeIndexNode(refp);
+                    }
                     return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, ParseRef) || VN_IS(subp, Dot)
                            || VN_IS(subp, UnlinkedRef);
                 })) {

@@ -13,16 +13,11 @@ module t;
   end
   initial $assertoff(0, g[int'(cfg[1].IDX)].chk);
 
-  if (1) begin : choice
-    localparam int IDX = -1;
-  end else begin : choice
+  if (1) begin : cfg_named
     localparam int IDX = 0;
   end
-  initial $assertoff(0, g[int'(choice.IDX)].chk);
-  initial $assertoff(0, g[choice.IDX < 32'sd0].chk);
-
-  if (1) begin : cfg_named
-    localparam int IDX = 1;
-  end
-  initial $assertoff(0, g[int'(cfg_named.IDX)].chk);
+  function automatic int plus_one(int x);
+    return x + 1;
+  endfunction
+  initial $assertoff(0, g[plus_one(cfg_named.IDX)].chk);
 endmodule
