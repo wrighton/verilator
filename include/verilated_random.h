@@ -77,7 +77,7 @@ public:
         , m_dimension{dimension}
         , m_randModeIdx{randModeIdx} {}
     virtual ~VlRandomVar() = default;
-    std::string name() const { return m_name; }
+    const std::string& name() const { return m_name; }
     int width() const { return m_width; }
     int dimension() const { return m_dimension; }
     virtual void* datap(int /*idx*/) const { return m_datap; }
@@ -278,6 +278,12 @@ class VlRandomizer VL_NOT_FINAL {
     KeptValues m_solution;  // The solved values, see keep_solution
     KeptValues m_prior;  // The values before the solve, see keep_prior
     std::map<std::string, std::set<uint64_t>> m_priorRandc;  // m_randcUsedValues then
+    // Whether m_prior and m_priorRandc hold this call's, from keep_prior until end_prior: an
+    // object a call does not solve may still end it
+    bool m_priorKept = false;
+    // Whether keep_prior keeps them, from arm_prior, by the call holding the object, until
+    // end_prior: a call of the object alone cannot fail after its solve
+    bool m_priorArmed = false;
     KeptValues m_roundValues;  // The values before a function-call solve round first set them
     std::unordered_set<std::string> m_roundKept;  // Variables in m_roundValues
     // Array size variables, by registered name, which a solve of array sizes alone sets
@@ -609,10 +615,12 @@ public:
     void keep_solution();
     /// Set the values keep_solution kept
     void restore_solution();
-    /// Keep the values and randc cycles before a solve, for end_prior
-    void keep_prior();
-    /// Set the values and randc cycles keep_prior kept, unless ok
-    void end_prior(bool ok);
+    /// Make keep_prior keep, for a call holding the object
+    void arm_prior() { m_priorArmed = true; }
+    /// Keep the values and randc cycles before a solve, for end_prior, if armed or force
+    void keep_prior(bool force);
+    /// Set the values and randc cycles keep_prior kept, unless ok; return whether it kept them
+    bool end_prior(bool ok);
     /// Continue the randc cycles of another randomizer, which solved for the same object
     void randc_history_from(const VlRandomizer& other) {
         m_randcUsedValues = other.m_randcUsedValues;

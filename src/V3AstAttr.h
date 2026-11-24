@@ -1082,6 +1082,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(FORK_ON_KILL,                       "onKill",                 false,  CLEAN,  false,      "r", "") \
     macro(NBA_GENERIC_QUEUE_COMMIT_TRIGGER,   "commitTrigger",          false,  CLEAN,  false,      "", "") \
     macro(PROCESS_IS_KILLED,                  "isKilled",               PURE,   CLEAN,  false,      "", "") \
+    macro(RANDOMIZER_ARM_PRIOR,               "arm_prior",              false,  CLEAN,  false,      "", "") \
     macro(RANDOMIZER_BASIC_STD_RANDOMIZATION, "basicStdRandomization",  false,  CLEAN,  false,      "mr", "") \
     macro(RANDOMIZER_CLEARCONSTRAINTS,        "clearConstraints",       false,  CLEAN,  false,      "", "") \
     macro(RANDOMIZER_CLEARALL,                "clearAll",               false,  CLEAN,  false,      "", "") \
@@ -1101,7 +1102,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_FUNC_ROUND_NEXT,         "func_round_next",        false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_FUNC_ROUND_START,        "func_round_start",       false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_HARD,                    "hard",                   false,  CLEAN,  false,      "r+", "") \
-    macro(RANDOMIZER_KEEP_PRIOR,              "keep_prior",             false,  CLEAN,  false,      "", "") \
+    macro(RANDOMIZER_KEEP_PRIOR,              "keep_prior",             false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_KEEP_SOLUTION,           "keep_solution",          false,  CLEAN,  false,      "", "") \
     macro(RANDOMIZER_PIN_FROZEN,              "pin_frozen",             false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_RANDC_HISTORY_FROM,      "randc_history_from",     false,  CLEAN,  false,      "r", "") \
@@ -1118,6 +1119,11 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_CLEAR_VAR_DISABLED,      "clear_var_disabled",     false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_MARK_VAR_STATIC,         "mark_var_static",        false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_SET_STATIC_RANDMODE,     "set_static_randmode",    false,  CLEAN,  false,      "r", "") \
+    macro(RANDOM_SNAPSHOT_BEGIN,              "begin",                  false,  CLEAN,  false,      "", "") \
+    macro(RANDOM_SNAPSHOT_CLEAR,              "clear",                  false,  CLEAN,  false,      "", "") \
+    macro(RANDOM_SNAPSHOT_KEEP,               "keep",                   false,  CLEAN,  false,      "r", "") \
+    macro(RANDOM_SNAPSHOT_KEPT,               "kept",                   PURE,   CLEAN,  false,      "", "") \
+    macro(RANDOM_SNAPSHOT_RESTORE,            "restore",                false,  CLEAN,  false,      "rw", "") \
     macro(RNG_GET_RANDSTATE,                  "__Vm_rng.get_randstate", PURE,   CLEAN,  false,      "", "") \
     macro(RNG_SET_RANDSTATE,                  "__Vm_rng.set_randstate", false,  CLEAN,  false,      "r", "") \
     macro(SCHED_ANY_TRIGGERED,                "anyTriggered",           false,  CLEAN,  false,      "r", "") \

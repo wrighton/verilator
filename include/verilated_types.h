@@ -802,6 +802,71 @@ public:
     }
 };
 
+// The values a failed randomize() of an object sets back (IEEE 1800-2023 18.6.3), kept from
+// its keep phase until the call ends. The storage is reused by later calls, so only an object
+// once randomized holds it.
+class VlRandomSnapshot final {
+    // Largest value whose storage later calls reuse; the others' is freed when the call ends
+    static constexpr size_t s_reusedBytes = 256;
+    struct ValueBase VL_NOT_FINAL {
+        const bool m_freed;  // Whether freed when the call ends
+        explicit ValueBase(bool freed)
+            : m_freed{freed} {}
+        virtual ~ValueBase() = default;
+    };
+    template <typename T_Value>
+    struct Value final : ValueBase {
+        T_Value m_value;  // The value kept
+        explicit Value(const T_Value& value)
+            : ValueBase{sizeof(T_Value) > s_reusedBytes
+                        || !std::is_trivially_copyable<T_Value>::value}
+            , m_value{value} {}
+    };
+    struct State final {
+        std::vector<std::unique_ptr<ValueBase>> m_values;  // In the order kept
+        uint32_t m_count = 0;  // Number of values the call kept
+    };
+    std::unique_ptr<State> m_statep;  // Made by the first call, kept while it keeps values
+
+public:
+    // CONSTRUCTORS
+    VlRandomSnapshot() = default;
+    // A copy of the object is not being randomized
+    VlRandomSnapshot(const VlRandomSnapshot&) {}
+    VlRandomSnapshot& operator=(const VlRandomSnapshot&) = delete;
+    // METHODS
+    // Keep the values from the first, also if the keep phase reaches the object again
+    void begin() {
+        if (!m_statep) m_statep.reset(new State);
+        m_statep->m_count = 0;
+    }
+    bool kept() const { return m_statep && m_statep->m_count; }
+    // Keep the next value, of the same type as in earlier calls
+    template <typename T_Value>
+    void keep(const T_Value& value) {
+        std::vector<std::unique_ptr<ValueBase>>& valuesr = m_statep->m_values;
+        if (m_statep->m_count == valuesr.size()) valuesr.emplace_back();
+        std::unique_ptr<ValueBase>& valuepr = valuesr[m_statep->m_count++];
+        if (valuepr) {
+            static_cast<Value<T_Value>&>(*valuepr).m_value = value;
+        } else {
+            valuepr.reset(new Value<T_Value>{value});
+        }
+    }
+    // Set valuer back to the value kept index-th
+    template <typename T_Value>
+    void restore(uint32_t index, T_Value& valuer) const {
+        valuer = static_cast<const Value<T_Value>&>(*m_statep->m_values[index]).m_value;
+    }
+    void clear() {
+        if (!m_statep) return;
+        for (uint32_t i = 0; i < m_statep->m_count; ++i) {
+            if (m_statep->m_values[i]->m_freed) m_statep->m_values[i].reset();
+        }
+        m_statep->m_count = 0;
+    }
+};
+
 // These require the class object to have the thread safety lock
 inline IData VL_RANDOM_RNG_I(VlRNG& rngr) VL_MT_UNSAFE { return rngr.rand64(); }
 inline QData VL_RANDOM_RNG_Q(VlRNG& rngr) VL_MT_UNSAFE { return rngr.rand64(); }

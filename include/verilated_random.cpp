@@ -1414,10 +1414,13 @@ void VlRandomizer::keepValues(const VlRandomVar& var, KeptValues& valuesr) {
 void VlRandomizer::keepVars(KeptValues& valuesr) const {
     // Not those with rand_mode off, which the solve does not set and callbacks may change or
     // free (IEEE 1800-2023 18.8)
-    const auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
+    std::shared_ptr<const ArrayInfoMap> arrVarsp;  // Made if an array is kept
     for (const auto& var : m_vars) {
         if (isFrozenVar(var.first, *var.second)) continue;
-        if (var.second->dimension() > 0) var.second->setArrayInfo(arrVarsp);
+        if (var.second->dimension() > 0) {
+            if (!arrVarsp) arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
+            var.second->setArrayInfo(arrVarsp);
+        }
         keepValues(*var.second, valuesr);
     }
 }
@@ -1452,15 +1455,17 @@ void VlRandomizer::restore_solution() {
     m_solution.clear();
 }
 
-void VlRandomizer::keep_prior() {
+void VlRandomizer::keep_prior(bool force) {
     // Once per call: later function-call solve rounds must not overwrite it
-    if (m_prior.empty()) {
-        keepVars(m_prior);
-        m_priorRandc = m_randcUsedValues;
-    }
+    if (m_priorKept || !(force || m_priorArmed)) return;
+    m_priorKept = true;
+    keepVars(m_prior);
+    m_priorRandc = m_randcUsedValues;
 }
 
-void VlRandomizer::end_prior(bool ok) {
+bool VlRandomizer::end_prior(bool ok) {
+    m_priorArmed = false;
+    if (!m_priorKept) return false;
     // A failed call leaves the values and the randc cycles (IEEE 1800-2023 18.6.3)
     if (!ok) {
         setValues(m_prior);
@@ -1468,6 +1473,8 @@ void VlRandomizer::end_prior(bool ok) {
     }
     m_prior.clear();
     m_priorRandc.clear();
+    m_priorKept = false;
+    return true;
 }
 
 void VlRandomizer::keepRoundValues(const VlRandomVar& var) {

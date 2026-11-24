@@ -58,6 +58,29 @@ union RandomizeMode final {
     uint64_t asUQuad;  // Representation as int to be stored in nodep->user*
 };
 
+// The parts of a class randomize() around its solve, see finishClassRandomize
+struct ClassRandomizeParts final {
+    AstFunc* basicRandomizep;  // Basic randomization after a successful solve
+    AstNodeStmt* afterp;  // Then, if any
+    AstNodeStmt* failp;  // If the solve failed, if any
+    AstFunc* commitPartp;  // What the commit calls, if any
+    AstFunc* commitp;  // The commit of a successful call
+    AstFunc* undop;  // The undo of a failed call
+    AstTask* preTaskp;  // The pre-randomize phase
+    AstTask* keepTaskp;  // The keep phase, of a class that keeps the values before its solve
+};
+
+// The parts of a randomize() with around its solve, see lowerInlineRandomize
+struct InlineRandomizeParts final {
+    AstNodeStmt* basicp;  // Basic randomization after a successful solve, updating the result
+    AstNodeExpr* elemsp;  // Solves the member objects the solve may constrain, if any
+    AstNodeStmt* elemsFailp;  // Their pre_randomize if the solve failed, if any
+    AstNodeStmt* afterp;  // Solves the other member objects, if any
+    AstNodeStmt* failp;  // Their pre_randomize if the solve failed, if any
+    AstNodeStmt* commitp;  // Commits the member objects, if any
+    AstNodeStmt* undop;  // Their undo
+};
+
 // A constraint made by cloning the constraint of an object, or of the objects of an array
 struct ClonedConstraint final {
     AstNodeExpr* objp;  // The object, or object array, it was cloned for
@@ -193,11 +216,15 @@ public:
         = 0;
 
     // Per site
-    // Class randomize(): add the solver setup to randomizep, and return the
-    // solver result (also when the class has no constraints). If keepSolution, basic
-    // randomization does not change the solved values, nor a failure of it the variables.
-    virtual AstNodeExpr* lowerClassRandomize(AstClass* classp, AstFunc* randomizep,
-                                             AstVar* randModeVarp, bool keepSolution)
+    // Class randomize(): add the solver setup to randomizep, the solve part, and return the
+    // solver result (also when the class has no constraints). If keepSolution, the basic
+    // randomization does not change the solved values; if keepPrior, the undo sets them back.
+    // objsp, if any, solves member objects before the solve: after a solve of sizes resized the
+    // arrays, as the solve registers them after, else first. varsp, if any, the basic
+    // randomization, runs before it if no array may be resized after, else after the solve.
+    virtual AstNodeExpr*
+    lowerClassRandomize(AstClass* classp, AstFunc* randomizep, AstVar* randModeVarp,
+                        bool keepSolution, bool keepPrior, AstNodeStmt* objsp, AstNodeStmt* varsp)
         = 0;
     // Class randomize(): add statements that must follow the solver result,
     // after the front end has emitted the assignment that evaluates it
@@ -205,10 +232,12 @@ public:
     // Complete class solver lowering after the result assignment, before the front end emits
     // post_randomize callbacks, then call basicRandomizep only if the solve succeeded:
     // __VBasicRand, or __VBasicRandVars of a class whose member objects are randomized after
-    // the solve, then afterp, if any. If the solve failed, run failp, if any.
+    // the solve, then afterp, if any. If the solve failed, run failp, if any. Build the commit
+    // commitp, calling commitPartp, if any, and complete the undo undop, after the undo of the
+    // member objects, so a failed call leaves the variables the solve set (IEEE 1800-2023
+    // 18.6.3). The pre-randomize phase preTaskp ends what an earlier call kept and did not end.
     virtual void finishClassRandomize(AstClass* classp, AstFunc* randomizep,
-                                      AstFunc* basicRandomizep, AstNodeStmt* afterp,
-                                      AstNodeStmt* failp)
+                                      const ClassRandomizeParts& parts)
         = 0;
     // Ensure backend-required related classes are lowered before an inline site. The callback
     // remains front-end-owned so its visitor context is restored across nested class lowering.
@@ -218,15 +247,15 @@ public:
     // randomize() with {...} called by nodep: lower the captured constraints
     // into randomizeFuncp, and assign its return value from the solver result
     // and, after a successful solve, basicp, the basic randomization updating it, and elemsp,
-    // if any, then afterp, if any; if the solve failed, failp, and elemsFailp, the pre_randomize
-    // of what elemsp randomizes, unless elemsp ran. With a solve of array sizes, elemsp runs after
-    // the arrays are resized, in the final function-call round; its failure skips the final solve.
-    // thisVarp is the captured 'this' of the caller.
+    // if any, then afterp, if any, which solve the member objects; if the solve failed, failp,
+    // and elemsFailp, the pre_randomize of what elemsp solves, unless elemsp ran. With a solve
+    // of array sizes, elemsp runs after the arrays are resized, in the final function-call
+    // round; its failure skips the final solve. Then, by the return value, commitp, if any, the
+    // commit of the member objects, or undop, their undo, each updating it. thisVarp is the
+    // captured 'this' of the caller.
     virtual void lowerInlineRandomize(AstNodeFTaskRef* nodep, AstClass* classp,
                                       AstFunc* randomizeFuncp, AstNode* capturedTreep,
-                                      const AstVar* thisVarp, AstNodeStmt* basicp,
-                                      AstNodeExpr* elemsp, AstNodeStmt* elemsFailp,
-                                      AstNodeStmt* afterp, AstNodeStmt* failp)
+                                      const AstVar* thisVarp, const InlineRandomizeParts& parts)
         = 0;
     // std::randomize() with {...} called by nodep: lower the captured
     // constraints into randomizeFuncp, and return the solver result. stdrandp

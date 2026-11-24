@@ -502,7 +502,7 @@ class RoundsWith;
   endfunction
 endclass
 
-// An array element's post_randomize() detaches an object the rounds solved, then another fails
+// An array element's post_randomize() would detach an object the rounds solved, but another fails
 typedef class RoundsDetach;
 
 class Detacher;
@@ -575,6 +575,148 @@ typedef struct {
   string s;
 } Pair;
 
+// Fails when bad, also through a handle of its base class
+class ItemBad extends Item;
+  bit bad;
+  constraint c {bad -> v == 7'd1 && v == 7'd2;}
+endclass
+
+// Constrains the size of its array
+class SizedChild;
+  rand bit [6:0] values[];
+  constraint c {
+    values.size() == 4;
+    foreach (values[i]) values[i] > 7'd10;
+  }
+endclass
+
+typedef class LateBase;
+
+// Its constraint reads a variable of the object holding it
+class Reader;
+  rand bit [6:0] v;
+  rand bit [1:0] w;
+  LateBase holder;
+  constraint c {
+    v == holder.x;
+    w == holder.cyc;
+  }
+endclass
+
+class Nested;
+  rand Item item;
+  rand Bad member;
+  randc bit [1:0] cyc;
+  function new;
+    item = new;
+    member = new;
+  endfunction
+endclass
+
+// A later member object or array element fails
+class LateBase;
+  rand bit [6:0] x;
+  randc bit [1:0] cyc;
+  int post_count;
+  function void post_randomize();
+    ++post_count;
+  endfunction
+endclass
+
+class Late extends LateBase;
+  rand SizedChild sized;
+  rand Reader reader;
+  rand Item first;
+  rand Item based;
+  rand Item items[2];
+  rand Bad elems[2];
+  rand Nested nested;
+  function new;
+    ItemBad b;
+    sized = new;
+    reader = new;
+    reader.holder = this;
+    first = new;
+    b = new;
+    based = b;
+    foreach (items[i]) items[i] = new;
+    foreach (elems[i]) elems[i] = new;
+    nested = new;
+  endfunction
+endclass
+
+// Constrains its own variables, and has member objects
+class SplitHolder;
+  rand bit [6:0] x;
+  rand SizedChild sized;
+  rand Bad member;
+  bit bad;
+  constraint c {
+    x > 7'd5;
+    bad -> x == 7'd1 && x == 7'd2;
+  }
+  function new;
+    sized = new;
+    member = new;
+  endfunction
+endclass
+
+// The post_randomize() of its member object, of a cycle of rand handles, replaces another one
+typedef class Replaced;
+
+class Replacer;
+  rand Replaced back;
+  function void post_randomize();
+    if (back != null) back.member = new;
+  endfunction
+endclass
+
+class Replaced;
+  rand Bad member;
+  rand Replacer replacer;
+  function new;
+    member = new;
+    replacer = new;
+    replacer.back = this;
+  endfunction
+endclass
+
+// The pre_randomize() of its member object of a cycle of rand handles, called when its own
+// solve fails, sets a variable whose rand_mode() is off
+typedef class ModeWriter;
+
+class ModeOff;
+  rand bit [6:0] x;
+  rand bit [6:0] y;
+  rand ModeWriter writer;
+  bit bad;
+  constraint c {bad -> y == 7'd1 && y == 7'd2;}
+endclass
+
+class ModeWriter;
+  rand ModeOff back;
+  function void pre_randomize();
+    if (back != null) back.x = 7'd77;
+  endfunction
+endclass
+
+// Held through two handles
+class Shared;
+  rand bit [6:0] x;
+  randc bit [1:0] cyc;
+endclass
+
+class TwoHandles;
+  rand Shared first;
+  rand Shared second;
+  rand Bad member;
+  function new;
+    first = new;
+    second = first;
+    member = new;
+  endfunction
+endclass
+
 class Leaves;
   rand bit [14:0] half;
   rand bit [62:0] mid;
@@ -589,6 +731,382 @@ class Leaves;
     queue_values = '{7'd1, 7'd2};
     assoc[3] = 7'd1;
     assoc[7] = 7'd2;
+  endfunction
+endclass
+
+// A constraint of a member object of a global constraint owner reads, as state, variables of
+// another member object, which the owner solves only in part
+class SibLeaf;
+  rand bit [6:0] x;
+  rand bit [6:0] y;
+  rand bit [6:0] entries[];
+endclass
+
+class SibReader;
+  SibLeaf leaf;
+  rand bit [6:0] v;
+  rand bit [6:0] w;
+  constraint c {
+    v == leaf.x;
+    leaf.entries.size() > 0 -> w == leaf.entries[0];
+  }
+endclass
+
+class SibHolder;
+  rand SibLeaf leaf;
+  function new;
+    leaf = new;
+  endfunction
+endclass
+
+class SibSplitHolder;
+  rand SibLeaf leaf;
+  rand Item other;
+  function new;
+    leaf = new;
+    other = new;
+  endfunction
+endclass
+
+class SibOwner;
+  rand SibHolder holder;
+  rand SibReader reader;
+  rand SibReader readers[2];
+  constraint c {holder.leaf.y == 7'd1;}
+  function new;
+    holder = new;
+    reader = new;
+    reader.leaf = holder.leaf;
+    foreach (readers[i]) begin
+      readers[i] = new;
+      readers[i].leaf = holder.leaf;
+    end
+  endfunction
+endclass
+
+class SibOwnerFirst;
+  rand SibReader reader;
+  rand SibSplitHolder holder;
+  constraint c {holder.leaf.y == 7'd1;}
+  function new;
+    holder = new;
+    reader = new;
+    reader.leaf = holder.leaf;
+  endfunction
+endclass
+
+// A configuration object, read through a handle that is not rand, which no member object is
+class SizeConfig;
+  int n = 3;
+endclass
+
+class SibCycle;
+  randc bit [1:0] c;
+endclass
+
+class SibSizedOwner;
+  rand SibHolder holder;
+  rand SibReader reader;
+  rand SibCycle cycle;
+  SizeConfig cfg;
+  constraint c {
+    holder.leaf.y == 7'd1;
+    holder.leaf.entries.size() == cfg.n;
+  }
+  function new;
+    cfg = new;
+    cycle = new;
+    holder = new;
+    reader = new;
+    reader.leaf = holder.leaf;
+  endfunction
+endclass
+
+// The size of its array is read from an object through a handle that is not rand
+class SizeProvider;
+  rand bit [6:0] x;
+  constraint c {x == 7'd2;}
+endclass
+
+class SizeReader;
+  rand SibLeaf leaf;
+  rand SizeProvider provider;
+  SizeProvider alias_provider;
+  rand bit [6:0] data[];
+  rand int n;
+  constraint c {
+    leaf.y == 7'd1;
+    data.size() == n;
+    foreach (data[i]) data[i] == 7'd3;
+  }
+  constraint c_n {n == 32'(alias_provider.x);}
+  function new;
+    leaf = new;
+    provider = new;
+    alias_provider = provider;
+  endfunction
+endclass
+
+// A global constraint owner whose solve, in function-call rounds, sets the size of an array of
+// a basic-only member object, which each round may change
+class ResizeRoundsOwner;
+  rand SibHolder holder;
+  rand SibCycle cycle;
+  rand bit [3:0] j;
+  rand bit [3:0] k;
+  function bit [3:0] next(bit [3:0] a);
+    bit [3:0] r = 0;
+    for (int i = 0; i < 1; ++i) r += a + 4'd1;
+    return r;
+  endfunction
+  constraint c {
+    holder.leaf.y == 7'd1;
+    j < 4'd9;
+    k == next(j);
+    holder.leaf.entries.size() == 32'(k);
+  }
+  function new;
+    holder = new;
+    cycle = new;
+  endfunction
+endclass
+
+// As SizeReader, the object read held through a handle of a base class
+class SizeBase;
+endclass
+
+class SizeDerived extends SizeBase;
+  rand SizeProvider provider;
+endclass
+
+class SizeBaseReader;
+  rand SibLeaf leaf;
+  rand SizeBase holder;
+  SizeProvider alias_provider;
+  rand bit [6:0] data[];
+  constraint c {
+    leaf.y == 7'd1;
+    data.size() == 32'(alias_provider.x);
+    foreach (data[i]) data[i] == 7'd3;
+  }
+  function new;
+    SizeDerived derived = new;
+    derived.provider = new;
+    leaf = new;
+    holder = derived;
+    alias_provider = derived.provider;
+  endfunction
+endclass
+
+// The post_randomize() of a member object randomizes, or detaches, the next one
+typedef class PostHolder;
+
+class PostCallee;
+  rand bit [15:0] v;
+  rand bit [6:0] w;
+  bit bad;
+  constraint c {bad -> w == 7'd1 && w == 7'd2;}
+endclass
+
+class PostCaller;
+  PostHolder holder;
+  bit detach;
+  int result;
+  function void post_randomize();
+    if (holder == null) return;
+    if (detach) begin
+      holder.next = null;
+      return;
+    end
+    holder.next.v = 16'd77;
+    holder.next.bad = 1;
+    result = holder.next.randomize();
+    holder.next.bad = 0;
+  endfunction
+endclass
+
+class PostHolder;
+  rand PostCaller first;
+  rand PostCallee next;
+  function new;
+    first = new;
+    first.holder = this;
+    next = new;
+  endfunction
+endclass
+
+// A global constraint owner whose array is resized after its solve, its elements constrained by
+// nothing
+class SizeOnlyOwner;
+  rand SibLeaf leaf;
+  rand PostCallee tail;
+  rand bit [31:0] payload[];
+  rand bit [6:0] z;
+  bit bad;
+  constraint c {
+    leaf.y == 7'd1;
+    payload.size() == 4;
+    bad -> z == 7'd1 && z == 7'd2;
+  }
+  function new;
+    leaf = new;
+    tail = new;
+  endfunction
+endclass
+
+// Member objects fail their own solve, then the pre_randomize() of an object of a cycle a later
+// member object holds sets their variables
+typedef class LateHolder;
+typedef class LateCycB;
+
+class LateCycA;
+  rand LateCycB b;
+  LateHolder h;
+endclass
+
+class LateWrap;
+  rand LateCycA a;
+endclass
+
+class LateCycB;
+  rand LateCycA a;
+  function void pre_randomize();
+    if (a == null || a.h == null) return;
+    a.h.plain.v = 7'd55;
+    a.h.owner.z = 7'd66;
+  endfunction
+endclass
+
+class LateHolder;
+  rand Bad plain;
+  rand SizeOnlyOwner owner;
+  rand LateWrap wrap;
+  function new;
+    plain = new;
+    owner = new;
+    wrap = new;
+    wrap.a = new;
+    wrap.a.b = new;
+    wrap.a.b.a = wrap.a;
+    wrap.a.h = this;
+  endfunction
+endclass
+
+// The pre_randomize() of its member object of a cycle of rand handles, run when its own solve
+// fails, replaces another member object, or sets a variable of its solve
+typedef class FailHolder;
+
+class FailWriter;
+  rand FailHolder back;
+  function void pre_randomize();
+    if (back == null) return;
+    if (back.swap) back.leaf = new;
+    back.y = 7'd77;
+    back.sized.delete();
+  endfunction
+endclass
+
+class FailHolder;
+  rand PostCallee leaf;
+  rand FailWriter writer;
+  rand bit [6:0] y;
+  rand bit [6:0] sized[];
+  bit bad;
+  bit swap;
+  constraint c {
+    y > 7'd3;
+    sized.size() == 3;
+    bad -> y == 7'd1 && y == 7'd2;
+  }
+  function new;
+    leaf = new;
+    writer = new;
+    writer.back = this;
+  endfunction
+endclass
+
+// Its member object holds an object of a cycle of rand handles, whose pre_randomize() runs also
+// when its own solve fails
+typedef class NestHolder;
+typedef class NestCycB;
+
+class NestCycA;
+  rand NestCycB b;
+  NestHolder h;
+  int pres;
+  function void pre_randomize();
+    ++pres;
+  endfunction
+endclass
+
+class NestCycB;
+  rand NestCycA a;
+  int pres;
+  function void pre_randomize();
+    ++pres;
+    if (a != null && a.h != null) a.h.y = 7'd77;
+  endfunction
+endclass
+
+class NestWrap;
+  rand NestCycA a;
+endclass
+
+class NestHolder;
+  rand NestCycA a;
+  rand NestWrap ws[1];
+  rand bit [6:0] y;
+  bit bad;
+  constraint c {bad -> y == 7'd1 && y == 7'd2;}
+  function new;
+    a = new;
+    foreach (ws[i]) begin
+      ws[i] = new;
+      ws[i].a = new;
+      ws[i].a.b = new;
+      ws[i].a.b.a = ws[i].a;
+    end
+    a.b = new;
+    a.b.a = a;
+    a.h = this;
+  endfunction
+endclass
+
+// A constraint of its member object reads, as state, its own variable
+typedef class OwnHolder;
+
+class OwnReader;
+  OwnHolder up;
+  rand bit [6:0] v;
+  constraint c {v == up.z;}
+endclass
+
+class OwnHolder;
+  rand bit [6:0] z;
+  rand SibLeaf leaf;
+  rand OwnReader reader;
+  constraint c {leaf.y == 7'd1;}
+  function new;
+    leaf = new;
+    reader = new;
+    reader.up = this;
+  endfunction
+endclass
+
+// randomize() with sets the size of its own array, then a member object fails
+class InlineSized;
+  rand bit [6:0] values[];
+  rand bit [6:0] x;
+  rand Bad member;
+  bit bad;
+  constraint c {
+    values.size() inside {[2 : 4]};
+    foreach (values[i]) values[i] > 7'd3;
+    x > 7'd3;
+    bad -> x == 7'd1 && x == 7'd2;
+  }
+  function new;
+    member = new;
   endfunction
 endclass
 
@@ -699,13 +1217,19 @@ module t;
           `checkd(lo.x, 7'(i + 90));
           `checkd(lo.other.v, 7'(i + 30));
         end
+        result = lo.randomize() with {x < 7'd50;};
+        `checkd(result, 0);
+        `checkd(lo.x, 7'(i + 90));
+        `checkd(lo.other.v, 7'(i + 30));
         lo.member.bad = 0;
+        lo.member.v = 7'(i + 40);
         lo.bad = 1;
         result = lo.randomize();
         `checkd(result, 0);
         `checkd(lo.x, 7'(i + 90));
-        `checkd(lo.member.pre_count, 5 * i + 4);
-        `checkd(lo.member.post_count, 2 * i + 1);
+        `checkd(lo.member.v, 7'(i + 40));
+        `checkd(lo.member.pre_count, 6 * i + 5);
+        `checkd(lo.member.post_count, i);
         lo.bad = 0;
         result = lo.randomize();
         `checkd(result, 1);
@@ -789,7 +1313,7 @@ module t;
         result = b.randomize();
         `checkd(result, 0);
         foreach (d.items[k]) `checkd(d.items[k].pre_count, 6 * i + 6);
-        foreach (d.items[k]) `checkd(d.items[k].post_count, 5 * i + 5);
+        foreach (d.items[k]) `checkd(d.items[k].post_count, 3 * i + 3);
         eo.bad = 0;
         result = eo.randomize();
         `checkd(result, 1);
@@ -1013,6 +1537,7 @@ module t;
         `checkd(rw.x, 7'(i + 90));
         `checkd(rw.y, 7'(i + 70));
         rd.sub = new;
+        rd.sub.v = 7'(i + 50);
         rd.x = 7'(i + 90);
         rd.elems[1].bad = 1;
         result = rd.randomize() with {
@@ -1020,7 +1545,7 @@ module t;
           sub != null -> x == f(sub.v);
         };
         `checkd(result, 0);
-        `checkd(rd.sub == null, 1);
+        `checkd(rd.sub.v, 7'(i + 50));
         `checkd(rd.x, 7'(i + 90));
         rh.x = 7'(i + 90);
         rh.values = new[1];
@@ -1048,6 +1573,181 @@ module t;
         for (int j = i; j < i + 4; ++j) begin
           for (int k = j + 1; k < i + 4; ++k) `checkd(cycle[j] == cycle[k], 0);
         end
+      end
+    end
+
+    begin
+      // A member object or array element fails after the object's solve and earlier ones
+      Late l;
+      LateBase b;
+      ItemBad ib;
+      bit [1:0] cycle[$];
+      bit [1:0] nested_cycle[$];
+      bit [6:0] values[$];
+      bit [1:0] cyc;
+      bit [1:0] nested_cyc;
+      int result;
+      l = new;
+      b = l;
+      $cast(ib, l.based);
+      for (int i = 0; i < 8; ++i) begin
+        for (int fail = 0; fail < 6; ++fail) begin
+          l.x = 7'(i + 90);
+          l.sized.values = '{7'(i), 7'(i + 1)};
+          l.first.v = 7'(i + 30);
+          ib.v = 7'(i + 35);
+          foreach (l.items[k]) l.items[k].v = 7'(k + i + 40);
+          foreach (l.elems[k]) l.elems[k].v = 7'(k + i + 50);
+          l.nested.item.v = 7'(i + 60);
+          cyc = l.cyc;
+          nested_cyc = l.nested.cyc;
+          l.elems[1].bad = fail % 3 == 0;
+          ib.bad = fail % 3 == 1;
+          l.nested.member.bad = fail % 3 == 2;
+          if (fail < 3) result = b.randomize();
+          else result = l.randomize() with {x < 7'd50;};
+          `checkd(result, 0);
+          `checkd(l.x, 7'(i + 90));
+          `checkd(l.cyc, cyc);
+          `checkd(l.sized.values.size(), 2);
+          foreach (l.sized.values[k]) `checkd(l.sized.values[k], 7'(k + i));
+          `checkd(l.first.v, 7'(i + 30));
+          `checkd(ib.v, 7'(i + 35));
+          foreach (l.items[k]) `checkd(l.items[k].v, 7'(k + i + 40));
+          foreach (l.elems[k]) `checkd(l.elems[k].v, 7'(k + i + 50));
+          `checkd(l.nested.item.v, 7'(i + 60));
+          `checkd(l.nested.cyc, nested_cyc);
+          `checkd(l.post_count, 2 * i);
+          `checkd(l.first.post_count, 2 * i);
+          `checkd(ib.post_count, 2 * i);
+          foreach (l.items[k]) `checkd(l.items[k].post_count, 2 * i);
+          `checkd(l.elems[0].post_count, 2 * i);
+          `checkd(l.nested.item.post_count, 2 * i);
+        end
+        l.elems[1].bad = 0;
+        ib.bad = 0;
+        l.nested.member.bad = 0;
+        result = l.randomize();
+        `checkd(result, 1);
+        `checkd(l.sized.values.size(), 4);
+        // Randomized with the object holding it (IEEE 1800-2023 18.5.9)
+        `checkd(l.reader.v, l.x);
+        `checkd(l.reader.w, l.cyc);
+        result = l.reader.randomize(null);
+        `checkd(result, 1);
+        cycle.push_back(l.cyc);
+        nested_cycle.push_back(l.nested.cyc);
+        result = l.randomize() with {first.v == 7'(i);};
+        `checkd(result, 1);
+        `checkd(l.reader.v, l.x);
+        values.push_back(l.x);
+        `checkd(l.post_count, 2 * i + 2);
+        `checkd(l.nested.item.post_count, 2 * i + 2);
+        `checkd(l.elems[1].post_count, 2 * i + 2);
+        cycle.push_back(l.cyc);
+        nested_cycle.push_back(l.nested.cyc);
+      end
+      l.reader.holder = null;
+      // Randomized also by randomize() with
+      `checkd(values.unique().size() > 1, 1);
+      // The failed calls do not use values of the randc cycles
+      for (int i = 0; i < 16; i += 4) begin
+        for (int j = i; j < i + 4; ++j) begin
+          for (int k = j + 1; k < i + 4; ++k) begin
+            `checkd(cycle[j] == cycle[k], 0);
+            `checkd(nested_cycle[j] == nested_cycle[k], 0);
+          end
+        end
+      end
+    end
+
+    begin
+      // The object's own solve, or a later member object, fails
+      SplitHolder h;
+      int result;
+      h = new;
+      for (int i = 0; i < 4; ++i) begin
+        h.x = 7'(i + 90);
+        h.sized.values = '{7'(i), 7'(i + 1)};
+        h.member.bad = 1;
+        result = h.randomize();
+        `checkd(result, 0);
+        `checkd(h.x, 7'(i + 90));
+        `checkd(h.sized.values.size(), 2);
+        h.member.bad = 0;
+        h.bad = 1;
+        result = h.randomize();
+        `checkd(result, 0);
+        `checkd(h.x, 7'(i + 90));
+        `checkd(h.sized.values.size(), 2);
+        foreach (h.sized.values[k]) `checkd(h.sized.values[k], 7'(k + i));
+        h.bad = 0;
+        result = h.randomize();
+        `checkd(result, 1);
+        `checkd(h.sized.values.size(), 4);
+      end
+    end
+
+    begin
+      // A failed call of an object detached by an earlier call leaves its values
+      Replaced r;
+      Bad b;
+      int result;
+      r = new;
+      for (int i = 0; i < 4; ++i) begin
+        b = r.member;
+        result = r.randomize();
+        `checkd(result, 1);
+        `checkd(r.member == b, 0);
+        b.v = 7'(i + 44);
+        b.bad = 1;
+        result = b.randomize();
+        `checkd(result, 0);
+        `checkd(b.v, 7'(i + 44));
+      end
+      r.replacer.back = null;
+    end
+
+    begin
+      // A failed call leaves what a callback sets in a variable that is not random
+      ModeOff m;
+      int result;
+      m = new;
+      m.writer = new;
+      m.writer.back = m;
+      m.x.rand_mode(0);
+      m.bad = 1;
+      for (int i = 0; i < 4; ++i) begin
+        m.x = 7'(i);
+        result = m.randomize();
+        `checkd(result, 0);
+        `checkd(m.x, 77);
+      end
+      m.writer.back = null;
+    end
+
+    begin
+      // A failed call leaves an object reached through two handles
+      TwoHandles t;
+      Shared copy;
+      bit [1:0] cyc;
+      int result;
+      t = new;
+      for (int i = 0; i < 8; ++i) begin
+        t.first.x = 7'(i + 40);
+        cyc = t.first.cyc;
+        t.member.bad = 1;
+        result = t.randomize();
+        `checkd(result, 0);
+        `checkd(t.first.x, 7'(i + 40));
+        `checkd(t.first.cyc, cyc);
+        t.member.bad = 0;
+        result = t.randomize();
+        `checkd(result, 1);
+        // A copy is not being randomized
+        copy = new t.first;
+        result = copy.randomize();
+        `checkd(result, 1);
       end
     end
 
@@ -1081,6 +1781,258 @@ module t;
         `checks(l.pair.s, "kept");
         foreach (l.dyn_values[k]) `checkd(l.dyn_values[k], 7'(k + i));
         foreach (l.queue_values[k]) `checkd(l.queue_values[k], 7'(k + 2 * i));
+      end
+    end
+
+    begin
+      // The member objects are randomized together (IEEE 1800-2023 18.5.8)
+      SibOwner o;
+      SibOwnerFirst f;
+      SibSizedOwner z;
+      bit [1:0] cycles[$];
+      bit [6:0] values[$];
+      bit [6:0] elems[$];
+      int result;
+      o = new;
+      f = new;
+      z = new;
+      for (int i = 0; i < 8; ++i) begin
+        result = o.randomize();
+        `checkd(result, 1);
+        `checkd(o.holder.leaf.y, 1);
+        `checkd(o.reader.v, o.holder.leaf.x);
+        foreach (o.readers[k]) `checkd(o.readers[k].v, o.holder.leaf.x);
+        result = o.reader.randomize(null);
+        `checkd(result, 1);
+        values.push_back(o.holder.leaf.x);
+        result = f.randomize();
+        `checkd(result, 1);
+        `checkd(f.holder.leaf.y, 1);
+        `checkd(f.reader.v, f.holder.leaf.x);
+        result = f.reader.randomize(null);
+        `checkd(result, 1);
+        z.holder.leaf.entries.delete();
+        result = z.randomize();
+        `checkd(result, 1);
+        `checkd(z.holder.leaf.entries.size(), 3);
+        `checkd(z.reader.v, z.holder.leaf.x);
+        `checkd(z.reader.w, z.holder.leaf.entries[0]);
+        result = z.reader.randomize(null);
+        `checkd(result, 1);
+        elems.push_back(z.holder.leaf.entries[2]);
+        // Its member objects are solved once per call
+        cycles.push_back(z.cycle.c);
+        if (i % 4 == 3) begin
+          `checkd(cycles.unique().size(), 4);
+          cycles.delete();
+        end
+      end
+      `checkd(values.unique().size() > 1, 1);
+      `checkd(elems.unique().size() > 1, 1);
+    end
+
+    begin
+      // The sizes read, as state, a member object solved before
+      SizeReader r;
+      int result;
+      r = new;
+      for (int i = 0; i < 4; ++i) begin
+        r.provider.x = 7'd1;
+        result = r.randomize();
+        `checkd(result, 1);
+        `checkd(r.data.size(), 2);
+      end
+    end
+
+    begin
+      // Member objects whose solve failed keep what a later callback sets
+      LateHolder h;
+      int result;
+      h = new;
+      h.plain.bad = 1;
+      h.owner.bad = 1;
+      result = h.randomize();
+      `checkd(result, 0);
+      `checkd(h.plain.v, 55);
+      `checkd(h.owner.z, 66);
+      h.wrap.a.b.a = null;
+      h.wrap.a.h = null;
+    end
+
+    begin
+      // The elements a resize after the solve adds are randomized
+      SizeOnlyOwner p;
+      int result;
+      p = new;
+      result = p.randomize();
+      `checkd(result, 1);
+      `checkd(p.payload.size(), 4);
+      foreach (p.payload[i]) `checkd(p.payload[i] == 0, 0);
+    end
+
+    begin
+      // The elements of an array the last round resized are randomized, and the member objects
+      // once per call
+      ResizeRoundsOwner o;
+      bit [1:0] cycles[$];
+      int result;
+      int zeros;
+      int total;
+      o = new;
+      zeros = 0;
+      total = 0;
+      for (int i = 0; i < 20; ++i) begin
+        result = o.randomize();
+        `checkd(result, 1);
+        `checkd(o.holder.leaf.entries.size(), 32'(o.k));
+        foreach (o.holder.leaf.entries[q]) begin
+          ++total;
+          if (o.holder.leaf.entries[q] == 0) ++zeros;
+        end
+        cycles.push_back(o.cycle.c);
+        if (i % 4 == 3) begin
+          `checkd(cycles.unique().size(), 4);
+          cycles.delete();
+        end
+      end
+      `checkd(zeros < total / 8, 1);
+    end
+
+    begin
+      // The sizes read, as state, an object a member object of a derived class holds
+      SizeBaseReader r;
+      int result;
+      r = new;
+      for (int i = 0; i < 4; ++i) begin
+        r.alias_provider.x = 7'd1;
+        result = r.randomize();
+        `checkd(result, 1);
+        `checkd(r.data.size(), 2);
+      end
+    end
+
+    begin
+      // A failed call from a post_randomize(), or of an object one detached, leaves its values
+      PostHolder h;
+      PostCallee n;
+      int result;
+      h = new;
+      for (int i = 0; i < 4; ++i) begin
+        result = h.randomize();
+        `checkd(result, 1);
+        `checkd(h.first.result, 0);
+        `checkd(h.next.v, 77);
+      end
+      n = h.next;
+      h.first.detach = 1;
+      result = h.randomize();
+      `checkd(result, 1);
+      `checkd(h.next == null, 1);
+      n.v = 16'd77;
+      n.bad = 1;
+      result = n.randomize();
+      `checkd(result, 0);
+      `checkd(n.v, 77);
+      h.first.holder = null;
+    end
+
+    begin
+      // A failed call keeps what a callback run on the failure sets, and leaves an object a
+      // callback detached
+      FailHolder h;
+      PostCallee old;
+      int result;
+      h = new;
+      for (int i = 0; i < 4; ++i) begin
+        old = h.leaf;
+        h.y = 7'(i + 5);
+        h.sized = '{1, 2};
+        h.bad = 1;
+        h.swap = 1;
+        result = h.randomize();
+        `checkd(result, 0);
+        `checkd(h.y, 77);
+        `checkd(h.sized.size(), 0);
+        h.y = 7'(i + 5);
+        h.sized = '{1, 2};
+        result = h.randomize() with {y < 7'd100;};
+        `checkd(result, 0);
+        `checkd(h.y, 77);
+        `checkd(h.sized.size(), 0);
+        `checkd(h.leaf == old, 0);
+        h.bad = 0;
+        h.swap = 0;
+        old.v = 16'(i + 21);
+        old.bad = 1;
+        result = old.randomize();
+        `checkd(result, 0);
+        `checkd(old.v, 16'(i + 21));
+      end
+      h.writer.back = null;
+    end
+
+    begin
+      // The pre_randomize() of an object of a cycle a member object holds
+      NestHolder h;
+      int result;
+      h = new;
+      h.y = 7'd5;
+      h.bad = 1;
+      result = h.randomize();
+      `checkd(result, 0);
+      `checkd(h.y, 77);
+      `checkd(h.a.pres, 1);
+      `checkd(h.a.b.pres, 1);
+      `checkd(h.ws[0].a.b.pres, 1);
+      h.a.b.a = null;
+      h.a.h = null;
+      h.ws[0].a.b.a = null;
+    end
+
+    begin
+      // A member object reads the object's own variable
+      OwnHolder o;
+      int result;
+      o = new;
+      for (int i = 0; i < 8; ++i) begin
+        result = o.randomize();
+        `checkd(result, 1);
+        `checkd(o.reader.v, o.z);
+        result = o.reader.randomize(null);
+        `checkd(result, 1);
+      end
+      o.reader.up = null;
+    end
+
+    begin
+      // randomize() with resizing an array, then a member object fails
+      InlineSized s;
+      int result;
+      s = new;
+      for (int i = 0; i < 4; ++i) begin
+        s.values = '{7'(i), 7'(i + 1)};
+        s.x = 7'(i + 50);
+        s.member.bad = 1;
+        result = s.randomize() with {
+          values.size() == 3;
+          x < 7'd40;
+        };
+        `checkd(result, 0);
+        `checkd(s.values.size(), 2);
+        `checkd(s.values[0], 7'(i));
+        `checkd(s.x, 7'(i + 50));
+        s.member.bad = 0;
+        result = s.randomize() with {values.size() == 3;};
+        `checkd(result, 1);
+        `checkd(s.values.size(), 3);
+        // Its own solve fails after the solve of sizes
+        s.values = '{7'(i), 7'(i + 1)};
+        s.bad = 1;
+        result = s.randomize();
+        `checkd(result, 0);
+        `checkd(s.values.size(), 2);
+        `checkd(s.values[0], 7'(i));
+        s.bad = 0;
       end
     end
 
