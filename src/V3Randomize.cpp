@@ -63,6 +63,11 @@ using ActiveSet = std::unordered_set<const AstClass*>;
 static constexpr const char* BASIC_RANDOMIZE_VARS_FUNC_NAME = "__VBasicRandVars";
 static constexpr const char* BASIC_RANDOMIZE_OBJS_FUNC_NAME = "__VBasicRandObjs";
 static constexpr const char* BASIC_RANDOMIZE_OBJS_PRE_FUNC_NAME = "__VBasicRandObjsPre";
+// Parts of randomize(): its pre-randomize phase, then the rest, which ends with its
+// post-randomize phase if successful (IEEE 1800-2023 18.6)
+static constexpr const char* PRE_RANDOMIZE_TASK_NAME = "__VrandPre";
+static constexpr const char* NOPRE_RANDOMIZE_FUNC_NAME = "__VrandNoPre";
+static constexpr const char* POST_RANDOMIZE_TASK_NAME = "__VrandPost";
 
 // ######################################################################
 // Determines if a class is used with randomization
@@ -1683,8 +1688,6 @@ class RandomizeVisitor final : public VNVisitor {
     ActiveSet m_activeClasses;  // Classes currently building randomize()
     // Whether the basic randomization of the class is split, see basicRandSplit
     std::unordered_map<const AstClass*, bool> m_basicRandSplit;
-    std::map<AstClass*, std::pair<bool, bool>>
-        m_prePostWrap;  // Per-handle-type pre/post virtual wrapper presence
     // Methods implementing randomize(null), see addRandomizeNullBody
     enum class NullPhase : uint8_t { NONE, ENTRY, PRE, CHECK, POST };
     std::vector<std::tuple<AstClass*, NullPhase, AstFunc*>>
@@ -2393,79 +2396,16 @@ class RandomizeVisitor final : public VNVisitor {
         randomizeFuncp->addStmtsp(
             new AstIf{fl, new AstVarRef{fl, randomizeFuncp->fvarp(), VAccess::READ}, stmtsp});
     }
-    // Per-class virtual wrapper that invokes the class's effective
-    // pre_randomize/post_randomize. IEEE 1800-2023 18.6.2: pre_randomize and
-    // post_randomize "appear to behave as virtual methods" because randomize()
-    // is virtual. The inline `randomize() with` path builds a non-virtual
-    // function on the static handle type, so it dispatches pre/post through
-    // this wrapper to reach the dynamic type's override.
-    AstTask* getCreatePrePostCallback(AstClass* const classp, const string& which) {
-        const string name = "__V" + which;
-        if (AstTask* const existingp = VN_CAST(m_memberMap.findMember(classp, name), Task)) {
-            return existingp;
-        }
-        AstTask* const taskp = new AstTask{classp->fileline(), name};
-        taskp->classMethod(true);
-        taskp->isVirtual(classp->isExtended());
-        classp->addMembersp(taskp);
-        m_memberMap.insert(classp, taskp);
-        addPrePostCall(classp, taskp, which);
-        return taskp;
-    }
-    // Build the virtual pre/post wrappers across classp's whole hierarchy so a
-    // `randomize() with` through a base handle dispatches to a derived
-    // override. Returns whether a pre/post wrapper exists anywhere in the
-    // hierarchy (cached per static handle type).
-    std::pair<bool, bool> buildPrePostVirtualWrappers(AstClass* const classp) {
-        const auto cachedIt = m_prePostWrap.find(classp);
-        if (cachedIt != m_prePostWrap.end()) return cachedIt->second;
-        std::vector<AstClass*> hierp{classp};
-        v3Global.rootp()->foreach([&](AstClass* subp) {
-            if (subp != classp && AstClass::isClassExtendedFrom(subp, classp))
-                hierp.push_back(subp);
-        });
-        bool hasPre = false;
-        bool hasPost = false;
-        for (AstClass* const cp : hierp) {
-            if (findPrePostTask(cp, "pre_randomize")) {
-                getCreatePrePostCallback(cp, "pre_randomize");
-                hasPre = true;
-            }
-            if (findPrePostTask(cp, "post_randomize")) {
-                getCreatePrePostCallback(cp, "post_randomize");
-                hasPost = true;
-            }
-        }
-        // Ensure the static handle type owns the slot whenever a subclass
-        // overrides, so the virtual call resolves on a base handle.
-        if (hasPre) getCreatePrePostCallback(classp, "pre_randomize");
-        if (hasPost) getCreatePrePostCallback(classp, "post_randomize");
-        const std::pair<bool, bool> result{hasPre, hasPost};
-        m_prePostWrap.emplace(classp, result);
-        return result;
-    }
-    AstNodeStmt* newVirtualPrePostCall(AstClass* const classp, const string& which) {
+    // Call of classp's taskp on this object, so that of its class runs
+    AstNodeStmt* newThisTaskCall(AstClass* const classp, AstTask* const taskp) {
         FileLine* const fl = classp->fileline();
-        AstTask* const wrapperp = getCreatePrePostCallback(classp, which);
         AstClassRefDType* const refDTypep = new AstClassRefDType{fl, classp, nullptr};
         v3Global.rootp()->typeTablep()->addTypesp(refDTypep);
         AstMethodCall* const callp
-            = new AstMethodCall{fl, new AstThisRef{fl, refDTypep}, wrapperp->name(), nullptr};
-        callp->taskp(wrapperp);
+            = new AstMethodCall{fl, new AstThisRef{fl, refDTypep}, taskp->name(), nullptr};
+        callp->taskp(taskp);
         callp->dtypeSetVoid();
         return callp->makeStmt();
-    }
-    void addVirtualPrePostCall(AstFunc* const randomizeFuncp, AstClass* const classp,
-                               const string& which) {
-        randomizeFuncp->addStmtsp(newVirtualPrePostCall(classp, which));
-    }
-    // Check if a class (including inherited members) has any rand class-type members
-    bool classHasRandClassMembers(AstClass* classp) {
-        return classp->existsMember([](const AstClass*, const AstVar* varp) {
-            if (!varp->rand().isRandomizable()) return false;
-            const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
-            return VN_IS(dtypep, ClassRefDType);
-        });
     }
     // True if this class owns a global constraint: a member-select chain rooted
     // at a rand class-typed handle reaching into a sub-object, or a random static
@@ -2488,9 +2428,8 @@ class RandomizeVisitor final : public VNVisitor {
             return owns;
         });
     }
-    // Get or create __VrandCb_pre/__VrandCb_post task for nested callbacks
-    AstTask* getCreateNestedCallbackTask(AstClass* classp, const string& suffix) {
-        const string name = "__VrandCb_" + suffix;
+    // Get or create the pre- or post-randomize phase task, see populatePhaseTask
+    AstTask* getCreatePhaseTask(AstClass* classp, const string& name) {
         AstTask* taskp = VN_CAST(m_memberMap.findMember(classp, name), Task);
         if (taskp) return taskp;
         taskp = new AstTask{classp->fileline(), name};
@@ -2500,9 +2439,12 @@ class RandomizeVisitor final : public VNVisitor {
         m_memberMap.insert(classp, taskp);
         return taskp;
     }
-    // Populate nested callback task body: calls pre/post_randomize on globally constrained members
-    void populateNestedCallbackTask(AstTask* const callbackTaskp, AstClass* const classp,
-                                    const string& cbName) {
+    // Populate a pre- or post-randomize phase task: classp's callback, before (pre) or after
+    // (post) the phases of its rand class members
+    void populatePhaseTask(AstTask* const phaseTaskp, AstClass* const classp,
+                           const string& cbName) {
+        const bool pre = cbName == "pre_randomize";
+        if (pre) addPrePostCall(classp, phaseTaskp, cbName);
         FileLine* const fl = classp->fileline();
         classp->foreachMember([&](AstClass* ownerClassp, AstVar* memberVarp) {
             if (!memberVarp->rand().isRandomizable()) return;
@@ -2511,8 +2453,8 @@ class RandomizeVisitor final : public VNVisitor {
             if (!classRefp) return;
             AstClass* const memberClassp = classRefp->classp();
             if (memberClassp == classp) return;  // Avoid self-reference
-            // Others are randomized by member.randomize(), which calls their callbacks
-            if (!memberVarp->globalConstrained() || inRandHandleCycle(memberVarp, classp)) return;
+            // A cycle's objects are randomized by member.randomize(), which calls their callbacks
+            if (inRandHandleCycle(memberVarp, classp)) return;
 
             // Force-visit member class if not yet processed
             if (memberClassp->user1()) {
@@ -2520,58 +2462,26 @@ class RandomizeVisitor final : public VNVisitor {
                 m_solverp->startClass(classp);
             }
 
-            AstNodeStmt* stmtsp = nullptr;
-
-            // 1. Call member.pre/post_randomize() if exists in hierarchy
-            if (AstTask* const userFuncp = findPrePostTask(memberClassp, cbName)) {
-                AstMethodCall* const callp = new AstMethodCall{
-                    fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::WRITE}, cbName};
-                callp->taskp(userFuncp);
-                callp->dtypeSetVoid();
-                stmtsp = AstNode::addNext(stmtsp, callp->makeStmt());
-            }
-
-            // 2. Call member.__VrandCb_pre/post() for deeper recursion
-            if (classHasRandClassMembers(memberClassp)) {
-                const string suffix = (cbName == "pre_randomize") ? "pre" : "post";
-                AstTask* const nestedTaskp = getCreateNestedCallbackTask(memberClassp, suffix);
-                // A cycle of rand class handles makes the callbacks recursive
-                if (m_activeClasses.count(memberClassp)) nestedTaskp->recursive(true);
-                AstMethodCall* const recurseCallp = new AstMethodCall{
-                    fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::WRITE},
-                    nestedTaskp->name()};
-                recurseCallp->taskp(nestedTaskp);
-                recurseCallp->dtypeSetVoid();
-                stmtsp = AstNode::addNext(stmtsp, recurseCallp->makeStmt());
-            }
-
-            if (!stmtsp) return;
-
-            // Wrap in null check
-            AstNodeExpr* condp
-                = new AstNeq{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
-                             new AstConst{fl, AstConst::Null{}}};
-            // Each object of a cycle is reached once, while flagged as being randomized
-            if (inRandHandleCycle(memberVarp, classp)) {
-                condp
-                    = new AstLogAnd{fl, condp,
-                                    new AstNot{fl, newRandomizingSelp(fl, ownerClassp, memberVarp,
-                                                                      VAccess::READ)}};
-                AstNodeStmt* const setp = new AstAssign{
-                    fl, newRandomizingSelp(fl, ownerClassp, memberVarp, VAccess::WRITE),
-                    new AstConst{fl, AstConst::BitTrue{}}};
-                stmtsp = AstNode::addNext(setp, stmtsp);
-                stmtsp = AstNode::addNext(
-                    stmtsp,
-                    new AstAssign{fl,
-                                  newRandomizingSelp(fl, ownerClassp, memberVarp, VAccess::WRITE),
-                                  new AstConst{fl, AstConst::BitFalse{}}});
-            }
-            AstIf* const nullCheckp = new AstIf{fl, condp, stmtsp};
+            // One randomized by its own __VrandNoPre runs its post-randomize phase there
+            if (!pre && !memberVarp->globalConstrained()) return;
+            // Called on the object, so the phase of its dynamic type runs
+            AstTask* const memberPhasep = getCreatePhaseTask(
+                memberClassp, pre ? PRE_RANDOMIZE_TASK_NAME : POST_RANDOMIZE_TASK_NAME);
+            AstMethodCall* const callp
+                = new AstMethodCall{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::WRITE},
+                                    memberPhasep->name()};
+            callp->taskp(memberPhasep);
+            callp->dtypeSetVoid();
+            AstIf* const nullCheckp = new AstIf{
+                fl,
+                new AstNeq{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
+                           new AstConst{fl, AstConst::Null{}}},
+                callp->makeStmt()};
 
             // Wrap in rand_mode check
-            callbackTaskp->addStmtsp(wrapIfRandMode(classp, memberVarp, nullCheckp));
+            phaseTaskp->addStmtsp(wrapIfRandMode(classp, memberVarp, nullCheckp));
         });
+        if (!pre) addPrePostCall(classp, phaseTaskp, cbName);
     }
     AstVar* getVarFromRef(AstNodeExpr* const exprp) {
         if (AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef)) {
@@ -2890,6 +2800,10 @@ class RandomizeVisitor final : public VNVisitor {
                     // A globally constrained member of a cycle is solved too, so is
                     // randomized before the solve
                     addBasicMemberCall(varsFuncp, nodep, classp, memberVarp, inCycle, "randomize");
+                } else if (!inCycle) {
+                    // Its pre-randomize phase is called by this object's
+                    addBasicMemberCall(objsFuncp, nodep, classp, memberVarp, inCycle,
+                                       NOPRE_RANDOMIZE_FUNC_NAME);
                 } else {
                     addBasicMemberCall(objsFuncp, nodep, classp, memberVarp, inCycle, "randomize");
                     // The pre_randomize of the object and of its rand objects, as randomize()
@@ -3324,7 +3238,9 @@ class RandomizeVisitor final : public VNVisitor {
         const bool basicFirst = m_globalOwnerClassps.count(nodep);
 
         FileLine* const fl = nodep->fileline();
-        AstFunc* const randomizep = V3Randomize::newRandomizeFunc(m_memberMap, nodep);
+        AstFunc* const userRandp = V3Randomize::newRandomizeFunc(m_memberMap, nodep);
+        AstFunc* const randomizep
+            = V3Randomize::newRandomizeFunc(m_memberMap, nodep, NOPRE_RANDOMIZE_FUNC_NAME);
         AstVar* const fvarp = randomizep->fvarp();
         AstVar* const randModeVarp = RandModeVars::randModeVarp(nodep);
         // An object of a cycle of rand handles is flagged while randomized, so it is not
@@ -3337,14 +3253,16 @@ class RandomizeVisitor final : public VNVisitor {
                                             randomizingVarp, VAccess::WRITE},
                               new AstConst{fl, AstConst::BitTrue{}}});
         }
-        addPrePostCall(nodep, randomizep, "pre_randomize");
-
-        // Call nested pre_randomize on rand class-type members (IEEE 18.4.1)
-        if (classHasRandClassMembers(nodep)) {
-            AstTask* const preTaskp = getCreateNestedCallbackTask(nodep, "pre");
-            populateNestedCallbackTask(preTaskp, nodep, "pre_randomize");
-            randomizep->addStmtsp((new AstTaskRef{fl, preTaskp})->makeStmt());
-        }
+        // The phases call pre/post_randomize of the object and its rand class members
+        // (IEEE 1800-2023 18.6)
+        AstTask* const preTaskp = getCreatePhaseTask(nodep, PRE_RANDOMIZE_TASK_NAME);
+        populatePhaseTask(preTaskp, nodep, "pre_randomize");
+        AstTask* const postTaskp = getCreatePhaseTask(nodep, POST_RANDOMIZE_TASK_NAME);
+        populatePhaseTask(postTaskp, nodep, "post_randomize");
+        userRandp->addStmtsp((new AstTaskRef{fl, preTaskp})->makeStmt());
+        userRandp->addStmtsp(new AstAssign{fl,
+                                           new AstVarRef{fl, userRandp->fvarp(), VAccess::WRITE},
+                                           new AstFuncRef{fl, randomizep}});
 
         // Both IS_RANDOMIZED and IS_RANDOMIZED_GLOBAL classes need full constraint support
         // IS_RANDOMIZED_GLOBAL classes can be randomized independently
@@ -3391,15 +3309,7 @@ class RandomizeVisitor final : public VNVisitor {
         m_solverp->finishClassRandomize(nodep, randomizep, afterSolveBasicp);
         if (objsAfterSolve) randomizep->addStmtsp(newObjsAfterSolvep(fl, nodep, fvarp));
 
-        // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
-        AstNodeStmt* postp = nullptr;
-        if (classHasRandClassMembers(nodep)) {
-            AstTask* const postTaskp = getCreateNestedCallbackTask(nodep, "post");
-            populateNestedCallbackTask(postTaskp, nodep, "post_randomize");
-            postp = (new AstTaskRef{fl, postTaskp})->makeStmt();
-        }
-        postp = AstNode::addNextNull(postp, newPrePostCall(nodep, "post_randomize"));
-        addPostRandomizeStmts(randomizep, postp);
+        addPostRandomizeStmts(randomizep, (new AstTaskRef{fl, postTaskp})->makeStmt());
         if (randomizingVarp) {
             randomizep->addStmtsp(
                 new AstAssign{fl,
@@ -3715,26 +3625,10 @@ class RandomizeVisitor final : public VNVisitor {
                 new AstConst{nodep->fileline(), AstConst::BitTrue{}}});
         }
 
-        // A base-handle `randomize() with` must still reach a derived
-        // pre/post_randomize. Route them through per-class virtual wrappers
-        // when the static handle type participates in inheritance.
-        const std::pair<bool, bool> prePostWrap = classp->isExtended()
-                                                      ? buildPrePostVirtualWrappers(classp)
-                                                      : std::pair<bool, bool>{false, false};
-        if (prePostWrap.first) {
-            addVirtualPrePostCall(randomizeFuncp, classp, "pre_randomize");
-        } else {
-            addPrePostCall(classp, randomizeFuncp, "pre_randomize");
-        }
-
-        // Call nested pre_randomize on rand class-type members (IEEE 18.4.1)
-        if (classHasRandClassMembers(classp)) {
-            AstTask* const preTaskp = getCreateNestedCallbackTask(classp, "pre");
-            if (!preTaskp->stmtsp()) {
-                populateNestedCallbackTask(preTaskp, classp, "pre_randomize");
-            }
-            randomizeFuncp->addStmtsp((new AstTaskRef{nodep->fileline(), preTaskp})->makeStmt());
-        }
+        // The phases of the object's class, also through a base-class handle (IEEE 1800-2023
+        // 18.6)
+        randomizeFuncp->addStmtsp(
+            newThisTaskCall(classp, getCreatePhaseTask(classp, PRE_RANDOMIZE_TASK_NAME)));
 
         // Detach the expression and prepare variable copies
         // (randomize() in class method is a FuncRef, not a MethodCall)
@@ -3760,19 +3654,9 @@ class RandomizeVisitor final : public VNVisitor {
                 newObjsAfterSolvep(nodep->fileline(), classp, randomizeFuncp->fvarp()));
         }
 
-        // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
-        AstNodeStmt* postp = nullptr;
-        if (classHasRandClassMembers(classp)) {
-            AstTask* const postTaskp = getCreateNestedCallbackTask(classp, "post");
-            if (!postTaskp->stmtsp()) {
-                populateNestedCallbackTask(postTaskp, classp, "post_randomize");
-            }
-            postp = (new AstTaskRef{nodep->fileline(), postTaskp})->makeStmt();
-        }
-        postp = AstNode::addNextNull(postp, prePostWrap.second
-                                                ? newVirtualPrePostCall(classp, "post_randomize")
-                                                : newPrePostCall(classp, "post_randomize"));
-        addPostRandomizeStmts(randomizeFuncp, postp);
+        addPostRandomizeStmts(
+            randomizeFuncp,
+            newThisTaskCall(classp, getCreatePhaseTask(classp, POST_RANDOMIZE_TASK_NAME)));
         if (randomizingVarp) {
             randomizeFuncp->addStmtsp(new AstAssign{
                 nodep->fileline(),
