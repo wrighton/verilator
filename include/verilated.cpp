@@ -3798,6 +3798,7 @@ void VerilatedContext::removeModel(const VerilatedModel* modelp) {
     for (auto it = m_impdatap->m_models.begin(); it != m_impdatap->m_models.end(); ++it) {
         if (it->second != modelp) continue;
         m_impdatap->m_models.erase(it);
+        ++m_impdatap->m_modelsRemoved;
         return;
     }
 }
@@ -3806,6 +3807,8 @@ std::map<std::string, VerilatedModel*> VerilatedContext::models() const VL_MT_SA
     const VerilatedLockGuard lock{m_impdatap->m_modelsMutex};
     return m_impdatap->m_models;
 }
+
+uint32_t VerilatedContext::modelsRemoved() const VL_MT_SAFE { return m_impdatap->m_modelsRemoved; }
 
 //======================================================================
 // VerilatedContextImp:: Methods - command line
