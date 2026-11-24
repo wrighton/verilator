@@ -485,10 +485,23 @@ static AstVar* forceNetp(const AstPin* pinp) {
 //######################################################################
 // Forced input net ports that may be one net with all their connections
 
+// Read-only module input whose incoming enable can supply a whole force RHS.
+static AstVar* forceInputRhsVarp(const AstNodeExpr* exprp) {
+    const AstVarRef* const refp = VN_CAST(exprp, VarRef);
+    AstVar* const varp = refp ? refp->varp() : nullptr;
+    return varp && varp->isInput() && varp->declDirection() == VDirection::INPUT
+                   && !varp->isFuncLocalSticky() && !varp->isPrimaryIO()
+                   && !varp->resolveWrittenInput() && !varp->isForced() && !varp->isForceable()
+                   && !varp->isSigPublic()
+               ? varp
+               : nullptr;
+}
+
 class TristateForcedInputVisitor final : public VNVisitorConst {
     // Forced input net port, and whether each connection of it is a plain wire.
     std::unordered_map<const AstVar*, bool> m_plainps;
     std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_netps;  // Its connections
+    std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_rhsInputps;  // Force RHS ports
     // Pulls on a formal propagate to the nets connected to its instances.
     std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_pullActualps;
     // Written other than by a force or release, or forced with a value of an enable not known
@@ -503,11 +516,13 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
         const AstNodeExpr* rhsp = nodep->rhsp();
         while (const AstSel* const selp = VN_CAST(rhsp, Sel)) rhsp = selp->fromp();
         const AstVarRef* const rhsRefp = VN_CAST(rhsp, VarRef);
-        const bool known = VN_IS(rhsp, Const)
+        AstVar* const inputRhsp = forceInputRhsVarp(nodep->rhsp());
+        const bool known = VN_IS(rhsp, Const) || (VN_IS(lhsp, VarRef) && inputRhsp)
                            || (VN_IS(lhsp, VarRef) && rhsRefp && !rhsRefp->varp()->isNet()
                                && !rhsRefp->varp()->isIO() && !rhsRefp->varp()->isForced());
         if (const AstNodeVarRef* const refp = VN_CAST(lhsp, NodeVarRef)) {
             if (!known) m_writtenps.emplace(refp->varp());
+            if (inputRhsp) m_rhsInputps[refp->varp()].push_back(inputRhsp);
         }
         iterateAndNextConstNull(nodep->rhsp());
     }
@@ -573,6 +588,9 @@ public:
             for (const AstVar* const netp : visitor.m_netps[pair.first]) {
                 if (visitor.m_pulledps.count(netp)) ok = false;
             }
+            for (const AstVar* const rhsp : visitor.m_rhsInputps[pair.first]) {
+                if (visitor.m_writtenps.count(rhsp) || visitor.m_pulledps.count(rhsp)) ok = false;
+            }
             if (ok) resultps.emplace(pair.first);
         }
         return resultps;
@@ -610,6 +628,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                                   // cell's module did not recognise as tristate
         bool elemZ = false;  // An element or member procedurally written with z, stored as x
         bool inIface = false;  // Variable of an interface
+        bool inputForceRhs = false;  // Whole read-only below-top input used as a force value
         // Forced port: the enable of the net it connects to, which its force also forces
         AstVar* resolvedEnVarp = nullptr;
     };
@@ -2747,9 +2766,14 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstNodeExpr* basep = rhsp;
         while (AstSel* const selp = VN_CAST(basep, Sel)) basep = selp->fromp();
         AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
-        if (refp && isTristateVar(refp->varp()) && !refp->varp()->isIO()) {
+        if (refp && isTristateVar(refp->varp())) {
             AstVar* const varp = refp->varp();
             const AuxAstVar& aux = m_varAux(varp);
+            if (varp->isIO()) {
+                return rhsp == basep && aux.inputForceRhs && !aux.outVarp
+                           ? newEnSelp(rhsp, refp, VAccess::READ)
+                           : nullptr;
+            }
             // The enable of a net excludes its pull, which a force of the net overrides. Of a
             // forced net, only the enable of an interface strength net is taken here
             if (!aux.bitPulls.empty()) return nullptr;
@@ -3705,6 +3729,21 @@ public:
             for (AstNode* const stmtp : m_modp->stmtspList()) {
                 if (AstVar* const varp = VN_CAST(stmtp, Var)) createResolvedEnVarp(varp, inputps);
             }
+        }
+        // Incoming enables must exist before parent pins are expanded.
+        for (AstNode* const nodep : netlistp->modulespList()) {
+            if (VN_IS(nodep, Iface)) continue;
+            VL_RESTORER(m_modp);
+            m_modp = VN_AS(nodep, NodeModule);
+            if (m_modp->isTop()) continue;
+            m_modp->foreach([this](const AstAssignForce* forcep) {
+                AstNodeVarRef* const targetp = forceTargetRefp(forcep->lhsp());
+                if (!targetp || !isForceOverrideNet(targetp->varp())) return;
+                if (AstVar* const varp = forceInputRhsVarp(forcep->rhsp())) {
+                    getCreateEnVarp(varp, false);
+                    m_varAux(varp).inputForceRhs = true;
+                }
+            });
         }
         // Process interface modules first, so an interface tristate net is recorded
         // (AuxAstVar::ifaceTristate) before any module that drives it across hierarchy is
