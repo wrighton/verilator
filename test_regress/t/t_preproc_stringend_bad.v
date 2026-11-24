@@ -5,3 +5,7 @@
 // SPDX-License-Identifier: CC0-1.0
 
 "Blah
+`define STR_UNTERM "unterminated
+module t;
+  localparam string S = "ok";
+endmodule
