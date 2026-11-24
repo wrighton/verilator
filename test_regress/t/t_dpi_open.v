@@ -91,7 +91,7 @@ module t;
   import "DPI-C" function void dpii_open_int_u2(int u, input int i [] [], output int o [] []);
   import "DPI-C" function void dpii_open_int_u3(int u, input int i [] [] [], output int o [] [] []);
 
-  import "DPI-C" function void dpii_oba(int width, input int i [], output int o []);
+  import "DPI-C" function void dpii_oba(int width, input bit [] i, output bit [] o);
 
   typedef struct packed {
     bit [2:0] a;

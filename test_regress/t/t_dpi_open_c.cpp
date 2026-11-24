@@ -70,7 +70,7 @@ extern void dpii_open_int_u1(int u, const svOpenArrayHandle i, const svOpenArray
 extern void dpii_open_int_u2(int u, const svOpenArrayHandle i, const svOpenArrayHandle o);
 extern void dpii_open_int_u3(int u, const svOpenArrayHandle i, const svOpenArrayHandle o);
 
-extern void dpii_oba(const svOpenArrayHandle i, const svOpenArrayHandle o);
+extern void dpii_oba(int width, const svOpenArrayHandle i, const svOpenArrayHandle o);
 
 extern void dpii_open_bv1(int width, const svOpenArrayHandle i, const svOpenArrayHandle o);
 extern void dpii_open_bv7(int width, const svOpenArrayHandle i, const svOpenArrayHandle o);
@@ -310,11 +310,13 @@ void dpii_oba(int width, const svOpenArrayHandle i, const svOpenArrayHandle o) {
     TEST_CHECK_HEX_EQ(svHigh(i, 0), width - 1);
     TEST_CHECK_HEX_EQ(svRight(i, 0), 0);
     TEST_CHECK_HEX_EQ(svLow(i, 0), 0);
-    for (int bit = 0; bit < width; ++bit) {
-        const svBitVecVal* const ibvp = static_cast<svBitVecVal*>(svGetArrayPtr(i));
-        svBitVecVal* const obvp = static_cast<svBitVecVal*>(svGetArrayPtr(o));
-        svPutBitselBit(obvp, bit, svGetBitselBit(ibvp, bit) ? 0 : 1);
-    }
+    // The packed data is only svSizeOfArray bytes, so copy it to and from canonical form
+    svBitVecVal ibv[SV_PACKED_DATA_NELEMS(64)] = {};
+    svBitVecVal obv[SV_PACKED_DATA_NELEMS(64)] = {};
+    std::memcpy(ibv, svGetArrayPtr(i), svSizeOfArray(i));
+    for (int bit = 0; bit < width; ++bit)
+        svPutBitselBit(obv, bit, svGetBitselBit(ibv, bit) ? 0 : 1);
+    std::memcpy(svGetArrayPtr(o), obv, svSizeOfArray(o));
 }
 
 // An element pointer, if given, is to the svBitVecVal form of an individual value
