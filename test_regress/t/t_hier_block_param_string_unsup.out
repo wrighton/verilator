@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_hier_block_param_string_unsup.v:18:10: Unsupported: String-typed value of untyped parameter 'P' of hierarchical block 'mid'.
+                                                             : ... note: In instance 't.w'
+   18 |   mid #(.P(S)) u (.is_str(is_str));
+      |          ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

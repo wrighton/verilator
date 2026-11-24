@@ -1273,6 +1273,11 @@ public:
     // as from 'samep': both real, both string, or both integral with the same width and
     // signedness. Unlike AstNodeDType::similarDType, ignores whether two-state or four-state.
     bool sameValueType(const AstConst* samep) const;
+    // Width of the type a parameter declared without a data type takes from this value, as
+    // V3Width gives it: 32 bits for an integral value not of a fixed width
+    int untypedParamWidth() const {
+        return num().isOpaque() || dtypep()->widthSized() ? width() : 32;
+    }
     // Parse string and create appropriate type of AstConst.
     // May return nullptr on parse failure.
     static AstConst* parseParamLiteral(FileLine* fl, const string& literal);
