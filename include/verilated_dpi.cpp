@@ -372,16 +372,16 @@ static void _vl_svPutBitArrElemVecVal(const svOpenArrayHandle d, const svBitVecV
     const VerilatedDpiOpenVar* const varp = _vl_openhandle_varp(d);
     void* const datap = _vl_sv_adjusted_datap(varp, nargs, indx1, indx2, indx3);
     if (VL_UNLIKELY(!datap)) return;
+    // Unused bits of the canonical form are undetermined (IEEE 1800-2023 H.7.7)
+    const int bits = varp->entBits();
     switch (varp->vltype()) {  // LCOV_EXCL_BR_LINE
-    case VLVT_UINT8: *(reinterpret_cast<CData*>(datap)) = s[0]; return;
-    case VLVT_UINT16: *(reinterpret_cast<SData*>(datap)) = s[0]; return;
-    case VLVT_UINT32: *(reinterpret_cast<IData*>(datap)) = s[0]; return;
-    case VLVT_UINT64: *(reinterpret_cast<QData*>(datap)) = VL_SET_QII(s[1], s[0]); break;
-    case VLVT_WDATA: {
-        WDataOutP wdatap = WDataOutP::external(reinterpret_cast<EData*>(datap));
-        for (int i = 0; i < VL_WORDS_I(varp->entBits()); ++i) wdatap[i] = s[i];
+    case VLVT_UINT8: VL_SET_C_SVBV(bits, *(reinterpret_cast<CData*>(datap)), s); return;
+    case VLVT_UINT16: VL_SET_S_SVBV(bits, *(reinterpret_cast<SData*>(datap)), s); return;
+    case VLVT_UINT32: VL_SET_I_SVBV(bits, *(reinterpret_cast<IData*>(datap)), s); return;
+    case VLVT_UINT64: VL_SET_Q_SVBV(bits, *(reinterpret_cast<QData*>(datap)), s); return;
+    case VLVT_WDATA:
+        VL_SET_W_SVBV(bits, WDataOutP::external(reinterpret_cast<EData*>(datap)), s);
         return;
-    }
     default:  // LCOV_EXCL_START  // Errored earlier
         VL_SVDPI_WARN_("%%Warning: DPI svOpenArrayHandle function unsupported datatype (%d).\n",
                        varp->vltype());
@@ -394,16 +394,16 @@ static void _vl_svPutLogicArrElemVecVal(const svOpenArrayHandle d, const svLogic
     const VerilatedDpiOpenVar* const varp = _vl_openhandle_varp(d);
     void* const datap = _vl_sv_adjusted_datap(varp, nargs, indx1, indx2, indx3);
     if (VL_UNLIKELY(!datap)) return;
+    // Unused bits of the canonical form are undetermined (IEEE 1800-2023 H.7.7)
+    const int bits = varp->entBits();
     switch (varp->vltype()) {  // LCOV_EXCL_BR_LINE
-    case VLVT_UINT8: *(reinterpret_cast<CData*>(datap)) = s[0].aval; return;
-    case VLVT_UINT16: *(reinterpret_cast<SData*>(datap)) = s[0].aval; return;
-    case VLVT_UINT32: *(reinterpret_cast<IData*>(datap)) = s[0].aval; return;
-    case VLVT_UINT64: *(reinterpret_cast<QData*>(datap)) = VL_SET_QII(s[1].aval, s[0].aval); break;
-    case VLVT_WDATA: {
-        WDataOutP wdatap = WDataOutP::external(reinterpret_cast<EData*>(datap));
-        for (int i = 0; i < VL_WORDS_I(varp->entBits()); ++i) wdatap[i] = s[i].aval;
+    case VLVT_UINT8: VL_SET_C_SVLV(bits, *(reinterpret_cast<CData*>(datap)), s); return;
+    case VLVT_UINT16: VL_SET_S_SVLV(bits, *(reinterpret_cast<SData*>(datap)), s); return;
+    case VLVT_UINT32: VL_SET_I_SVLV(bits, *(reinterpret_cast<IData*>(datap)), s); return;
+    case VLVT_UINT64: VL_SET_Q_SVLV(bits, *(reinterpret_cast<QData*>(datap)), s); return;
+    case VLVT_WDATA:
+        VL_SET_W_SVLV(bits, WDataOutP::external(reinterpret_cast<EData*>(datap)), s);
         return;
-    }
     default:  // LCOV_EXCL_START  // Errored earlier
         VL_SVDPI_WARN_("%%Warning: DPI svOpenArrayHandle function unsupported datatype (%d).\n",
                        varp->vltype());
