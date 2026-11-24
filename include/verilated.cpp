@@ -1989,6 +1989,24 @@ IData VL_FSEEK_I(IData fdi, IData offset, IData origin) VL_MT_SAFE {
     return Verilated::threadContextp()->impp()->fdSeek(fdi, offset, origin);
 }
 IData VL_FTELL_I(IData fdi) VL_MT_SAFE { return Verilated::threadContextp()->impp()->fdTell(fdi); }
+IData VL_FEOF_I(IData fpi) VL_MT_SAFE {
+    // While threadsafe, each thread can only access different file handles
+    FILE* const fp = VL_CVT_I_FP(fpi);
+    if (VL_UNLIKELY(!fp)) return 1;
+    return std::feof(fp) ? 1 : 0;
+}
+IData VL_FGETC_I(IData fpi) VL_MT_SAFE {
+    // While threadsafe, each thread can only access different file handles
+    FILE* const fp = VL_CVT_I_FP(fpi);
+    if (VL_UNLIKELY(!fp)) return ~0U;  // -1
+    return std::fgetc(fp);
+}
+IData VL_UNGETC_I(IData fpi, IData c) VL_MT_SAFE {
+    // While threadsafe, each thread can only access different file handles
+    FILE* const fp = VL_CVT_I_FP(fpi);
+    if (VL_UNLIKELY(!fp)) return ~0U;  // -1
+    return std::ungetc(c, fp) >= 0 ? 0 : ~0U;
+}
 void VL_FCLOSE_I(IData fdi) VL_MT_SAFE {
     // While threadsafe, each thread can only access different file handles
     Verilated::threadContextp()->impp()->fdClose(fdi);
