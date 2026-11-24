@@ -1048,6 +1048,7 @@ public:
                     if (!vscp) return;
                     AstSenItem* const nextp = new AstSenItem{
                         flp, VEdgeType::ET_CHANGED, new AstVarRef{flp, vscp, VAccess::READ}};
+                    nextp->forceUpdate(true);
                     if (itemsp) {
                         itemsp->addNext(nextp);
                     } else {
@@ -1060,6 +1061,7 @@ public:
                 markPermanentlyProtected(origSenRefp);
                 AstSenItem* const origItemp
                     = new AstSenItem{flp, VEdgeType::ET_CHANGED, origSenRefp};
+                origItemp->forceUpdate(true);
                 if (!itemsp) varp->v3fatalSrc("force-rd-update missing force-enable sen item");
                 itemsp->addNext(origItemp);
                 for (ForceInfo* const finfop : forceps) {
@@ -1227,6 +1229,7 @@ class ForceDiscoveryVisitor final : public VNVisitorConst {
 
         AstSenItem* const itemsp = new AstSenItem{flp, VEdgeType::ET_CHANGED,
                                                   new AstVarRef{flp, enVscp, VAccess::READ}};
+        itemsp->forceUpdate(true);
         AstActive* const activep = new AstActive{flp, "force-update", new AstSenTree{flp, itemsp}};
         activep->senTreeStorep(activep->sentreep());
 
@@ -1331,6 +1334,7 @@ class ForceDiscoveryVisitor final : public VNVisitorConst {
             // Build an update block triggered by force-enable changes.
             AstSenItem* const itemsp = new AstSenItem{flp, VEdgeType::ET_CHANGED,
                                                       new AstVarRef{flp, enVscp, VAccess::READ}};
+            itemsp->forceUpdate(true);
             AstActive* const activep
                 = new AstActive{flp, "force-update", new AstSenTree{flp, itemsp}};
             activep->senTreeStorep(activep->sentreep());
