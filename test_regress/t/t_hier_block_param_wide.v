@@ -13,10 +13,12 @@ module t;
   // An unsized value wider than 32 bits is truncated to the untyped parameter's 32 bits
   int width;
   longint value;
+  // verilator lint_off WIDTHTRUNC
   mid #(.P('h1_0000_0005)) u (
       .width(width),
       .value(value)
   );
+  // verilator lint_on WIDTHTRUNC
   initial begin
     #1;
     `checkd(width, 32);
