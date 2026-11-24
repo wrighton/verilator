@@ -1412,67 +1412,88 @@ std::unordered_set<const AstVar*> regOutTaints(const LogicClasses& logicClasses,
 // of the 'pre', 'act' and 'nba' regions: through logic other than sensitive to edges alone to what
 // it writes, to all it writes if it calls a function or reads a class member, and through logic
 // sensitive to edges alone from the variables of its events, or from any class member in them. The
-// outputs not tainted are marked.
+// outputs not tainted are marked. So are the outputs no clocked logic, function or variable of
+// regOutTaints() reaches through combinational logic: functions of the inputs alone, which the
+// wrapper takes from its latest update.
 void markPrimaryRegOuts(const LogicRegions& logicRegions,
                         const std::unordered_set<const AstVar*>& taints) {
-    std::unordered_set<const AstVar*> tainted;
-    std::vector<const AstVar*> queue;
-    const auto taint = [&](const AstVar* varp) {
-        if (tainted.emplace(varp).second) queue.push_back(varp);
-    };
-    // Logic by the variables that may change what it writes, and the variables each writes
-    std::unordered_map<const AstVar*, std::vector<const AstNode*>> readers;
+    using Readers = std::unordered_map<const AstVar*, std::vector<const AstNode*>>;
+    Readers readers;  // Logic by the variables that may change what it writes
+    Readers combReaders;  // Combinational logic by the variables it reads
     std::unordered_map<const AstNode*, std::vector<const AstVar*>> written;
+    std::unordered_set<const AstVar*> tainted{taints};
+    std::unordered_set<const AstVar*> stateful{taints};  // Not functions of the inputs alone
     for (const ProcessList* const listp :
          {&logicRegions.m_pre, &logicRegions.m_act, &logicRegions.m_nba}) {
         for (const Process& process : *listp) {
             const AstNode* const procp = process.m_procp;
+            const AstSenTree* const senTreep = process.m_senTreep;
             bool edgesOnly = true;
-            for (const AstSenItem* const itemp : process.m_senTreep->sensespList()) {
+            for (const AstSenItem* const itemp : senTreep->sensespList()) {
                 if (!itemp->edgeType().anEdge()) edgesOnly = false;
             }
-            const bool hidden = process.m_senTreep->exists([](const AstNode* nodep) {
-                return VN_IS(nodep, MemberRef);
-            }) || (!edgesOnly && procp->exists([](const AstNode* nodep) {
-                                    return VN_IS(nodep, NodeCCall) || VN_IS(nodep, MemberRef);
-                                }));
-            process.m_senTreep->foreach(
+            const bool comb = senTreep->hasCombo() || senTreep->hasHybrid();
+            const bool calls = procp->exists([](const AstNode* nodep) {
+                return VN_IS(nodep, NodeCCall) || VN_IS(nodep, MemberRef);
+            });
+            const bool hidden
+                = (!edgesOnly && calls) || senTreep->exists([](const AstNode* nodep) {
+                      return VN_IS(nodep, MemberRef);
+                  });
+            senTreep->foreach(
                 [&](const AstVarRef* refp) { readers[refp->varp()].push_back(procp); });
             procp->foreach([&](const AstVarRef* refp) {
                 if (refp->access().isWriteOrRW()) {
                     written[procp].push_back(refp->varp());
-                    if (hidden) taint(refp->varp());
+                    if (hidden) tainted.emplace(refp->varp());
+                    if (!comb || calls) stateful.emplace(refp->varp());
                 }
-                if (!edgesOnly && refp->access().isReadOrRW()) {
-                    readers[refp->varp()].push_back(procp);
+                if (refp->access().isReadOrRW()) {
+                    if (!edgesOnly) readers[refp->varp()].push_back(procp);
+                    if (comb) combReaders[refp->varp()].push_back(procp);
                 }
             });
         }
     }
-    for (const AstVar* const varp : taints) taint(varp);
     v3Global.rootp()->foreach([&](const AstVar* varp) {
-        if (varp->isPrimaryInish() && !varp->isPrimaryClock()) taint(varp);
+        if (varp->isPrimaryInish() && !varp->isPrimaryClock()) tainted.emplace(varp);
     });
-    // Each variable and each logic is visited once
-    std::unordered_set<const AstNode*> visited;
-    while (!queue.empty()) {
-        const AstVar* const varp = queue.back();
-        queue.pop_back();
-        const auto it = readers.find(varp);
-        if (it == readers.end()) continue;
-        for (const AstNode* const procp : it->second) {
-            if (!visited.emplace(procp).second) continue;
-            for (const AstVar* const writtenp : written[procp]) taint(writtenp);
-        }
-    }
+    // Spread taint to what the logic reading a tainted variable writes, visiting each variable
+    // and each logic once
+    const auto spread
+        = [&](const Readers& readersOf, std::unordered_set<const AstVar*>& taintedr) {
+              std::vector<const AstVar*> queue{taintedr.begin(), taintedr.end()};
+              std::unordered_set<const AstNode*> visited;
+              while (!queue.empty()) {
+                  const AstVar* const varp = queue.back();
+                  queue.pop_back();
+                  const auto it = readersOf.find(varp);
+                  if (it == readersOf.end()) continue;
+                  for (const AstNode* const procp : it->second) {
+                      if (!visited.emplace(procp).second) continue;
+                      for (const AstVar* const writtenp : written[procp]) {
+                          if (taintedr.emplace(writtenp).second) queue.push_back(writtenp);
+                      }
+                  }
+              }
+          };
+    spread(readers, tainted);
+    spread(combReaders, stateful);
     size_t regOuts = 0;
+    size_t combOuts = 0;
     v3Global.rootp()->foreach([&](AstVar* varp) {
-        if (varp->isPrimaryIO() && varp->isWritable() && !tainted.count(varp)) {
+        if (!varp->isPrimaryIO() || !varp->isWritable()) return;
+        if (!tainted.count(varp)) {
             varp->setPrimaryRegOut();
             ++regOuts;
         }
+        if (!stateful.count(varp)) {
+            varp->setPrimaryCombOut();
+            ++combOuts;
+        }
     });
     V3Stats::addStat("Scheduling, library outputs from the clock update alone", regOuts);
+    V3Stats::addStat("Scheduling, library outputs of the inputs alone", combOuts);
 }
 
 }  // namespace

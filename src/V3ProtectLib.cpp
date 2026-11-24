@@ -80,9 +80,11 @@ class ProtectVisitor final : public VNVisitor {
     std::string m_vpiWrittenName;  // Export counting them
     std::string m_initName = "init__V";  // Set at initial time
     std::string m_lastSeqName = "last_seq_seqnum__V";  // Sequence number of the update of clocks
+    std::string m_seqNumName = "seq_seqnum__V";  // Same, at once
     std::string m_seqInitName = "seq_init__V";  // Set after the first update of clocks
     std::string m_seqFirstName = "seq_first__V";  // Set in the first update of clocks
     std::string m_settleName;  // Function settling the library before the first update of clocks
+    AstTextBlock* m_selectp = nullptr;  // Results whichever update ran last
     AstTextBlock* m_seqFirstp = nullptr;  // Call of the settle function before the first update
     const string m_libName;
     const string m_topName;
@@ -122,6 +124,7 @@ class ProtectVisitor final : public VNVisitor {
         m_seqInitName = uniqueName(m_seqInitName);
         m_seqFirstName = uniqueName(m_seqFirstName);
         m_settleName = uniqueName(m_libName + "_protectlib_settle");
+        m_seqNumName = uniqueName(m_seqNumName);
         if (v3Global.opt.vpi()) {
             // Nor the signals and functions --vpi adds, also to a top module without sequential
             // logic
@@ -318,6 +321,7 @@ class ProtectVisitor final : public VNVisitor {
         }
         if (m_hasSeqUpdate) {
             txtp->add("time " + m_lastSeqName + ";\n");
+            txtp->add("time " + m_seqNumName + ";\n");
             txtp->add("bit " + m_initName + " = 1'b0;\n");
         }
         txtp->add("\n");
@@ -375,11 +379,9 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add(m_comboIgnoreParamsp);
             m_settleCallp = new AstTextBlock{fl};
             txtp->add(m_settleCallp);
-            m_seqParamsp = new AstTextBlock{fl,  //
-                                            m_lastSeqName + " <= " + m_libName
-                                                + "_protectlib_seq_update(\n",  //
-                                            ",\n",  //
-                                            "\n);\n"};
+            m_seqParamsp = new AstTextBlock{
+                fl, m_seqNumName + " = " + m_libName + "_protectlib_seq_update(\n", ",\n",
+                "\n);\n" + m_lastSeqName + " <= " + m_seqNumName + ";\n"};
             m_seqParamsp->add("handle__V");
             txtp->add(m_seqParamsp);
             m_nbAssignsp = new AstTextBlock{fl};
@@ -400,6 +402,8 @@ class ProtectVisitor final : public VNVisitor {
             m_comboAssignsp = new AstTextBlock{fl};
             txtp->add(m_comboAssignsp);
             txtp->add("end\n");
+            m_selectp = new AstTextBlock{fl};
+            txtp->add(m_selectp);
         } else {
             m_comboAssignsp = new AstTextBlock{fl};
             txtp->add(m_comboAssignsp);
@@ -768,8 +772,17 @@ class ProtectVisitor final : public VNVisitor {
         // Until the first NBA of the clock update's results, such an output has its value in the
         // library settled before the first clock update, its initial value, so the parent has it
         // at time zero like the combinational results
+        // A function of the inputs alone is current after either update, so it comes from the
+        // latest one at once, and from the clock update alone if a function of the clocks alone
+        const bool inputsOnly = m_hasSeqUpdate && varp->isPrimaryCombOut();
         std::string seqAssign = portName + " = " + seqName + ";\n";
-        if (!combo) {
+        if (inputsOnly) {
+            seqAssign = portName + " = " + tmpName + ";\n";
+            if (combo) {
+                seqAssign = "if (" + m_seqNumName + " > last_combo_seqnum__V) " + seqAssign
+                            + "else " + portName + " = " + comboName + ";\n";
+            }
+        } else if (!combo) {
             if (!m_seqFirstp) newSettle(varp->fileline());
             const std::string firstLocal = localName(varp, "_first__V");
             addLocalVariable(m_seqDeclsp, varp, firstLocal);
@@ -792,15 +805,21 @@ class ProtectVisitor final : public VNVisitor {
         if (m_hasSeqUpdate) {
             m_seqPortsp->add(varp->cloneTree(false));
             m_seqParamsp->add(tmpName);
-            addLocalVariable(m_seqDeclsp, varp, seqLocal);
             addLocalVariable(m_tmpDeclsp, varp, tmpLocal);
-            m_nbAssignsp->add(seqName + " <= " + tmpName + ";\n");
-            m_seqAssignsp->add(seqAssign);
+            if (!inputsOnly) {
+                addLocalVariable(m_seqDeclsp, varp, seqLocal);
+                m_nbAssignsp->add(seqName + " <= " + tmpName + ";\n");
+            }
             m_cSeqParamsp->add(varp->dpiArgType(true, false));
             m_cSeqOutsp->add(V3Task::assignInternalToDpi(varp, true, "", "", "handlep__V->")
                              + "\n");
         }
-        m_comboAssignsp->add(combo ? portName + " = " + comboName + ";\n" : seqAssign);
+        if (combo && !inputsOnly) {
+            if (m_hasSeqUpdate) m_seqAssignsp->add(seqAssign);
+            m_comboAssignsp->add(portName + " = " + comboName + ";\n");
+        } else {
+            m_selectp->add(seqAssign);
+        }
     }
 
     static bool checkIfClockExists(const AstNodeModule* modp) {
