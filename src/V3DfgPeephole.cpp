@@ -1768,8 +1768,23 @@ class V3DfgPeephole final : public DfgVisitor {
         FileLine* const flp = vtxp->fileline();
 
         if (DfgConst* const lsbConstp = lsbp->cast<DfgConst>()) {
+            // Bits out of range read as X (IEEE 1800-2023 11.5.1), here zero
+            const uint32_t width = vtxp->width();
+            const uint32_t fromWidth = fromp->width();
+            const uint32_t lsb = std::min(lsbConstp->toU32(), fromWidth);
+            const uint32_t inWidth = std::min(width, fromWidth - lsb);
             APPLYING(REPLACE_MUX_WITH_SEL) {
-                replace(make<DfgSel>(vtxp, fromp, lsbConstp->num().toUInt()));
+                if (inWidth == width) {
+                    replace(make<DfgSel>(vtxp, fromp, lsb));
+                    return;
+                }
+                DfgVertex* resp = makeZero(flp, width - inWidth);
+                if (inWidth) {
+                    DfgSel* const selp
+                        = make<DfgSel>(flp, DfgDataType::packed(inWidth), fromp, lsb);
+                    resp = make<DfgConcat>(vtxp, resp, selp);
+                }
+                replace(resp);
                 return;
             }
         }
