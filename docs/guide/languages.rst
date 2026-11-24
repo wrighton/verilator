@@ -553,8 +553,11 @@ force, release
    #. Force/release with procedural continuous assignment is not supported.
       The assignment is treated as procedural.
 
-   #. Expressions using multiple variable references or function calls on
-      forced right-hand side are not sensitive to dependency changes.
+   #. Changes to explicit right-hand side dependencies, including function
+      arguments, trigger reevaluation (IEEE 1800-2023 10.6). Changes to
+      values read only inside a called function do not trigger
+      reevaluation. A class-member reference requires a receiver that can
+      be evaluated independently of calls on the right-hand side.
 
 inside
    Inside expressions may not include unpacked array traversal or $ as an
