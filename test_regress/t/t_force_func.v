@@ -49,7 +49,61 @@ module t;
   endfunction
   logic [6:0] sampled_target;
 
+  int traced_calls = 0;
+  function automatic logic [6:0] traced(logic [6:0] value);
+    ++traced_calls;
+    return value;
+  endfunction
+  logic [6:0] traced_direct;
+  logic [6:0] traced_nested;
+
+  class DrawBase;
+    virtual function int value(int x);
+      return x;
+    endfunction
+  endclass
+
+  class DrawOverride extends DrawBase;
+    function int value(int x);
+      return x ^ $urandom;
+    endfunction
+  endclass
+
+  function automatic int wrapped_draw(int x);
+    return x ^ $urandom;
+  endfunction
+
+  function automatic int draw(int x);
+    return wrapped_draw(x);
+  endfunction
+
+  int plain_random;
+  int hidden_random;
+  int virtual_random;
+  DrawBase random_source;
+  DrawOverride random_override = new;
+
   initial begin
+    // None of these force-site samples may be repeated when the scheduler settles.
+    random_source = random_override;
+    repeat (4) begin
+      logic [95:0] sampled;
+      #1;
+      force plain_random = int'(mix(arg)) ^ $urandom;
+      force hidden_random = draw(int'(arg));
+      force virtual_random = random_source.value(int'(arg));
+      sampled = {plain_random, hidden_random, virtual_random};
+      #1;
+      `checkh({plain_random, hidden_random, virtual_random}, sampled);
+      arg ^= 7'd1;
+      #1;
+      `checkh(plain_random == sampled[95:64], 1'b0);
+      `checkh(hidden_random == sampled[63:32], 1'b0);
+      `checkh(virtual_random == sampled[31:0], 1'b0);
+      release plain_random;
+      release hidden_random;
+      release virtual_random;
+    end
     // IEEE 1800-2023 10.6: force a = b + f(c) follows changes to both b and c.
     #1;
     arg = 0;
@@ -58,12 +112,18 @@ module t;
     force bit_target = data[mirrored_index(position)];
     transformer = new;
     force method_target = transformer.next_value(mix(arg));
-    force sampled_target = offset + sample ();
+    force sampled_target = sample ();
     `checkh(samples, 1);
+    force traced_direct = traced(arg);
+    force traced_nested = ~traced(arg);
+    `checkh(traced_calls, 2);
     #1;
+    `checkh(traced_calls, 2);
+    `checkh(traced_direct, 7'd0);
+    `checkh(traced_nested, 7'h7f);
     `checkh(bit_target, 1'b1);
     `checkh(method_target, 7'h5b);
-    `checkh(sampled_target, 7'd6);
+    `checkh(sampled_target, 7'd4);
 
     arg = 1;
     position = 4;
@@ -71,6 +131,11 @@ module t;
     `checkh(net_target, 7'h5d);
     `checkh(bit_target, 1'b0);
     `checkh(method_target, 7'h5c);
+    `checkh(traced_calls, 4);
+    `checkh(traced_direct, 7'd1);
+    `checkh(traced_nested, 7'h7e);
+    release traced_direct;
+    release traced_nested;
 
     arg = 7'h55;
     offset = 7'd8;
@@ -78,8 +143,9 @@ module t;
     #1;
     `checkh(net_target, 7'h17);
     `checkh(method_target, 7'h10);
-    `checkh(sampled_target, 7'd12);
+    `checkh(sampled_target, 7'd4);
     `checkh(samples, 1);
+    `checkh(traced_calls, 4);
 
     // Replacing a slice leaves the rest of the first force live.
     force net_target[3:2] = 2'b00;
@@ -102,8 +168,9 @@ module t;
     `checkh(net_target, 7'd42);
     `checkh(bit_target, 1'b0);
     `checkh(method_target, 7'h5b);
-    `checkh(sampled_target, 7'd12);
+    `checkh(sampled_target, 7'd4);
     `checkh(samples, 1);
+    `checkh(traced_calls, 4);
 
     #1 a = 0;
     force b = get_arg(a);

@@ -100,6 +100,7 @@ class LiftExprVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Current module
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     bool m_lift = false;  // Lift encountered expressions
+    bool m_forceRhs = false;  // Keep random draws in the force's RHS evaluation
     AstNodeStmt* m_newStmtps = nullptr;  // Statements lifted out of current node
     // Expressions in some special locations need not, or should not be lifted
     AstNodeExpr* m_doNotLiftp = nullptr;
@@ -298,13 +299,15 @@ class LiftExprVisitor final : public VNVisitor {
         VL_RESTORER(m_doNotLiftp);
         const bool isForce = VN_IS(nodep, AssignForce);
         AstNodeExpr* const rhsp = nodep->rhsp();
-        // Pure function calls belong to the live RHS. Impure calls stay at the force site
-        // and are sampled once.
-        const bool liveRhs = isForce && rhsp->exists([](const AstNodeFTaskRef*) { return true; })
-                             && !rhsp->exists([](AstNode* exprp) { return !exprp->isPure(); });
         m_doNotLiftp = !isForce && VN_IS(nodep->lhsp(), NodeVarRef) ? rhsp : nullptr;
-        if (AstNodeStmt* const newStmtps = lift(rhsp)) {
-            if (liveRhs) {
+        AstNodeStmt* newStmtps;
+        {
+            VL_RESTORER(m_forceRhs);
+            m_forceRhs = isForce;
+            newStmtps = lift(rhsp);
+        }
+        if (newStmtps) {
+            if (isForce) {
                 AstNodeExpr* const resultp = nodep->rhsp()->unlinkFrBack();
                 nodep->rhsp(new AstExprStmt{nodep->fileline(), newStmtps, resultp});
             } else {
@@ -344,8 +347,11 @@ class LiftExprVisitor final : public VNVisitor {
         if (m_doNotLiftp == nodep) return;
         // No need to lift void expressions, these should be under StmtExpr, but just in case ...
         if (VN_IS(nodep->dtypep()->skipRefp(), VoidDType)) return;
-        // Do not lift if pure
-        if (nodep->isPure()) return;
+        // A force RHS is copied for immediate and scheduled evaluation. Sample random
+        // draws in the enclosing process even when their AST nodes are marked pure.
+        if (nodep->isPure() && !(m_forceRhs && (VN_IS(nodep, Rand) || VN_IS(nodep, RandRNG)))) {
+            return;
+        }
         // Do not lift if LValue
         if (nodep->isLValue()) return;
 
