@@ -472,7 +472,7 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add("}\n\n");
 
         // Delete
-        txtp->add("static void " + m_libName + "_protectlib_delete(void* vhandlep__V) {\n");
+        txtp->add("void " + m_libName + "_protectlib_delete(void* vhandlep__V) {\n");
         txtp->add(/**/ "VL_DO_DANGLING(delete static_cast<" + m_topName
                   + "_container*>(vhandlep__V), vhandlep__V);\n");
         txtp->add("}\n\n");
@@ -486,15 +486,19 @@ class ProtectVisitor final : public VNVisitor {
                   + (v3Global.opt.vpi() ? "abovep__V" : "/*abovep__V*/") + ") {\n");
         txtp->add(/**/ m_topName + "_container* const handlep__V = new " + m_topName
                   + "_container{scopep__V};\n");
-        txtp->add(/**/ "handlep__V->contextp()->addEndContextCb(" + m_libName
-                  + "_protectlib_delete, handlep__V);\n");
         if (v3Global.opt.vpi()) txtp->add(/**/ "handlep__V->__VvpiAttach(abovep__V);\n");
         txtp->add(/**/ "return handlep__V;\n");
         txtp->add("}\n\n");
         // A library model created otherwise, as in another simulator, has its VPI scopes at the
-        // top level
+        // top level, and is deleted with its context, as the model using the library deletes
+        // only the library models it created
         txtp->add("void* " + m_libName + "_protectlib_create(const char* scopep__V) {\n");
-        txtp->add(/**/ "return " + m_libName + "_protectlib_create_under(scopep__V, nullptr);\n");
+        txtp->add(/**/ "void* const handlep__V = " + m_libName
+                  + "_protectlib_create_under(scopep__V, nullptr);\n");
+        txtp->add(/**/ "static_cast<" + m_topName
+                  + "_container*>(handlep__V)->contextp()->addEndContextCb(" + m_libName
+                  + "_protectlib_delete, handlep__V);\n");
+        txtp->add(/**/ "return handlep__V;\n");
         txtp->add("}\n\n");
 
         if (v3Global.opt.vpi()) {

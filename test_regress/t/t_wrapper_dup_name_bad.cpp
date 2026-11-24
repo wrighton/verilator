@@ -9,12 +9,16 @@
 
 #include VM_PREFIX_INCLUDE
 
+// Destroyed when the error exits
+std::unique_ptr<VerilatedContext> s_contextp;
+std::unique_ptr<VM_PREFIX> s_firstp;
+
 int main() {
-    const std::unique_ptr<VerilatedContext> contextp{new VerilatedContext};
+    s_contextp.reset(new VerilatedContext);
 
     // Two models under the same hierarchical path in one context
-    const std::unique_ptr<VM_PREFIX> firstp{new VM_PREFIX{contextp.get(), "TOP"}};
-    const std::unique_ptr<VM_PREFIX> secondp{new VM_PREFIX{contextp.get(), "TOP"}};
+    s_firstp.reset(new VM_PREFIX{s_contextp.get(), "TOP"});
+    const std::unique_ptr<VM_PREFIX> secondp{new VM_PREFIX{s_contextp.get(), "TOP"}};
 
     return 0;
 }
