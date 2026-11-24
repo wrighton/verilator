@@ -300,18 +300,18 @@ class LiftExprVisitor final : public VNVisitor {
         const bool isForce = VN_IS(nodep, AssignForce);
         AstNodeExpr* const rhsp = nodep->rhsp();
         m_doNotLiftp = !isForce && VN_IS(nodep->lhsp(), NodeVarRef) ? rhsp : nullptr;
-        AstNodeStmt* newStmtps;
+        AstNodeStmt* rhsStmtps;
         {
             VL_RESTORER(m_forceRhs);
             m_forceRhs = isForce;
-            newStmtps = lift(rhsp);
+            rhsStmtps = lift(rhsp);
         }
-        if (newStmtps) {
+        if (rhsStmtps) {
             if (isForce) {
                 AstNodeExpr* const resultp = nodep->rhsp()->unlinkFrBack();
-                nodep->rhsp(new AstExprStmt{nodep->fileline(), newStmtps, resultp});
+                nodep->rhsp(new AstExprStmt{nodep->fileline(), rhsStmtps, resultp});
             } else {
-                nodep->addHereThisAsNext(newStmtps);
+                nodep->addHereThisAsNext(rhsStmtps);
             }
         }
 
