@@ -982,6 +982,16 @@ class EmitCSyms final : EmitCBaseVisitorConst {
             m_modCoverBins += nodep->size();
         }
     }
+    static const AstVar* libWrapperVar(const AstNodeModule* modp, const std::string& name) {
+        const AstVar* resultp = nullptr;
+        for (const AstNode* const nodep : modp->stmtspList()) {
+            const AstVar* const varp = VN_CAST(nodep, Var);
+            if (varp && varp->prettyName() == name) resultp = varp;
+        }
+        UASSERT_OBJ(resultp, modp, "Verilator library wrapper without '" << name << "'");
+        return resultp;
+    }
+
     void visit(AstCFunc* nodep) override {
         nameCheck(nodep);
         if (nodep->dpiImportPrototype() || nodep->dpiExportDispatcher()) m_dpis.push_back(nodep);
@@ -1207,7 +1217,9 @@ void EmitCSyms::emitSymImpPreamble() {
     }
     for (const std::string& libName : libNames) {
         puts("extern \"C\" void " + libName + "_protectlib_check_hash(int protectlib_hash__V);\n");
-        puts("extern \"C\" void* " + libName + "_protectlib_create(const char* scopep__V);\n");
+        puts("extern \"C\" void* " + libName
+             + "_protectlib_create_owned(const char* scopep__V);\n");
+        puts("extern \"C\" void " + libName + "_protectlib_delete(void* vhandlep__V);\n");
     }
     if (!libNames.empty()) puts("\n");
 
@@ -1447,22 +1459,14 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
         const AstScope* const scopep = i.first;
         const AstNodeModule* const modp = i.second;
         if (!modp->verilatorLib()) continue;
-        const AstVar* hashp = nullptr;
-        const AstVar* handlep = nullptr;
-        for (const AstNode* const nodep : modp->stmtspList()) {
-            const AstVar* const varp = VN_CAST(nodep, Var);
-            if (!varp) continue;
-            if (varp->prettyName() == "protectlib_hash__V") hashp = varp;
-            if (varp->prettyName() == "handle__V") handlep = varp;
-        }
-        UASSERT_OBJ(hashp, modp, "Verilator library wrapper without 'protectlib_hash__V'");
-        UASSERT_OBJ(handlep, modp, "Verilator library wrapper without 'handle__V'");
+        const AstVar* const hashp = libWrapperVar(modp, "protectlib_hash__V");
+        const AstVar* const handlep = libWrapperVar(modp, "handle__V");
         const uint32_t hash = VN_AS(hashp->valuep(), Const)->toUInt();
         stmts.add(modp->origName() + "_protectlib_check_hash(static_cast<int>("
                   + std::to_string(hash) + "U));");
         // The library model is named after the %m of the instance
         stmts.add("vlSymsp->" + instName(scopep) + "." + varName(handlep) + " = VL_CVT_VP_Q("
-                  + modp->origName() + "_protectlib_create(std::string{"
+                  + modp->origName() + "_protectlib_create_owned(std::string{"
                   + EmitCUtil::instNameExpr(scopep->prettyName(), false) + "}.c_str()));");
     }
 
@@ -1634,6 +1638,14 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
 
 EmitCSyms::TextStmts EmitCSyms::getSymDtorStmts() {
     TextStmts stmts;
+
+    // Delete the library model of each Verilator library wrapper, created at construction
+    for (const ScopeModPair& itpair : m_scopes) {
+        if (!itpair.second->verilatorLib()) continue;
+        stmts.add(itpair.second->origName() + "_protectlib_delete(VL_CVT_Q_VP(vlSymsp->"
+                  + instName(itpair.first) + "."
+                  + varName(libWrapperVar(itpair.second, "handle__V")) + "));");
+    }
 
     emitScopeHier(stmts, true);
     if (v3Global.needTraceDumper()) {

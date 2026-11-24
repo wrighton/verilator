@@ -392,16 +392,21 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add("}\n\n");
 
         // Delete
-        txtp->add("static void " + m_libName + "_protectlib_delete(void* vhandlep__V) {\n");
+        txtp->add("void " + m_libName + "_protectlib_delete(void* vhandlep__V) {\n");
         txtp->add(/**/ "VL_DO_DANGLING(delete static_cast<" + m_topName
                   + "_container*>(vhandlep__V), vhandlep__V);\n");
         txtp->add("}\n\n");
 
         // Initial
         initialComment(txtp, fl);
+        // A Verilator model using the library deletes the library model it creates
+        txtp->add("void* " + m_libName + "_protectlib_create_owned(const char* scopep__V) {\n");
+        txtp->add(/**/ "return new " + m_topName + "_container{scopep__V};\n");
+        txtp->add("}\n\n");
+        // A library model created otherwise, as in another simulator, is deleted with its context
         txtp->add("void* " + m_libName + "_protectlib_create(const char* scopep__V) {\n");
-        txtp->add(/**/ m_topName + "_container* const handlep__V = new " + m_topName
-                  + "_container{scopep__V};\n");
+        txtp->add(/**/ m_topName + "_container* const handlep__V = static_cast<" + m_topName
+                  + "_container*>(" + m_libName + "_protectlib_create_owned(scopep__V));\n");
         txtp->add(/**/ "handlep__V->contextp()->addEndContextCb(" + m_libName
                   + "_protectlib_delete, handlep__V);\n");
         txtp->add(/**/ "return handlep__V;\n");
