@@ -362,6 +362,15 @@ or set by ```unconnected_drive``, if it is a port of the top-level module,
 or if it is public writable. This fallback does not collapse two ports
 connected to overlapping bits of the same net.
 
+A force or release of a net with a tristate driver also forces or releases
+whether each bit is high impedance (IEEE 1800-2023 10.6.2), also through a
+hierarchical reference from any module. A force in the module of the net
+with a value whose high impedance bits are not known, e.g. a function call,
+a port, or a forced net, is unsupported; from another module, such a force
+overrides only the value. A force with high impedance bits of a net that no
+module drives high impedance or reads the high impedance state of is
+unsupported.
+
 A continuously written net input that any instance connects to a value,
 such as a variable, a hierarchical reference to a variable, a select by a
 runtime position, or a value expression, can also return a drive through

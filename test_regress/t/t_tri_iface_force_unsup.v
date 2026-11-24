@@ -66,13 +66,6 @@ module u_undriven_net;
   end
 endmodule
 
-module u_const_z;
-  tgt_if tgt (1'b0);
-  task force_value;
-    force tgt.value = 2'bz1;
-  endtask
-endmodule
-
 module u_tristate_concat;
   tgt_if tgt (1'b0);
   bit ten = 1'b0;
@@ -210,6 +203,25 @@ module u_forced_tristate_src;
   end
 endmodule
 
+// A net with no tristate driver cannot be forced high impedance
+module u_plain_z;
+  wire [1:0] n;
+  assign n = 2'b01;
+  initial force n = 2'bz1;
+endmodule
+
+// The value of a force of a tristate net of a module needs a known enable too
+module u_local_net;
+  bit d = 1'b0;
+  bit en = 1'b0;
+  wire [1:0] n;
+  assign n = en ? 2'b10 : 2'bzz;
+  function automatic logic [1:0] fz(input bit x);
+    return x ? 2'b01 : 2'bz1;
+  endfunction
+  initial force n = fz(d);
+endmodule
+
 module u_ports (
     tgt_if p,
     inout wire [1:0] io,
@@ -224,7 +236,6 @@ endmodule
 module t;
   u_partial_net partial_net ();
   u_undriven_net undriven_net ();
-  u_const_z const_z ();
   u_tristate_concat tristate_concat ();
   u_func_call func_call ();
   u_tristate_cond tristate_cond ();
@@ -236,6 +247,8 @@ module t;
   u_func_driven func_driven ();
   u_class_queue class_queue ();
   u_forced_tristate_src forced_tristate_src ();
+  u_local_net local_net ();
+  u_plain_z plain_z ();
   tgt_if port_tgt (1'b0);
   wire [1:0] port_io;
   assign port_io = 2'bzz;

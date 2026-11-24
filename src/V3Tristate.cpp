@@ -492,6 +492,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         bool cellOutput = false;  // Written by a cell's port connection, so may carry a z the
                                   // cell's module did not recognise as tristate
         bool elemZ = false;  // An element or member procedurally written with z, stored as x
+        bool inIface = false;  // Variable of an interface
     };
 
     VNUser3Allocator<AstVar, AuxAstVar> m_varAux;
@@ -570,7 +571,8 @@ class TristateVisitor final : public TristateBaseVisitor {
     bool m_alhs = false;  // On LHS of assignment
     bool m_inAlias = false;  // Inside alias statement
     bool m_inForceLhs = false;  // On LHS of force or release
-    // Force or release of an interface strength net, and the enable of a constant force value
+    // Force or release of a net whose enable is forced with it, and the enable of a constant
+    // force value
     std::vector<std::pair<AstNodeStmt*, AstNodeExpr*>> m_forceEnables;
     bool m_processedIfaces = false;  // Interface modules already processed (interfaces-first pass)
     VStrength m_currentStrength = VStrength::STRONG;  // Current strength of assignment,
@@ -1728,12 +1730,22 @@ class TristateVisitor final : public TristateBaseVisitor {
         return !isTristateVar(varp) && !varp->isIO() && !aux.cellOutput
                && (aux.assigned || !varp->isNet());
     }
-    // Reference under the constant selects of a force/release target that is an interface
-    // strength net, else nullptr. V3Const already split concatenated targets.
-    AstNodeVarRef* forcedStrengthNetRefp(AstNodeExpr* lhsp) {
+    // Net a force or release of which overrides its drivers rather than driving it (IEEE
+    // 1800-2023 10.6.2): an interface strength net, or a net of a module that is not a port
+    bool isForceOverrideNet(AstVar* varp) {
+        return isIfaceStrengthNet(varp)
+               || (varp->isNet() && !varp->isIO() && !m_varAux(varp).inIface);
+    }
+    // Whether a force of a net also forces its enable, known once every module is processed:
+    // an interface strength net, or a net of a module that is not a port and has an enable
+    bool isForcedEnableNet(AstVar* varp) {
+        return isIfaceStrengthNet(varp) || (isForceOverrideNet(varp) && varp->user1p());
+    }
+    // Reference under the constant selects of a force/release target, else nullptr. V3Const
+    // already split concatenated targets.
+    static AstNodeVarRef* forceTargetRefp(AstNodeExpr* lhsp) {
         while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
-        AstNodeVarRef* const refp = VN_CAST(lhsp, NodeVarRef);
-        return refp && isIfaceStrengthNet(refp->varp()) ? refp : nullptr;
+        return VN_CAST(lhsp, NodeVarRef);
     }
     // Clone of a reference under constant selects, with the reference retargeted to its __en
     AstNodeExpr* newEnSelp(AstNodeExpr* exprp, AstNodeVarRef* refp, VAccess access) {
@@ -2579,8 +2591,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         return false;
     }
     // A forced net bit has the forced value, so it is driven unless that value is z (IEEE
-    // 1800-2023 10.6.2). A force of an interface strength net therefore also forces those bits
-    // of its enable to the enable of the value, and a release releases both. Returns the enable
+    // 1800-2023 10.6.2). A force of a tristate net therefore also forces those bits of its
+    // enable to the enable of the value, and a release releases both. Returns the enable
     // of the value, or nullptr when the value may be z in a way not tracked here.
     AstNodeExpr* newForceValueEnp(AstNodeExpr* rhsp, AstNodeExpr* lhsp) {
         AstNodeExpr* basep = rhsp;
@@ -2589,8 +2601,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         if (refp && isTristateVar(refp->varp()) && !refp->varp()->isIO()) {
             AstVar* const varp = refp->varp();
             const AuxAstVar& aux = m_varAux(varp);
-            // The enable of a net excludes its pull, which a force of the net overrides; only
-            // the enable of an interface strength net follows its own forces
+            // The enable of a net excludes its pull, which a force of the net overrides. Of a
+            // forced net, only the enable of an interface strength net is taken here
             if (!aux.bitPulls.empty()) return nullptr;
             if (!varp->isForced()) {
                 return aux.pullp ? newAllZerosOrOnes(lhsp, true)
@@ -2608,6 +2620,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstVar* const enVarp = getCreateEnVarp(refp->varp(), false);
         enVarp->isContinuously(true);
         enVarp->setForcedByCode();
+        // A release of a net restores the resolved value of its drivers.
+        refp->varp()->isContinuously(true);
         AstNodeExpr* const enLhsp = newEnSelp(lhsp, refp, refp->access());
         if (enValuep) {
             stmtp->addNextHere(new AstAssignForce{stmtp->fileline(), enLhsp, enValuep});
@@ -2621,12 +2635,17 @@ class TristateVisitor final : public TristateBaseVisitor {
         iterateAndNextNull(lhsp);
         checkUnhandled(nodep);
     }
-    // Queue a force or release of an interface strength net for pairForceEnables, with the
-    // enable of a constant force value, which this pass lowers in place
+    // Queue a force or release of a net whose enable may be forced with it for
+    // pairForceEnables, with the enable of a constant force value, which this pass lowers in
+    // place
     void queueForceEnable(AstNodeStmt* stmtp) {
         AstAssignForce* const forcep = VN_CAST(stmtp, AssignForce);
         AstNodeExpr* const lhsp = forcep ? forcep->lhsp() : VN_AS(stmtp, Release)->lhsp();
-        if (!forcedStrengthNetRefp(lhsp)) return;
+        AstNodeVarRef* const refp = forceTargetRefp(lhsp);
+        if (!refp || !isForceOverrideNet(refp->varp())) return;
+        AstVar* const varp = refp->varp();
+        // The resolution of a net of this module drives its enable only if it exists by then
+        if (m_tgraph.isTristate(varp)) getCreateEnVarp(varp, false);
         // Of a value lowered here, only a constant's enable is exactly its z bits
         AstNodeExpr* enp = forcep ? VN_AS(forcep->rhsp()->user1p(), NodeExpr) : nullptr;
         if (enp) {
@@ -2649,14 +2668,56 @@ class TristateVisitor final : public TristateBaseVisitor {
             AstNodeStmt* const stmtp = pair.first;
             AstAssignForce* const forcep = VN_CAST(stmtp, AssignForce);
             AstNodeExpr* const lhsp = forcep ? forcep->lhsp() : VN_AS(stmtp, Release)->lhsp();
-            AstNodeVarRef* const refp = forcedStrengthNetRefp(lhsp);
+            AstNodeVarRef* const refp = forceTargetRefp(lhsp);
             AstNodeExpr* enp = pair.second;
-            if (forcep && !enp) enp = newForceValueEnp(forcep->rhsp(), lhsp);
+            AstVar* const varp = refp->varp();
+            // A net with no enable, as neither its module drives it high impedance nor any
+            // module reads its high impedance state, cannot hold a forced z
+            if (!isForcedEnableNet(varp)) {
+                // A z constant, lowered or in a task
+                const AstConst* const enConstp = VN_CAST(enp, Const);
+                const AstConst* const constp = forcep ? VN_CAST(forcep->rhsp(), Const) : nullptr;
+                if ((enConstp && !enConstp->num().isEqAllOnes())
+                    || (constp && constp->num().hasZ())) {
+                    stmtp->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: Force of high impedance bits of a net with no"
+                                  " tristate driver or high impedance read: "
+                                      << refp->prettyNameQ());
+                }
+                if (enp) VL_DO_DANGLING(enp->deleteTree(), enp);
+                continue;
+            }
+            if (AstConst* const constp = forcep ? VN_CAST(forcep->rhsp(), Const) : nullptr) {
+                if (constp->num().hasZ()) {
+                    // A z constant in a task is not lowered yet; its z bits drive 0
+                    enp = getNonZConstp(constp);
+                    V3Number num{constp, constp->width()};
+                    num.opAnd(constp->num(), VN_AS(enp, Const)->num());
+                    constp->replaceWith(new AstConst{constp->fileline(), num});
+                    VL_DO_DANGLING(pushDeletep(constp), constp);
+                }
+            }
+            // A net of another module that the value reads may be tristate there without an
+            // enable
+            const bool xrefNetValue
+                = forcep && !isIfaceStrengthNet(varp)
+                  && forcep->rhsp()->exists([](const AstVarXRef* xrefp) {
+                         return xrefp->varp()->isNet() && !xrefp->varp()->user1p();
+                     });
+            if (forcep && !enp && !xrefNetValue) enp = newForceValueEnp(forcep->rhsp(), lhsp);
             if (forcep && !enp) {
-                forcep->rhsp()->v3warn(E_UNSUPPORTED,
-                                       "Unsupported: Force of interface strength net with a "
-                                       "value that may be high impedance: "
-                                           << refp->prettyNameQ());
+                if (isIfaceStrengthNet(refp->varp())) {
+                    forcep->rhsp()->v3warn(E_UNSUPPORTED,
+                                           "Unsupported: Force of interface strength net with a "
+                                           "value that may be high impedance: "
+                                               << refp->prettyNameQ());
+                } else if (!VN_IS(refp, VarXRef)) {
+                    forcep->rhsp()->v3warn(E_UNSUPPORTED,
+                                           "Unsupported: Force of tristate net with a value that "
+                                           "may be high impedance: "
+                                               << refp->prettyNameQ());
+                }
+                // The value-only fallback leaves the drive-state resolution unchanged.
                 continue;
             }
             addForceEnable(stmtp, lhsp, refp, enp);
@@ -3120,13 +3181,11 @@ class TristateVisitor final : public TristateBaseVisitor {
             iteratePinGuts(nodep);
         }
     }
-
     void handleNodeVarRef(AstNodeVarRef* nodep) {
         UINFO(9, dbgState() << nodep);
         UASSERT_OBJ(nodep->varp(), nodep, "Unlinked");
-        // Force and release override all drivers of a resolved interface strength net rather
-        // than adding a driver (IEEE 1800-2023 10.6.2); V3Force lowers them later.
-        if (m_inForceLhs && isIfaceStrengthNet(nodep->varp())) return;
+        // V3Force lowers a force or release that overrides the drivers of a net
+        if (m_inForceLhs && isForceOverrideNet(nodep->varp())) return;
         if (m_graphing) {
             if (nodep->access().isWriteOrRW()) associateLogic(nodep, nodep->varp());
             if (nodep->access().isReadOrRW()) associateLogic(nodep->varp(), nodep);
@@ -3249,6 +3308,10 @@ class TristateVisitor final : public TristateBaseVisitor {
             }
         } else {  // !graphing
             if (m_tgraph.isTristate(nodep)) {
+                // A hierarchical force also needs the local resolver to drive its enable.
+                if (nodep->isForced() && !nodep->isIO() && isForceOverrideNet(nodep)) {
+                    getCreateEnVarp(nodep, false);
+                }
                 // nodep->isPulldown() || nodep->isPullup() handled in TristateGraphVisitor
                 m_tgraph.didProcess(nodep);
             }
@@ -3310,7 +3373,11 @@ class TristateVisitor final : public TristateBaseVisitor {
     }
 
     void visit(AstClass* nodep) override {
-        // don't deal with classes
+        // Classes are not otherwise processed, but a force of a net there still needs its
+        // enable
+        if (m_graphing) return;
+        nodep->foreach([this](AstAssignForce* forcep) { queueForceEnable(forcep); });
+        nodep->foreach([this](AstRelease* relp) { queueForceEnable(relp); });
     }
     void visit(AstNodeFTask* nodep) override {
         // Functions are not otherwise processed, but a force of a strength net there still
@@ -3421,9 +3488,15 @@ public:
         // graphed. A module driving such a net with a plain (non-Z) assign has no Z in its
         // own graph to mark the net tristate, so without this its driver would be dropped.
         // Collect only the interfaces (reverse declaration order to match the pass below).
+        // Mark their variables first, as any module may force a net of an interface.
         std::vector<AstNodeModule*> ifacesp;
         for (AstNode* const modp : netlistp->modulespList()) {
-            if (VN_IS(modp, Iface)) ifacesp.push_back(VN_AS(modp, NodeModule));
+            AstIface* const ifacep = VN_CAST(modp, Iface);
+            if (!ifacep) continue;
+            ifacesp.push_back(ifacep);
+            for (AstNode* const stmtp : ifacep->stmtspList()) {
+                if (AstVar* const varp = VN_CAST(stmtp, Var)) m_varAux(varp).inIface = true;
+            }
         }
         for (auto it = ifacesp.rbegin(); it != ifacesp.rend(); ++it) iterate(*it);
         m_processedIfaces = true;
