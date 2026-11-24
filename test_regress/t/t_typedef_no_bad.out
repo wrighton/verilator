@@ -2,4 +2,10 @@
    10 |   sometype p;
       |   ^~~~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_typedef_no_bad.v:11:3: Can't find typedef/interface: 'sometype'
+   11 |   sometype #(int) q;
+      |   ^~~~~~~~
+%Error: t/t_typedef_no_bad.v:13:3: Expecting a data type: 'r', found: VAR 'r'
+   13 |   r #(int) s;
+      |   ^
 %Error: Exiting due to
