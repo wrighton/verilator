@@ -1379,6 +1379,102 @@ void createEval(AstNetlist* netlistp,  //
     if (inReactivep) netlistp->evalFuncp(VEval::REACT)->noLife(true);
 }
 
+// Return the variables that may change other than by an input the wrapper of a library passes,
+// as written in functions (which any logic may call), through a virtual interface, or by logic
+// with delays or event controls, or run in a region of its own. Runs before scheduling makes
+// functions of logic. Initializers and other initial blocks need not count: the wrapper publishes
+// the values at time zero from its first clock update.
+std::unordered_set<const AstVar*> regOutTaints(const LogicClasses& logicClasses,
+                                               const VirtIfaceTriggers& virtIfaceTriggers) {
+    std::unordered_set<const AstVar*> taints;
+    const auto addWrites = [&](const AstNode* nodep) {
+        nodep->foreach([&](const AstVarRef* refp) {
+            if (refp->access().isWriteOrRW()) taints.emplace(refp->varp());
+        });
+    };
+    for (const Process& process : logicClasses.m_initial) {
+        if (process.m_procp->isSuspendable()) addWrites(process.m_procp);
+    }
+    for (const ProcessList* const listp : {&logicClasses.m_final, &logicClasses.m_postponed,
+                                           &logicClasses.m_observed, &logicClasses.m_reactive}) {
+        for (const Process& process : *listp) addWrites(process.m_procp);
+    }
+    v3Global.rootp()->foreach([&](const AstCFunc* funcp) { addWrites(funcp); });
+    for (const VirtIfaceTriggers::TriggerEntry& entry : virtIfaceTriggers.m_triggers) {
+        taints.emplace(entry.m_vscp->varp());
+    }
+    return taints;
+}
+
+// Mark the top level outputs the combinational update of the wrapper of a library cannot change,
+// which it then takes from its clock update alone. That update passes the inputs other than the
+// clocks, so taint spreads from those and from the variables of regOutTaints() through the logic
+// of the 'pre', 'act' and 'nba' regions: through logic other than sensitive to edges alone to what
+// it writes, to all it writes if it calls a function or reads a class member, and through logic
+// sensitive to edges alone from the variables of its events, or from any class member in them. The
+// outputs not tainted are marked.
+void markPrimaryRegOuts(const LogicRegions& logicRegions,
+                        const std::unordered_set<const AstVar*>& taints) {
+    std::unordered_set<const AstVar*> tainted;
+    std::vector<const AstVar*> queue;
+    const auto taint = [&](const AstVar* varp) {
+        if (tainted.emplace(varp).second) queue.push_back(varp);
+    };
+    // Logic by the variables that may change what it writes, and the variables each writes
+    std::unordered_map<const AstVar*, std::vector<const AstNode*>> readers;
+    std::unordered_map<const AstNode*, std::vector<const AstVar*>> written;
+    for (const ProcessList* const listp :
+         {&logicRegions.m_pre, &logicRegions.m_act, &logicRegions.m_nba}) {
+        for (const Process& process : *listp) {
+            const AstNode* const procp = process.m_procp;
+            bool edgesOnly = true;
+            for (const AstSenItem* const itemp : process.m_senTreep->sensespList()) {
+                if (!itemp->edgeType().anEdge()) edgesOnly = false;
+            }
+            const bool hidden = process.m_senTreep->exists([](const AstNode* nodep) {
+                return VN_IS(nodep, MemberRef);
+            }) || (!edgesOnly && procp->exists([](const AstNode* nodep) {
+                                    return VN_IS(nodep, NodeCCall) || VN_IS(nodep, MemberRef);
+                                }));
+            process.m_senTreep->foreach(
+                [&](const AstVarRef* refp) { readers[refp->varp()].push_back(procp); });
+            procp->foreach([&](const AstVarRef* refp) {
+                if (refp->access().isWriteOrRW()) {
+                    written[procp].push_back(refp->varp());
+                    if (hidden) taint(refp->varp());
+                }
+                if (!edgesOnly && refp->access().isReadOrRW()) {
+                    readers[refp->varp()].push_back(procp);
+                }
+            });
+        }
+    }
+    for (const AstVar* const varp : taints) taint(varp);
+    v3Global.rootp()->foreach([&](const AstVar* varp) {
+        if (varp->isPrimaryInish() && !varp->isPrimaryClock()) taint(varp);
+    });
+    // Each variable and each logic is visited once
+    std::unordered_set<const AstNode*> visited;
+    while (!queue.empty()) {
+        const AstVar* const varp = queue.back();
+        queue.pop_back();
+        const auto it = readers.find(varp);
+        if (it == readers.end()) continue;
+        for (const AstNode* const procp : it->second) {
+            if (!visited.emplace(procp).second) continue;
+            for (const AstVar* const writtenp : written[procp]) taint(writtenp);
+        }
+    }
+    size_t regOuts = 0;
+    v3Global.rootp()->foreach([&](AstVar* varp) {
+        if (varp->isPrimaryIO() && varp->isWritable() && !tainted.count(varp)) {
+            varp->setPrimaryRegOut();
+            ++regOuts;
+        }
+    });
+    V3Stats::addStat("Scheduling, library outputs from the clock update alone", regOuts);
+}
+
 }  // namespace
 
 //============================================================================
@@ -1430,6 +1526,10 @@ void schedule(AstNetlist* netlistp) {
 
     // Step 3: Gather and classify all logic in the design
     LogicClasses logicClasses = gatherLogicClasses(netlistp);
+    std::unordered_set<const AstVar*> libRegOutTaints;
+    if (!v3Global.opt.libCreate().empty()) {
+        libRegOutTaints = regOutTaints(logicClasses, virtIfaceTriggers);
+    }
 
     if (v3Global.opt.stats()) {
         V3Stats::statsStage("sched-gather");
@@ -1471,6 +1571,7 @@ void schedule(AstNetlist* netlistp) {
     // All clocks (signals referenced in an AstSenTree) generated via a blocking assignment
     // (including combinationally generated signals) are computed within the act region.
     LogicRegions logicRegions = partition(logicClasses);
+    if (!v3Global.opt.libCreate().empty()) markPrimaryRegOuts(logicRegions, libRegOutTaints);
     if (v3Global.opt.stats()) {
         addSizeStat("size of region: Active Pre", logicRegions.m_pre);
         addSizeStat("size of region: Active", logicRegions.m_act);
