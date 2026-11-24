@@ -32,6 +32,15 @@ module middle (
   );
 endmodule
 
+module registered_leaf (
+    inout wire [6:0] p,
+    input bit clk
+);
+  logic [6:0] state;
+  initial state = 7'h40;
+  always @(posedge clk) state <= p;
+endmodule
+
 module t;
   logic external_en = 1;
   logic external_partial = 0;
@@ -85,6 +94,24 @@ module t;
       .local_en(1'b0),
       .forwarded(pulled_low_forwarded)
   );
+
+  bit sample_clk = 0;
+  wire [6:0] sampled_net = 7'h03;
+  registered_leaf sampler (
+      .p(sampled_net),
+      .clk(sample_clk)
+  );
+  initial begin
+    #1 force sampler.p = 7'h01;
+    #1 sample_clk = 1;
+    #1;
+    `checkh(sampler.state, 7'h01);
+    release sampler.p;
+    sample_clk = 0;
+    #1 sample_clk = 1;
+    #1;
+    `checkh(sampler.state, 7'h03);
+  end
 
   task automatic check_ordinary(logic [6:0] expected);
     `checkh(ordinary.p, expected);

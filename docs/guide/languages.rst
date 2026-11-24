@@ -368,8 +368,9 @@ hierarchical reference from any module. Supported force values include
 two-state expressions and direct net reads with tracked drive state,
 including constant packed selects. A value whose high impedance bits cannot
 be represented is unsupported from either a local or hierarchical
-reference. For a net without a tristate driver or an independent
-high-impedance reader, forcing high-impedance bits remains unsupported.
+reference. Without such an enable, literal high-impedance force values are
+unsupported; dynamically produced high-impedance bits are not tracked by
+the value-only lowering.
 
 An inout net port and its whole local wire or tri connection share a force
 domain (IEEE 1800-2023 10.6.2, 23.3.3.7), so forcing or releasing either

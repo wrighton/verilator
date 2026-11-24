@@ -2025,7 +2025,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     }
     static AstNodeVarRef* forceRhsRefp(AstNodeExpr* rhsp) {
         while (const AstSel* const selp = VN_CAST(rhsp, Sel)) {
-            if (!VN_IS(selp->lsbp(), Const)) return nullptr;
+            if (!selp->lsbp()->isPure()) return nullptr;
             rhsp = selp->fromp();
         }
         return VN_CAST(rhsp, NodeVarRef);
@@ -2364,7 +2364,8 @@ class TristateVisitor final : public TristateBaseVisitor {
             const auto it = m_valueReaders.find(pendingps[index]);
             if (it == m_valueReaders.end()) continue;
             for (AstVar* const destp : it->second) {
-                if (!destp->dtypep()->skipRefp()->isIntegralOrPacked()) continue;
+                if (!destp->isNet() || !destp->dtypep()->skipRefp()->isIntegralOrPacked())
+                    continue;
                 if (!visitedps.emplace(destp).second) continue;
                 m_tgraph.setTristate(destp);
                 pendingps.push_back(destp);
@@ -2911,12 +2912,6 @@ class TristateVisitor final : public TristateBaseVisitor {
         bool sawValue = false;
         bool unknown = false;
         std::unordered_set<const AstNodeVarRef*> resultWrites;
-        taskp->foreach([&](const AstReturn* retp) {
-            if (retp->lhsp()) {
-                sawValue = true;
-                unknown |= !forceExprNeverZ(retp->lhsp());
-            }
-        });
         taskp->foreach([&](const AstNodeAssign* assignp) {
             const AstNodeVarRef* const refp = forceTargetRefp(assignp->lhsp());
             if (refp && refp->varp() == taskp->fvarp()) {
@@ -4012,14 +4007,18 @@ public:
         }
         // Before any module is processed, give each forced port the enable of its connection,
         // so every reader finds it
+        const bool haveForce = netlistp->exists([](const AstNode* nodep) {
+            return VN_IS(nodep, AssignForce) || VN_IS(nodep, Release);
+        });
         const TristateForcedInputVisitor::Eligible eligible
-            = TristateForcedInputVisitor::eligible(netlistp);
+            = haveForce ? TristateForcedInputVisitor::eligible(netlistp)
+                        : TristateForcedInputVisitor::Eligible{};
         std::unordered_set<const AstVar*> inputps;
         for (const AstVar* const varp : eligible.inputps) {
             if (varp->isForced()) inputps.emplace(varp);
         }
         for (AstNode* const nodep : netlistp->modulespList()) {
-            if (VN_IS(nodep, Iface)) continue;
+            if (!haveForce || VN_IS(nodep, Iface)) continue;
             VL_RESTORER(m_modp);
             m_modp = VN_AS(nodep, NodeModule);
             for (AstNode* const stmtp : m_modp->stmtspList()) {
@@ -4029,7 +4028,7 @@ public:
         // Incoming enables must exist before parent pins are expanded.
         const std::unordered_set<const AstVar*>& aliasps = eligible.aliasps;
         for (AstNode* const nodep : netlistp->modulespList()) {
-            if (VN_IS(nodep, Iface)) continue;
+            if (!haveForce || VN_IS(nodep, Iface)) continue;
             VL_RESTORER(m_modp);
             m_modp = VN_AS(nodep, NodeModule);
             m_modp->foreach([this, &eligible, &aliasps](const AstAssignForce* forcep) {
