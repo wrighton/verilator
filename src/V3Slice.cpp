@@ -345,7 +345,7 @@ class SliceVisitor final : public VNVisitor {
             // Original node is replaced, so it is safe to copy it one time even if it is impure.
             AstNodeExpr* const fromp = nodep->rhsp()->cloneTree(false, newlistp != nullptr);
             AstStructSel* const selp
-                = new AstStructSel{fromp->fileline(), fromp, itemp->memberp()->name()};
+                = new AstStructSel{fromp->fileline(), fromp, itemp->memberp()};
             selp->dtypeFrom(itemp->memberp()->dtypep());
             newlistp = AstNode::addNext(newlistp,
                                         nodep->cloneType(itemp->valuep()->unlinkFrBack(), selp));

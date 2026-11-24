@@ -89,6 +89,14 @@ private:
     // evaluation of their conjunction also guards the outer references themselves.
     class NullGuardVisitor final : public VNVisitorConst {
         AstNodeExpr* m_guardp = nullptr;  // Conjunction of the checks so far, nullptr if none
+        // Variables a statement within the expression writes, e.g. the result of a lowered call.
+        // A guard is evaluated before the expression, so it cannot read them.
+        std::unordered_set<const AstVar*> m_stmtWrittenps;
+        bool readsStmtWritten(const AstNodeExpr* nodep) const {
+            return !m_stmtWrittenps.empty() && nodep->exists([&](const AstVarRef* refp) {
+                return m_stmtWrittenps.count(refp->varp()) != 0;
+            });
+        }
         // Add a check to the conjunction
         void addCheck(AstNodeExpr* const condp) {
             if (!condp) return;
@@ -137,7 +145,7 @@ private:
         void visit(AstMemberRef* nodep) override {
             iterateChildrenConst(nodep);
             AstNodeExpr* const fromp = nodep->fromp();
-            if (!isNullableRef(fromp)) return;
+            if (!isNullableRef(fromp) || readsStmtWritten(fromp)) return;
             FileLine* const flp = fromp->fileline();
             addCheck(
                 new AstNeq{flp, fromp->cloneTree(false), new AstConst{flp, AstConst::Null{}}});
@@ -146,7 +154,7 @@ private:
             // A method call also reads through its receiver (as upstream #9318)
             iterateChildrenConst(nodep);
             AstNodeExpr* const fromp = nodep->fromp();
-            if (!isNullableRef(fromp)) return;
+            if (!isNullableRef(fromp) || readsStmtWritten(fromp)) return;
             FileLine* const flp = fromp->fileline();
             addCheck(
                 new AstNeq{flp, fromp->cloneTree(false), new AstConst{flp, AstConst::Null{}}});
@@ -157,6 +165,11 @@ private:
         // Returns the checks of 'exprp', or nullptr if there are none
         static AstNodeExpr* newGuard(AstNodeExpr* const exprp) {
             NullGuardVisitor visitor;
+            exprp->foreach([&](const AstExprStmt* stmtp) {
+                stmtp->stmtsp()->foreachAndNext([&](const AstVarRef* refp) {
+                    if (refp->access().isWriteOrRW()) visitor.m_stmtWrittenps.insert(refp->varp());
+                });
+            });
             visitor.iterateConst(exprp);
             return visitor.m_guardp;
         }

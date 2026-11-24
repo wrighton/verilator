@@ -1843,10 +1843,19 @@ class ConstVisitor final : public VNVisitor {
                 // See also warning in V3Width
                 // Must adjust by element width as declRange() is in number of elements
                 string msbLsbProtected;
+                int outsideMsb = nodep->declRange().hiMaxSelect();
+                int adjustScale = 1;  // Units of the negative-lsb adjustment
                 if (nodep->declElWidth() == 0) {
                     msbLsbProtected = "(nodep->declElWidth() == 0) "
                                       + nodep->lsbConstStr(nodep->widthConst() - 1) + ":"
                                       + nodep->lsbConstStr(0);
+                } else if (nodep->declElWidth() > 1
+                           && nodep->widthConst() != nodep->declElWidth()) {
+                    // A select of other than one element is in bits, as V3Width reports it
+                    msbLsbProtected = nodep->lsbConstStr(nodep->widthConst() - 1) + ":"
+                                      + nodep->lsbConstStr(0);
+                    outsideMsb = maxDeclBit;
+                    adjustScale = nodep->declElWidth();
                 } else {
                     msbLsbProtected
                         = nodep->lsbConstStr(nodep->widthConst() - 1, nodep->declElWidth()) + ":"
@@ -1854,11 +1863,11 @@ class ConstVisitor final : public VNVisitor {
                 }
                 nodep->v3warn(SELRANGE,
                               "Selection index out of range: "
-                                  << msbLsbProtected << " outside "
-                                  << nodep->declRange().hiMaxSelect() << ":0"
+                                  << msbLsbProtected << " outside " << outsideMsb << ":0"
                                   << (nodep->declRange().lo() >= 0
                                           ? ""
-                                          : (" (adjusted +" + cvtToStr(-nodep->declRange().lo())
+                                          : (" (adjusted +"
+                                             + cvtToStr(-nodep->declRange().lo() * adjustScale)
                                              + " to account for negative lsb)")));
                 UINFO(1, "    Related Raw index is " << nodep->lsbConstStr(nodep->widthConst() - 1)
                                                      << ":" << nodep->lsbConstStr(0));
@@ -3901,7 +3910,6 @@ class ConstVisitor final : public VNVisitor {
     }
 
     // Not folded, so not constant
-    void visit(AstAssocSel* nodep) override { visit(static_cast<AstNode*>(nodep)); }
     void visit(AstWildcardSel* nodep) override { visit(static_cast<AstNode*>(nodep)); }
 
     void visit(AstStructSel* nodep) override {
@@ -3985,8 +3993,7 @@ class ConstVisitor final : public VNVisitor {
                 } else if (const AstConst* const itemp = VN_CAST(selItemp, Const)) {
                     VL_DO_DANGLING(replaceNum(nodep, itemp->num()), nodep);
                     did = true;
-                } else if (m_params && VN_IS(valuep, NodeCons)
-                           && VN_AS(valuep, NodeCons)->isConstantTree()) {
+                } else if (m_params && VN_IS(valuep, NodeCons)) {
                     // Allow parameters to pass aggregates
                     AstNode* const newp = valuep->cloneTree(false);
                     nodep->replaceWithKeepDType(newp);

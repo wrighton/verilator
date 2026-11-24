@@ -12,4 +12,12 @@
                                                 : ... note: In instance 't'
    30 |   always @(posedge clk) lane = wrap.f[40'(40'h10_0000_0005)];
       |                                      ^
+%Warning-SELRANGE: t/t_select_bad_range6.v:35:20: Selection index out of range: 68719476741:68719476741 outside 14:0
+                                                : ... note: In instance 't'
+   35 |   assign g_lane = g[40'(40'h10_0000_0005)];
+      |                    ^
+%Warning-SELRANGE: t/t_select_bad_range6.v:36:16: Selection index out of range: 68719476742:68719476742 outside 14:0
+                                                : ... note: In instance 't'
+   36 |   always_comb g[40'(40'h10_0000_0006)] = lane;
+      |                ^
 %Error: Exiting due to

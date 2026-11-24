@@ -23,10 +23,6 @@
                                      : ... note: In instance 't'
    48 |   localparam int C_QUE_1 = C_QUE[1];
       |                                 ^
-%Error: t/t_param_dynamic_bad.v:50:33: Expecting expression to be constant, but can't convert a ASSOCSEL to constant.
-                                     : ... note: In instance 't'
-   50 |   localparam int C_ASC_A = C_ASC["a"];
-      |                                 ^
 %Error: t/t_param_dynamic_bad.v:52:33: Expecting expression to be constant, but can't convert a WILDCARDSEL to constant.
                                      : ... note: In instance 't'
    52 |   localparam int C_WLD_1 = C_WLD[1];

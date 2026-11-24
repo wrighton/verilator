@@ -28,4 +28,10 @@ module t (
   wrap_t wrap;
   logic [3:0] lane;
   always @(posedge clk) lane = wrap.f[40'(40'h10_0000_0005)];
+
+  // A wide position of a packed array, folded only after the width pass, read and written
+  logic [14:0][3:0] g;
+  logic [3:0] g_lane;
+  assign g_lane = g[40'(40'h10_0000_0005)];
+  always_comb g[40'(40'h10_0000_0006)] = lane;
 endmodule
