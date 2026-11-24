@@ -110,6 +110,7 @@ private:
         int m_bitLsb = 0;  // Bit's LSB
         int m_bitMsb = 0;  // Bit's MSB
         int m_elemWidth = 0;  // Element width
+        int m_forceId = 0;  // Identifies the force statement without reading its RHS storage
     };
 
     std::vector<Entry> m_entries;  // Sorted by msb, non-overlapping
@@ -119,8 +120,8 @@ private:
                                    [](const Entry& e, int bit) { return e.m_msb < bit; });
         while (it != m_entries.end() && it->m_lsb <= msb) {
             if (it->m_lsb < lsb && it->m_msb > msb) {
-                const Entry right{msb + 1, it->m_msb, it->m_rhsLsb, it->m_rhsWidth,
-                                  it->m_rhsDatap};
+                Entry right = *it;
+                right.m_lsb = msb + 1;
                 it->m_msb = lsb - 1;
                 return m_entries.insert(++it, right);
             }
@@ -288,6 +289,16 @@ private:
 public:
     VlForceVec() = default;
 
+    // A procedural RHS stays live as long as any part of its force survives.
+    bool hasForce(int forceId, int lsb, int msb) const {
+        for (auto it = std::lower_bound(m_entries.begin(), m_entries.end(), lsb,
+                                        [](const Entry& e, int bit) { return e.m_msb < bit; });
+             it != m_entries.end() && it->m_lsb <= msb; ++it) {
+            if (it->m_forceId == forceId) return true;
+        }
+        return false;
+    }
+
     template <typename T>
     T read(const T& val) const {
         T result = val;
@@ -357,24 +368,25 @@ public:
         return result;
     }
 
-    void addForce(int lsb, int msb, const void* rhsDatap, int rhsLsb) {
+    void addForce(int lsb, int msb, const void* rhsDatap, int rhsLsb, int forceId = 0) {
         assert(lsb <= msb);
         assert(rhsDatap);
         assert(rhsLsb <= lsb);
 
         auto it = trimEntries(lsb, msb);
-        m_entries.insert(it, {lsb, msb, rhsLsb, msb - rhsLsb + 1, rhsDatap});
+        m_entries.insert(it, {lsb, msb, rhsLsb, msb - rhsLsb + 1, rhsDatap, 0, 0, 0, forceId});
     }
 
     void addForce(int lsb, int msb, const void* rhsDatap, int rhsLsb, int bitLsb, int bitMsb,
-                  int elemWidth) {
+                  int elemWidth, int forceId = 0) {
         assert(lsb == msb);
         assert(rhsDatap);
         assert(elemWidth > 0);
         assert(0 <= bitLsb && bitLsb <= bitMsb && bitMsb < elemWidth);
         const std::size_t at = trimElementBitRange(lsb, bitLsb, bitMsb);
-        m_entries.insert(m_entries.begin() + at, Entry{lsb, msb, rhsLsb, bitMsb - rhsLsb + 1,
-                                                       rhsDatap, bitLsb, bitMsb, elemWidth});
+        m_entries.insert(m_entries.begin() + at,
+                         Entry{lsb, msb, rhsLsb, bitMsb - rhsLsb + 1, rhsDatap, bitLsb, bitMsb,
+                               elemWidth, forceId});
     }
 
     void release(int lsb, int msb) {

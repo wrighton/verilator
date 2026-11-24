@@ -296,10 +296,20 @@ class LiftExprVisitor final : public VNVisitor {
     void visit(AstNodeAssign* nodep) override {
         if (nodep->user1SetOnce()) return;
         VL_RESTORER(m_doNotLiftp);
-        // Do not lift the RHS if this is already a simple assignment to a variable
-        m_doNotLiftp = VN_IS(nodep->lhsp(), NodeVarRef) ? nodep->rhsp() : nullptr;
-        if (AstNode* const newStmtps = lift(nodep->rhsp())) {
-            nodep->addHereThisAsNext(newStmtps);
+        const bool isForce = VN_IS(nodep, AssignForce);
+        AstNodeExpr* const rhsp = nodep->rhsp();
+        // Pure function calls belong to the live RHS. Impure calls stay at the force site
+        // and are sampled once.
+        const bool liveRhs = isForce && rhsp->exists([](const AstNodeFTaskRef*) { return true; })
+                             && !rhsp->exists([](AstNode* exprp) { return !exprp->isPure(); });
+        m_doNotLiftp = !isForce && VN_IS(nodep->lhsp(), NodeVarRef) ? rhsp : nullptr;
+        if (AstNodeStmt* const newStmtps = lift(rhsp)) {
+            if (liveRhs) {
+                AstNodeExpr* const resultp = nodep->rhsp()->unlinkFrBack();
+                nodep->rhsp(new AstExprStmt{nodep->fileline(), newStmtps, resultp});
+            } else {
+                nodep->addHereThisAsNext(newStmtps);
+            }
         }
 
         // Lifting from NBA LHS is safe as it evaluates at the same time as the RHS
