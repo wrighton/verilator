@@ -21,26 +21,39 @@
 int errors = 0;
 
 #ifdef T_GLOBAL_CONTEXT
-// A context owned by a static object, destroyed at exit
+// A context and model owned by static objects, destroyed at exit
 std::unique_ptr<VerilatedContext> g_contextp;
+std::unique_ptr<VM_PREFIX> g_topp;
 #endif
 
-int main(int argc, char** argv) {
-    // Exits cleanly when the context of a model with hierarchical blocks is destroyed at exit
-#ifdef T_GLOBAL_CONTEXT
-    g_contextp.reset(new VerilatedContext);
-    g_contextp->commandArgs(argc, argv);
-    const std::unique_ptr<VM_PREFIX> topp{new VM_PREFIX{g_contextp.get(), ""}};
-#else
-    Verilated::commandArgs(argc, argv);  // The default context
-    const std::unique_ptr<VM_PREFIX> topp{new VM_PREFIX{""}};
-#endif
+static void evalAndCheck(VM_PREFIX* topp) {
     for (int i = 0; i < 10; ++i) {
         topp->clk = i & 1;
         topp->eval();
     }
     TEST_CHECK_EQ(topp->q0, 5);
     TEST_CHECK_EQ(topp->q1, 5);
+}
+
+int main(int argc, char** argv) {
+    // Exits cleanly when the context of a model with hierarchical blocks is destroyed at exit
+#ifdef T_GLOBAL_CONTEXT
+    g_contextp.reset(new VerilatedContext);
+    g_contextp->commandArgs(argc, argv);
+    g_topp.reset(new VM_PREFIX{g_contextp.get(), ""});
+    VM_PREFIX* const topp = g_topp.get();
+#else
+    Verilated::commandArgs(argc, argv);  // The default context
+    std::unique_ptr<VM_PREFIX> topp{new VM_PREFIX{""}};
+#endif
+    evalAndCheck(&*topp);
+#ifdef T_RECREATE
+    // A model created again under the same name, after deleting the first
+    topp->final();
+    topp.reset();
+    topp.reset(new VM_PREFIX{""});
+    evalAndCheck(topp.get());
+#endif
 #ifdef T_STD_EXIT
     // Also when exiting with the model alive
     if (!errors) VL_PRINTF("*-* All Finished *-*\n");
