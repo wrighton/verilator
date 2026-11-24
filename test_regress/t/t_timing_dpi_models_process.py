@@ -15,7 +15,17 @@ test.compile(make_main=False,
              vm_prefix="Vb",
              verilator_make_gmake=False,
              verilator_flags2=["--timing", "--top-module", "b"])
-test.run(cmd=[os.environ["MAKE"], "-C", test.obj_dir, "-f", "Vb.mk", "Vb__ALL.a"])
+
+# Vb links with Va and shares VL_DEBUG-dependent runtime layout, so build it with the same flags
+# as Va (VL_DEBUG, model optimization)
+test.run(cmd=[os.environ["MAKE"], "-C", test.obj_dir,
+              "-f", os.getcwd() + "/Makefile_obj",
+              "VM_PREFIX=Vb",
+              "TEST_OBJ_DIR=" + test.obj_dir,
+              "CPPFLAGS_DRIVER=-D" + test.name.upper(),
+              ("CPPFLAGS_DRIVER2=-DTEST_VERBOSE=1" if test.verbose else ""),
+              ("" if test.benchmark else "OPT_FAST=-O0"),
+              "Vb__ALL.a"])  # yapf:disable
 
 test.vm_prefix = "Va"
 test.compile(make_main=False,
