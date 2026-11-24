@@ -1843,10 +1843,19 @@ class ConstVisitor final : public VNVisitor {
                 // See also warning in V3Width
                 // Must adjust by element width as declRange() is in number of elements
                 string msbLsbProtected;
+                int outsideMsb = nodep->declRange().hiMaxSelect();
+                int adjustScale = 1;  // Units of the negative-lsb adjustment
                 if (nodep->declElWidth() == 0) {
                     msbLsbProtected = "(nodep->declElWidth() == 0) "
                                       + nodep->lsbConstStr(nodep->widthConst() - 1) + ":"
                                       + nodep->lsbConstStr(0);
+                } else if (nodep->declElWidth() > 1
+                           && nodep->widthConst() != nodep->declElWidth()) {
+                    // A select of other than one element is in bits, as V3Width reports it
+                    msbLsbProtected = nodep->lsbConstStr(nodep->widthConst() - 1) + ":"
+                                      + nodep->lsbConstStr(0);
+                    outsideMsb = maxDeclBit;
+                    adjustScale = nodep->declElWidth();
                 } else {
                     msbLsbProtected
                         = nodep->lsbConstStr(nodep->widthConst() - 1, nodep->declElWidth()) + ":"
@@ -1854,11 +1863,11 @@ class ConstVisitor final : public VNVisitor {
                 }
                 nodep->v3warn(SELRANGE,
                               "Selection index out of range: "
-                                  << msbLsbProtected << " outside "
-                                  << nodep->declRange().hiMaxSelect() << ":0"
+                                  << msbLsbProtected << " outside " << outsideMsb << ":0"
                                   << (nodep->declRange().lo() >= 0
                                           ? ""
-                                          : (" (adjusted +" + cvtToStr(-nodep->declRange().lo())
+                                          : (" (adjusted +"
+                                             + cvtToStr(-nodep->declRange().lo() * adjustScale)
                                              + " to account for negative lsb)")));
                 UINFO(1, "    Related Raw index is " << nodep->lsbConstStr(nodep->widthConst() - 1)
                                                      << ":" << nodep->lsbConstStr(0));
@@ -3052,8 +3061,11 @@ class ConstVisitor final : public VNVisitor {
                 srcp = packedp;
             } else if ((VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType)
                         || VN_IS(srcDTypep, UnpackArrayDType))) {
-                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)
-                    || VN_IS(dstDTypep, UnpackArrayDType)) {
+                const bool dynamicDst
+                    = VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType);
+                // A fixed-size unpacked target is streamed into as into a queue, then copied
+                const bool unpackedDst = VN_IS(dstDTypep, UnpackArrayDType);
+                if (dynamicDst || unpackedDst || !VN_IS(srcDTypep, UnpackArrayDType)) {
                     int blockSize = 1;
                     if (const AstConst* const constp = VN_CAST(streamp->rhsp(), Const)) {
                         blockSize = constp->toSInt();
@@ -3079,7 +3091,7 @@ class ConstVisitor final : public VNVisitor {
                     // A dynamically sized source is reversed before packing it left-justified,
                     // as its width is not known
                     AstNodeDType* const arrayDTypep
-                        = dynamicDst ? dstDTypep : srcp->dtypep()->skipRefp();
+                        = dynamicDst || unpackedDst ? dstDTypep : srcp->dtypep()->skipRefp();
                     int dstElementBits = 0;
                     if (const AstNodeDType* const elemDtp = arrayDTypep->subDTypep()) {
                         dstElementBits = elemDtp->width();
@@ -3088,7 +3100,7 @@ class ConstVisitor final : public VNVisitor {
                     srcp = new AstCvtArrayToArray{
                         srcp->fileline(), srcp->unlinkFrBack(), arrayDTypep,   true,
                         blockSize,        dstElementBits,       srcElementBits};
-                    if (!dynamicDst) {
+                    if (!dynamicDst && !unpackedDst) {
                         srcp = new AstCvtArrayToPacked{srcp->fileline(), srcp, dstDTypep};
                     }
                     nodep->rhsp(srcp);
@@ -3916,7 +3928,6 @@ class ConstVisitor final : public VNVisitor {
     }
 
     // Not folded, so not constant
-    void visit(AstAssocSel* nodep) override { visit(static_cast<AstNode*>(nodep)); }
     void visit(AstDynArraySel* nodep) override { visit(static_cast<AstNode*>(nodep)); }
     void visit(AstQueueSel* nodep) override { visit(static_cast<AstNode*>(nodep)); }
     void visit(AstWildcardSel* nodep) override { visit(static_cast<AstNode*>(nodep)); }
@@ -4002,8 +4013,7 @@ class ConstVisitor final : public VNVisitor {
                 } else if (const AstConst* const itemp = VN_CAST(selItemp, Const)) {
                     VL_DO_DANGLING(replaceNum(nodep, itemp->num()), nodep);
                     did = true;
-                } else if (m_params && VN_IS(valuep, NodeCons)
-                           && VN_AS(valuep, NodeCons)->isConstantTree()) {
+                } else if (m_params && VN_IS(valuep, NodeCons)) {
                     // Allow parameters to pass aggregates
                     AstNode* const newp = valuep->cloneTree(false);
                     nodep->replaceWithKeepDType(newp);
@@ -4920,12 +4930,12 @@ class ConstVisitor final : public VNVisitor {
     TREE_SKIP_VISIT("ArraySel");
     TREE_SKIP_VISIT("AssocSel");
     TREE_SKIP_VISIT("CAwait");
-    TREE_SKIP_VISIT("DynArraySel");
-    TREE_SKIP_VISIT("QueueSel");
     TREE_SKIP_VISIT("Cond");
+    TREE_SKIP_VISIT("DynArraySel");
     TREE_SKIP_VISIT("Extend");
     TREE_SKIP_VISIT("ExtendS");
     TREE_SKIP_VISIT("Or");
+    TREE_SKIP_VISIT("QueueSel");
     TREE_SKIP_VISIT("WildcardSel");
 
     //-----
@@ -5416,12 +5426,7 @@ AstNodeExpr* V3Const::selectionFromp(const AstNodeExpr* const exprp) {
     if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) return selp->fromp();
     if (const AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
         // Only read selectors/getters belong on a default path; write methods can be pure too.
-        switch (methodp->method()) {
-        case VCMethod::ARRAY_AT:
-        case VCMethod::ARRAY_AT_BACK:
-        case VCMethod::DYN_SIZE: return methodp->fromp();
-        default: break;
-        }
+        if (methodp->method() == VCMethod::DYN_SIZE) return methodp->fromp();
     }
     return nullptr;
 }

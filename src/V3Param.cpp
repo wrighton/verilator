@@ -568,8 +568,6 @@ class ParamProcessor final {
         return key + "}";
     }
 
-    static bool isAggregateParamValue(const AstNode* nodep) { return VN_IS(nodep, NodeCons); }
-
     string paramValueString(const AstNode* nodep) {
         if (const AstRefDType* const refp = VN_CAST(nodep, RefDType)) {
             nodep = refp->skipRefToNonRefp();
@@ -2032,14 +2030,6 @@ class ParamProcessor final {
             if (!modvarp->isGParam()) {
                 pinp->v3fatalSrc("Attempted parameter setting of non-parameter: Param "
                                  << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());
-            } else if (pinp->exprp()->exists([](const AstConsWildcard*) { return true; })) {
-                pinp->v3warn(E_UNSUPPORTED, "Unsupported: Parameter override value containing a "
-                                            "wildcard associative array: Param "
-                                                << pinp->prettyNameQ() << " of "
-                                                << nodep->prettyNameQ() << ".");
-                // Recover by keeping the default
-                AstNode* const exprp = pinp->exprp()->unlinkFrBack();
-                VL_DO_DANGLING(exprp->deleteTree(), exprp);
             } else if (VN_IS(pinp->exprp(), Pattern)
                        || (VN_IS(pinp->exprp(), ConsArray)
                            && arraySubDTypep(modvarp->subDTypep()))) {

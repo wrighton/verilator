@@ -7,12 +7,4 @@
                                                            : ... note: In instance 't'
    24 |   localparam int ADENSE = A[DENSE];
       |                            ^
-%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:27:10: Unsupported: Parameter override value containing a wildcard associative array: Param 'W' of 'u_sub'.
-                                                           : ... note: In instance 't'
-   27 |   sub #(.W(WV)) u_sub ();
-      |          ^
-%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:29:10: Unsupported: Parameter override value containing a wildcard associative array: Param 'WA' of 'u_sub_array'.
-                                                           : ... note: In instance 't'
-   29 |   sub #(.WA(WAV)) u_sub_array ();
-      |          ^~
 %Error: Exiting due to

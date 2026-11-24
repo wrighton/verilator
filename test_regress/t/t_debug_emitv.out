@@ -482,7 +482,9 @@ module t;
             if (((usarr.marr[32'sh0]) != 32'sh0)) begin
                 $write("");
             end
-            if ((((arraymanyd[4'h0])[4'h0])[4'h0])[7:4][3:2][2]) begin
+            if ((((arraymanyd[32'sh0])[32'sh0])[32'sh0])[
+                (32'h4 * 32'h1)+:4][(32'h2 * 32'h1)
+                +:2][2]) begin
                 $write("");
             end
             if ((var_part != 32'sh0)) begin
