@@ -17,16 +17,18 @@ if not test.have_solver:
 
 test.compile()
 
-# Reg's callbacks are also called from Block, whose constraint selects through Reg's fields, so
-# Reg's randomize() calls them instead of a copy
+# Reg's pre- and post-randomize phases are also called from Block, whose constraint selects
+# through Reg's fields, so the parts of Reg's randomize() call them instead of a copy
 calls = set()
 for filename in test.glob_some(test.obj_dir + "/*.cpp"):
     with open(filename, 'r', encoding="utf8") as fh:
         for funcText in fh.read().split("\n}\n"):
-            if "Reg::__VnoInFunc_randomize(" in funcText:
-                calls.update(re.findall(r'->__VnoInFunc___VrandCb_(pre|post)\(', funcText))
-if calls != {"pre", "post"}:
-    test.error("Reg::randomize does not call its nested callbacks, calls: " + str(calls))
+            if ("Reg::__VnoInFunc_randomize(" in funcText
+                    or "Reg::__VnoInFunc___VrandNoPre(" in funcText):
+                calls.update(re.findall(r'->__VnoInFunc___Vrand(Pre|Post)\(', funcText))
+if calls != {"Pre", "Post"}:
+    test.error("Reg::randomize does not call its pre- and post-randomize phases, calls: " +
+               str(calls))
 
 test.execute()
 
