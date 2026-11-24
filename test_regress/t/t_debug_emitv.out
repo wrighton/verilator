@@ -1946,6 +1946,23 @@ function int rand_reduce(input Cls obj);
         disable label10;
     end
 endfunction
+class ClsSize;
+    rand int rdyn[];
+    constraint dyn_size {
+
+        ???? // CONSTRAINTEXPR
+        (rdyn.size() == 32'sh2)}
+    function new();
+    endfunction
+    function bit signed [31:0]  randomize();
+    endfunction
+endclass
+function int rand_size(input ClsSize obj);
+    begin : label11
+        rand_size = obj.randomize();
+        disable label11;
+    end
+endfunction
 process __VprocessQueue_named__0[$];
 package __Vconstpool;
     const string CONSARRAY_0[1:0] = '{0:"ZERO", 1:"ONE"};
@@ -2127,19 +2144,19 @@ endmodule
 package p;
     logic pkgvar;
     function int ident(input int value);
-        begin : label11
+        begin : label12
             ident = /*CRESET*/;
             ident = value;
-            disable label11;
+            disable label12;
         end
     endfunction
     function int uses_const_func();
         logic [1:0]  v;
-        begin : label12
+        begin : label13
             uses_const_func = /*CRESET*/;
             v = /*CRESET*/;
             uses_const_func = 32'h2;
-            disable label12;
+            disable label13;
         end
     endfunction
 endpackage
@@ -2161,13 +2178,13 @@ module sub__Zz461fae86;
         o = ({32'h1{{1'h0, i[31:1]}}} + 32'h1);
     endtask
     function int f(input int v);
-        begin : label13
+        begin : label14
             if ((v == 32'sh0)) begin
                 f = 32'sh21;
-                disable label13;
+                disable label14;
             end
             f = ({32'h1{{31'h0, v[2]}}} + 32'h1);
-            disable label13;
+            disable label14;
         end
     endfunction
     real r;
@@ -2212,7 +2229,7 @@ package std;
         protected chandle m_process;
         static function process self();
             process p;
-            begin : label14
+            begin : label15
                 self = /*CRESET*/;
                 p = /*CRESET*/;
                 $c(vlProcess->initFromSelf(p););
@@ -2224,17 +2241,17 @@ package std;
                     end
                 end
                 self = p;
-                disable label14;
+                disable label15;
             end
         endfunction
         protected task set_status(input int s);
             $c(m_process->state(s););
         endtask
         function int status();
-            begin : label15
+            begin : label16
                 status = /*CRESET*/;
                 status = $c(m_process->state());
-                disable label15;
+                disable label16;
             end
         endfunction
         protected task disable_process();
@@ -2277,12 +2294,12 @@ package std;
         endtask
         function string get_randstate();
             string s;
-            begin : label16
+            begin : label17
                 get_randstate = /*CRESET*/;
                 s = string'($c(0));
                 $c(s = m_process->randstate(););
                 get_randstate = s;
-                disable label16;
+                disable label17;
             end
         endfunction
         task set_randstate(input string s);
@@ -2319,7 +2336,7 @@ package std;
             m_keyCount = (m_keyCount + keyCount);
         endtask
         task get(input int keyCount);
-            begin : label17
+            begin : label18
                 dropKilled();
                 if (((m_keyCount >= keyCount) && ((
                                                    m_queue.size() 
@@ -2333,7 +2350,7 @@ package std;
                     begin
                         m_keyCount = (m_keyCount - 
                                       keyCount);
-                        disable label17;
+                        disable label18;
                     end
                 end
                 m_queue.push_back(
@@ -2358,15 +2375,15 @@ package std;
             end
         endtask
         function int try_get(input int keyCount);
-            begin : label18
+            begin : label19
                 try_get = /*CRESET*/;
                 if ((m_keyCount < keyCount)) begin
                     try_get = 32'sh0;
-                    disable label18;
+                    disable label19;
                 end
                 m_keyCount = (m_keyCount - keyCount);
                 try_get = 32'sh1;
-                disable label18;
+                disable label19;
             end
         endfunction
     endclass

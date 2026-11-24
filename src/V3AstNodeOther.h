@@ -2576,6 +2576,7 @@ class AstVar final : public AstNode {
     bool m_dfgAllowMultidriveTri : 1;  // Allow DFG MULTIDRIVEN warning for intentional tri nets
     bool m_globalConstrained : 1;  // Global constraint per IEEE 1800-2023 18.5.8
     bool m_isStdRandomizeArg : 1;  // Argument variable created for std::randomize (__Varg*)
+    bool m_isRandSizeVar : 1;  // Size variable of a size-constrained array (__V*size)
     bool m_processQueue : 1;  // Process queue variable
     bool m_mtaskCacheLineAlign : 1;  // Start MTask affinity group on a cache line
     uint32_t m_assertCtlMask = 0;  // Type/directive bit of per-instance assertion control state
@@ -2647,6 +2648,7 @@ class AstVar final : public AstNode {
         m_dfgAllowMultidriveTri = false;
         m_globalConstrained = false;
         m_isStdRandomizeArg = false;
+        m_isRandSizeVar = false;
         m_processQueue = false;
         m_mtaskCacheLineAlign = false;
     }
@@ -2876,6 +2878,8 @@ public:
     bool globalConstrained() const { return m_globalConstrained; }
     bool isStdRandomizeArg() const { return m_isStdRandomizeArg; }
     void setStdRandomizeArg() { m_isStdRandomizeArg = true; }
+    bool isRandSizeVar() const { return m_isRandSizeVar; }
+    void setRandSizeVar() { m_isRandSizeVar = true; }
     // METHODS
     void name(const string& name) override { m_name = name; }
     void tag(const string& text) override { m_tag = text; }

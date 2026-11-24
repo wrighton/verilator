@@ -273,6 +273,15 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<const VlRandomVar*> m_randomConstraintVars;
     std::set<std::string> m_disabledVars;  // Variables with rand_mode off (skip write-back)
                                            // variables
+    // Names and bytes of variables
+    using KeptValues = std::vector<std::pair<std::string, std::string>>;
+    KeptValues m_solution;  // The solved values, see keep_solution
+    KeptValues m_prior;  // The values before the solve, see keep_prior
+    std::map<std::string, std::set<uint64_t>> m_priorRandc;  // m_randcUsedValues then
+    KeptValues m_roundValues;  // The values before a function-call solve round first set them
+    std::unordered_set<std::string> m_roundKept;  // Variables in m_roundValues
+    // Array size variables, by registered name, which a solve of array sizes alone sets
+    std::unordered_set<std::string> m_sizeVars;
     ArrayInfoMap m_arr_vars;  // Tracks each element in array structures for iteration
     // Arrays whose elements must be distinct grouped by unique constraint
     std::map<uint32_t, std::unordered_set<std::string>> m_uniqueArrays;
@@ -323,6 +332,10 @@ class VlRandomizer VL_NOT_FINAL {
     int m_funcRound = 0;  // Current solve round
     int m_funcRoundLast = 0;  // Final solve round
     bool funcPreRound() const { return m_funcRound < m_funcRoundLast; }
+    void keepRoundValues(const VlRandomVar& var);  // Keep var's value before a round sets it
+    static void keepValues(const VlRandomVar& var, KeptValues& valuesr);
+    void keepVars(KeptValues& valuesr) const;
+    void setValues(const KeptValues& values) const;
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
@@ -591,6 +604,15 @@ public:
     bool next_check_only(VlRNGReseeds& rngr);
     /// Finds the sizes of the arrays for a final next(), without advancing randc cycles
     bool next_size(VlRNGReseeds& rngr);
+    /// Keep the values a successful solve set, which restore_solution sets again after the
+    /// basic randomization of the variables not solved, as that may overwrite them
+    void keep_solution();
+    /// Set the values keep_solution kept
+    void restore_solution();
+    /// Keep the values and randc cycles before a solve, for end_prior
+    void keep_prior();
+    /// Set the values and randc cycles keep_prior kept, unless ok
+    void end_prior(bool ok);
     /// Continue the randc cycles of another randomizer, which solved for the same object
     void randc_history_from(const VlRandomizer& other) {
         m_randcUsedValues = other.m_randcUsedValues;
@@ -1192,16 +1214,15 @@ public:
                           std::initializer_list<std::pair<const char*, int>> argRounds);
     // Fix the values solved by solvedr, and advance to the next round; false after the last
     bool func_round_next(const VlRandomizer& solvedr);
-    // Whether solving the final round
+    // Whether the final round is being solved
     bool func_round_final() const { return !funcPreRound(); }
-    // Stop solving in rounds
-    void func_round_end() {
-        m_funcArgRounds.clear();
-        m_funcRound = m_funcRoundLast = 0;
-    }
+    // Stop solving in rounds; if they failed, set the values they changed back through the
+    // variables solvedr, which solved the final round, registered
+    void func_round_end(bool ok, const VlRandomizer& solvedr);
     // Whether the function argument variables are solved, so the call can be evaluated
     bool func_args_ready(std::initializer_list<const char*> names) const;
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
+    void markSizeVar(const std::string& name) { m_sizeVars.insert(name); }  // Of array size
     /// Restrict variable name to its enum values: domain is a Bool term over '__Ve'
     void enum_domain(const std::string& name, const char* domain) { m_enumDomains[name] = domain; }
     /// Register solve-before ordering of bits [lsb, lsb + width) of variables or array
