@@ -1,3 +1,5 @@
-%Error: t/t_preproc_eof4_bad.v:8:1: Unterminated string
+%Error: t/t_preproc_eof4_bad.v:7:1: Unterminated string
+    7 | "blah
+      | ^~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: Exiting due to
