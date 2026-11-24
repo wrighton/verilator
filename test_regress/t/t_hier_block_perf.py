@@ -22,8 +22,8 @@ HIER_THREADS = 4
 config_file = test.t_dir + "/" + test.name + ".vlt"
 
 test.compile(v_flags2=[
-    config_file, "+define+SIM_CYCLES=" + str(test.cycles), "--prof-exec", "--hierarchical",
-    "--stats", "-Wno-UNOPTFLAT",
+    config_file, "+define+SIM_CYCLES=" + str(test.cycles), "--prof-exec",
+    "--hierarchical", "--stats",
     (f"-DWORKERS={HIER_BLOCK_THREADS}" if test.vltmt and HIER_BLOCK_THREADS > 1 else ""),
     (f"--hierarchical-threads {HIER_THREADS}" if test.vltmt and HIER_THREADS > 1 else "")
 ],
@@ -31,13 +31,18 @@ test.compile(v_flags2=[
              context_threads=(HIER_THREADS if test.vltmt else 1))
 
 test.file_grep(test.obj_dir + "/V" + test.name + "__hier.dir/V" + test.name + "__stats.txt",
-               r'Optimizations, Hierarchical DPI wrappers with costs\s+(\d+)', 6)
+               r'Optimizations, Hierarchical DPI wrappers with costs\s+(\d+)', 8)
 
 if test.vltmt:
     test.file_grep(test.obj_dir + "/V" + test.name + "__hier.dir/V" + test.name + "__stats.txt",
-                   r'Optimizations, Thread schedule count\s+(\d+)', 2)
+                   r'Optimizations, Thread schedule count\s+(\d+)', 1)
     test.file_grep(test.obj_dir + "/V" + test.name + "__hier.dir/V" + test.name + "__stats.txt",
-                   r'Optimizations, Thread schedule total tasks\s+(\d+)', 3)
+                   r'Optimizations, Thread schedule total tasks\s+(\d+)', 2)
+    cost = test.file_grep(
+        test.obj_dir + "/V" + test.name + "__hier.dir/V" + test.name + "__stats.txt",
+        r'MTask graph, final, critical path cost\s+(\d+)')
+    if cost and int(cost[0]) > 6000:
+        test.error("Critical path cost " + cost[0] + " above 6000")
 
 test.execute(all_run_flags=[
     "+verilator+prof+exec+start+2",
