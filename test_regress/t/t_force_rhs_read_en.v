@@ -133,9 +133,48 @@ module t;
     index = 6;
     #0.1;
     `checkh(index_target === 1'bz, 1'b1);
+    // An out of range bit reads as x, which the force drives (IEEE 1800-2023 11.5.1).
+    index = 9;
+    #0.1;
+    `checkh(index_target === 1'bz, 1'b0);
+    index = -1;
+    #0.1;
+    `checkh(index_target === 1'bz, 1'b0);
     release index_target;
     #0.1;
     `checkh(index_target, 1'b1);
     `checkh(index_target === 1'bz, 1'b0);
+  end
+
+  // A part select partly out of range drives its out of range bits.
+  wire [1:0] part_target;
+  assign part_target = index_target_en ? 2'b11 : 2'bzz;
+  int part_index = 0;
+  initial begin
+    #1;
+    force part_target = index_source[part_index+:2];
+    #0.1;
+    `checkh(part_target[1] === 1'bz, 1'b1);
+    `checkh(part_target[0], 1'b1);
+    part_index = 5;
+    #0.1;
+    `checkh(part_target[1] === 1'bz, 1'b1);
+    `checkh(part_target[0], 1'b0);
+    part_index = 6;
+    #0.1;
+    `checkh(part_target[1] === 1'bz, 1'b0);
+    `checkh(part_target[0] === 1'bz, 1'b1);
+    part_index = -1;
+    #0.1;
+    `checkh(part_target[1], 1'b1);
+    `checkh(part_target[0] === 1'bz, 1'b0);
+    part_index = 7;
+    #0.1;
+    `checkh(part_target === 2'bzz, 1'b0);
+    `checkh(part_target[1] === 1'bz, 1'b0);
+    `checkh(part_target[0] === 1'bz, 1'b0);
+    release part_target;
+    #0.1;
+    `checkh(part_target, 2'b11);
   end
 endmodule

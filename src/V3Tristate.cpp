@@ -652,6 +652,7 @@ public:
             aliasps;  // Explicit alias membership for RHS preparation
         std::unordered_map<const AstVar*, std::vector<AstVar*>> rhsInputActualps;
         std::unordered_set<const AstVar*> pulledps;  // Direct and propagated pulls for INOUT
+        std::unordered_set<const AstVar*> xrefWrittenps;  // Written through a hierarchical ref
     };
     static Eligible eligible(AstNetlist* netlistp) {
         TristateForcedInputVisitor visitor;
@@ -708,6 +709,7 @@ public:
         result.aliasps = std::move(visitor.m_aliasedps);
         result.rhsInputActualps = std::move(visitor.m_readInputActualps);
         result.pulledps = std::move(visitor.m_pulledps);
+        result.xrefWrittenps = std::move(visitor.m_xrefWrittenps);
         return result;
     }
 };
@@ -800,6 +802,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstVar* resolvedEnVarp = nullptr;
         // Ordinary INOUT relays read the parent resolver for a downstream prepared pin.
         AstVar* inoutReadRelayp = nullptr;
+        // Pull-aware read enable of a pulled net read by INOUT pins, forced with the net
+        AstVar* pullReadEnVarp = nullptr;
     };
 
     VNUser3Allocator<AstVar, AuxAstVar> m_varAux;
@@ -873,6 +877,8 @@ class TristateVisitor final : public TristateBaseVisitor {
     std::vector<std::pair<AstVar*, AstNodeExpr*>> m_inoutReadEnps;
     // Pulled actuals cannot share the raw driver enable of an INOUT force alias.
     std::unordered_set<const AstVar*> m_inoutPulledps;
+    // Nets with an alias or a hierarchical writer, which tristate resolution cannot represent
+    std::unordered_set<const AstVar*> m_unresolvedWriterps;
     // Wired net, or element of an unpacked array of wired nets, by net and unpacked indices
     using WiredElem = std::pair<AstVar*, std::vector<int>>;
     std::map<WiredElem, Assigns> m_wiredAssigns;  // Continuous drivers of wired elements
@@ -2063,6 +2069,11 @@ class TristateVisitor final : public TristateBaseVisitor {
         return isIfaceStrengthNet(varp) || (varp->isNet() && !varp->isIO() && !aux.inIface)
                || aux.resolvedEnVarp;
     }
+    // A force value keeps the value-only lowering of a module net with an alias or a
+    // hierarchical writer, as making the net tristate would reject that writer
+    bool hasUnresolvedWriter(AstVar* varp) {
+        return !m_varAux(varp).inIface && m_unresolvedWriterps.count(varp);
+    }
     // Enable forced with a net: of a forced port, the enable of the net it connects to
     AstVar* getCreateForceEnVarp(AstVar* varp) {
         AstVar* const resolvedEnVarp = m_varAux(varp).resolvedEnVarp;
@@ -2107,11 +2118,12 @@ class TristateVisitor final : public TristateBaseVisitor {
         m_modp->addStmtsp(newp);
         m_varAux(varp).resolvedEnVarp = newp;
     }
-    // Clone of a reference under constant selects, with the reference retargeted to the enable
-    // forced with it
-    AstNodeExpr* newEnSelp(AstNodeExpr* exprp, AstNodeVarRef* refp, VAccess access) {
+    // Clone of a reference under selects, with the reference retargeted to enVarp, by default
+    // the enable forced with it
+    AstNodeExpr* newEnSelp(AstNodeExpr* exprp, AstNodeVarRef* refp, VAccess access,
+                           AstVar* enVarp = nullptr) {
         FileLine* const flp = refp->fileline();
-        AstVar* const enVarp = getCreateForceEnVarp(refp->varp());
+        if (!enVarp) enVarp = getCreateForceEnVarp(refp->varp());
         AstNodeVarRef* enRefp;
         if (const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
             enRefp = newVarXRef(flp, enVarp, xrefp->dotted(), access, xrefp->inlinedDots());
@@ -3012,6 +3024,27 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
         return false;
     }
+    // Enable of a force value read from a net through selects. An out of range bit reads as x
+    // (IEEE 1800-2023 11.5.1), which the force drives, so the enable is selected from its
+    // 2-state inverse, whose out of range bits read as 0.
+    AstNodeExpr* newForceValueSelEnp(AstNodeExpr* rhsp, AstNodeVarRef* refp) {
+        AstNodeExpr* const enp = newEnSelp(rhsp, refp, VAccess::READ);
+        if (rhsp == refp) return enp;
+        AstNodeExpr* basep = enp;
+        while (AstSel* const selp = VN_CAST(basep, Sel)) {
+            selp->dtypeSetBitSized(selp->widthConst(), VSigning::UNSIGNED);
+            basep = selp->fromp();
+        }
+        FileLine* const flp = refp->fileline();
+        VNRelinker relinker;
+        basep->unlinkFrBack(&relinker);
+        AstNot* const invertedp = new AstNot{flp, basep};
+        invertedp->dtypeSetBitSized(basep->width(), VSigning::UNSIGNED);
+        relinker.relink(invertedp);
+        AstNot* const resultp = new AstNot{flp, enp};
+        resultp->dtypeSetBitSized(enp->width(), VSigning::UNSIGNED);
+        return resultp;
+    }
     // A forced net bit has the forced value, so it is driven unless that value is z (IEEE
     // 1800-2023 10.6.2). A force of a tristate net therefore also forces those bits of its
     // enable to the enable of the value, and a release releases both. Returns the enable
@@ -3034,10 +3067,9 @@ class TristateVisitor final : public TristateBaseVisitor {
             // forced net, only the enable of an interface strength net is taken here
             if (!aux.bitPulls.empty()) return nullptr;
             if (!varp->isForced()) {
-                return aux.pullp ? newAllZerosOrOnes(lhsp, true)
-                                 : newEnSelp(rhsp, refp, VAccess::READ);
+                return aux.pullp ? newAllZerosOrOnes(lhsp, true) : newForceValueSelEnp(rhsp, refp);
             }
-            return !aux.pullp && isIfaceStrengthNet(varp) ? newEnSelp(rhsp, refp, VAccess::READ)
+            return !aux.pullp && isIfaceStrengthNet(varp) ? newForceValueSelEnp(rhsp, refp)
                                                           : nullptr;
         }
         return nullptr;
@@ -3052,6 +3084,17 @@ class TristateVisitor final : public TristateBaseVisitor {
         // A release of a net restores the resolved value of its drivers.
         refp->varp()->isContinuously(true);
         AstNodeExpr* const enLhsp = newEnSelp(lhsp, refp, refp->access());
+        // A force overrides a pull, so the pull-aware read enable is forced the same way
+        if (AstVar* const readEnVarp = m_varAux(refp->varp()).pullReadEnVarp) {
+            readEnVarp->setForcedByCode();
+            AstNodeExpr* const readEnLhsp = newEnSelp(lhsp, refp, refp->access(), readEnVarp);
+            if (enValuep) {
+                stmtp->addNextHere(new AstAssignForce{stmtp->fileline(), readEnLhsp,
+                                                      enValuep->cloneTreePure(false)});
+            } else {
+                stmtp->addNextHere(new AstRelease{stmtp->fileline(), readEnLhsp});
+            }
+        }
         if (enValuep) {
             stmtp->addNextHere(new AstAssignForce{stmtp->fileline(), enLhsp, enValuep});
         } else {
@@ -3149,7 +3192,8 @@ class TristateVisitor final : public TristateBaseVisitor {
             const AstVarRef* const rhsRefp = VN_CAST(nodep->rhsp(), VarRef);
             const AstVarRef* const targetp = VN_CAST(forceTargetRefp(nodep->lhsp()), VarRef);
             if (rhsRefp && rhsRefp->varp()->isInput() && m_varAux(rhsRefp->varp()).forceRhsReadEn
-                && targetp && !targetp->varp()->isIO() && isForceOverrideNet(targetp->varp())) {
+                && targetp && !targetp->varp()->isIO() && isForceOverrideNet(targetp->varp())
+                && !hasUnresolvedWriter(targetp->varp())) {
                 // The force can introduce Z even if all normal drivers are always driven.
                 m_tgraph.setTristate(targetp->varp());
             }
@@ -3680,8 +3724,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 if (AstNodeExpr* const relayp = getInoutReadRelayp(refp)) return relayp;
                 AstNodeExpr* const enp = newInoutPinEnRefp(refp);
                 AstVar* const varp = refp->varp();
-                // A force overrides a pull. The raw enable of a forced net must stay intact.
-                if (!varp->isIO() && !varp->isForced()) m_inoutReadEnps.emplace_back(varp, enp);
+                if (!varp->isIO()) m_inoutReadEnps.emplace_back(varp, enp);
                 return enp;
             }
             return getEnExprBasedOnOriginalp(exprp);
@@ -3746,15 +3789,13 @@ class TristateVisitor final : public TristateBaseVisitor {
     void addInoutReadPullMasks() {
         // Materialize one effective read enable per pulled source in this module. Do not
         // change the raw driver enable, which is also used for port contributions.
-        std::unordered_map<const AstVar*, AstVar*> readEnps;
         for (const auto& entry : m_inoutReadEnps) {
-            const AuxAstVar& aux = m_varAux(entry.first);
+            AuxAstVar& aux = m_varAux(entry.first);
             if (!aux.pullp && aux.bitPulls.empty()) continue;
             AstNodeExpr* const enp = entry.second;
             FileLine* const flp = enp->fileline();
-            const auto result = readEnps.emplace(entry.first, nullptr);
-            AstVar*& readEnp = result.first->second;
-            if (result.second) {
+            AstVar*& readEnp = aux.pullReadEnVarp;
+            if (!readEnp) {
                 readEnp = new AstVar{flp, VVarType::MODULETEMP,
                                      "__VinoutReadEn" + cvtToStr(m_unique++), enp->dtypep()};
                 readEnp->isContinuously(true);
@@ -4109,6 +4150,8 @@ public:
             = haveForce ? TristateForcedInputVisitor::eligible(netlistp)
                         : TristateForcedInputVisitor::Eligible{};
         m_inoutPulledps = std::move(eligible.pulledps);
+        m_unresolvedWriterps = std::move(eligible.xrefWrittenps);
+        m_unresolvedWriterps.insert(eligible.aliasps.begin(), eligible.aliasps.end());
         std::unordered_set<const AstVar*> inputps;
         for (const AstVar* const varp : eligible.inputps) {
             if (varp->isForced()) inputps.emplace(varp);
@@ -4134,7 +4177,8 @@ public:
                     if (!targetp || !isForceOverrideNet(targetp->varp())) return;
                     const AstVarRef* const rhsRefp = VN_CAST(forcep->rhsp(), VarRef);
                     if (rhsRefp && rhsRefp->dtypep()->skipRefp()->isFourstate()
-                        && eligible.rhsInputps.count(rhsRefp->varp())) {
+                        && eligible.rhsInputps.count(rhsRefp->varp())
+                        && !hasUnresolvedWriter(targetp->varp())) {
                         inputReadps.push_back(rhsRefp->varp());
                     }
                     if (const AstNodeVarRef* const refp = forceRhsRefp(forcep->rhsp())) {

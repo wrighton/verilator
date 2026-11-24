@@ -36,6 +36,27 @@ module input_to_interface (
   always @(posedge drop) release target.value;
 endmodule
 
+// A local net with a hierarchical or alias writer keeps value-only forces of an input
+module xref_target_worker (
+    input wire [6:0] rhs
+);
+  wire [6:0] n;
+  initial #1 force n = rhs;
+endmodule
+
+module alias_target_worker (
+    input wire [6:0] rhs,
+    input wire [6:0] raw
+);
+  wire [6:0] n, m;
+  alias n = m;
+  assign m = raw;
+  initial begin
+    #1 force n = rhs;
+    #2 release n;
+  end
+endmodule
+
 module t;
   bit take = 0, drop = 0, rhs_enabled = 1, raw_enabled = 1;
   logic [6:0] rhs_raw = 7'h00, raw = 7'h11;
@@ -55,6 +76,31 @@ module t;
       .take(take),
       .drop(drop)
   );
+  bit [6:0] worker_rhs = 7'h4c, worker_raw = 7'h13;
+  xref_target_worker xref_worker (.rhs(worker_rhs));
+  assign xref_worker.n = worker_raw;
+  alias_target_worker alias_worker (
+      .rhs(worker_rhs),
+      .raw(worker_raw)
+  );
+  initial begin
+    #0.5;
+    `checkh(xref_worker.n, 7'h13);
+    `checkh(alias_worker.n, 7'h13);
+    #1;
+    `checkh(xref_worker.n, 7'h4c);
+    `checkh(alias_worker.n, 7'h4c);
+    worker_rhs = 7'h21;
+    #1;
+    `checkh(xref_worker.n, 7'h21);
+    `checkh(alias_worker.n, 7'h21);
+    #1;
+    `checkh(alias_worker.n, 7'h13);
+    release xref_worker.n;
+    #1;
+    `checkh(xref_worker.n, 7'h13);
+  end
+
   initial begin
     #1;
     `checkh(n, 7'h11);

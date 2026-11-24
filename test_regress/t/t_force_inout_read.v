@@ -134,6 +134,66 @@ module t;
     `checkh(iface_forwarded === 7'bzzzzzzz, 1'b1);
   end
 
+  // A parent force of a pulled net overrides its pulls only while forced.
+  wire [6:0] bit_pulled;
+  pullup (bit_pulled[6]);
+  pullup (bit_pulled[5]);
+  pulldown (bit_pulled[1]);
+  pulldown (bit_pulled[0]);
+  tri1 [6:0] forced_high;
+  tri0 [6:0] forced_low;
+  wire [6:0] bit_pulled_forwarded, forced_high_forwarded, forced_low_forwarded;
+  leaf bit_pulled_leaf (
+      .p(bit_pulled),
+      .local_en(1'b0),
+      .forwarded(bit_pulled_forwarded)
+  );
+  leaf forced_high_leaf (
+      .p(forced_high),
+      .local_en(1'b0),
+      .forwarded(forced_high_forwarded)
+  );
+  leaf forced_low_leaf (
+      .p(forced_low),
+      .local_en(1'b0),
+      .forwarded(forced_low_forwarded)
+  );
+  initial begin
+    #1.5;
+    `checkh(bit_pulled_leaf.p === 7'b11zzz00, 1'b1);
+    `checkh(bit_pulled_forwarded === 7'b11zzz00, 1'b1);
+    `checkh(forced_high_forwarded === 7'h7f, 1'b1);
+    `checkh(forced_low_forwarded === 7'h00, 1'b1);
+    force bit_pulled = 7'b0z1z0z1;
+    force forced_high = 7'bz0z1z0z;
+    force forced_low = 7'b1z0z1z0;
+    #0.5;
+    `checkh(bit_pulled_leaf.p === 7'b0z1z0z1, 1'b1);
+    `checkh(bit_pulled_forwarded === 7'b0z1z0z1, 1'b1);
+    `checkh(forced_high_forwarded === 7'bz0z1z0z, 1'b1);
+    `checkh(forced_low_forwarded === 7'b1z0z1z0, 1'b1);
+    release bit_pulled;
+    release forced_high;
+    release forced_low;
+    #0.5;
+    `checkh(bit_pulled_leaf.p === 7'b11zzz00, 1'b1);
+    `checkh(bit_pulled_forwarded === 7'b11zzz00, 1'b1);
+    `checkh(forced_high_forwarded === 7'h7f, 1'b1);
+    `checkh(forced_low_forwarded === 7'h00, 1'b1);
+    force bit_pulled[5:1] = 5'bz10z1;
+    force forced_high[3:2] = 2'bz0;
+    #0.5;
+    `checkh(bit_pulled_forwarded === 7'b1z10z10, 1'b1);
+    `checkh(forced_high_forwarded === 7'b111z011, 1'b1);
+    release bit_pulled[5:1];
+    release forced_high[3:2];
+    #0.5;
+    `checkh(bit_pulled_leaf.p === 7'b11zzz00, 1'b1);
+    `checkh(bit_pulled_forwarded === 7'b11zzz00, 1'b1);
+    `checkh(forced_high_forwarded === 7'h7f, 1'b1);
+    `checkh(forced_low_forwarded === 7'h00, 1'b1);
+  end
+
   task automatic check_ordinary(logic [6:0] expected);
     `checkh(ordinary.p, expected);
     `checkh(ordinary.forwarded, expected);
