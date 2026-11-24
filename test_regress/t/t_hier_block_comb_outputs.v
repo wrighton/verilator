@@ -13,6 +13,7 @@
 `define BLK blk
 `define BLK_T blk_t
 `define BLK_Q blk_q
+`define BLK_C blk_c
 `endif
 
 module t;
@@ -116,6 +117,77 @@ module t;
     #1;
     `checkh(p_b, 1'b0);
     `checkh(q_b, 1'b1);
+  end
+
+  // Outputs combinational from clocks of a block reach the parent at once: a clock gate, and an
+  // input that is also an event of the block
+  bit clk_c = 1'b0;
+  bit i_c = 1'b0;
+  wire gclk_c, o_c, e_c;
+  wire [6:0] cnt_c;
+  `BLK_C u_c (
+      .clk(clk_c),
+      .en(1'b1),
+      .i(i_c),
+      .clk2(1'b0),
+      .d(1'b0),
+      .gclk(gclk_c),
+      .o(o_c),
+      .e(e_c),
+      .fclk(),
+      .q2(),
+      .cnt(cnt_c)
+  );
+  int a_c = 0;
+  int b_c = 0;
+  always_ff @(posedge clk_c) a_c <= a_c + 1;
+  always_ff @(posedge gclk_c) b_c <= a_c;
+  initial begin
+    for (int n = 0; n < 2; ++n) begin
+      #1 clk_c = 1'b1;
+      #1 clk_c = 1'b0;
+    end
+    `checkh(a_c, 2);
+    `checkh(b_c, 1);
+    `checkh(cnt_c, 7'd2);
+  end
+  bit clk_s = 1'b0;
+  bit s_c;
+  always_ff @(posedge clk_s) s_c <= o_c;
+  initial begin
+    #1 i_c = 1'b1;
+    #0 clk_s = 1'b1;
+    #1;
+    `checkh(s_c, 1'b1);
+    `checkh(e_c, 1'b1);
+  end
+  // An output of a clock alone fed back to a data input is not a combinational loop
+  bit clk_f = 1'b0;
+  bit clk2_f = 1'b0;
+  wire fclk_f, q2_f;
+  `BLK_C u_f (
+      .clk(clk_f),
+      .en(1'b1),
+      .i(1'b0),
+      .clk2(clk2_f),
+      .d(fclk_f),
+      .gclk(),
+      .o(),
+      .e(),
+      .fclk(fclk_f),
+      .q2(q2_f),
+      .cnt()
+  );
+  initial begin
+    #1 clk_f = 1'b1;
+    #0 clk2_f = 1'b1;
+    #1;
+    `checkh(q2_f, 1'b1);
+    clk_f = 1'b0;
+    #0 clk2_f = 1'b0;
+    #0 clk2_f = 1'b1;
+    #1;
+    `checkh(q2_f, 1'b0);
   end
 
   // Outputs not written by clocked logic alone already have their values in the first time step
@@ -332,4 +404,26 @@ module blk_q (
   always_ff @(posedge clk)
     q <= seq_init__V & seq_first__V & q_first__V & blk_q_protectlib_settle
         & blkqlib_protectlib_settle;
+endmodule
+
+module blk_c (
+    input bit clk,
+    input bit en,
+    input bit i,
+    input bit clk2,
+    input bit d,
+    output bit gclk,
+    output bit o,
+    output bit e,
+    output bit fclk,
+    output bit q2,
+    output bit [6:0] cnt
+);
+  /*verilator hier_block*/
+  always_ff @(posedge clk) cnt <= cnt + 7'd1;
+  assign gclk = clk & en;
+  assign o = i;
+  always @(i) e <= i;
+  assign fclk = clk;
+  always_ff @(posedge clk2) q2 <= d;
 endmodule
