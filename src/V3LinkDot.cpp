@@ -9144,6 +9144,39 @@ class LinkDotResolveVisitor final : public VNVisitor {
         addAssertCtlTargets(reaches, argsp, targets, absolute);
         return true;
     }
+    // Whether a reference reads a parameter whose value can differ between the instances sharing
+    // this module: one found upward, outside this module, or one read through another module
+    // instance, which names the declaration of the unelaborated module. A generate-qualified
+    // name below this module, and a direct name of an interface instance or port in module
+    // code, are relinked to the elaborated instance instead.
+    bool assertCtlInstanceParam(const AstVarXRef* refp) {
+        if (!refp->varp() || !refp->varp()->isParam()) return false;
+        string baddot;
+        VSymEnt* okSymp = nullptr;
+        const VSymEnt* symp = m_statep->findAssertCtlDotted(refp->fileline(), m_curSymp,
+                                                            refp->dotted(), baddot, okSymp, true);
+        // A class is elaborated with the module declaring it
+        const VSymEnt* ownp = m_curSymp;
+        bool inClass = false;
+        while (ownp && !VN_IS(ownp->nodep(), Cell)
+               && (!VN_IS(ownp->nodep(), NodeModule) || VN_IS(ownp->nodep(), Class))) {
+            inClass |= VN_IS(ownp->nodep(), Class);
+            ownp = ownp->parentp();
+        }
+        bool throughModule = false;
+        for (; symp && symp != ownp; symp = symp->parentp()) {
+            const AstCell* const cellp = VN_CAST(symp->nodep(), Cell);
+            if (cellp && !VN_IS(cellp->modp(), Iface)) throughModule = true;
+        }
+        if (!symp) return true;
+        if (refp->containsGenBlock()) return false;
+        // Only a direct name in module code is relinked to the elaborated interface instance
+        if (refp->varp()->isIfaceParam()
+            && (inClass || refp->dotted().find('.') != string::npos)) {
+            return true;
+        }
+        return throughModule;
+    }
     string assertControlPath(AstNodeExpr* nodep, bool* nonconstantp = nullptr) {
         if (const AstParseRef* const refp = VN_CAST(nodep, ParseRef)) return refp->name();
         if (const AstDot* const dotp = VN_CAST(nodep, Dot)) {
@@ -9155,6 +9188,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
             const int errors = V3Error::errorCount();
             symIterateNull(selp->bitp(), m_curSymp);
             if (V3Error::errorCount() != errors) return "";
+            if (m_statep->forPrimary()) {
+                selp->bitp()->foreach([&](const AstVarXRef* refp) {
+                    if (assertCtlInstanceParam(refp)) {
+                        refp->v3error("Assertion control scope index reads parameter "
+                                      << refp->prettyNameQ()
+                                      << " of another instance, which a constant expression "
+                                         "cannot (IEEE 1800-2023 A.8.4, 11.2.1).");
+                    }
+                });
+            }
             if (selp->bitp()->exists([](const AstEnumItemRef* refp) {
                     return refp->containsGenBlock() && !refp->dotted().empty();
                 })) {
