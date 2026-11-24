@@ -20,7 +20,9 @@
 // their external domains: the sentrees the writing processes can resume on.
 // These are computed over the call graph of the code executed by suspendable
 // processes, including the processes started by forks, condensed into its
-// strongly connected components.
+// strongly connected components. Code that may run on resuming after a zero
+// delay is also instrumented to flag its writes of what combinational logic
+// reads, for the 'inact' region to trigger that logic.
 //
 // See the internals documentation docs/internals.rst for more details.
 //
@@ -35,6 +37,7 @@
 #include "V3Stats.h"
 
 #include <unordered_map>
+#include <unordered_set>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -118,6 +121,9 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
     public:
         std::set<AstSenTree*> m_domains;  // Sentrees waited on
         std::set<AstVarScope*> m_writes;  // Variables written
+        bool m_zeroDelay = false;  // May run on resuming after a zero delay
+        // Variables written, and the statements writing them
+        std::vector<std::pair<AstNodeStmt*, const AstVar*>> m_writeStmts;
         explicit Vertex(V3Graph* graphp)
             : V3GraphVertex{graphp} {}
     };
@@ -133,6 +139,13 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
     std::unique_ptr<V3CallTargets> m_callTargetsp;
     V3Graph m_graph;  // The call graph used for analysis
     Vertex* m_vtxp = nullptr;  // Vertex of the current body, if suspendable code
+    bool m_inProcess = false;  // In a suspendable process, coroutine or fork
+    bool m_inComb = false;  // In combinational logic, or a function it calls
+    std::unordered_set<const AstCFunc*> m_combFuncps;  // Functions called by such logic
+    AstNodeStmt* m_stmtp = nullptr;  // Current statement
+    // Variables read by combinational logic, which the delay scheduler's triggers evaluate
+    std::unordered_set<const AstVar*> m_readps;
+    AstVarScope* m_dirtyp = nullptr;  // Flag set by writes after a zero delay, see instrument
     std::vector<AstCFunc*> m_funcps;  // Functions not yet recorded when visited
     // External domains of the variables written by suspendables
     std::map<const AstVarScope*, std::set<AstSenTree*>> m_externalDomains;
@@ -145,7 +158,14 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
             Vertex* const vtxp = new Vertex{&m_graph};
             nodep->user1p(vtxp);
             VL_RESTORER(m_vtxp);
+            VL_RESTORER(m_inProcess);
+            VL_RESTORER(m_stmtp);
+            VL_RESTORER(m_inComb);
             m_vtxp = vtxp;
+            m_inComb = false;
+            const AstCFunc* const funcp = VN_CAST(nodep, CFunc);
+            m_inProcess = !funcp || funcp->isCoroutine();
+            m_stmtp = nullptr;
             iterateChildrenConst(nodep);
         }
         return nodep->user1u().to<Vertex*>();
@@ -176,6 +196,9 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
             Vertex* const mergep = vtxp->as<Vertex>();
             keepp->m_domains.insert(mergep->m_domains.begin(), mergep->m_domains.end());
             keepp->m_writes.insert(mergep->m_writes.begin(), mergep->m_writes.end());
+            keepp->m_zeroDelay |= mergep->m_zeroDelay;
+            keepp->m_writeStmts.insert(keepp->m_writeStmts.end(), mergep->m_writeStmts.begin(),
+                                       mergep->m_writeStmts.end());
             for (V3GraphEdge* const ep : mergep->outEdges().unlinkable()) ep->relinkFromp(keepp);
             for (V3GraphEdge* const ep : mergep->inEdges().unlinkable()) ep->relinkTop(keepp);
             VL_DO_DANGLING(mergep->unlinkDelete(&m_graph), mergep);
@@ -200,6 +223,8 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
             for (const V3GraphEdge& edge : vtx.inEdges()) {
                 Vertex* const callerp = edge.fromp()->as<Vertex>();
                 callerp->m_domains.insert(domains.begin(), domains.end());
+                // A caller continues after the callee's zero delay
+                callerp->m_zeroDelay |= vtx.as<Vertex>()->m_zeroDelay;
             }
         }
         // Propagate the domains down the graph
@@ -208,6 +233,7 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
             for (V3GraphEdge& edge : vtx.outEdges()) {
                 Vertex* const calleep = edge.top()->as<Vertex>();
                 calleep->m_domains.insert(domains.begin(), domains.end());
+                calleep->m_zeroDelay |= vtx.as<Vertex>()->m_zeroDelay;
             }
         }
 
@@ -234,7 +260,49 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
         }
     }
 
+    // Code resumed after a zero delay runs in the 'inact' region, which fires no trigger, so
+    // logic reading what it writes would not see the write. Set a flag before each statement
+    // that may write such a variable, or a writable argument of a coroutine, for the
+    // 'inact' region to fire the triggers of the delay scheduler, see createEval. No await is
+    // inside a statement before its write, so the flag is still set when the code suspends.
+    void instrument() {
+        std::vector<AstNodeStmt*> stmtps;
+        std::unordered_set<const AstNodeStmt*> seen;
+        for (const V3GraphVertex& vtx : m_graph.vertices()) {
+            const Vertex* const vtxp = vtx.as<Vertex>();
+            if (!vtxp->m_zeroDelay) continue;
+            for (const auto& stmtVar : vtxp->m_writeStmts) {
+                const AstVar* const varp = stmtVar.second;
+                if (!m_readps.count(varp) && !(varp->isFuncLocal() && varp->isWritable())) {
+                    continue;
+                }
+                if (seen.insert(stmtVar.first).second) stmtps.push_back(stmtVar.first);
+            }
+        }
+        V3Stats::addStat("Scheduling, Timing, zero delay writes flagged", stmtps.size());
+        if (stmtps.empty()) return;
+        // Stores in concurrently run code all set it to 1, read only in the 'inact' region
+        m_dirtyp = v3Global.rootp()->topScopep()->createTemp("__VzeroDelayDirty", 1);
+        m_dirtyp->varp()->setIgnoreSchedWrite();
+        for (AstNodeStmt* const stmtp : stmtps) {
+            FileLine* const flp = stmtp->fileline();
+            stmtp->addHereThisAsNext(new AstAssign{flp,
+                                                   new AstVarRef{flp, m_dirtyp, VAccess::WRITE},
+                                                   new AstConst{flp, AstConst::BitTrue{}}});
+        }
+    }
+
     // VISITORS
+    void visit(AstActive* const nodep) override {
+        VL_RESTORER(m_inComb);
+        m_inComb = nodep->sentreep()->hasCombo() || nodep->sentreep()->hasHybrid();
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeStmt* const nodep) override {
+        VL_RESTORER(m_stmtp);
+        m_stmtp = nodep;
+        iterateChildrenConst(nodep);
+    }
     void visit(AstNodeProcedure* const nodep) override {
         UASSERT_OBJ(!m_vtxp, nodep, "Should not nest");
         // If the process is suspendable, record its body
@@ -266,10 +334,23 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
         UASSERT_OBJ(m_vtxp, nodep, "Await not in suspendable code");
         // Record the domain
         if (AstSenTree* const senTreep = nodep->sentreep()) m_vtxp->m_domains.insert(senTreep);
+        // A delay not known to be nonzero may be zero
+        const AstCMethodHard* const methodp = VN_CAST(nodep->exprp(), CMethodHard);
+        if (methodp && methodp->method() == VCMethod::SCHED_DELAY) {
+            const AstConst* const constp = VN_CAST(methodp->pinsp(), Const);
+            if (!constp || constp->isZero()) m_vtxp->m_zeroDelay = true;
+        }
         iterateChildrenConst(nodep);
     }
     void visit(AstNodeCCall* const nodep) override {
         iterateChildrenConst(nodep);
+        if (m_inComb) {  // Walk the functions combinational logic calls for their reads
+            for (AstCFunc* const cfuncp : m_callTargetsp->getTargets(nodep)) {
+                if (!cfuncp->isCoroutine() && m_combFuncps.insert(cfuncp).second) {
+                    iterateChildrenConst(cfuncp);
+                }
+            }
+        }
         if (!m_vtxp) return;  // Not in suspendable code
         // Add edges to all functions that may be called, including through virtual calls
         for (AstCFunc* const cfuncp : m_callTargetsp->getTargets(nodep)) {
@@ -277,9 +358,26 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
         }
     }
     void visit(AstNodeVarRef* nodep) override {
+        // A function's own variable is read by that function only
+        if (nodep->access().isReadOrRW() && m_inComb && !nodep->varp()->isFuncLocal()) {
+            m_readps.insert(nodep->varp());
+        }
         if (!m_vtxp) return;  // Not in suspendable code, or outside processes/functions
         if (nodep->access().isWriteOrRW() && !nodep->varp()->ignoreSchedWrite()) {
             m_vtxp->m_writes.insert(nodep->varScopep());
+            // A writable argument of a function, unlike of a coroutine, which may wait before
+            // returning, is written at the call, see instrument
+            const AstVar* const varp = nodep->varp();
+            const bool callArg = varp->isFuncLocal() && varp->isWritable() && !m_inProcess;
+            if (m_stmtp && !callArg) m_vtxp->m_writeStmts.emplace_back(m_stmtp, varp);
+        }
+    }
+    void visit(AstMemberRef* nodep) override {
+        iterateChildrenConst(nodep);
+        // A member of a class object, maybe written through another reference to the object
+        if (nodep->access().isReadOrRW() && m_inComb) m_readps.insert(nodep->varp());
+        if (m_vtxp && m_stmtp && nodep->access().isWriteOrRW()) {
+            m_vtxp->m_writeStmts.emplace_back(m_stmtp, nodep->varp());
         }
     }
     void visit(AstConst*) override {}  // Accelerate
@@ -302,22 +400,25 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
         m_graph.order();
         // Propagate the domains up and down the graph to compute external sensitivities
         computeExternalDomains();
+        instrument();
     }
 
 public:
-    // Returns the external domains of variables written by suspendables
-    static std::map<const AstVarScope*, std::set<AstSenTree*>> apply(AstNetlist* nodep) {
+    // Returns the external domains of variables written by suspendables, and the flag set by
+    // writes after a zero delay that logic reads, if any
+    static std::pair<std::map<const AstVarScope*, std::set<AstSenTree*>>, AstVarScope*>
+    apply(AstNetlist* nodep) {
         ExternalDomainsVisitor visitor{nodep};
-        return std::move(visitor.m_externalDomains);
+        return {std::move(visitor.m_externalDomains), visitor.m_dirtyp};
     }
 };
 
 TimingKit prepareTiming(AstNetlist* const netlistp) {
     if (!v3Global.usesTiming()) return {};
     std::pair<ProcessList, AstNodeStmt*> resumes = ResumeProcessBuilder::apply(netlistp);
-    std::map<const AstVarScope*, std::set<AstSenTree*>> externalDomains
-        = ExternalDomainsVisitor::apply(netlistp);
-    return {std::move(resumes.first), resumes.second, std::move(externalDomains)};
+    auto domainsDirty = ExternalDomainsVisitor::apply(netlistp);
+    return {std::move(resumes.first), resumes.second, std::move(domainsDirty.first),
+            domainsDirty.second};
 }
 
 }  // namespace V3Sched
