@@ -462,8 +462,9 @@ protected:
 
     // MEMBERS
     static VerilatedImpData& s() VL_MT_SAFE {  // Singleton
-        static VerilatedImpData s_s;
-        return s_s;
+        // Never destroyed, as models using it may be destroyed by any static destructor
+        static VerilatedImpData* const s_sp = new VerilatedImpData;
+        return *s_sp;
     }
 
 public:  // But only for verilated*.cpp
