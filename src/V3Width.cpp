@@ -2117,6 +2117,7 @@ class WidthVisitor final : public VNVisitor {
                 nodep->v3warn(E_UNSUPPORTED,
                               "Unsupported/Illegal: empty queue ('{}') in this context");
                 newp = new AstConst{nodep->fileline(), AstConst::Unsized32{}, 0};
+                newp->didWidth(true);  // Keeps the port's type, so is not checked again
             }
             newp->dtypeFrom(m_vup->dtypep());
             nodep->replaceWith(newp);
@@ -14011,6 +14012,7 @@ class WidthVisitor final : public VNVisitor {
     // Check DPI open array argument 'portp' can be passed actual 'pinp' of a call, else report
     static void checkOpenArrayActual(const AstVar* portp, const AstNode* pinp) {
         const AstNodeDType* const pinDTypep = pinp->dtypep()->skipRefp();
+        if (VN_IS(pinDTypep, UnsizedArrayDType)) return;  // '{}', reported as an argument
         if (VN_IS(pinDTypep, StreamDType)) {
             pinp->v3warn(E_UNSUPPORTED, "Unsupported: DPI open array argument "
                                             << portp->prettyNameQ()
