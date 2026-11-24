@@ -337,10 +337,7 @@ public:  // But only for verilated*.cpp
     void fdWrite(IData fdi, const std::string& output) VL_MT_SAFE_EXCLUDES(m_fdMutex) {
         const VerilatedLockGuard lock{m_fdMutex};
         const VerilatedFpList fdlist = fdToFpList(fdi);
-        for (const auto& i : fdlist) {
-            if (VL_UNLIKELY(!i)) continue;
-            (void)fwrite(output.c_str(), 1, output.size(), i);
-        }
+        for (const auto& i : fdlist) (void)fwrite(output.c_str(), 1, output.size(), i);
     }
     void fdClose(IData fdi) VL_MT_SAFE_EXCLUDES(m_fdMutex) {
         const VerilatedLockGuard lock{m_fdMutex};
@@ -358,7 +355,7 @@ public:  // But only for verilated*.cpp
             // Starts at 1 to skip stdout
             fdi >>= 1;
             for (int i = 1; (fdi != 0) && (i < 31); i++, fdi >>= 1) {
-                if (fdi & VL_MASK_I(1)) {
+                if ((fdi & VL_MASK_I(1)) && m_fdps[i]) {
                     std::fclose(m_fdps[i]);
                     m_fdps[i] = nullptr;
                     m_fdFreeMct.push_back(i);
@@ -374,6 +371,7 @@ public:  // But only for verilated*.cpp
     }
 
 private:
+    // Return the open files a descriptor names; closed or never-opened entries are omitted
     VerilatedFpList fdToFpList(IData fdi) VL_REQUIRES(m_fdMutex) {
         VerilatedFpList fp;
         // cppverilator-suppress integerOverflow shiftTooManyBitsSigned
@@ -385,7 +383,7 @@ private:
             case 1: fp.push_back(stdout); break;
             case 2: fp.push_back(stderr); break;
             default:
-                if (VL_LIKELY(idx < m_fdps.size())) fp.push_back(m_fdps[idx]);
+                if (VL_LIKELY(idx < m_fdps.size()) && m_fdps[idx]) fp.push_back(m_fdps[idx]);
                 break;
             }
         } else {
@@ -393,7 +391,7 @@ private:
             if (fdi & 1) fp.push_back(stdout);
             fdi >>= 1;
             for (size_t i = 1; (fdi != 0) && (i < VerilatedFpList::capacity()); ++i, fdi >>= 1) {
-                if (fdi & VL_MASK_I(1)) fp.push_back(m_fdps[i]);
+                if ((fdi & VL_MASK_I(1)) && m_fdps[i]) fp.push_back(m_fdps[i]);
             }
         }
         return fp;
