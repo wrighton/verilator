@@ -38,6 +38,16 @@ class ColorStronglyConnectedComponents final {
     uint32_t m_nonTrivialSCCs = 0;  // Number of non-trivial SCCs in the graph
     uint32_t m_index = 0;  // Visitation index counter
     std::vector<const DfgVertex*> m_stack;  // The stack used by the algorithm
+    // A vertex being visited. Its sinks are in 'm_pendingSinkps' from 'beginSink' up to where
+    // the sinks of the next frame start, or to the end for the innermost frame.
+    struct VisitFrame final {
+        const DfgVertex* vtxp;  // The vertex
+        uint32_t rootIndex;  // Visitation index assigned to the vertex on entry
+        size_t beginSink;  // Index of first sink of the vertex
+        size_t nextSink;  // Index of next sink to visit
+    };
+    std::vector<VisitFrame> m_frames;  // The vertices being visited, innermost last
+    std::vector<const DfgVertex*> m_pendingSinkps;  // Sinks of the vertices in 'm_frames'
 
     // METHODS
     // Use the bottom 32-bit word as the component number
@@ -49,23 +59,49 @@ class ColorStronglyConnectedComponents final {
         return reinterpret_cast<uint32_t (&)[2]>(m_map[vtx])[1];
     }
 
-    void visitColorSCCs(const DfgVertex& vtx) {
-        UDEBUGONLY(UASSERT_OBJ(index(vtx) == UNASSIGNED, &vtx, "Already visited vertex"););
-
-        // Visiting vertex
-        const size_t rootIndex = index(vtx) = ++m_index;
-
-        // Visit children
-        vtx.foreachSink([&](const DfgVertex& child) {
-            // If the child has not yet been visited, then continue traversal
-            if (index(child) == UNASSIGNED) visitColorSCCs(child);
+    // Depth first traversal of the vertices reachable from 'startVtx'. Uses an explicit stack,
+    // as recursion would overflow the C++ stack on long paths.
+    void visitColorSCCs(const DfgVertex& startVtx) {
+        enterVertex(startVtx);
+        while (!m_frames.empty()) {
+            VisitFrame& frame = m_frames.back();
+            const DfgVertex& vtx = *frame.vtxp;
+            if (frame.nextSink == m_pendingSinkps.size()) {
+                m_pendingSinkps.resize(frame.beginSink);
+                const uint32_t rootIndex = frame.rootIndex;
+                m_frames.pop_back();
+                finishVertex(vtx, rootIndex);
+                continue;
+            }
+            const DfgVertex& child = *m_pendingSinkps[frame.nextSink];
+            // If the child has not yet been visited, then visit it, and come back to this
+            // child once done
+            if (index(child) == UNASSIGNED) {
+                enterVertex(child);
+                continue;
+            }
             // If the child is not in an SCC
             if (component(child) == UNASSIGNED) {
                 if (index(vtx) > index(child)) index(vtx) = index(child);
             }
+            ++frame.nextSink;
+        }
+    }
+
+    // Start visiting the given vertex
+    void enterVertex(const DfgVertex& vtx) {
+        UDEBUGONLY(UASSERT_OBJ(index(vtx) == UNASSIGNED, &vtx, "Already visited vertex"););
+        const uint32_t rootIndex = index(vtx) = ++m_index;
+        const size_t beginSink = m_pendingSinkps.size();
+        vtx.foreachSink([&](const DfgVertex& child) {
+            m_pendingSinkps.push_back(&child);
             return false;
         });
+        m_frames.push_back({&vtx, rootIndex, beginSink, beginSink});
+    }
 
+    // Complete visiting the given vertex, after all its children were visited
+    void finishVertex(const DfgVertex& vtx, uint32_t rootIndex) {
         if (index(vtx) == rootIndex) {
             // This is the 'root' of an SCC
 

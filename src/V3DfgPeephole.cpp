@@ -312,7 +312,19 @@ class V3DfgPeephole final : public DfgVisitor {
         m_iterList.resize(size);
     }
 
+    // Delete the given unused vertex, and recursively its sources that become unused
     void deleteVertex(DfgVertex* vtxp) {
+        // Uses an explicit stack, as recursion would overflow the C++ stack on long paths
+        std::vector<DfgVertex*> stack{vtxp};
+        while (!stack.empty()) {
+            DfgVertex* const currp = stack.back();
+            stack.pop_back();
+            deleteSingleVertex(currp, stack);
+        }
+    }
+
+    // Delete the given unused vertex, and push its sources that become unused onto 'stack'
+    void deleteSingleVertex(DfgVertex* vtxp, std::vector<DfgVertex*>& stack) {
         UASSERT_OBJ(!m_vInfo[vtxp].m_workListIndex, vtxp, "Deleted Vertex is in work list");
         UASSERT_OBJ(!vtxp->hasSinks(), vtxp, "Should not delete used vertex");
         const DfgVertexVar* const varp = vtxp->cast<DfgVertexVar>();
@@ -365,12 +377,12 @@ class V3DfgPeephole final : public DfgVisitor {
         // Add used sources to the iter list - their sinks have changed
         for (auto it = srcps.begin(); it != mid; ++it) addToIterList(*it);
 
-        // Recursively delete unused sources
-        for (auto it = mid; it != srcps.end(); ++it) {
+        // Delete unused sources, in order, so push them reversed
+        for (auto it = srcps.rbegin(); it.base() != mid; ++it) {
             // Remove from work list
             removeFromWorkList(*it);
-            // Delete vertex
-            deleteVertex(*it);
+            // Delete vertex later
+            stack.push_back(*it);
         }
     }
 
