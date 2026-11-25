@@ -10901,6 +10901,12 @@ class WidthVisitor final : public VNVisitor {
         return VN_IS(nodep, LogAnd) || VN_IS(nodep, LogEq) || VN_IS(nodep, LogIf)
                || VN_IS(nodep, LogNot) || VN_IS(nodep, LogOr);
     }
+    static bool isStatusCall(const AstNode* nodep) {
+        // Built-in methods whose int result is 1 or 0: randomize (IEEE 1800-2023 18.6.1, 18.12)
+        // and the rand_mode query (IEEE 1800-2023 18.8)
+        const AstNodeFTaskRef* const refp = VN_CAST(nodep, NodeFTaskRef);
+        return refp && (refp->name() == "randomize" || refp->name() == "rand_mode");
+    }
     void iterateCheckBool(AstNode* parentp, const char* side, AstNode* underp, Stage stage) {
         UASSERT_OBJ(stage == BOTH, parentp,
                     "Bad call");  // Booleans always self-determined so do BOTH at once
@@ -10947,7 +10953,8 @@ class WidthVisitor final : public VNVisitor {
             underp->replaceWith(new AstConst{parentp->fileline(), AstConst::BitFalseErroring{}});
             VL_DO_DANGLING(pushDeletep(underp), underp);
         } else {
-            const bool bad = widthBad(underp, parentp->findBitDType());
+            // A status result is a truth value, so is not truncated
+            const bool bad = widthBad(underp, parentp->findBitDType()) && !isStatusCall(underp);
             if (bad) {
                 {  // if (warnOn), but not needed here
                     UINFOTREE(5, parentp->backp(), "", "back");
