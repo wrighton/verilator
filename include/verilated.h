@@ -431,7 +431,9 @@ class VerilatedEvalLoop final {
 
     // MEMBERS
     VerilatedModel& m_model;  // The model this loop evaluates
-    const uint32_t m_convergeLimit;  // --converge-limit from compiler command line
+    const uint32_t m_defaultConvergeLimit;  // --converge-limit from compiler command line
+    uint32_t m_convergeLimit;  // Limit in effect, the context may override the default
+    bool m_started = false;  // Evaluated since construction or the last restore
     // Where to record --prof-exec sections, or null if not profiling
     VlExecutionProfilerBase* m_profilerp = nullptr;
     bool m_profTopLevel = false;  // Top level model during profiling
@@ -440,6 +442,7 @@ public:
     // CONSTRUCTORS
     VerilatedEvalLoop(VerilatedModel& model, uint32_t convergeLimit)
         : m_model{model}
+        , m_defaultConvergeLimit{convergeLimit}
         , m_convergeLimit{convergeLimit} {}
 
     // METHODS
@@ -456,6 +459,12 @@ public:
         m_profilerp = profilerp;
         m_profTopLevel = topLevel;
     }
+    // The model was restored from a checkpoint, so its next eval is as its first
+    void restored() { m_started = false; }
+#ifdef VL_DEBUG
+    // Where the process last resumed on this thread was waiting, reported on non-convergence
+    static thread_local VlFileLine t_lastResumed;
+#endif
 
 private:
     // Evaluate a time step, recording --prof-exec sections iff 'Profiling'.
@@ -599,6 +608,7 @@ protected:
         uint64_t m_profExecStart = 1;  // +prof+exec+start time
         uint32_t m_profExecWindow = 2;  // +prof+exec+window size
         // Slow path
+        uint32_t m_convergeLimit = 0;  // +converge+limit, 0 = each model's --converge-limit
         std::string m_coverageFilename;  // +coverage+file filename
         std::string m_logFilename;  // +log+file filename
         std::string m_profExecFilename;  // +prof+exec+file filename
@@ -695,6 +705,12 @@ public:
     void commandArgsAdd(int argc, const char** argv) VL_MT_SAFE_EXCLUDES(m_argMutex);
     /// Match plusargs with a given prefix. Returns static char* valid only for a single call
     const char* commandArgsPlusMatch(const char* prefixp) VL_MT_SAFE_EXCLUDES(m_argMutex);
+    /// Return the convergence limit override, 0 if none
+    uint32_t convergeLimit() const VL_MT_SAFE;
+    /// Override the --converge-limit of the models under this context, 1 to 2147483647, or 0
+    /// for no override. Each model reads it on its first eval(), and on its first eval() after
+    /// being restored from a checkpoint.
+    void convergeLimit(uint32_t val) VL_MT_SAFE;
     /// Return VerilatedCovContext, allocate if needed
     /// Note if get unresolved reference then likely forgot to link verilated_cov.cpp
     VerilatedCovContext* coveragep() VL_MT_SAFE;
