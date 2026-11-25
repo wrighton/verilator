@@ -172,10 +172,30 @@ static std::vector<bool> splitCheckBreakable(const AstCFunc* ofuncp) {
     return breakable;
 }
 
+size_t emittedNodeSizeEstimate(const AstNode* nodep) {
+    if (!nodep->isWide()) return 1;
+    // V3Expand evaluates a concatenation, an extension or a constant select of a wide value by
+    // taking the words of its operands, which are counted themselves, so it is not counted per
+    // word, as a chain of them, each wider than the one under it, would be at each level. It
+    // inserts a narrow operand of a concatenation into each word it spans, of at most one more
+    // than its own words, with a shift, a mask and an OR.
+    if (const AstConcat* const catp = VN_CAST(nodep, Concat)) {
+        size_t size = 1;
+        for (const AstNodeExpr* const opp : {catp->lhsp(), catp->rhsp()}) {
+            if (!opp->isWide()) size += 3 * (VL_WORDS_I(opp->width()) + 1);
+        }
+        return size;
+    }
+    if (VN_IS(nodep, Extend) || VN_IS(nodep, ExtendS)) return 1;
+    if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+        if (VN_IS(selp->lsbp(), Const)) return 1;
+    }
+    return nodep->widthWords();
+}
+
 size_t emittedSizeEstimate(const AstNode* nodep) {
     size_t size = 0;
-    nodep->foreach(
-        [&](const AstNode* itemp) { size += itemp->isWide() ? itemp->widthWords() : 1; });
+    nodep->foreach([&](const AstNode* itemp) { size += emittedNodeSizeEstimate(itemp); });
     return size;
 }
 

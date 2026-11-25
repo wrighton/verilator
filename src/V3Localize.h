@@ -21,12 +21,15 @@
 #include "verilatedos.h"
 
 class AstNetlist;
+class AstVarScope;
 
 //============================================================================
 
 class V3Localize final {
 public:
     static void localizeAll(AstNetlist* nodep) VL_MT_DISABLED;
+    // Whether the variable may become local to the functions using it, by what it is
+    static bool isCandidate(const AstVarScope* vscp) VL_MT_DISABLED;
 };
 
 #endif  // Guard
