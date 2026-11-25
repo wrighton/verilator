@@ -671,6 +671,7 @@ class EmitCModel final : public EmitCFunc {
              + EmitCUtil::topClassName() + "& rhs) {\n");
         puts(/**/ "Verilated::quiesce();\n");
         puts(/**/ "rhs.vlSymsp->" + protect("__Vdeserialize") + "(os);\n");
+        puts(/**/ "rhs.m_evalLoop.restored();\n");
         puts(/**/ "return os;\n");
         puts("}\n");
     }
