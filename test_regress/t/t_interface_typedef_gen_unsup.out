@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_interface_typedef_gen_unsup.v:24:20: Unsupported: Interface typedef reference through a generate block index that is not a literal number, selecting differently specialized interfaces
+                                                           : ... note: In instance 't'
+   24 |   leaf #(.T(g[P].b.data_t)) c ();
+      |                    ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_interface_typedef_gen_unsup.v:26:22: Unsupported: Interface typedef reference through a generate block index that is not a literal number, selecting differently specialized interfaces
+                                                           : ... note: In instance 't'
+   26 |     leaf #(.T(g[i].b.data_t)) c ();
+      |                      ^~~~~~
+%Error: Exiting due to

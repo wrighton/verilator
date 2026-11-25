@@ -57,6 +57,7 @@ class V3LinkDotIfaceCapture final {
     static void clearModuleCache();
     static AstIfaceRefDType* ifaceRefFromVarDType(AstNodeDType* dtypep);
     static AstNodeModule* followCellPathFromItems(AstNode* itemsp, const string& cellPath);
+    static string constIndexCellPath(const string& dotText, AstNode* unlinkedScopep);
     // Point a reference at a typedef and fix its other links.
     static void retargetRefToTypedef(AstRefDType* refp, AstTypedef* typedefp);
     // Same, for a parameter type.
@@ -97,10 +98,13 @@ public:
     // Same, but the path is a name used at nodep, so it starts in the innermost
     // generate block or module around nodep that declares its first component.
     static AstNodeModule* followCellPathAt(const AstNode* nodep, const string& cellPath);
+    // Report a captured reference whose path through an index resolved to no module, and
+    // retarget it to a valid type.  Returns true if reported.
+    static bool reportIfUnresolved(AstRefDType* refp, const AstNodeModule* resolvedModp);
 
     static void captureTypedefContext(AstRefDType* refp, const char* stageLabel, int dotPos,
-                                      const std::string& dotText, VSymEnt* dotSymp,
-                                      AstNodeModule* modp,
+                                      const std::string& dotText, AstNode* unlinkedScopep,
+                                      VSymEnt* dotSymp, AstNodeModule* modp,
                                       const std::function<std::string()>& indentFn);
 
     // Debug: dump all captured references
