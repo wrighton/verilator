@@ -301,6 +301,46 @@ public:
 
 //######################################################################
 
+// Names a module item may create as implicit nets, for LinkCellsVisitor::hierStubItems: the
+// identifiers not in a scope of its own, such as in a connection, continuous assignment or gate
+// terminal, including in a generate block, for which V3LinkDot creates them in the module. Not
+// in a function, process, let or class, where they are declared in that scope (IEEE 1800-2023
+// 6.10), so only visible outside it by a hierarchical reference (IEEE 1800-2023 23.9), for
+// which the module is kept whole anyway.
+class HierStubImplicitVisitor final : public VNVisitorConst {
+    const std::unordered_set<string>& m_declaredr;  // Names declared, so not implicit
+    std::unordered_set<string>& m_namesr;  // Names found
+
+    // VISITORS
+    void visit(AstParseRef* nodep) override {
+        // Not a name in a class or package
+        const AstDot* const dotp = VN_CAST(nodep->backp(), Dot);
+        if (!(dotp && dotp->colon() && dotp->rhsp() == nodep)
+            && !m_declaredr.count(nodep->name())) {
+            m_namesr.emplace(nodep->name());
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeProcedure* nodep) override {
+        const AstAlways* const alwaysp = VN_CAST(nodep, Always);
+        if (alwaysp && alwaysp->keyword() == VAlwaysKwd::CONT_ASSIGN) iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeFTask*) override {}
+    void visit(AstNodeSchema*) override {}
+    void visit(AstNodeModule*) override {}
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    HierStubImplicitVisitor(AstNode* nodep, const std::unordered_set<string>& declaredr,
+                            std::unordered_set<string>& namesr)
+        : m_declaredr{declaredr}
+        , m_namesr{namesr} {
+        iterateConst(nodep);
+    }
+    ~HierStubImplicitVisitor() override = default;
+};
+
 class LinkCellsVisitor final : public VNVisitor {
     // NODE STATE
     //  Entire netlist:
@@ -339,6 +379,7 @@ class LinkCellsVisitor final : public VNVisitor {
     string m_origTopModuleName;  // original name of the top module
     int m_modDepth = 0;  // Depth of the current module
     uint64_t m_statModsScanned = 0;  // Modules examined by readModNames
+    uint64_t m_statHierStubs = 0;  // Parameterized hierarchical blocks reduced by stubHierBlocks
 
     // METHODS
     V3GraphVertex* vertex(AstNodeModule* nodep) {
@@ -707,6 +748,135 @@ class LinkCellsVisitor final : public VNVisitor {
     }
 
     // VISITORS
+    // Whether stubHierBlocks keeps a statement of a hierarchical block, as a declaration of
+    // its parameters or ports, or what their declarations may use other than functions and
+    // lets
+    static bool hierStubKeeps(const AstNode* nodep) {
+        if (const AstVar* const varp = VN_CAST(nodep, Var)) {
+            return varp->isParam() || varp->isIO();
+        }
+        return VN_IS(nodep, Port) || VN_IS(nodep, Typedef) || VN_IS(nodep, TypedefFwd)
+               || VN_IS(nodep, ParamTypeDType) || VN_IS(nodep, PackageImport)
+               || VN_IS(nodep, PackageExport) || VN_IS(nodep, PackageExportStarStar)
+               || VN_IS(nodep, Pragma);
+    }
+    // Add the names a statement kept in a stub uses, in any namespace or scope, to namesr
+    static void addHierStubUses(const AstNode* itemp, std::unordered_set<string>& namesr,
+                                bool& dottedr) {
+        itemp->foreach([&](const AstNode* nodep) {
+            if (const AstDot* const dotp = VN_CAST(nodep, Dot)) {
+                if (!dotp->colon()) dottedr = true;
+            } else if (!VN_IS(nodep, Const) && !nodep->name().empty()) {
+                namesr.emplace(nodep->name());
+            }
+        });
+    }
+    // Add the names a statement dropped from a stub may make visible in its module to namesr:
+    // those it declares, and those it may create as implicit nets, other than those in
+    // declaredr. And to rangedr the names of its ranged enumeration values, before they are
+    // expanded to the names with each index appended.
+    static void addHierStubDrops(AstNode* itemp, const std::unordered_set<string>& declaredr,
+                                 std::unordered_set<string>& namesr,
+                                 std::unordered_set<string>& rangedr) {
+        if (!itemp->name().empty()) namesr.emplace(itemp->name());
+        // The values of an enumeration type, and the names of generate blocks
+        itemp->foreach([&](const AstNode* nodep) {
+            if (const AstEnumItem* const enump = VN_CAST(nodep, EnumItem)) {
+                (enump->rangep() ? rangedr : namesr).emplace(enump->name());
+            } else if (VN_IS(nodep, NodeGen) && !nodep->name().empty()) {
+                namesr.emplace(nodep->name());
+            }
+        });
+        HierStubImplicitVisitor{itemp, declaredr, namesr};
+    }
+    // Statements of blockp to keep in its stub, or none if it cannot be stubbed
+    std::unordered_set<const AstNode*> hierStubItems(AstModule* blockp) {
+        std::unordered_set<const AstNode*> kept;
+        std::unordered_set<string> used;  // Names the kept statements use
+        bool dotted = false;  // A kept statement has a hierarchical reference
+        const auto keep = [&](AstNode* itemp) {
+            kept.emplace(itemp);
+            addHierStubUses(itemp, used, dotted);
+        };
+        for (AstNode* itemp = blockp->stmtsp(); itemp; itemp = itemp->nextp()) {
+            if (hierStubKeeps(itemp)) keep(itemp);
+        }
+        // Functions and lets the kept statements use, which as used in constant expressions
+        // only use other such declarations
+        for (bool added = true; added;) {
+            added = false;
+            for (AstNode* itemp = blockp->stmtsp(); itemp; itemp = itemp->nextp()) {
+                if ((VN_IS(itemp, Func) || VN_IS(itemp, Let)) && !kept.count(itemp)
+                    && used.count(itemp->name())) {
+                    keep(itemp);
+                    added = true;
+                }
+            }
+        }
+        if (dotted) return {};
+        // Do not stub if the kept statements use a name the dropped statements may declare,
+        // so only legal parameters and ports are stubbed. Without regard to scopes, which
+        // could hide such a use.
+        std::unordered_set<string> declared;  // Names the kept statements declare
+        for (const AstNode* const itemp : kept) {
+            declared.emplace(itemp->name());
+            // And the values of the enumeration types they declare, not in a function or let
+            if (!VN_IS(itemp, NodeFTask) && !VN_IS(itemp, Let)) {
+                itemp->foreach([&](const AstEnumItem* enump) { declared.emplace(enump->name()); });
+            }
+        }
+        std::unordered_set<string> dropped;  // Names the dropped statements may declare
+        std::unordered_set<string> ranged;  // Names of their ranged enumeration values
+        for (AstNode* itemp = blockp->stmtsp(); itemp; itemp = itemp->nextp()) {
+            if (!kept.count(itemp)) addHierStubDrops(itemp, declared, dropped, ranged);
+        }
+        for (const string& name : used) {
+            V3Global::opCountInc();
+            if (dropped.count(name)) return {};
+            // Possibly a ranged enumeration value's name: its base, then a decimal index
+            for (size_t pos = name.size(); pos > 1 && name[pos - 1] >= '0' && name[pos - 1] <= '9';
+                 --pos) {
+                V3Global::opCountInc();
+                if (ranged.count(name.substr(0, pos - 1))) return {};
+            }
+        }
+        return kept;
+    }
+    void stubHierBlocks(AstNetlist* netlistp) {
+        // A run with hierarchical blocks uses each block's library, but V3Param only replaces
+        // an instance of a parameterized block with the library for its parameters, so the
+        // block's module is linked before then. Reduce the module to its parameters and ports,
+        // so its instances and other contents, used by the block's own run, are not linked by
+        // V3LinkDot, as for an unparameterized block, whose library replaces its module in
+        // readModNames.
+        if (!v3Global.opt.fHierParamStub()) return;
+        const V3HierBlockOptSet& hierBlocks = v3Global.opt.hierBlocks();
+        if (hierBlocks.empty()) return;
+        std::unordered_set<string> paramBlocks;  // Original names of parameterized blocks
+        for (const auto& pair : hierBlocks) {
+            if (pair.second.mangledName() != pair.second.origName()) {
+                paramBlocks.emplace(pair.second.origName());
+            }
+        }
+        if (paramBlocks.empty()) return;
+        for (AstNodeModule* modp = netlistp->modulesp(); modp;
+             modp = VN_AS(modp->nextp(), NodeModule)) {
+            AstModule* const blockp = VN_CAST(modp, Module);
+            if (!blockp || !paramBlocks.count(blockp->origName())) continue;
+            // Not this run's own block, renamed by readModNames, nor a library. A module of the
+            // same name in another library is also stubbed, as V3Param also replaces it.
+            if (hierBlocks.count(blockp->name())) continue;
+            const std::unordered_set<const AstNode*> kept = hierStubItems(blockp);
+            if (kept.empty()) continue;
+            UINFO(4, "Stubbing parameterized hierarchical block " << blockp);
+            ++m_statHierStubs;
+            for (AstNode *itemp = blockp->stmtsp(), *nextp; itemp; itemp = nextp) {
+                nextp = itemp->nextp();
+                if (!kept.count(itemp)) VL_DO_DANGLING(pushDeletep(itemp->unlinkFrBack()), itemp);
+            }
+        }
+    }
+
     void visit(AstNetlist* nodep) override {
         readModNames(nodep->modulesp());
         iterateChildren(nodep);
@@ -784,6 +954,11 @@ class LinkCellsVisitor final : public VNVisitor {
                     << "' was not found in design.\n"
                     << (suggest.empty() ? "" : V3Error::warnMore() + suggest));
         }
+        // After binds, including those in modules found by library search, added their
+        // instances. The levels above were computed with the stubbed blocks' instances, so
+        // modules only those instances use keep their levels, but are no longer instantiated
+        // and so not linked, as for the modules under a block replaced by its library.
+        stubHierBlocks(nodep);
     }
     void visit(AstNodeModule* nodep) override {
         // Module: Pick up modnames, so we can resolve cells later
@@ -1339,6 +1514,7 @@ public:
     }
     ~LinkCellsVisitor() override {
         V3Stats::addStat("LinkCells, Modules scanned", m_statModsScanned);
+        V3Stats::addStat("LinkCells, Hierarchical blocks stubbed", m_statHierStubs);
         if (debug() >= 5 || dumpGraphLevel() >= 5) { m_mods.dumpFilePrefixed("linkcells"); }
     }
 };

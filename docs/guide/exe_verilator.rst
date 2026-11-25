@@ -1089,6 +1089,14 @@ Summary:
    this is not recommended as may cause additional warnings and ordering
    issues.
 
+.. option:: -fno-hier-param-stub
+
+   Rarely needed. In a run with :vlopt:`--hierarchical-block` options, made
+   by :vlopt:`--hierarchical`, do not reduce each parameterized
+   hierarchical block's module to its parameters and ports before linking.
+   The run then also links the block's contents, which the block's own run
+   uses, reporting any problems in them again.
+
 .. option:: -fno-ico-change-detect
 
    Rarely needed. Disable input change detection in the input combinational
