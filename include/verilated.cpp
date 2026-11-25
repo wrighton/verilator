@@ -1787,7 +1787,7 @@ IData _vl_vsscanf(FILE* fp,  // If a fscanf
                     // 0..-15
                     const int shift = -userUnits + timeunit;  // 0..-15
                     real = std::strtod(t_tmp.c_str(), nullptr) * vl_time_multiplier(-shift);
-                    VL_SET_WQ(owp, static_cast<uint64_t>(real));
+                    VL_SET_WQ(owp, VL_RTOIROUND_Q_D(real));
                     break;
                 }
                 case 'b': {

@@ -25,6 +25,29 @@ module t;
     for (int i = 0; i < COUNT; ++i) counts[i] = 0;
   endtask
 
+  // Count switches between two four-production lists over COUNT rand joins
+  task automatic count_switches(input real weight, output int switches);
+    string s;
+    switches = 0;
+    repeat (COUNT) begin
+      s = "";
+      randsequence(main)
+        main: rand join (weight) s1 s2;
+        s1: a b c d;
+        s2: e f g h;
+        a: { s = {s, "a"}; };
+        b: { s = {s, "b"}; };
+        c: { s = {s, "c"}; };
+        d: { s = {s, "d"}; };
+        e: { s = {s, "E"}; };
+        f: { s = {s, "F"}; };
+        g: { s = {s, "G"}; };
+        h: { s = {s, "H"}; };
+      endsequence
+      for (int i = 1; i < 8; ++i) if ((s[i] >= "a") != (s[i-1] >= "a")) ++switches;
+    end
+  endtask
+
   initial begin
     prep();
 
@@ -66,6 +89,18 @@ module t;
     `check_within_30_percent(counts[2], COUNT * 1 / 1);
     `check_within_30_percent(counts[3], COUNT * 1 / 1);
     `check_within_30_percent(counts[4], COUNT * 1 / 1);
+
+    // rand join weight 1.0 interleaves measurably differently from 0.5
+    begin
+      int switches_half;
+      int switches_one;
+      int diff;
+      count_switches(0.5, switches_half);
+      count_switches(1.0, switches_one);
+      diff = switches_one - switches_half;
+      if (diff < 0) diff = -diff;
+      `check_range(diff, COUNT / 4, 7 * COUNT);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

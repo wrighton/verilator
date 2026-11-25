@@ -16,6 +16,12 @@ module t;
   wire #rdly d_real = in;
   wire #PDLY d_param = in;
 
+  // A huge delay does not resume before the end of the test
+  initial begin
+    #1e30;
+    $stop;
+  end
+
   initial begin
     #2 in = 1'b1;
     #100;
