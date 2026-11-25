@@ -28,6 +28,17 @@ Options:
    ``$assertoff``, and ``$assertcontrol``. Also prevents ``VerilatedContext*``
    assertion control functions from updating assertion handling.
 
+.. option:: +verilator+converge+limit+<value>
+
+   Set how many iterations each scheduling region loop may take within one
+   evaluation before the model fails with a :option:`DIDNOTCONVERGE`
+   error, overriding the :vlopt:`--converge-limit` the model was Verilated
+   with. Must be between 1 and 2147483647. The C++ equivalent is
+   ``VerilatedContext::convergeLimit()``. Either takes effect at each
+   model's first evaluation, and at its first evaluation after it is
+   restored from a :vlopt:`--savable` checkpoint. A very large limit delays
+   the error for a design that never converges, which then appears to hang.
+
 .. option:: +verilator+coverage+file+<filename>
 
    When a model was Verilated using :vlopt:`--coverage`, sets the filename
