@@ -17,6 +17,10 @@ interface ifc #(
   typedef logic [W-1:0] data_t;
 endinterface
 
+interface ifn;
+  typedef logic [4:0] data_t;
+endinterface
+
 module leaf #(
     parameter type T = logic,
     parameter int EXP = 1
@@ -110,6 +114,74 @@ module m_array;
   end
 endmodule
 
+// Test: generate loop blocks selected by number from outside the loop
+module m_index;
+  for (genvar i = 0; i < 2; ++i) begin : g
+    for (genvar j = 0; j < 2; ++j) begin : h
+      ifc #(.W(i * 2 + j + 15)) b ();
+    end
+  end
+  leaf #(.T(g[1].h[0].b.data_t), .EXP(17)) c10 ();
+  leaf #(.T(g[0].h[1].b.data_t), .EXP(16)) c01 ();
+  typedef g[1].h[1].b.data_t data_t;
+  initial begin
+    data_t x;
+    `checkd($bits(x), 18);
+    `checkd($bits(g[0].h[0].b.data_t), 15);
+  end
+endmodule
+
+// Test: descending loop and instance array ranges, and a negative index
+module m_range;
+  for (genvar i = 3; i >= -1; --i) begin : g
+    ifc #(.W(i + 10)) b ();
+  end
+  leaf #(.T(g[3].b.data_t), .EXP(13)) c3 ();
+  leaf #(.T(g[-1].b.data_t), .EXP(9)) cm1 ();
+  ifc #(.W(23)) arr[3:1] ();
+  leaf #(.T(arr[3].data_t), .EXP(23)) c_arr ();
+endmodule
+
+// Test: index given by a parameter, into blocks whose instances are alike
+module m_param #(
+    parameter int P = 1
+);
+  for (genvar i = 0; i < 2; ++i) begin : g_dflt
+    ifc b ();
+  end
+  leaf #(.T(g_dflt[P].b.data_t), .EXP(8)) c_dflt ();
+  for (genvar i = 0; i < 2; ++i) begin : g_same
+    ifc #(.W(21)) b ();
+  end
+  leaf #(.T(g_same[P].b.data_t), .EXP(21)) c_same ();
+  for (genvar i = 0; i < 2; ++i) begin : g_ifn
+    ifn b ();
+  end
+  leaf #(.T(g_ifn[P].b.data_t), .EXP(5)) c_ifn ();
+endmodule
+
+// Test: index given by a parameter, into a loop whose blocks do not all have the instance
+module m_partial #(
+    parameter int P = 2
+);
+  for (genvar i = 0; i < 3; ++i) begin : g
+    if (i != 1) begin : h
+      ifc b ();
+    end
+  end
+  leaf #(.T(g[P].h.b.data_t), .EXP(8)) c ();
+endmodule
+
+// Test: index in a module specialized more than once
+module m_spec #(
+    parameter int N = 2
+);
+  for (genvar i = 0; i < 2; ++i) begin : g
+    ifc #(.W(N + i)) b ();
+  end
+  leaf #(.T(g[1].b.data_t), .EXP(N + 1)) c ();
+endmodule
+
 module t;
   m_if u_if ();
   m_for u_for ();
@@ -121,6 +193,12 @@ module t;
   m_cond #(.SEL(0)) u_cond0 ();
   m_cond #(.SEL(1)) u_cond1 ();
   m_array u_array ();
+  m_index u_index ();
+  m_range u_range ();
+  m_param u_param ();
+  m_partial u_partial ();
+  m_spec #(.N(2)) u_spec2 ();
+  m_spec #(.N(4)) u_spec4 ();
 
   initial begin
     #1;

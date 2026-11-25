@@ -5382,7 +5382,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
 
                     V3LinkDotIfaceCapture::captureTypedefContext(
                         refp, "typedef", static_cast<int>(m_ds.m_dotPos), m_ds.m_dotText,
-                        m_ds.m_dotSymp, m_modp, [this]() { return indent(); });
+                        m_ds.m_unlinkedScopep, m_ds.m_dotSymp, m_modp,
+                        [this]() { return indent(); });
 
                     if (VN_IS(nodep->backp(), SelExtract)) {
                         m_packedArrayDtp = refp;
@@ -5400,7 +5401,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
 
                     V3LinkDotIfaceCapture::captureTypedefContext(
                         refp, "paramtype", static_cast<int>(m_ds.m_dotPos), m_ds.m_dotText,
-                        m_ds.m_dotSymp, m_modp, [this]() { return indent(); });
+                        m_ds.m_unlinkedScopep, m_ds.m_dotSymp, m_modp,
+                        [this]() { return indent(); });
 
                     if (VN_IS(nodep->backp(), SelExtract)) {
                         m_packedArrayDtp = refp;

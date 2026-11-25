@@ -1752,6 +1752,13 @@ class ParamProcessor final {
                 if (normedNamep) VL_DO_DANGLING(normedNamep->deleteTree(), normedNamep);
             }
         } else if (AstParamTypeDType* const modvarp = pinp->modPTypep()) {
+            // The pin type is taken here, so its instance paths must resolve by now
+            pinp->exprp()->foreach([](AstRefDType* refp) {
+                if (const VIfaceCaptureTag* const tagp = V3LinkDotIfaceCapture::captureTag(refp)) {
+                    V3LinkDotIfaceCapture::reportIfUnresolved(
+                        refp, V3LinkDotIfaceCapture::followCellPathAt(refp, tagp->m_cellPath));
+                }
+            });
             // Resolve the pin and declared type through arbitrary dtype wrappers
             // and typedef chains before widthing either one.
             resolveDeferredDotsReachableFrom(pinp->exprp(), m_modp);
