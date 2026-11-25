@@ -1108,12 +1108,18 @@ class IndependentBits final : public DfgVisitor {
     // Map from root of a tree of Concats to its leaves, with their offsets, by increasing offset
     std::unordered_map<const DfgVertex*, std::vector<std::pair<uint32_t, const DfgVertex*>>>
         m_concatLeaves;
-    // The sinks of a vertex in an SCC, with its selects ordered by LSB
+    // The sinks of a vertex in an SCC. The selects are ordered by LSB, with an implicit binary
+    // tree over them holding the maximum MSB in each subtree, to find those overlapping a
+    // range in time logarithmic in their number, whatever their widths.
     struct SinkIndex final {
-        std::vector<std::pair<uint32_t, DfgSel*>> m_sels;  // Selects, with their LSBs
+        std::vector<DfgSel*> m_sels;  // Selects, by increasing LSB
+        // Node 'i' has children '2i' and '2i+1'; leaf 'm_nLeaves + j' is select 'j'. Each node
+        // holds 1 + the maximum MSB of the selects below it, or 0 if there are none.
+        std::vector<uint32_t> m_maxMsbP1s;
+        size_t m_nLeaves = 1;  // Number of leaves in the tree, a power of 2
         std::vector<DfgVertex*> m_others;  // The other sinks
-        uint32_t m_maxSelWidth = 0;  // Width of the widest select
     };
+    size_t m_nExamined = 0;  // Number of sinks examined when enqueueing sinks, for statistics
     std::unordered_map<const DfgVertex*, SinkIndex> m_sinkIndex;  // Built when first needed
     // The bits of the visited vertex to compute. Visitors of bit-local vertices compute only
     // these, the others compute all bits.
@@ -1525,15 +1531,34 @@ class IndependentBits final : public DfgVisitor {
     // Bit-local sinks are only enqueued if they read the changed bits, to recompute those.
     void enqueueSinks(DfgVertex& vtx, uint32_t msb, uint32_t lsb) {
         const SinkIndex& index = sinkIndex(vtx);
-        // Selects of the changed bits, found by their LSBs, as a wide vertex can have many
-        const uint32_t firstLsb = lsb >= index.m_maxSelWidth ? lsb - index.m_maxSelWidth + 1 : 0;
-        auto it = std::lower_bound(index.m_sels.begin(), index.m_sels.end(),
-                                   std::make_pair(firstLsb, static_cast<DfgSel*>(nullptr)));
-        for (; it != index.m_sels.end() && it->first <= msb; ++it) {
-            DfgSel* const selp = it->second;
-            if (lsb < selp->lsb() + selp->width()) enqueueSink(vtx, *selp, msb, lsb);
+        // Selects of the changed bits, as a wide vertex can have many: those with an LSB of at
+        // most 'msb', found by binary search, and an MSB of at least 'lsb', found by descending
+        // the tree into the subtrees reaching 'lsb'
+        const size_t end
+            = std::upper_bound(index.m_sels.begin(), index.m_sels.end(), msb,
+                               [](uint32_t bit, const DfgSel* selp) { return bit < selp->lsb(); })
+              - index.m_sels.begin();
+        // Entries are a node, its first select, and its number of selects
+        std::vector<std::tuple<size_t, size_t, size_t>> stack{{1, 0, index.m_nLeaves}};
+        while (!stack.empty()) {
+            size_t node;
+            size_t first;
+            size_t count;
+            std::tie(node, first, count) = stack.back();
+            stack.pop_back();
+            ++m_nExamined;
+            if (first >= end || index.m_maxMsbP1s[node] <= lsb) continue;
+            if (count == 1) {
+                enqueueSink(vtx, *index.m_sels[first], msb, lsb);
+                continue;
+            }
+            stack.emplace_back(2 * node + 1, first + count / 2, count / 2);
+            stack.emplace_back(2 * node, first, count / 2);
         }
-        for (DfgVertex* const sinkp : index.m_others) enqueueSink(vtx, *sinkp, msb, lsb);
+        for (DfgVertex* const sinkp : index.m_others) {
+            ++m_nExamined;
+            enqueueSink(vtx, *sinkp, msb, lsb);
+        }
     }
 
     // The sinks of 'vtx' in an SCC (the others already have all bits marked independent)
@@ -1544,14 +1569,24 @@ class IndependentBits final : public DfgVisitor {
         vtx.foreachSink([&](DfgVertex& sink) {
             if (!m_sccInfo.get(sink)) return false;
             if (DfgSel* const selp = sink.cast<DfgSel>()) {
-                index.m_sels.emplace_back(selp->lsb(), selp);
-                index.m_maxSelWidth = std::max(index.m_maxSelWidth, selp->width());
+                index.m_sels.push_back(selp);
             } else {
                 index.m_others.push_back(&sink);
             }
             return false;
         });
-        std::sort(index.m_sels.begin(), index.m_sels.end());
+        std::stable_sort(index.m_sels.begin(), index.m_sels.end(),
+                         [](const DfgSel* ap, const DfgSel* bp) { return ap->lsb() < bp->lsb(); });
+        while (index.m_nLeaves < index.m_sels.size()) index.m_nLeaves *= 2;
+        index.m_maxMsbP1s.resize(2 * index.m_nLeaves, 0);
+        for (size_t i = 0; i < index.m_sels.size(); ++i) {
+            const DfgSel* const selp = index.m_sels[i];
+            index.m_maxMsbP1s[index.m_nLeaves + i] = selp->lsb() + selp->width();
+        }
+        for (size_t node = index.m_nLeaves - 1; node > 0; --node) {
+            index.m_maxMsbP1s[node]
+                = std::max(index.m_maxMsbP1s[2 * node], index.m_maxMsbP1s[2 * node + 1]);
+        }
         return index;
     }
 
@@ -1776,7 +1811,10 @@ public:
     // of the values of vertices in the same SCC as the vertex resides in.
     static std::unordered_map<const DfgVertex*, BitMask> apply(DfgGraph& dfg,
                                                                const SccInfo& sccInfo) {
-        return std::move(IndependentBits{dfg, sccInfo}.m_vtxp2Mask);
+        IndependentBits independentBits{dfg, sccInfo};
+        V3Stats::addStatSum("Optimizations, DFG, BreakCycles, sinks examined",
+                            independentBits.m_nExamined);
+        return std::move(independentBits.m_vtxp2Mask);
     }
 };
 
