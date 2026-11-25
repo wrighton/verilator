@@ -15,9 +15,14 @@ module t;
   property p_nc_lhs_range;
     @(posedge clk) a [= 1: 2] |-> b;
   endproperty
+  property p_nc_abort_range;
+    @(posedge clk) accept_on (a) b [= 1: 2];
+  endproperty
 
   a_nc_range :
   assert property (p_nc_range);
   a_nc_lhs_range :
   assert property (p_nc_lhs_range);
+  a_nc_abort_range :
+  assert property (p_nc_abort_range);
 endmodule
