@@ -88,6 +88,16 @@ module t;
     return $bits(v);
   endfunction
 
+  // An implicit net, before a variable of the same name
+  // verilator lint_off IMPLICIT
+  assign imp = 1'b1;
+  // verilator lint_on IMPLICIT
+  function automatic int implicit_bits();
+    int n = $bits(imp);
+    logic [5:0] imp;
+    return n;
+  endfunction
+
   initial begin : static_init
     static int w = W + 1;
     static int W = 4;
@@ -115,6 +125,7 @@ module t;
     `checkd($bits(ret_td(7'h5)), 7);
     `checkd(fwd_bits(), 32);
     `checkd(typedef_bits(), 3);
+    `checkd(implicit_bits(), 1);
     `checkd($bits(c.ones(1)), 5);
     `checkh(c.ones(1), 5'h1f);
     $write("*-* All Finished *-*\n");
