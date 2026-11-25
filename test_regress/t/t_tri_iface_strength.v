@@ -190,6 +190,48 @@ module float_forcer (
     else release p.value[4:2];
 endmodule
 
+interface proc_value;
+  logic [32:0] value;
+endinterface
+
+module upward_writer;
+  initial begin
+    t.from_below.value = 'z;
+    #1;
+    t.from_below.value = 33'h0_7777_0001;
+  end
+endmodule
+
+module self_writer #(
+    parameter bit WRITE = 1'b0
+);
+  proc_value li ();
+  if (WRITE) begin : g_write
+    initial begin
+      self_drive.li.value = 'z;
+      #1;
+      self_drive.li.value = 33'h1_0000_0404;
+    end
+  end
+endmodule
+
+module port_shadow (
+    proc_value p
+);
+  if (1) begin : g
+    proc_value p ();
+    initial begin
+      bit [32:0] data;
+      data = 33'h1_0000_0006;
+      begin : b
+        p.value = data[1] ? data : 'z;
+        #1;
+        `checkh(p.value, 33'h1_0000_0006);
+      end
+    end
+  end
+endmodule
+
 module t;
   default_zero high_override ();
   default_zero idle_zero ();
@@ -366,6 +408,146 @@ module t;
     release overlapped.value;
     #1;
     `checkh(overlapped.value, 4'b0000);
+  end
+
+  // Assignments of one process inside and outside named blocks form a single driver.
+  proc_value proc ();
+  initial begin
+    bit [32:0] data;
+    data = 33'h1_0000_0004;
+    begin : outer_block
+      begin : inner_block
+        proc.value = data[2] ? data : 'z;
+        #1;
+        `checkh(proc.value, 33'h1_0000_0004);
+      end
+      proc.value = 33'h2;
+      #1;
+      `checkh(proc.value, 33'h2);
+    end
+    begin
+      bit [32:0] last;
+      last = 33'h0_8000_0001;
+      proc.value = last;
+    end
+    #1;
+    `checkh(proc.value, 33'h0_8000_0001);
+    t.proc.value = 33'h1_0000_000b;
+    #1;
+    `checkh(proc.value, 33'h1_0000_000b);
+  end
+
+  // The same within a generate block that declares the instance.
+  if (1) begin : g_proc
+    proc_value gen_proc ();
+    initial begin
+      bit [32:0] data;
+      data = 33'h1_0000_0004;
+      begin : first
+        gen_proc.value = data[2] ? data : 'z;
+      end
+      #1;
+      `checkh(gen_proc.value, 33'h1_0000_0004);
+      gen_proc.value = 33'h2;
+      #1;
+      `checkh(gen_proc.value, 33'h2);
+      g_proc.gen_proc.value = 33'h0_0000_0101;
+      #1;
+      `checkh(gen_proc.value, 33'h0_0000_0101);
+    end
+  end
+
+  // A write and a read in a named block reach the same instance, also when a generate block
+  // declares an instance named like an interface port.
+  proc_value shadowed_port ();
+  port_shadow shadow_drive (shadowed_port);
+
+  // A path from the top module, written inside a named block.
+  proc_value upward ();
+  initial begin
+    begin : up_block
+      t.upward.value = 'z;
+      #1;
+      t.upward.value = 33'h1_5555_5555;
+    end
+    #1;
+    `checkh(upward.value, 33'h1_5555_5555);
+  end
+
+  // A path from the top module, written from below.
+  proc_value from_below ();
+  upward_writer upward_drive ();
+  initial begin
+    #2;
+    `checkh(from_below.value, 33'h0_7777_0001);
+  end
+
+  // A path through the name of one instance of a module, written in another instance, reaches
+  // the named instance only.
+  self_writer self_drive ();
+  self_writer #(1'b1) other_drive ();
+  initial begin
+    #2;
+    `checkh(self_drive.li.value, 33'h1_0000_0404);
+    `checkh(other_drive.li.value, 33'bz);
+  end
+
+  // A write and a read in one nested generate block reach the same instance, also when an
+  // instance of the same name is declared further out.
+  default_zero hidden ();
+  bit hidden_on = 1'b0;
+  if (1) begin : g_inner
+    default_zero hidden ();
+    if (1) begin : g_deeper
+      assign hidden.value = hidden_on ? 1'b1 : 1'bz;
+      wire seen = hidden.value;
+    end
+  end
+  initial begin
+    for (int i = 0; i < 2; ++i) begin
+      hidden_on = i[0];
+      #1;
+      `checkh(g_inner.g_deeper.seen, hidden_on);
+    end
+  end
+
+  // Sibling generate blocks each drive their own instance from a nested block.
+  bit [1:0] sibling_on = 2'b00;
+  for (genvar g = 0; g < 2; ++g) begin : g_sibling
+    default_zero sibling ();
+    if (1) begin : g_sub
+      assign (strong0, strong1) sibling.value = sibling_on[g] ? 1'b1 : 1'bz;
+    end
+  end
+  initial begin
+    for (int i = 0; i < 4; ++i) begin
+      sibling_on = 2'(i);
+      #1;
+      `checkh(g_sibling[0].sibling.value, sibling_on[0]);
+      `checkh(g_sibling[1].sibling.value, sibling_on[1]);
+    end
+  end
+
+  // A path starting with a nested generate block reaches the instance in that block, not an
+  // outer one of the same path.
+  if (1) begin : g_nested
+    default_zero inst ();
+  end
+  bit nested_on = 1'b0;
+  if (1) begin : g_holder
+    if (1) begin : g_nested
+      default_zero inst ();
+    end
+    assign g_nested.inst.value = nested_on ? 1'b1 : 1'bz;
+  end
+  initial begin
+    #1;
+    `checkh(g_nested.inst.value, 1'b0);
+    `checkh(g_holder.g_nested.inst.value, 1'b0);
+    nested_on = 1'b1;
+    #1;
+    `checkh(g_nested.inst.value, 1'b0);
+    `checkh(g_holder.g_nested.inst.value, 1'b1);
   end
 
   initial begin
