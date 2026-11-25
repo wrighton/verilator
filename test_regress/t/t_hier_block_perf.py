@@ -31,7 +31,7 @@ test.compile(v_flags2=[
              context_threads=(HIER_THREADS if test.vltmt else 1))
 
 test.file_grep(test.obj_dir + "/V" + test.name + "__hier.dir/V" + test.name + "__stats.txt",
-               r'Optimizations, Hierarchical DPI wrappers with costs\s+(\d+)', 8)
+               r'Optimizations, Hierarchical DPI wrappers with costs\s+(\d+)', 10)
 
 if test.vltmt:
     test.file_grep(test.obj_dir + "/V" + test.name + "__hier.dir/V" + test.name + "__stats.txt",

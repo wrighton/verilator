@@ -17,9 +17,10 @@ endmodule
 module marker (
     input bit clk,
     input bit leftright_protectlib_settle,
+    input bit leftright_protectlib_clock_low,
     output bit q
 );
-  always_ff @(posedge clk) q <= leftright_protectlib_settle;
+  always_ff @(posedge clk) q <= leftright_protectlib_settle ^ leftright_protectlib_clock_low;
 endmodule
 `else
 // A user of both libraries and of a C function named like the settle function of one
@@ -40,6 +41,7 @@ module consumer (
   left__PVT__right u_m (
       .clk(clk),
       .leftright_protectlib_settle(n[0]),
+      .leftright_protectlib_clock_low(n[2]),
       .q(q_m)
   );
   assign y = user_settle(n);
