@@ -416,6 +416,8 @@ public:
     V3Number& setLong(uint32_t value);
     V3Number& setLongS(int32_t value);
     V3Number& setDouble(double value);
+    // Set to integral-valued 'value' truncated to width() bits, or zero if not finite
+    V3Number& setIntegralDouble(double value);
     void setBitX0(int bit);
     void setBit(int bit, char value) {  // Note: must be initialized as number and pre-zeroed!
         if (bit >= m_data.width()) return;
