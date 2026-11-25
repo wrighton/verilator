@@ -216,25 +216,46 @@ std::unique_ptr<Graph> buildGraph(const LogicRegions& logicRegions) {
     return graphp;
 }
 
-void propagateDrivingRegions(SchedReplicateVertex* vtxp) {
-    // Note: The graph is always acyclic, so the recursion will terminate
-
-    // Nothing to do if already visited
-    if (vtxp->user()) return;
-
-    // Compute union of driving regions of all inputs
-    uint8_t drivingRegions = 0;
-    for (V3GraphEdge& edge : vtxp->inEdges()) {
-        SchedReplicateVertex* const srcp = edge.fromp()->as<SchedReplicateVertex>();
-        propagateDrivingRegions(srcp);
-        drivingRegions |= srcp->drivingRegions();
+void propagateDrivingRegions(Graph* graphp) {
+    // Depth first with an explicit stack, as recursion overflows the stack on long paths.
+    // Note: The graph is always acyclic, so this terminates
+    struct Frame final {
+        SchedReplicateVertex* vtxp;
+        V3GraphEdge::IList::const_iterator edgeIt;  // Next input edge of vtxp to consider
+        uint8_t drivingRegions;  // Union of driving regions of the inputs considered so far
+    };
+    std::vector<Frame> stack;
+    const auto enter = [&](SchedReplicateVertex* vtxp) {
+        const V3GraphEdge::IList& edges = vtxp->inEdges();
+        stack.push_back({vtxp, edges.begin(), 0});
+    };
+    for (V3GraphVertex& vtx : graphp->vertices()) {
+        SchedReplicateVertex* const startp = vtx.as<SchedReplicateVertex>();
+        // Nothing to do if already visited
+        if (startp->user()) continue;
+        enter(startp);
+        while (!stack.empty()) {
+            Frame& frame = stack.back();
+            const V3GraphEdge::IList& edges = frame.vtxp->inEdges();
+            if (frame.edgeIt != edges.end()) {
+                SchedReplicateVertex* const srcp
+                    = (*frame.edgeIt).fromp()->as<SchedReplicateVertex>();
+                // Visit the input first, then consider the same edge again
+                if (!srcp->user()) {
+                    enter(srcp);
+                    continue;
+                }
+                frame.drivingRegions |= srcp->drivingRegions();
+                ++frame.edgeIt;
+                continue;
+            }
+            // Add any new driving regions
+            frame.vtxp->addDrivingRegions(frame.drivingRegions);
+            // Mark as visited
+            frame.vtxp->user(true);
+            stack.pop_back();
+        }
     }
-
-    // Add any new driving regions
-    vtxp->addDrivingRegions(drivingRegions);
-
-    // Mark as visited
-    vtxp->user(true);
 }
 
 LogicReplicas replicate(Graph* graphp) {
@@ -267,9 +288,7 @@ LogicReplicas replicateLogic(LogicRegions& logicRegionsRegions) {
     // Dump for debug
     if (dumpGraphLevel() >= 6) graphp->dumpDotFilePrefixed("sched-replicate");
     // Propagate driving region flags
-    for (V3GraphVertex& vtx : graphp->vertices()) {
-        propagateDrivingRegions(vtx.as<SchedReplicateVertex>());
-    }
+    propagateDrivingRegions(graphp.get());
     // Dump for debug
     if (dumpGraphLevel() >= 6) graphp->dumpDotFilePrefixed("sched-replicate-propagated");
     // Replicate the necessary logic
