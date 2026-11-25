@@ -454,6 +454,12 @@ module t (
   `signal(FOLD_MUX_FROM_ONES, ones[rand_a[5:0]]);
   `signal(FOLD_MUX_FROM_ZERO, zero[rand_a[5:0]]);
   `signal(REPLACE_MUX_WITH_SEL, rand_a[const_a[5:0]]);
+  // Bits read out of range are X, so only the bits in range are compared
+  wire logic [63:0] mux_sel_partial = rand_a[const_a[5:0] +: 64];
+  `signal(REPLACE_MUX_WITH_SEL_PARTIAL, mux_sel_partial[16:0]);
+  wire logic [39:0] mux_sel_above = rand_a[39:0];
+  wire logic [7:0] mux_sel_above_x = mux_sel_above[const_a[5:0] +: 8];
+  `signal(REPLACE_MUX_WITH_SEL_ABOVE, mux_sel_above_x & 8'd0);
   `signal(REPLACE_COND_THEN_OR_LHS, rand_a[0] ? rand_a[1] | rand_b[1] : rand_a[1]);
   `signal(REPLACE_COND_THEN_OR_RHS, rand_a[0] ? rand_a[1] | rand_b[1] : rand_b[1]);
   `signal(REMOVE_ACI_BINARY_LHS, ~rand_a & (~rand_b & ~rand_a));
