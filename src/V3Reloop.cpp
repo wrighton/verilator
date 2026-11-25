@@ -133,8 +133,45 @@ public:
 };
 
 //######################################################################
+// Sets the number of nodes ReloopAnalysis visits in each statement, when it reaches the end
+
+class ReloopSizeVisitor final : public VNVisitorConst {
+    // NODE STATE
+    // AstNodeStmt::user2() -> int. Number of nodes, see ReloopVisitor
+    uint32_t m_count = 0;  // Nodes visited so far
+
+    // VISITORS
+    void visit(AstNodeStmt* nodep) override {
+        const uint32_t startCount = m_count++;
+        iterateChildrenConst(nodep);
+        nodep->user2(static_cast<int>(m_count - startCount));
+    }
+    void visit(AstStreamL* nodep) override {
+        ++m_count;
+        iterateConst(nodep->lhsp());
+    }
+    void visit(AstReplicate* nodep) override {
+        ++m_count;
+        iterateConst(nodep->srcp());
+    }
+    void visit(AstNode* nodep) override {
+        ++m_count;
+        iterateChildrenConst(nodep);
+    }
+
+public:
+    // CONSTRUCTORS
+    explicit ReloopSizeVisitor(AstNode* nodep) { iterateConst(nodep); }
+};
+
+//######################################################################
 
 class ReloopVisitor final : public VNVisitor {
+    // NODE STATE
+    // AstNodeStmt::user2() -> int. Number of nodes ReloopAnalysis visits in the statement,
+    //                         so statements with different numbers cannot form a run
+    const VNUser2InUse m_user2InUse;
+
     // STATE
     const uint32_t m_limit = static_cast<uint32_t>(v3Global.opt.reloopLimit());  // Min run length
     AstCFunc* m_cfuncp = nullptr;  // Current function
@@ -265,11 +302,11 @@ class ReloopVisitor final : public VNVisitor {
     // node now in place of 'startp', and the next statement that can start a run.
     std::pair<AstNode*, AstNode*> reroll(AstNode* startp) {
         AstNodeStmt* const firstp = VN_CAST(startp, NodeStmt);
-        // A run needs a next statement of the same type. Checking that before walking 'firstp'
-        // keeps nested statements, e.g. an 'if'/'else if' chain, from being walked once for
-        // each statement enclosing them.
+        // A run needs a next statement of the same type and size. Checking that before walking
+        // 'firstp' keeps nested statements, e.g. an 'if'/'else if' chain, from being walked once
+        // for each statement enclosing them.
         const AstNodeStmt* const nextp = firstp ? nextStmt(firstp) : nullptr;
-        if (!nextp || nextp->type() != firstp->type()
+        if (!nextp || nextp->type() != firstp->type() || nextp->user2() != firstp->user2()
             || !ReloopAnalysis::gather(firstp, m_firstConsts, m_firstTypes)) {
             return {startp, startp->nextp()};
         }
@@ -285,6 +322,9 @@ class ReloopVisitor final : public VNVisitor {
         ++m_statReloops;
         m_statReItems += n;
         AstNode* const initp = makeLoop(firstp, n);
+        // The loop body was changed, and the loop statements are new
+        { ReloopSizeVisitor{initp}; }
+        { ReloopSizeVisitor{initp->nextp()}; }
         return {initp, initp->nextp()->nextp()};  // Next is after the initializer and the loop
     }
 
@@ -315,6 +355,9 @@ class ReloopVisitor final : public VNVisitor {
         VL_RESTORER(m_nTemps);
         m_cfuncp = nodep;
         m_nTemps = 0;
+        for (AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            ReloopSizeVisitor{stmtp};
+        }
         rerollList(nodep->stmtsp());
     }
     //--------------------
