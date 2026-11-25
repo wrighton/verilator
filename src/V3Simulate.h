@@ -1376,9 +1376,10 @@ private:
         if (VN_IS(fromp, VarRef) || VN_IS(fromp, ArraySel) || VN_IS(fromp, StructSel)) {
             outBasepRef = fromp;
             lsbRef = fetchConst(selp->lsbp())->num();
-            // A computed signed position below zero writes from bit zero up; a constant
-            // position is already a number of its own signedness
-            if (!VN_IS(selp->lsbp(), Const)) lsbRef.isSigned(selp->lsbp()->isSigned());
+            // A signed position below zero writes from bit zero up. The simulated value has no
+            // signedness, so take that of the constant's number, or of the computed position.
+            const AstConst* const lsbConstp = VN_CAST(selp->lsbp(), Const);
+            lsbRef.isSigned(lsbConstp ? lsbConstp->num().isSigned() : selp->lsbp()->isSigned());
             return;  // And presumably still optimizable()
         }
         if (AstSel* const subselp = VN_CAST(fromp, Sel)) {
