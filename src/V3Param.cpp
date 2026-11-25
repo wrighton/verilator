@@ -3628,7 +3628,9 @@ public:
         for (AstNode* const nodep : VNList<AstNode>{stmtsp}) {
             ++scannedr;
             if (AstDefParam* const defParamp = VN_CAST(nodep, DefParam)) {
-                if (!defParamp->checkTarget()) defParamsr.push_back(defParamp);
+                if (!defParamp->checkTarget() && !defParamp->valueCheck()) {
+                    defParamsr.push_back(defParamp);
+                }
             } else if (const AstGenBlock* const blockp = VN_CAST(nodep, GenBlock)) {
                 // Unnamed, so in this scope, as in ParamVisitor::iterateDefParams
                 if (blockp->name().empty()) {
