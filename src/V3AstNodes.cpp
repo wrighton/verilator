@@ -2939,6 +2939,10 @@ AstNetlist::AstNetlist()
 }
 void AstNetlist::addEvalStats(const std::string& phase) {
     if (!v3Global.opt.stats()) return;
+    int largestNodes = 0;
+    foreach(
+        [&](const AstCFunc* funcp) { largestNodes = std::max(largestNodes, funcp->nodeCount()); });
+    V3Stats::addStat("Size of largest function, nodes, " + phase, largestNodes);
     for (int i = 0; i < VEval::_ENUM_END; ++i) {
         VEval eval{i};
         AstCFunc* const funcp = m_evalFuncps[i];
