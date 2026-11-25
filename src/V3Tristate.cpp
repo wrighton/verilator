@@ -501,6 +501,34 @@ static AstVar* forceNetp(const AstPin* pinp, const AstNodeModule* modp) {
     return plain ? netp : nullptr;
 }
 
+// Variables whose value, z included, nodep's value carries: a z read only as e.g. a condition
+// or operator operand gives x, not z (IEEE 1800-2023 11.4). Set *xrefp if one is read through a
+// hierarchical reference.
+static void valueReads(AstNode* nodep, std::vector<AstVar*>& varps, bool* xrefp = nullptr) {
+    if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+        varps.push_back(refp->varp());
+        if (xrefp && VN_IS(refp, VarXRef)) *xrefp = true;
+    } else if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+        valueReads(selp->fromp(), varps, xrefp);
+    } else if (const AstArraySel* const aselp = VN_CAST(nodep, ArraySel)) {
+        valueReads(aselp->fromp(), varps, xrefp);
+    } else if (const AstStructSel* const sselp = VN_CAST(nodep, StructSel)) {
+        valueReads(sselp->fromp(), varps, xrefp);
+    } else if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+        valueReads(concatp->lhsp(), varps, xrefp);
+        valueReads(concatp->rhsp(), varps, xrefp);
+    } else if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+        valueReads(repp->srcp(), varps, xrefp);
+    } else if (const AstExtend* const extendp = VN_CAST(nodep, Extend)) {
+        valueReads(extendp->lhsp(), varps, xrefp);
+    } else if (const AstExtendS* const extendsp = VN_CAST(nodep, ExtendS)) {
+        valueReads(extendsp->lhsp(), varps, xrefp);
+    } else if (const AstCond* const condp = VN_CAST(nodep, Cond)) {
+        valueReads(condp->thenp(), varps, xrefp);
+        valueReads(condp->elsep(), varps, xrefp);
+    }
+}
+
 //######################################################################
 // Forced input net ports that may be one net with all their connections
 
@@ -541,6 +569,12 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
     std::unordered_map<const AstVar*, std::vector<AstVar*>> m_readInputActualps;
     std::unordered_set<const AstVar*> m_unsafeReadps;
     std::unordered_set<const AstVar*> m_aliasedps;  // Variables of an alias
+    // Nets a continuous assignment forwards each variable's value to
+    std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_forwardps;
+    // Nets an output connection or a hierarchical reference forwards a value to
+    std::unordered_set<const AstVar*> m_remoteps;
+    // Variables of each connection of each inout port
+    std::unordered_map<const AstVar*, std::vector<std::vector<const AstVar*>>> m_inoutVarps;
 
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_modp);
@@ -572,6 +606,17 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
         iterateAndNextConstNull(nodep->rhsp());
     }
     void visit(AstRelease*) override {}
+    void visit(AstAssignW* nodep) override {
+        std::vector<AstVar*> srcps;
+        bool xref = false;
+        valueReads(nodep->rhsp(), srcps, &xref);
+        nodep->lhsp()->foreach([&](const AstNodeVarRef* refp) {
+            if (!refp->access().isWriteOrRW() || !refp->varp()->isNet()) return;
+            if (xref) m_remoteps.emplace(refp->varp());
+            for (const AstVar* const srcp : srcps) m_forwardps[srcp].push_back(refp->varp());
+        });
+        iterateChildrenConst(nodep);
+    }
     void visit(AstAlias* nodep) override {
         nodep->foreach([&](const AstNodeVarRef* refp) { m_aliasedps.emplace(refp->varp()); });
         iterateChildrenConst(nodep);
@@ -608,8 +653,17 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
         if (portp && nodep->exprp()) {
             if (portp->declDirection().isWritable()) {
                 nodep->exprp()->foreach([&](const AstNodeVarRef* refp) {
-                    if (refp->access().isWriteOrRW()) m_cellOutputps.emplace(refp->varp());
+                    if (!refp->access().isWriteOrRW()) return;
+                    m_cellOutputps.emplace(refp->varp());
+                    if (portp->declDirection() == VDirection::OUTPUT && refp->varp()->isNet()) {
+                        m_remoteps.emplace(refp->varp());
+                    }
                 });
+            }
+            if (portp->isInout()) {
+                std::vector<const AstVar*>& varps = m_inoutVarps[portp].emplace_back();
+                nodep->exprp()->foreach(
+                    [&](const AstNodeVarRef* refp) { varps.push_back(refp->varp()); });
             }
             addPullActuals(VN_AS(nodep->exprp(), NodeExpr), portp);
             if (portp->isNonOutput()) {
@@ -653,6 +707,9 @@ public:
         std::unordered_map<const AstVar*, std::vector<AstVar*>> rhsInputActualps;
         std::unordered_set<const AstVar*> pulledps;  // Direct and propagated pulls for INOUT
         std::unordered_set<const AstVar*> xrefWrittenps;  // Written through a hierarchical ref
+        // Inout ports every connection of which carries a remote drive state, which keep the
+        // lowering of an ordinary port when forced
+        std::unordered_set<const AstVar*> remoteInoutps;
     };
     static Eligible eligible(AstNetlist* netlistp) {
         TristateForcedInputVisitor visitor;
@@ -677,6 +734,33 @@ public:
                 if (unsafeReadps.emplace(portp).second) pulledps.push_back(portp);
             }
         }
+        // Nets carrying, through value-transparent continuous assignments, the value of an inout
+        // port, an output connection or a hierarchical reference: a net of a force domain
+        // would read only their local drive state, so their ports keep their own nets.
+        std::vector<const AstVar*> remoteps{visitor.m_remoteps.begin(), visitor.m_remoteps.end()};
+        for (const auto& pair : visitor.m_forwardps) {
+            if (pair.first->isInout()) remoteps.push_back(pair.first);
+        }
+        std::unordered_set<const AstVar*> remoteSetps{remoteps.begin(), remoteps.end()};
+        for (size_t index = 0; index < remoteps.size(); ++index) {
+            const auto it = visitor.m_forwardps.find(remoteps[index]);
+            if (it == visitor.m_forwardps.end()) continue;
+            for (const AstVar* const destp : it->second) {
+                if (remoteSetps.emplace(destp).second) remoteps.push_back(destp);
+            }
+        }
+        // An input port connected to such a net, also through other input ports, carries it
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (const auto& pair : visitor.m_netps) {
+                if (remoteSetps.count(pair.first)) continue;
+                if (std::any_of(pair.second.begin(), pair.second.end(),
+                                [&](const AstVar* netp) { return remoteSetps.count(netp); })) {
+                    remoteSetps.emplace(pair.first);
+                    changed = true;
+                }
+            }
+        }
         Eligible result;
         for (const auto& pair : visitor.m_rhsInputps) {
             for (const AstVar* const rhsp : pair.second) {
@@ -688,7 +772,7 @@ public:
         for (const auto& pair : visitor.m_plainps) {
             bool ok = pair.second && !visitor.m_writtenps.count(pair.first)
                       && !visitor.m_pulledps.count(pair.first)
-                      && !visitor.m_aliasedps.count(pair.first);
+                      && !visitor.m_aliasedps.count(pair.first) && !remoteSetps.count(pair.first);
             for (const AstVar* const netp : visitor.m_netps[pair.first]) {
                 if (visitor.m_pulledps.count(netp) || visitor.m_aliasedps.count(netp)
                     || visitor.m_xrefWrittenps.count(netp)) {
@@ -705,6 +789,16 @@ public:
                 }
             }
             if (ok) result.inputps.emplace(pair.first);
+        }
+        for (const auto& pair : visitor.m_inoutVarps) {
+            if (std::all_of(pair.second.begin(), pair.second.end(),
+                            [&](const std::vector<const AstVar*>& varps) {
+                                return std::any_of(
+                                    varps.begin(), varps.end(),
+                                    [&](const AstVar* varp) { return remoteSetps.count(varp); });
+                            })) {
+                result.remoteInoutps.emplace(pair.first);
+            }
         }
         result.aliasps = std::move(visitor.m_aliasedps);
         result.rhsInputActualps = std::move(visitor.m_readInputActualps);
@@ -725,7 +819,8 @@ class TristatePrepareForceVisitor final : public VNVisitor {
     void visit(AstPin* nodep) override {
         AstVar* const portp = nodep->modVarp();
         if (portp && !portp->isForceable()
-            && (portp->isInout() || m_eligible.inputps.count(portp))) {
+            && ((portp->isInout() && !m_eligible.remoteInoutps.count(portp))
+                || m_eligible.inputps.count(portp))) {
             if (AstVar* const actualp = forceNetp(nodep, m_modp)) {
                 if (!portp->isInout() || !m_eligible.pulledps.count(actualp)) {
                     m_actualps[portp].push_back(actualp);
@@ -879,6 +974,8 @@ class TristateVisitor final : public TristateBaseVisitor {
     std::unordered_set<const AstVar*> m_inoutPulledps;
     // Nets with an alias or a hierarchical writer, which tristate resolution cannot represent
     std::unordered_set<const AstVar*> m_unresolvedWriterps;
+    // Inout ports kept off force domains, see TristateForcedInputVisitor::Eligible
+    std::unordered_set<const AstVar*> m_remoteInoutps;
     // Wired net, or element of an unpacked array of wired nets, by net and unpacked indices
     using WiredElem = std::pair<AstVar*, std::vector<int>>;
     std::map<WiredElem, Assigns> m_wiredAssigns;  // Continuous drivers of wired elements
@@ -2115,7 +2212,8 @@ class TristateVisitor final : public TristateBaseVisitor {
             return;
         }
         if (m_modp->level() <= DESIGN_TOP_LEVEL || !varp->isInout() || !varp->isForced()
-            || varp->isForceable() || !varp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            || varp->isForceable() || !varp->dtypep()->skipRefp()->isIntegralOrPacked()
+            || m_remoteInoutps.count(varp)) {
             return;
         }
         AstVar* const newp
@@ -2398,31 +2496,6 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
     }
 
-    static void valueReads(AstNode* nodep, std::vector<AstVar*>& varps) {
-        // Variables whose value, z included, nodep's value carries: a z read only as e.g. a
-        // condition or operator operand gives x, not z (IEEE 1800-2023 11.4)
-        if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
-            varps.push_back(refp->varp());
-        } else if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
-            valueReads(selp->fromp(), varps);
-        } else if (const AstArraySel* const aselp = VN_CAST(nodep, ArraySel)) {
-            valueReads(aselp->fromp(), varps);
-        } else if (const AstStructSel* const sselp = VN_CAST(nodep, StructSel)) {
-            valueReads(sselp->fromp(), varps);
-        } else if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
-            valueReads(concatp->lhsp(), varps);
-            valueReads(concatp->rhsp(), varps);
-        } else if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
-            valueReads(repp->srcp(), varps);
-        } else if (const AstExtend* const extendp = VN_CAST(nodep, Extend)) {
-            valueReads(extendp->lhsp(), varps);
-        } else if (const AstExtendS* const extendsp = VN_CAST(nodep, ExtendS)) {
-            valueReads(extendsp->lhsp(), varps);
-        } else if (const AstCond* const condp = VN_CAST(nodep, Cond)) {
-            valueReads(condp->thenp(), varps);
-            valueReads(condp->elsep(), varps);
-        }
-    }
     void propagateResolvedInoutReads(AstNodeModule* modp) {
         // A prepared INOUT can carry Z from the parent even when no local driver supplies it.
         // Mark value-transparent forwarding destinations so the read enable follows the data.
@@ -4160,6 +4233,7 @@ public:
             = haveForce ? TristateForcedInputVisitor::eligible(netlistp)
                         : TristateForcedInputVisitor::Eligible{};
         m_inoutPulledps = std::move(eligible.pulledps);
+        m_remoteInoutps = std::move(eligible.remoteInoutps);
         m_unresolvedWriterps = std::move(eligible.xrefWrittenps);
         m_unresolvedWriterps.insert(eligible.aliasps.begin(), eligible.aliasps.end());
         std::unordered_set<const AstVar*> inputps;

@@ -53,6 +53,41 @@ module forwarding_leaf (
   assign joined = sel ? left : right;
 endmodule
 
+// Forwards of an inout port reaching a forced input port through nets, an output port, or a
+// hierarchical reference, which keeps the input port's own net
+module chain_input (
+    input wire p
+);
+endmodule
+
+module chain_source (
+    inout wire p
+);
+endmodule
+
+module chain_inout (
+    inout wire p
+);
+endmodule
+
+module chain_hops (
+    inout wire src
+);
+  wire first = src;
+  wire second = first;
+  chain_input leaf (second);
+  wire inout_first = src;
+  wire inout_second = inout_first;
+  chain_inout inout_leaf (inout_second);
+endmodule
+
+module chain_output (
+    inout wire src,
+    output wire out
+);
+  assign out = src;
+endmodule
+
 // A forward of a force-capable port with a bit another module writes
 module partial_leaf (
     inout wire p
@@ -334,6 +369,82 @@ module t;
     `checkh(fwd_other.direct === 7'bzzzzzzz, 1'b0);
     `checkh(fwd_other.picked === 1'bz, 1'b0);
     `checkh(fwd_other.joined === 7'bzzzzzzz, 1'b0);
+  end
+
+  bit chain_en = 0;
+  wire chain_hop_net = chain_en ? 1'b1 : 1'bz;
+  chain_hops hops (chain_hop_net);
+  wire chain_out_src = chain_en ? 1'b1 : 1'bz;
+  wire chain_out;
+  chain_output out_h (
+      chain_out_src,
+      chain_out
+  );
+  chain_input out_leaf (chain_out);
+  wire chain_xref_net = chain_en ? 1'b1 : 1'bz;
+  chain_source xref_src (chain_xref_net);
+  wire chain_xref = xref_src.p;
+  chain_input xref_leaf (chain_xref);
+  wire chain_out_inout_src = chain_en ? 1'b1 : 1'bz;
+  wire chain_out_inout;
+  chain_output out_inout_h (
+      chain_out_inout_src,
+      chain_out_inout
+  );
+  chain_inout out_inout_leaf (chain_out_inout);
+  wire chain_xref_inout_net = chain_en ? 1'b1 : 1'bz;
+  chain_source xref_inout_src (chain_xref_inout_net);
+  wire chain_xref_inout = xref_inout_src.p;
+  chain_inout xref_inout_leaf (chain_xref_inout);
+  task automatic chain_force_unused;
+    force hops.inout_leaf.p = 1'b0;
+    force out_inout_leaf.p = 1'b0;
+    force xref_inout_leaf.p = 1'b0;
+  endtask
+  initial begin
+    #1.5;
+    `checkh(hops.inout_leaf.p === 1'bz, 1'b1);
+    `checkh(out_inout_leaf.p === 1'bz, 1'b1);
+    `checkh(xref_inout_leaf.p === 1'bz, 1'b1);
+    #0.3;
+    `checkh(hops.inout_leaf.p, 1'b1);
+    `checkh(out_inout_leaf.p, 1'b1);
+    `checkh(xref_inout_leaf.p, 1'b1);
+  end
+  initial begin
+    #1.5;
+    `checkh(hops.leaf.p === 1'bz, 1'b1);
+    `checkh(out_leaf.p === 1'bz, 1'b1);
+    `checkh(xref_leaf.p === 1'bz, 1'b1);
+    force hops.leaf.p = 1'b0;
+    force out_leaf.p = 1'b0;
+    force xref_leaf.p = 1'b0;
+    #0.1;
+    `checkh(hops.leaf.p, 1'b0);
+    `checkh(out_leaf.p, 1'b0);
+    `checkh(xref_leaf.p, 1'b0);
+    release hops.leaf.p;
+    release out_leaf.p;
+    release xref_leaf.p;
+    #0.1;
+    `checkh(hops.leaf.p === 1'bz, 1'b1);
+    `checkh(out_leaf.p === 1'bz, 1'b1);
+    `checkh(xref_leaf.p === 1'bz, 1'b1);
+    chain_en = 1;
+    #0.1;
+    `checkh(hops.leaf.p, 1'b1);
+    `checkh(out_leaf.p, 1'b1);
+    `checkh(xref_leaf.p, 1'b1);
+    force hops.leaf.p = 1'b0;
+    force xref_leaf.p = 1'b0;
+    #0.1;
+    `checkh(hops.leaf.p, 1'b0);
+    `checkh(xref_leaf.p, 1'b0);
+    release hops.leaf.p;
+    release xref_leaf.p;
+    #0.1;
+    `checkh(hops.leaf.p, 1'b1);
+    `checkh(xref_leaf.p, 1'b1);
   end
 
   bit part_data = 1;
