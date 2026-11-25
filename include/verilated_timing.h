@@ -252,18 +252,21 @@ public:
 #ifdef VL_DEBUG
     void dump() const;
 #endif
-    // Used by coroutines for co_awaiting a certain simulation time
-    auto delay(uint64_t delay, VlProcessRef process, const char* filename = VL_UNKNOWN_FILENAME,
-               int lineno = 0) {
+    // Used by coroutines for co_awaiting a delay of 'value' units of 'ticksPerUnit' ticks each
+    auto delay(uint64_t value, uint64_t ticksPerUnit, VlProcessRef process,
+               const char* filename = VL_UNKNOWN_FILENAME, int lineno = 0) {
+        constexpr uint64_t MAX_TIME = std::numeric_limits<uint64_t>::max();
         const uint64_t now = m_context.time();
+        const uint64_t ticks = value * ticksPerUnit;
         VlDelayPhase phase = VlDelayPhase::ACTIVE;
-        if (delay == 0) {
+        if (value == 0) {
             phase = VlDelayPhase::INACTIVE;
-        } else if (VL_UNLIKELY(delay > std::numeric_limits<uint64_t>::max() - now)) {
+        } else if (VL_UNLIKELY((ticksPerUnit != 1 && value > MAX_TIME / ticksPerUnit)
+                               || ticks > MAX_TIME - now)) {
             // Resumption time not representable in 64-bit time (IEEE 1800-2023 9.4.1)
             phase = VlDelayPhase::NEVER;
         }
-        return DelayAwaitable{*this, process, now + delay, phase,
+        return DelayAwaitable{*this, process, now + ticks, phase,
                               VlFileLineDebug{filename, lineno}};
     }
     // Used by coroutines for co_awaiting the start of a forked process, which resumes in the
