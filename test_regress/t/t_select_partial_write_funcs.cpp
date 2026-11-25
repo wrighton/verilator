@@ -94,7 +94,10 @@ static void check(int rbits, int obits, int64_t pos, int wlsb, int wbits) {
         dst[VL_BITWORD_E(bit)] &= ~(EData{1} << VL_BITBIT_E(bit));
     }
     Words exp = dst;
-    for (int bit = wlsb; bit < wlsb + wbits; ++bit) {
+    // Only a position within the value's width of the window writes, which also keeps the
+    // subtraction below from overflowing
+    const bool writes = pos > -int64_t{obits} && pos < wbits;
+    for (int bit = wlsb; writes && bit < wlsb + wbits; ++bit) {
         const int64_t from = bit - wlsb - pos;
         if (from < 0 || from >= obits) continue;
         const EData mask = EData{1} << VL_BITBIT_E(bit);
