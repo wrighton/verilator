@@ -41,6 +41,7 @@ module t;
   packed_t pdata;
   packed_t pdata_reg;
   packed2_t pdata2_reg;
+  packed_t [2:0] pdatas;
   assign pdata.data = 16'h1234;
   logic [7:0] logic8bit;
   assign logic8bit = $bits(logic8bit)'(pdata >> 8);
@@ -157,6 +158,11 @@ module t;
     if (r != 127.5) $stop;
     r = 2.0 / int'(i + 1);
     if (r != 1.0) $stop;
+
+    // Size cast of a shifted packed array, computed at the width of the array
+    if (16'(two_dee_sig >> 8) != 16'h1234) $stop;
+    pdatas = 48'h1234_5678_9abc;
+    if (32'(pdatas >> 8) != 32'h3456_789a) $stop;
 
     $write("*-* All Finished *-*\n");
     $finish;
