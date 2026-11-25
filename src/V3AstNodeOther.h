@@ -2544,6 +2544,7 @@ class AstVar final : public AstNode {
     bool m_primaryRegOut : 1;  // Output of top level written only by clocked logic
     bool m_primaryPosedge : 1;  // Input of top level read only as the clock of rising edges
     bool m_primaryCombOut : 1;  // Output of top level a function of the inputs alone
+    bool m_primaryDataOut : 1;  // Output of top level a function of the data inputs alone
     bool m_sc : 1;  // SystemC variable
     bool m_scSensitive : 1;  // SystemC sensitive() needed
     bool m_sigPublic : 1;  // User C code accesses this signal or is top signal
@@ -2620,6 +2621,7 @@ class AstVar final : public AstNode {
         m_primaryRegOut = false;
         m_primaryPosedge = false;
         m_primaryCombOut = false;
+        m_primaryDataOut = false;
         m_sc = false;
         m_scSensitive = false;
         m_usedParam = false;
@@ -2939,6 +2941,8 @@ public:
     void setPrimaryPosedge() { m_primaryPosedge = true; }
     bool isPrimaryCombOut() const VL_MT_SAFE { return m_primaryCombOut; }
     void setPrimaryCombOut() { m_primaryCombOut = true; }
+    bool isPrimaryDataOut() const VL_MT_SAFE { return m_primaryDataOut; }
+    void setPrimaryDataOut() { m_primaryDataOut = true; }
     bool isIfaceRef() const VL_MT_SAFE { return varType() == VVarType::IFACEREF; }
     void setIfaceRef() {
         m_direction = VDirection::NONE;

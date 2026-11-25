@@ -5555,6 +5555,7 @@ void AstVar::dump(std::ostream& str) const {
     if (isPrimaryRegOut()) str << " [PREG]";
     if (isPrimaryPosedge()) str << " [PPOS]";
     if (isPrimaryCombOut()) str << " [PCOMB]";
+    if (isPrimaryDataOut()) str << " [PDATA]";
     if (isConst()) str << " [CONST]";
     if (isPullup()) str << " [PULLUP]";
     if (isPulldown()) str << " [PULLDOWN]";
@@ -5613,6 +5614,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isPrimaryRegOut);
     dumpJsonBoolFuncIf(str, isPrimaryPosedge);
     dumpJsonBoolFuncIf(str, isPrimaryCombOut);
+    dumpJsonBoolFuncIf(str, isPrimaryDataOut);
     dumpJsonStr(str, "direction", direction().ascii());
     dumpJsonStr(str, "declDirection", declDirection().ascii());
     dumpJsonBoolFuncIf(str, isConst);
