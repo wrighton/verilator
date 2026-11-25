@@ -197,7 +197,131 @@ class Caller;
   endfunction
 endclass
 
+// A static rand member of a class the object reaches through a rand class handle is a
+// random variable of the object, not a caller variable
+class Shared;
+  static rand int unsigned s;
+  constraint c {s inside {[0 : 50]};}
+endclass
+
+class SharedHolder;
+  rand Shared sh;
+  rand int unsigned y;
+  function new();
+    sh = new;
+  endfunction
+endclass
+
+// Also through a rand class handle of an object it holds
+class SharedOuter;
+  rand SharedHolder inner;
+  rand int unsigned z;
+  function new();
+    inner = new;
+  endfunction
+endclass
+
+// A static rand member of a class the object reaches only through an array of rand class
+// handles, whose objects are randomized apart, is taken as a caller variable
+class SharedArrayHolder;
+  rand Shared arr[2];
+  rand int unsigned y;
+  function new();
+    foreach (arr[i]) arr[i] = new;
+  endfunction
+endclass
+
+// Static rand members no class constraint names: of a class reached through a rand class
+// handle, and of the object's own class, from a module and from a class
+class Bare;
+  rand bit [3:0] a;
+  static rand bit [3:0] s;
+endclass
+
+class BareHolder;
+  rand Bare b;
+  static rand bit [3:0] own;
+  function new();
+    b = new;
+  endfunction
+endclass
+
+class BareCaller;
+  function int run(BareHolder h);
+    return h.randomize() with {
+      Bare::s == 6;
+      own == 2;
+    };
+  endfunction
+endclass
+
 module t;
+  initial begin
+    automatic BareHolder bh = new;
+    automatic BareCaller bc = new;
+    automatic int randomize_result;
+    repeat (4) begin
+      randomize_result = bh.randomize() with {
+        Bare::s == 9;
+        b.a == 3;
+        own == 5;
+      };
+      `checkd(randomize_result, 1);
+      `checkd(Bare::s, 9);
+      `checkd(bh.b.a, 3);
+      `checkd(BareHolder::own, 5);
+      randomize_result = bh.randomize() with {b.s == 7;};
+      `checkd(randomize_result, 1);
+      `checkd(Bare::s, 7);
+      randomize_result = bc.run(bh);
+      `checkd(randomize_result, 1);
+      `checkd(Bare::s, 6);
+      `checkd(BareHolder::own, 2);
+    end
+  end
+
+  initial begin
+    automatic SharedArrayHolder ah = new;
+    automatic int randomize_result;
+    Shared::s = 5;
+    randomize_result = ah.randomize() with {
+      Shared::s == 21;
+      y == Shared::s;
+    };
+    `checkd(randomize_result, 0);
+  end
+
+  initial begin
+    automatic SharedOuter so = new;
+    automatic int randomize_result;
+    randomize_result = so.randomize() with {
+      Shared::s == 13;
+      z == Shared::s;
+    };
+    `checkd(randomize_result, 1);
+    `checkd(Shared::s, 13);
+    `checkd(so.z, 13);
+  end
+
+  initial begin
+    automatic SharedHolder sh = new;
+    automatic int randomize_result;
+    randomize_result = sh.randomize() with {
+      Shared::s == 9;
+      y == Shared::s;
+    };
+    `checkd(randomize_result, 1);
+    `checkd(Shared::s, 9);
+    `checkd(sh.y, 9);
+    randomize_result = sh.randomize() with {
+      sh.s == 11;
+      y == sh.s;
+    };
+    `checkd(randomize_result, 1);
+    `checkd(Shared::s, 11);
+    `checkd(sh.y, 11);
+  end
+
   initial begin
     automatic UniqueList u = new;
     automatic Caller c = new;
