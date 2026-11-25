@@ -2437,6 +2437,11 @@ class ParamProcessor final {
             }
             const AstPin* const valuePinp = paramPins.at(paramp);
             if (!valuePinp) return nullptr;
+            // A type given for a value parameter, or the reverse, is reported when the pin is
+            // applied, so leave the default to the specialization
+            if (VN_IS(valuePinp->exprp(), NodeDType) != VN_IS(paramp, ParamTypeDType)) {
+                return nullptr;
+            }
             refps.push_back(refs[i].first);
             valuePinps.push_back(valuePinp);
         }
