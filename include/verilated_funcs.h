@@ -2290,36 +2290,26 @@ inline void VL_STREAML_RWI(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q
     }
 }
 
-// The first obits bits of a queue or dynamic array of lbits wide elements, left-aligned and
-// filled with zero bits on the right (IEEE 1800-2023 11.4.14, 11.4.14.3)
+// Pack the elements of a queue left-justified, zero-filled on the right (IEEE 1800-2023 11.4.14)
 template <typename T_Ret, typename T_Elem>
-inline T_Ret _vl_pack_r(int obits, int lbits, const VlQueue<T_Elem>& q) {
+inline T_Ret _vl_pack_r(int obits, int lbits, const VlQueue<T_Elem>& q) VL_PURE {
+    // A larger queue, which is illegal, keeps the rightmost bits that fit
+    const int offset = std::max(0, obits - q.size() * lbits);
     T_Ret ret = 0;
-    for (int i = 0; i < q.size() && i * lbits < obits; ++i) {
-        // Lowest bit of the element in the result, negative if only its upper bits fit
-        const int lsb = obits - (i + 1) * lbits;
-        const QData elem = q.at(i);
-        ret |= static_cast<T_Ret>(lsb >= 0 ? elem << lsb : elem >> -lsb);
-    }
+    for (size_t i = 0; i < q.size() && i * lbits < sizeof(T_Ret) * VL_BYTESIZE; ++i)
+        ret |= static_cast<T_Ret>(q.at(q.size() - 1 - i)) << (i * lbits + offset);
     return ret;
 }
-template <typename T_Elem>
-inline WDataOutP _vl_pack_w_r(int obits, int lbits, WDataOutP owp, const VlQueue<T_Elem>& q) {
-    VL_MEMSET_ZERO_W(owp, VL_WORDS_I(obits));
-    for (int i = 0; i < q.size() && i * lbits < obits; ++i) {
-        const int lsb = obits - (i + 1) * lbits;
-        const QData elem = q.at(i);
-        if (lsb >= 0) {
-            _vl_insert_WQ(owp, elem, lsb + lbits - 1, lsb);
-        } else {
-            _vl_insert_WQ(owp, elem >> -lsb, lsb + lbits - 1, 0);
-        }
-    }
-    return owp;
+
+inline IData VL_PACK_I_RI(int obits, int lbits, const VlQueue<CData>& q) {
+    return _vl_pack_r<IData>(obits, lbits, q);
 }
 
-template <typename T>
-inline IData VL_PACK_I_RI(int obits, int lbits, const VlQueue<T>& q) {
+inline IData VL_PACK_I_RI(int obits, int lbits, const VlQueue<SData>& q) {
+    return _vl_pack_r<IData>(obits, lbits, q);
+}
+
+inline IData VL_PACK_I_RI(int obits, int lbits, const VlQueue<IData>& q) {
     return _vl_pack_r<IData>(obits, lbits, q);
 }
 
@@ -2368,8 +2358,15 @@ inline IData VL_PACK_I_UI(const int obits, const int lbits,
     return ret;
 }
 
-template <typename T>
-inline QData VL_PACK_Q_RI(int obits, int lbits, const VlQueue<T>& q) {
+inline QData VL_PACK_Q_RI(int obits, int lbits, const VlQueue<CData>& q) {
+    return _vl_pack_r<QData>(obits, lbits, q);
+}
+
+inline QData VL_PACK_Q_RI(int obits, int lbits, const VlQueue<SData>& q) {
+    return _vl_pack_r<QData>(obits, lbits, q);
+}
+
+inline QData VL_PACK_Q_RI(int obits, int lbits, const VlQueue<IData>& q) {
     return _vl_pack_r<QData>(obits, lbits, q);
 }
 
