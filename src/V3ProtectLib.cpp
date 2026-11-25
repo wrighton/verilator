@@ -379,11 +379,13 @@ class ProtectVisitor final : public VNVisitor {
             if (v3Global.opt.vpi()) m_clkSensp->add(m_vpiWritesName);
             txtp->add(m_clkSensp);
             txtp->add(" begin\n");
-            m_comboIgnoreParamsp
-                = new AstTextBlock{fl,  //
-                                   dpiName(s_comboIgnoreSuffix) + "(\n", ",\n", "\n);\n"};
-            m_comboIgnoreParamsp->add("handle__V");
-            txtp->add(m_comboIgnoreParamsp);
+            // The update of the clocks reads all inputs itself after writes through the VPI
+            if (!v3Global.opt.vpi()) {
+                m_comboIgnoreParamsp
+                    = new AstTextBlock{fl, dpiName(s_comboIgnoreSuffix) + "(\n", ",\n", "\n);\n"};
+                m_comboIgnoreParamsp->add("handle__V");
+                txtp->add(m_comboIgnoreParamsp);
+            }
             m_settleCallp = new AstTextBlock{fl};
             txtp->add(m_settleCallp);
             m_seqParamsp = new AstTextBlock{
@@ -680,7 +682,7 @@ class ProtectVisitor final : public VNVisitor {
         m_comboPortsp->add(varp->cloneTree(false));
         m_comboParamsp->add(svPortName(varp));
         m_comboIgnorePortsp->add(varp->cloneTree(false));
-        if (m_hasSeqUpdate) m_comboIgnoreParamsp->add(svPortName(varp));
+        if (m_comboIgnoreParamsp) m_comboIgnoreParamsp->add(svPortName(varp));
         m_cComboParamsp->add(varp->dpiArgType(true, false));
         m_cComboInsp->add(cInputConnection(varp));
         m_cIgnoreParamsp->add(varp->dpiArgType(true, false));
