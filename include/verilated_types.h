@@ -950,6 +950,15 @@ class VlRefPinBase VL_NOT_FINAL {
 
 protected:
     VL_ATTR_ALWINLINE VlRefPinBase(VlRefList& list, void* elemp, const void* opsp);
+    // Already outdated, kept alive by keptp
+    VlRefPinBase(VlRefKept* keptp, void* elemp)
+        : m_elemp{elemp}
+        , m_opsp{nullptr}
+        , m_listp{nullptr}
+        , m_nextp{nullptr}
+        , m_keptp{keptp} {
+        ++keptp->m_pins;
+    }
     VL_ATTR_ALWINLINE ~VlRefPinBase();
     void* elemp() const { return m_elemp; }
 
@@ -958,12 +967,24 @@ public:
     VlRefPinBase& operator=(const VlRefPinBase&) = delete;
 };
 
+// Copy of a value passed to a const ref argument, as a missing associative array element
+template <typename T_Value>
+class VlRefValue final : public VlRefKept {
+public:
+    T_Value m_value;  // The value
+    explicit VlRefValue(const T_Value& value)
+        : m_value{value} {}
+};
+
 // Element passed to a ref argument
 template <typename T_Value>
 class VlRefPin final : public VlRefPinBase {
 public:
     VL_ATTR_ALWINLINE VlRefPin(VlRefList& list, T_Value& elem, const void* opsp)
         : VlRefPinBase{list, &elem, opsp} {}
+    // cppcheck-suppress noExplicitConstructor
+    VlRefPin(VlRefValue<T_Value>* keptp)
+        : VlRefPinBase{keptp, &keptp->m_value} {}
     VL_ATTR_ALWINLINE ~VlRefPin() {}
     operator T_Value&() const { return *static_cast<T_Value*>(elemp()); }
     // The element, for a select within it, e.g. of a member of a struct element
@@ -1117,6 +1138,28 @@ public:
         m_list.takeSlots(fromList);
     }
 };
+
+// Map of outdated associative array elements
+template <typename T_Map>
+class VlRefMap final : public VlRefKept {
+public:
+    T_Map m_map;  // The map, moved, so its elements stay in place
+    explicit VlRefMap(T_Map& from)
+        : m_map{std::move(from)} {
+        from.clear();
+    }
+};
+
+#if __cplusplus >= 201703L
+// Node of a removed associative array element
+template <typename T_Map>
+class VlRefMapNode final : public VlRefKept {
+public:
+    typename T_Map::node_type m_node;  // The node, extracted, so its element stays in place
+    explicit VlRefMapNode(typename T_Map::node_type&& node)
+        : m_node{std::move(node)} {}
+};
+#endif
 
 //===================================================================
 // Verilog queue and dynamic array container
@@ -1955,7 +1998,41 @@ private:
     // MEMBERS
     Map m_map;  // State of the assoc array
     T_Value m_defaultValue;  // Default value
-    bool m_hasExplicitDefault = false;  // m_defaultValue is given by the user, e.g. '{default: x}
+    mutable VlRefList m_refs;  // Elements passed by reference
+
+    // METHODS
+    // Functions for elements passed by reference, as for VlQueue
+    struct RefOps final {
+        void (*outdate)(VlAssocArray& a, bool keepContents);  // Before storage is freed
+        void (*erase)(VlAssocArray& a, typename Map::iterator it);
+    };
+    static const RefOps s_refOps;
+    const RefOps& refOps() const { return *static_cast<const RefOps*>(m_refs.opsp()); }
+    void outdateRefs(bool keepContents) {
+        if (VL_UNLIKELY(m_refs.hasPins())) refOps().outdate(*this, keepContents);
+    }
+    // Keep the storage for the pins, outdating them, and leave a copy of it, or nothing
+    static void refOutdate(VlAssocArray& a, bool keepContents) {
+        VlRefMap<Map>* const keptp = new VlRefMap<Map>{a.m_map};
+        if (keepContents) a.m_map = keptp->m_map;
+        a.m_refs.outdate(nullptr, keptp);
+    }
+    // Erase an element; if pinned, keep it for its pins only
+    static void refErase(VlAssocArray& a, typename Map::iterator it) {
+        const T_Value* const elemp = &it->second;
+        if (!a.m_refs.has(elemp)) {
+            a.m_map.erase(it);
+            return;
+        }
+#if __cplusplus >= 201703L
+        a.m_refs.outdate(elemp, new VlRefMapNode<Map>{a.m_map.extract(it)});
+#else
+        // Without node extraction, every reference to the array becomes outdated
+        const T_Key index = it->first;
+        refOutdate(a, true);
+        a.m_map.erase(index);
+#endif
+    }
 
 public:
     // CONSTRUCTORS
@@ -1971,19 +2048,30 @@ public:
                           std::initializer_list<std::pair<const T_Key, T_Value>> init)
         : m_map{init}
         , m_defaultValue{defaultValue} {}
-    // Construct from an array with differently ordered keys, e.g. of the other signedness
-    template <typename T_OtherKeyLess>
-    VlAssocArray(const VlAssocArray<T_Key, T_Value, T_OtherKeyLess>& other)
-        : m_map{other.begin(), other.end()}
-        , m_defaultValue{other.atDefault()} {}
-    ~VlAssocArray() = default;
+    ~VlAssocArray() { outdateRefs(false); }
     VlAssocArray(const VlAssocArray&) = default;
-    VlAssocArray(VlAssocArray&&) = default;
-    VlAssocArray& operator=(const VlAssocArray&) = default;
-    VlAssocArray& operator=(VlAssocArray&&) = default;
-    // Insert entries as the constructor does, e.g. for a long constant in parts
-    void addItems(std::initializer_list<std::pair<const T_Key, T_Value>> init) {
-        m_map.insert(init);
+    // Elements passed by reference stay in the outdated storage of the source
+    VlAssocArray(VlAssocArray&& rhs) noexcept
+        : m_defaultValue{rhs.m_defaultValue} {
+        rhs.outdateRefs(true);
+        m_map = std::move(rhs.m_map);
+    }
+    VlAssocArray& operator=(const VlAssocArray& rhs) {
+        if (this != &rhs) {
+            outdateRefs(false);
+            m_map = rhs.m_map;
+            m_defaultValue = rhs.m_defaultValue;
+        }
+        return *this;
+    }
+    VlAssocArray& operator=(VlAssocArray&& rhs) noexcept {
+        if (this != &rhs) {
+            outdateRefs(false);
+            rhs.outdateRefs(true);
+            m_map = std::move(rhs.m_map);
+            m_defaultValue = rhs.m_defaultValue;
+        }
+        return *this;
     }
     bool operator==(const VlAssocArray& rhs) const { return m_map == rhs.m_map; }
     bool operator!=(const VlAssocArray& rhs) const { return m_map != rhs.m_map; }
@@ -1996,8 +2084,16 @@ public:
     int size() const { return m_map.size(); }
     bool empty() const { return m_map.empty(); }
     // Clear array. Verilog: function void delete([input index])
-    void clear() { m_map.clear(); }
-    void erase(const T_Key& index) { m_map.erase(index); }
+    void clear() {
+        outdateRefs(false);
+        m_map.clear();
+    }
+    void erase(const T_Key& index) {
+        const auto it = m_map.find(index);
+        if (it == m_map.end()) return;
+        if (VL_UNLIKELY(m_refs.hasPins())) return refOps().erase(*this, it);
+        m_map.erase(it);
+    }
     // Return 0/1 if element exists. Verilog: function int exists(input index)
     int exists(const T_Key& index) const { return m_map.find(index) != m_map.end(); }
     // inside (set membership operator)
@@ -2051,6 +2147,17 @@ public:
         const auto it = m_map.find(index);
         if (it == m_map.end()) return m_defaultValue;
         return it->second;
+    }
+    // Element passed to a ref argument
+    VlRefPin<T_Value> atWriteRef(const T_Key& index) {
+        return {m_refs, atWrite(index), &s_refOps};
+    }
+    // Element passed to a const ref argument; a missing element is not created, but passed
+    // as a copy of the default value
+    VlRefPin<T_Value> atRef(const T_Key& index) const {
+        const auto it = m_map.find(index);
+        if (it == m_map.end()) return {new VlRefValue<T_Value>{m_defaultValue}};
+        return {m_refs, const_cast<T_Value&>(it->second), &s_refOps};
     }
 
     // For save/restore
@@ -2775,6 +2882,10 @@ std::string VL_TO_STRING(const VlUnpacked<T_Value, N_Depth>& obj) {
 
 template <typename T_Value, std::size_t N_Depth>
 struct VlContainsCustomStruct<VlUnpacked<T_Value, N_Depth>> : VlContainsCustomStruct<T_Value> {};
+
+template <typename T_Key, typename T_Value>
+const typename VlAssocArray<T_Key, T_Value>::RefOps VlAssocArray<T_Key, T_Value>::s_refOps
+    = {&refOutdate, &refErase};
 
 template <typename T_Value, size_t N_MaxSize>
 const typename VlQueue<T_Value, N_MaxSize>::RefOps VlQueue<T_Value, N_MaxSize>::s_refOps
