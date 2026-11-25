@@ -3276,6 +3276,13 @@ VerilatedContext::VerilatedContext()
 VerilatedContext::~VerilatedContext() {
     Verilated::threadContextp(this);  // In unlikely case some other destructor needs it
     checkMagic(this);
+    endContext();
+    m_magic = 0x1;  // Arbitrary but 0x1 is what Verilator src uses for a deleted pointer
+    Verilated::threadContextp(nullptr);
+}
+
+void VerilatedContext::endContext() VL_MT_SAFE_EXCLUDES(m_endContextMutex) {
+    Verilated::threadContextp(this);  // In unlikely case a callback needs it
     // Callbacks may delete models whose destructors need this context. Each runs unlocked, as
     // it may add or remove the ones not run yet. Quadratic in the number of callbacks, which
     // is small.
@@ -3289,9 +3296,7 @@ VerilatedContext::~VerilatedContext() {
         }
         cb.first(cb.second);
     }
-    m_magic = 0x1;  // Arbitrary but 0x1 is what Verilator src uses for a deleted pointer
     logRestoreOutput();
-    Verilated::threadContextp(nullptr);
 }
 
 void VerilatedContext::addEndContextCb(void (*cb)(void*), void* datap)
@@ -4291,12 +4296,36 @@ VerilatedSyms::VerilatedSyms(VerilatedContext* contextp)
 }
 
 VerilatedSyms::~VerilatedSyms() {
-    VerilatedContext::checkMagic(_vm_contextp__);
+    if (VL_UNLIKELY(!_vm_contextp__->magicOk())) {
+        // Not vl_fatal, as its std::exit is undefined when called from a static destructor,
+        // nor the flush callbacks, which static destruction may have destroyed
+        vl_print_warn_error("%Error", nullptr, 0,
+                            "Attempt to delete model after its VerilatedContext was deleted");
+        VL_PRINTF("Aborting...\n");
+        std::fflush(nullptr);
+        std::_Exit(1);
+    }
     delete __Vm_evalMsgQp;
 }
 
 //===========================================================================
 // Verilated:: Methods
+
+VerilatedContext* Verilated::defaultContextp() VL_MT_SAFE {
+    // Ends the context when destroyed, where a static context would have been destroyed
+    struct EndAtExit final {
+        VerilatedContext* const m_contextp;  // Context to end
+        ~EndAtExit() { m_contextp->endContext(); }
+    };
+    // Never destroyed, as models using it may be destroyed by any static destructor. Its ender
+    // is constructed with it, so a later call, even from a static destructor, only reads this.
+    static VerilatedContext* const s_contextp = [] {
+        VerilatedContext* const contextp = new VerilatedContext;
+        static const EndAtExit s_endAtExit{contextp};
+        return contextp;
+    }();
+    return s_contextp;
+}
 
 void Verilated::debug(int level) VL_MT_SAFE {
     s_debug = level;
