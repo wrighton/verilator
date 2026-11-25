@@ -140,6 +140,8 @@ private:
         StorageKind m_valueStorage;  // How the packed values of its slices are stored
         std::vector<Whole> m_wholes;  // The whole values
         std::vector<Slice> m_slices;  // The slices of packed values
+        // Stamp of the current evaluation of the model the values are of, for events
+        const QData* m_evalStampp = nullptr;
     };
     // A contiguous range of 'm_groupVec', dumped by one thread, see 'dump'
     struct Shard final {
@@ -283,6 +285,9 @@ private:
     // Dump the whole values of a group, stored as 'T_Storage', in full, or only if changed
     template <bool T_Full, StorageKind T_Storage>
     void dumpGroupWholes(Buffer* bufp, const Group& group) VL_MT_UNSAFE;
+    // Dump the events of a group, in full, or only if triggered
+    template <bool T_Full>
+    void dumpGroupEvents(Buffer* bufp, const Group& group) VL_MT_UNSAFE;
     // Dump the slices of a group, stored as 'T_Storage', in full, or only if changed,
     // dispatching on how their packed values are stored
     template <bool T_Full, StorageKind T_Storage>
@@ -552,7 +557,7 @@ protected:
     void fullQData(uint32_t code, QData newval, int bits);
     void fullWData(uint32_t code, WDataInP newval, int bits);
     void fullDouble(uint32_t code, double newval);
-    void fullEvent(uint32_t code, const VlEventBase* newvalp);
+    void fullEvent(uint32_t code, const VlEventBase* newvalp, QData evalStamp);
 
     // Check previous dumped value of signal. If changed, then emit trace entry
     VL_ATTR_ALWINLINE void chgBit(uint32_t code, CData newval) {
@@ -586,8 +591,8 @@ protected:
             }
         }
     }
-    VL_ATTR_ALWINLINE void chgEvent(uint32_t code, const VlEventBase* newvalp) {
-        if (newvalp->isTriggered()) fullEvent(code, newvalp);
+    VL_ATTR_ALWINLINE void chgEvent(uint32_t code, const VlEventBase* newvalp, QData evalStamp) {
+        if (newvalp->isTriggered(evalStamp)) fullEvent(code, newvalp, evalStamp);
     }
     VL_ATTR_ALWINLINE void chgDouble(uint32_t code, double newval) {
         double old;  // LCOV_EXCL_LINE  // lcov bug
