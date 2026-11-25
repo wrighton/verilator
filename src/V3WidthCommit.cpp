@@ -275,7 +275,7 @@ private:
                 // V3Width reports these (see WidthVisitor::mailboxInternalCheck)
                 const AstVar* const varp = VN_CAST(defp, Var);
                 UASSERT_OBJ(!varp || !varp->isInternal() || !varp->isHideLocal(), nodep,
-                            "Internal member of std::mailbox used outside it");
+                            "Internal member of std::mailbox or std::semaphore used outside it");
                 nodep->v3warn(ENCAPSULATED, nodep->prettyNameQ()
                                                 << " is hidden as " << how
                                                 << " within this context (IEEE 1800-2023 8.18)\n"
@@ -948,7 +948,7 @@ private:
         // V3Width reports these (see WidthVisitor::mailboxInternalCheck)
         UASSERT_OBJ(!nodep->varp() || !nodep->varp()->isInternal()
                         || !nodep->varp()->isHideLocal(),
-                    nodep, "Internal member of std::mailbox selected");
+                    nodep, "Internal member of std::mailbox or std::semaphore selected");
         if (AstClassRefDType* const classrefp = VN_CAST(nodep->fromp()->dtypep(), ClassRefDType)) {
             classEncapCheck(nodep, nodep->varp(), classrefp->classp());
         }  // else might be struct, etc

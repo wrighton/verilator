@@ -1104,7 +1104,7 @@ class TimingControlVisitor final : public VNVisitor {
         return nullptr;
     }
     // Return the wait queue if the sentree only waits on one, else nullptr. Only std::mailbox
-    // has wait queues (see V3Param::markStdMailboxInternals).
+    // and std::semaphore have wait queues (see V3Param::markStdMailboxInternals).
     static AstVarRef* waitQueuep(const AstSenTree* const sentreep) {
         const AstSenItem* const itemp = sentreep->sensesp();
         if (itemp->nextp() || itemp->condp()) return nullptr;
@@ -1112,7 +1112,8 @@ class TimingControlVisitor final : public VNVisitor {
         if (!refp) return nullptr;
         const AstBasicDType* const basicp = refp->varp()->basicp();
         if (!basicp || !basicp->isWaitQueue()) return nullptr;
-        UASSERT_OBJ(refp->varp()->isInternal(), refp, "Wait queue outside std::mailbox");
+        UASSERT_OBJ(refp->varp()->isInternal(), refp,
+                    "Wait queue outside std::mailbox or std::semaphore");
         return refp;
     }
     // Create the wait of an event control on the wait list of its event, or for its turn on a
@@ -2828,7 +2829,7 @@ void V3Timing::chooseMailboxWaits(AstNetlist* nodep) {
             ifp->replaceWith(keptp->unlinkFrBackWithNext());
             VL_DO_DANGLING(deleter.pushDeletep(ifp), ifp);
         }
-        V3Stats::addStat("Timing, mailbox waits polled",
+        V3Stats::addStat("Timing, std waits polled",
                          visitor.impure() ? visitor.choiceps().size() : 0);
     }
     V3Global::dumpCheckGlobalTree("mailboxwait", 0, dumpTreeEitherLevel() >= 6);

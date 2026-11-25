@@ -691,25 +691,30 @@ object still gives the copy an event of its own, rather than sharing the
 event of the original (IEEE 1800-2023 8.12, 15.5.5).
 
 The waiting queues of ``std::mailbox``, ``m_getQueue`` and ``m_putQueue``
-in ``verilated_std.sv``, are declared as ``chandle``, and ``V3Param`` makes
-them ``VlWaitQueue`` before the class is specialized, so no other class has
-a member of that type. ``V3Param`` does so only in the std package that
-Verilator reads from its own input file, not in a package that a line
-directive (IEEE 1800-2023 22.12) names as that file. It also marks them
-internal, so ``%p`` does not show them. They are ``local``, and only the
-methods of the mailbox use them, as those keep the waiting processes
-informed: ``V3Width`` reports any other use where the reference resolves,
-before folding a type query or a method call removes it, even if
-``ENCAPSULATED`` is disabled, finding the class declaring the member, and
-the one of the method using it, by their place in the tree. A wait queue is
-such a ``VlWaitQueue``, which a waiting queue of IEEE 1800-2023 15.4.5
-waits on. ``@`` on a wait queue awaits ``queueWait(queue)``, which adds the
-coroutine to the wait list of the queue. Its methods, for internal use
-only, are ``__Vlisted()`` (``WAIT_QUEUE_LISTED``), which tells if the queue
-has a wait list, ``__Vpolled()`` (``WAIT_QUEUE_POLLED``), which only the
-condition of an ``if`` uses, which ``V3Timing`` replaces by one of its
-branches (see below), ``__Vwake(available)`` (``WAIT_QUEUE_WAKE``), which
-wakes the first waiter for a message or room added, ``__Vtake(available)``
+in ``verilated_std.sv``, and the one of ``std::semaphore``,
+``m_waitQueue``, are declared as ``chandle``, and ``V3Param`` makes them
+``VlWaitQueue`` before the mailbox class is specialized, so no other class
+has a member of that type. A semaphore waits on its queue as a mailbox
+does, for keys instead of messages (IEEE 1800-2023 15.3.3), and keeps its
+own list of waiting processes and their key counts, in the same order, for
+a process not waiting to pass a first waiter that asks for more keys.
+``V3Param`` does so only in the std package that Verilator reads from its
+own input file, not in a package that a line directive (IEEE 1800-2023
+22.12) names as that file. It also marks them internal, so ``%p`` does not
+show them. They are ``local``, and only the methods of the mailbox use
+them, as those keep the waiting processes informed: ``V3Width`` reports any
+other use where the reference resolves, before folding a type query or a
+method call removes it, even if ``ENCAPSULATED`` is disabled, finding the
+class declaring the member, and the one of the method using it, by their
+place in the tree. A wait queue is such a ``VlWaitQueue``, which a waiting
+queue of IEEE 1800-2023 15.4.5 waits on. ``@`` on a wait queue awaits
+``queueWait(queue)``, which adds the coroutine to the wait list of the
+queue. Its methods, for internal use only, are ``__Vlisted()``
+(``WAIT_QUEUE_LISTED``), which tells if the queue has a wait list,
+``__Vpolled()`` (``WAIT_QUEUE_POLLED``), which only the condition of an
+``if`` uses, which ``V3Timing`` replaces by one of its branches (see
+below), ``__Vwake(available)`` (``WAIT_QUEUE_WAKE``), which wakes the first
+waiter for a message or room added, ``__Vtake(available)``
 (``WAIT_QUEUE_TAKE``), for one taken without waiting, and
 ``__Vrelease(remaining)`` (``WAIT_QUEUE_RELEASE``), which ends the turn of
 the selected waiter, and passes it on to the next one if ``remaining``

@@ -35,84 +35,89 @@
                                         : ... Suggest using its methods
    36 |   typedef struct {type(b.m_putQueue) q;} queue_s;
       |                          ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:45:16: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:46:16: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   45 |     listed = b.m_putQueue.__Vlisted();
+   46 |     listed = b.m_putQueue.__Vlisted();
       |                ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:46:16: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:47:16: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   46 |     listed = m.m_getQueue.__Vlisted();
+   47 |     listed = m.m_getQueue.__Vlisted();
       |                ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:47:18: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:48:18: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   47 |     listed = t.b.m_getQueue.__Vlisted();
+   48 |     listed = t.b.m_getQueue.__Vlisted();
       |                  ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:48:19: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:49:19: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   48 |     listed = i.mb.m_putQueue.__Vlisted();
+   49 |     listed = i.mb.m_putQueue.__Vlisted();
       |                   ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:49:24: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:50:24: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   49 |     name = $typename(b.m_getQueue);
+   50 |     name = $typename(b.m_getQueue);
       |                        ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:50:26: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:51:26: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   50 |     dims = $dimensions(b.m_putQueue);
+   51 |     dims = $dimensions(b.m_putQueue);
       |                          ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:51:21: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:52:21: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   51 |     listed = type(b.m_getQueue) == type(chandle);
+   52 |     listed = type(b.m_getQueue) == type(chandle);
       |                     ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:52:11: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:53:11: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   52 |     c = b.m_getQueue;
+   53 |     c = b.m_getQueue;
       |           ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:53:16: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:54:16: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   53 |     listed = b.m_putQueue == null;
+   54 |     listed = b.m_putQueue == null;
       |                ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:54:7: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:55:7: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                        : ... note: In instance 't'
                                        : ... Suggest using its methods
-   54 |     b.m_putQueue = null;
+   55 |     b.m_putQueue = null;
       |       ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:55:22: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:56:22: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                         : ... note: In instance 't'
                                         : ... Suggest using its methods
-   55 |     $display("%p", b.m_getQueue);
+   56 |     $display("%p", b.m_getQueue);
       |                      ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:56:7: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
-                                       : ... note: In instance 't'
-                                       : ... Suggest using its methods
-   56 |     b.m_putQueue.__Vrelease(.remaining());
-      |       ^~~~~~~~~~
 %Error: t/t_mailbox_internal_bad.v:57:7: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                        : ... note: In instance 't'
                                        : ... Suggest using its methods
-   57 |     b.m_putQueue.__Vrelease(, 1);
+   57 |     b.m_putQueue.__Vrelease(.remaining());
       |       ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:58:17: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
-                                        : ... note: In instance 't'
-                                        : ... Suggest using its methods
-   58 |     @(posedge b.m_getQueue);
-      |                 ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:59:20: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
-                                        : ... note: In instance 't'
-                                        : ... Suggest using its methods
-   59 |     dims = $bits(b.m_getQueue);
-      |                    ^~~~~~~~~~
-%Error: t/t_mailbox_internal_bad.v:60:7: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+%Error: t/t_mailbox_internal_bad.v:58:7: Reference to 'm_putQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
                                        : ... note: In instance 't'
                                        : ... Suggest using its methods
-   60 |     b.m_getQueue.foo();
+   58 |     b.m_putQueue.__Vrelease(, 1);
       |       ^~~~~~~~~~
+%Error: t/t_mailbox_internal_bad.v:59:17: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+                                        : ... note: In instance 't'
+                                        : ... Suggest using its methods
+   59 |     @(posedge b.m_getQueue);
+      |                 ^~~~~~~~~~
+%Error: t/t_mailbox_internal_bad.v:60:20: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+                                        : ... note: In instance 't'
+                                        : ... Suggest using its methods
+   60 |     dims = $bits(b.m_getQueue);
+      |                    ^~~~~~~~~~
+%Error: t/t_mailbox_internal_bad.v:61:7: Reference to 'm_getQueue', which is internal to the built-in mailbox class, outside its methods (IEEE 1800-2023 8.18).
+                                       : ... note: In instance 't'
+                                       : ... Suggest using its methods
+   61 |     b.m_getQueue.foo();
+      |       ^~~~~~~~~~
+%Error: t/t_mailbox_internal_bad.v:62:18: Reference to 'm_waitQueue', which is internal to the built-in semaphore class, outside its methods (IEEE 1800-2023 8.18).
+                                        : ... note: In instance 't'
+                                        : ... Suggest using its methods
+   62 |     listed = sem.m_waitQueue.__Vlisted();
+      |                  ^~~~~~~~~~~
 %Error: Exiting due to

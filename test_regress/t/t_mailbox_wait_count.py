@@ -18,7 +18,7 @@ test.compile(verilator_flags2=["--binary", "--converge-limit", "3", "--stats"])
 
 test.execute()
 
-test.file_grep(test.stats, r'Timing, mailbox waits polled\s+(\d+)', 0)
+test.file_grep(test.stats, r'Timing, std waits polled\s+(\d+)', 0)
 test.file_grep(test.stats, r'Timing, mailbox wait subroutines scanned\s+(\d+)', 36)
 
 test.passes()
