@@ -1,0 +1,32 @@
+%Error: t/t_gen_missing_ftask_bad.v:41:13: Can't find definition of 'g' in dotted task/function: 'u.g.f'
+                                         : ... note: In instance 't'
+   41 |     if (u.g.f() != 1) $stop;
+      |             ^
+        ... Known scopes under 'f': <no instances found>
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_gen_missing_ftask_bad.v:42:9: Can't find definition of 'g' in dotted task/function: 'u.g.tsk'
+                                        : ... note: In instance 't'
+   42 |     u.g.tsk();
+      |         ^~~
+        ... Known scopes under 'tsk': <no instances found>
+%Error: t/t_gen_missing_ftask_bad.v:43:9: Can't find definition of 'g' in dotted task/function: 'u.g.pre_randomize'
+                                        : ... note: In instance 't'
+   43 |     u.g.pre_randomize();
+      |         ^~~~~~~~~~~~~
+        ... Known scopes under 'pre_randomize': <no instances found>
+%Error: t/t_gen_missing_ftask_bad.v:44:15: Can't find definition of 'g' in dotted task/function: 'u.g.randomize'
+                                         : ... note: In instance 't'
+   44 |     void'(u.g.randomize());
+      |               ^~~~~~~~~
+        ... Known scopes under 'randomize': <no instances found>
+%Error: t/t_gen_missing_ftask_bad.v:45:9: Can't find definition of 'g' in dotted task/function: 'u.g.srandom'
+                                        : ... note: In instance 't'
+   45 |     u.g.srandom(1);
+      |         ^~~~~~~
+        ... Known scopes under 'srandom': <no instances found>
+%Error: t/t_gen_missing_ftask_bad.v:46:13: Can't find definition of 'g' in dotted task/function: 'i.g.f'
+                                         : ... note: In instance 't'
+   46 |     if (i.g.f() != 1) $stop;
+      |             ^
+        ... Known scopes under 'f': <no instances found>
+%Error: Exiting due to
