@@ -100,6 +100,27 @@ class Quux;
   rand int x;
 endclass
 
+class Copied;
+  rand bit [7:0] a;
+  rand bit [7:0] b;
+  constraint c {
+    a < 8'd100;
+    b < 8'd100;
+  }
+
+  // Which of a and b randomize() changes
+  function bit [1:0] changes();
+    bit [1:0] changed = '0;
+    for (int i = 0; i < 20; ++i) begin
+      a = 8'd50;
+      b = 8'd50;
+      if (randomize() != 1) $stop;
+      changed |= {a != 8'd50, b != 8'd50};
+    end
+    return changed;
+  endfunction
+endclass
+
 module t;
   initial begin
     automatic logic ok = 0;
@@ -146,6 +167,19 @@ module t;
     qux.y = 512;
     qux.rand_mode(0);
     if (qux.randomize() == 1) $stop;
+
+    begin
+      // A shallow copy has its own rand_mode state
+      automatic Copied c1 = new;
+      automatic Copied c2;
+      c1.a.rand_mode(0);
+      c2 = new c1;
+      c2.a.rand_mode(1);
+      c2.b.rand_mode(0);
+      if (c1.a.rand_mode != 0 || c1.b.rand_mode != 1) $stop;
+      if (c1.changes() != 2'b01) $stop;
+      if (c2.changes() != 2'b10) $stop;
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
