@@ -86,6 +86,15 @@ class ProtectVisitor final : public VNVisitor {
     std::string m_seqFirstName = "seq_first__V";  // Set in the first update of clocks
     std::string m_settleName;  // Function settling the library before the first update of clocks
     AstTextBlock* m_selectp = nullptr;  // Results whichever update ran last
+    // Suffixes of the C names of the library's DPI functions after the library name
+    static constexpr const char* s_checkHashSuffix = "_protectlib_check_hash";
+    static constexpr const char* s_createSuffix = "_protectlib_create";
+    static constexpr const char* s_comboUpdateSuffix = "_protectlib_combo_update";
+    static constexpr const char* s_seqUpdateSuffix = "_protectlib_seq_update";
+    static constexpr const char* s_comboIgnoreSuffix = "_protectlib_combo_ignore";
+    static constexpr const char* s_finalSuffix = "_protectlib_final";
+    // The SV names of the library's DPI functions by their C names, which ports may take
+    std::unordered_map<std::string, std::string> m_dpiNames;
     AstTextBlock* m_seqFirstp = nullptr;  // Call of the settle function before the first update
     const string m_libName;
     const string m_topName;
@@ -115,32 +124,30 @@ class ProtectVisitor final : public VNVisitor {
         FileLine* const fl = nodep->fileline();
         // Need to know the existence of clk before createSvFile()
         m_hasSeqUpdate = checkIfClockExists(nodep) || v3Global.opt.vpi();
-        // The wrapper's signals must not take the name of a port or another of them
+        // The wrapper's signals and functions must not take the name of a port or another of them
         for (const AstNode* const stmtp : nodep->stmtspList()) {
             const AstVar* const varp = VN_CAST(stmtp, Var);
             if (!varp || !varp->isIO()) continue;
             m_usedNames.emplace(svPortName(varp));
             m_usedNames.emplace(AstNode::verilogIdent(varp->name() + "_combo__V"));
         }
+        for (const char* const namep :
+             {"handle__V", "last_combo_seqnum__V", "protectlib_hash__V"}) {
+            m_usedNames.emplace(namep);
+        }
+        for (const char* const suffixp : {s_checkHashSuffix, s_createSuffix, s_comboUpdateSuffix,
+                                          s_seqUpdateSuffix, s_comboIgnoreSuffix, s_finalSuffix}) {
+            m_dpiNames.emplace(m_libName + suffixp, uniqueName(m_libName + suffixp));
+        }
         m_seqInitName = uniqueName(m_seqInitName);
         m_seqFirstName = uniqueName(m_seqFirstName);
         m_settleName = uniqueName(m_libName + "_protectlib_settle");
         m_seqNumName = uniqueName(m_seqNumName);
+        m_initName = uniqueName(m_initName);
+        m_lastSeqName = uniqueName(m_lastSeqName);
         if (v3Global.opt.vpi()) {
-            // Nor the signals and functions --vpi adds, also to a top module without sequential
-            // logic
-            for (const std::string& name :
-                 {std::string{"handle__V"}, std::string{"last_combo_seqnum__V"},
-                  std::string{"protectlib_hash__V"}, m_libName + "_protectlib_check_hash",
-                  m_libName + "_protectlib_create", m_libName + "_protectlib_combo_update",
-                  m_libName + "_protectlib_seq_update", m_libName + "_protectlib_combo_ignore",
-                  m_libName + "_protectlib_final"}) {
-                m_usedNames.emplace(name);
-            }
             m_vpiWritesName = uniqueName("vpi_writes__V");
             m_vpiWrittenName = uniqueName(m_libName + "_protectlib_vpi_written");
-            m_initName = uniqueName(m_initName);
-            m_lastSeqName = uniqueName(m_lastSeqName);
         }
         createSvFile(fl, nodep);
         createCppFile(fl);
@@ -156,12 +163,28 @@ class ProtectVisitor final : public VNVisitor {
         m_foundTop = true;
     }
 
+    // The SV name of the library's DPI function with C name '<lib><suffix>'
+    std::string dpiName(const char* suffixp) const { return m_dpiNames.at(m_libName + suffixp); }
+    // The SV declaration of that DPI function, up to its arguments
+    std::string dpiImport(const char* suffixp, const std::string& rtnType) const {
+        const std::string cName = m_libName + suffixp;
+        const std::string& svName = m_dpiNames.at(cName);
+        return "import \"DPI-C\" " + (svName == cName ? "" : cName + " = ") + "function " + rtnType
+               + " " + svName + "(";
+    }
+
     // 'base', or 'base' with a suffix, not the name of another port or signal of the wrapper
-    std::string uniqueName(const std::string& base) {
+    std::string uniqueName(const std::string& base, bool internal = false) {
+        // An internal name is written decoded in the wrapper. A literal name also stays distinct
+        // decoded, so the settle function keeps its C name whatever the library is named.
         std::string name = base;
-        for (int suffix = 1; !m_usedNames.emplace(AstNode::verilogIdent(name)).second; ++suffix) {
+        for (int suffix = 1; m_usedNames.count(AstNode::verilogIdent(name))
+                             || (!internal && m_usedNames.count(name));
+             ++suffix) {
             name = base + "_" + std::to_string(suffix);
         }
+        m_usedNames.emplace(AstNode::verilogIdent(name));
+        if (!internal) m_usedNames.emplace(name);
         return name;
     }
 
@@ -180,23 +203,22 @@ class ProtectVisitor final : public VNVisitor {
                          : m_libName)
                   + "\"\n");
 
-        txtp->add("profile_data -hier-dpi \"" + m_libName + "_protectlib_combo_update\" -cost 64'd"
+        txtp->add("profile_data -hier-dpi \"" + m_libName + s_comboUpdateSuffix + "\" -cost 64'd"
                   + std::to_string(v3Global.currentHierBlockCost()) + "\n");
-        txtp->add("profile_data -hier-dpi \"" + m_libName + "_protectlib_seq_update\" -cost 64'd"
+        txtp->add("profile_data -hier-dpi \"" + m_libName + s_seqUpdateSuffix + "\" -cost 64'd"
                   + std::to_string(v3Global.currentHierBlockCost()) + "\n");
 
         // Mark remaining NBA protectlib wrapper DPIs as non-hazardous by deliberately forwarding
         // them with non-zero cost.
         // Also, specify hierarchical workers for those tasks for scheduling.
-        txtp->add("profile_data -hier-dpi \"" + m_libName
-                  + "_protectlib_combo_ignore\" -cost 64'd1\n");
+        txtp->add("profile_data -hier-dpi \"" + m_libName + s_comboIgnoreSuffix
+                  + "\" -cost 64'd1\n");
         txtp->add("profile_data -hier-dpi \"" + m_settleName + "\" -cost 64'd1\n");
 
-        txtp->add("hier_workers -hier-dpi \"" + m_libName
-                  + "_protectlib_combo_update\" -workers 16'd"
-                  + std::to_string(V3Control::getHierWorkers(m_libName)) + "\n");
-        txtp->add("hier_workers -hier-dpi \"" + m_libName
-                  + "_protectlib_seq_update\" -workers 16'd"
+        txtp->add("hier_workers -hier-dpi \"" + m_libName + s_comboUpdateSuffix
+                  + "\" -workers 16'd" + std::to_string(V3Control::getHierWorkers(m_libName))
+                  + "\n");
+        txtp->add("hier_workers -hier-dpi \"" + m_libName + s_seqUpdateSuffix + "\" -workers 16'd"
                   + std::to_string(V3Control::getHierWorkers(m_libName)) + "\n");
         // No workers for combo_ignore
         txtp->add("`verilog\n");
@@ -266,43 +288,31 @@ class ProtectVisitor final : public VNVisitor {
 
         // DPI declarations
         hashComment(txtp, fl);
-        txtp->add("import \"DPI-C\" function void " + m_libName
-                  + "_protectlib_check_hash(int protectlib_hash__V);\n\n");
+        txtp->add(dpiImport(s_checkHashSuffix, "void") + "int protectlib_hash__V);\n\n");
         initialComment(txtp, fl);
-        txtp->add("import \"DPI-C\" function chandle " + m_libName
-                  + "_protectlib_create(string scope__V);\n\n");
+        txtp->add(dpiImport(s_createSuffix, "chandle") + "string scope__V);\n\n");
         comboComment(txtp, fl);
-        m_comboPortsp = new AstTextBlock{fl,  //
-                                         "import \"DPI-C\" function longint unsigned " + m_libName
-                                             + "_protectlib_combo_update(\n",  //
-                                         ", ",  //
-                                         ");\n\n"};
+        m_comboPortsp = new AstTextBlock{
+            fl, dpiImport(s_comboUpdateSuffix, "longint unsigned") + "\n", ", ", ");\n\n"};
         m_comboPortsp->add("chandle handle__V\n");
         txtp->add(m_comboPortsp);
         seqComment(txtp, fl);
         if (m_hasSeqUpdate) {
-            m_seqPortsp = new AstTextBlock{fl,  //
-                                           "import \"DPI-C\" function longint unsigned "
-                                               + m_libName + "_protectlib_seq_update(\n",  //
-                                           ", ",  //
-                                           ");\n\n"};
+            m_seqPortsp = new AstTextBlock{
+                fl, dpiImport(s_seqUpdateSuffix, "longint unsigned") + "\n", ", ", ");\n\n"};
             m_seqPortsp->add("chandle handle__V\n");
             txtp->add(m_seqPortsp);
             m_settleDeclp = new AstTextBlock{fl};
             txtp->add(m_settleDeclp);
         }
         comboIgnoreComment(txtp, fl);
-        m_comboIgnorePortsp = new AstTextBlock{fl,  //
-                                               "import \"DPI-C\" function void " + m_libName
-                                                   + "_protectlib_combo_ignore(\n",  //
-                                               ", ",  //
-                                               ");\n\n"};
+        m_comboIgnorePortsp
+            = new AstTextBlock{fl, dpiImport(s_comboIgnoreSuffix, "void") + "\n", ", ", ");\n\n"};
         m_comboIgnorePortsp->add("chandle handle__V\n");
         txtp->add(m_comboIgnorePortsp);
 
         finalComment(txtp, fl);
-        txtp->add("import \"DPI-C\" function void " + m_libName
-                  + "_protectlib_final(chandle handle__V);\n\n");
+        txtp->add(dpiImport(s_finalSuffix, "void") + "chandle handle__V);\n\n");
 
         // Local variables
         // Avoid tracing handle, as it is not a stable value, so breaks wavediff
@@ -345,21 +355,17 @@ class ProtectVisitor final : public VNVisitor {
 
         // Initial
         txtp->add("initial begin\n");
-        txtp->add(m_libName + "_protectlib_check_hash(protectlib_hash__V);\n");
-        txtp->add("if (handle__V == null) handle__V = " + m_libName
-                  + "_protectlib_create"
-                    "($sformatf(\"%m\"));\n");
+        txtp->add(dpiName(s_checkHashSuffix) + "(protectlib_hash__V);\n");
+        txtp->add("if (handle__V == null) handle__V = " + dpiName(s_createSuffix)
+                  + "($sformatf(\"%m\"));\n");
         if (m_hasSeqUpdate) txtp->add(m_initName + " = 1'b1;\n");
         txtp->add("end\n\n");
 
         // Combinatorial process
         addComment(txtp, fl, "Combinatorially evaluate changes to inputs");
         txtp->add("always_comb begin\n");
-        m_comboParamsp = new AstTextBlock{fl,  //
-                                          "last_combo_seqnum__V = " + m_libName
-                                              + "_protectlib_combo_update(\n",  //
-                                          ",\n",  //
-                                          "\n);\n"};
+        m_comboParamsp = new AstTextBlock{
+            fl, "last_combo_seqnum__V = " + dpiName(s_comboUpdateSuffix) + "(\n", ",\n", "\n);\n"};
         m_comboParamsp->add("handle__V");
         txtp->add(m_comboParamsp);
         txtp->add("end\n\n");
@@ -375,13 +381,13 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add(" begin\n");
             m_comboIgnoreParamsp
                 = new AstTextBlock{fl,  //
-                                   m_libName + "_protectlib_combo_ignore(\n", ",\n", "\n);\n"};
+                                   dpiName(s_comboIgnoreSuffix) + "(\n", ",\n", "\n);\n"};
             m_comboIgnoreParamsp->add("handle__V");
             txtp->add(m_comboIgnoreParamsp);
             m_settleCallp = new AstTextBlock{fl};
             txtp->add(m_settleCallp);
             m_seqParamsp = new AstTextBlock{
-                fl, m_seqNumName + " = " + m_libName + "_protectlib_seq_update(\n", ",\n",
+                fl, m_seqNumName + " = " + dpiName(s_seqUpdateSuffix) + "(\n", ",\n",
                 "\n);\n" + m_lastSeqName + " <= " + m_seqNumName + ";\n"};
             m_seqParamsp->add("handle__V");
             txtp->add(m_seqParamsp);
@@ -412,7 +418,7 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add("end\n\n");
 
         // Final
-        txtp->add("final " + m_libName + "_protectlib_final(handle__V);\n\n");
+        txtp->add("final " + dpiName(s_finalSuffix) + "(handle__V);\n\n");
 
         txtp->add("endmodule\n");
         txtp->add("/*verilator lint_restore*/\n");
@@ -467,9 +473,7 @@ class ProtectVisitor final : public VNVisitor {
 
         // Hash check
         hashComment(txtp, fl);
-        txtp->add("void " + m_libName
-                  + "_protectlib_check_hash"
-                    "(int protectlib_hash__V) {\n");
+        txtp->add("void " + m_libName + s_checkHashSuffix + "(int protectlib_hash__V) {\n");
         m_cHashValuep = new AstTextBlock{fl, "const int expected_hash__V = ", "", ""};
         txtp->add(m_cHashValuep);
         txtp->add(/**/ "if (protectlib_hash__V != expected_hash__V) {\n");
@@ -546,8 +550,7 @@ class ProtectVisitor final : public VNVisitor {
         // Updates
         comboComment(txtp, fl);
         m_cComboParamsp = new AstTextBlock{
-            fl, "unsigned long long " + m_libName + "_protectlib_combo_update(\n", ",\n",
-            "\n) {\n"};
+            fl, "unsigned long long " + m_libName + s_comboUpdateSuffix + "(\n", ",\n", "\n) {\n"};
         m_cComboParamsp->add("void* vhandlep__V");
         txtp->add(m_cComboParamsp);
         m_cComboInsp = new AstTextBlock{fl};
@@ -562,7 +565,7 @@ class ProtectVisitor final : public VNVisitor {
         if (m_hasSeqUpdate) {
             seqComment(txtp, fl);
             m_cSeqParamsp = new AstTextBlock{
-                fl, "unsigned long long " + m_libName + "_protectlib_seq_update(\n", ",\n",
+                fl, "unsigned long long " + m_libName + s_seqUpdateSuffix + "(\n", ",\n",
                 "\n) {\n"};
             m_cSeqParamsp->add("void* vhandlep__V");
             txtp->add(m_cSeqParamsp);
@@ -579,14 +582,14 @@ class ProtectVisitor final : public VNVisitor {
         }
 
         comboIgnoreComment(txtp, fl);
-        m_cIgnoreParamsp = new AstTextBlock{
-            fl, "void " + m_libName + "_protectlib_combo_ignore(\n", ",\n", "\n)\n{ }\n\n"};
+        m_cIgnoreParamsp = new AstTextBlock{fl, "void " + m_libName + s_comboIgnoreSuffix + "(\n",
+                                            ",\n", "\n)\n{ }\n\n"};
         m_cIgnoreParamsp->add("void* vhandlep__V");
         txtp->add(m_cIgnoreParamsp);
 
         // Final
         finalComment(txtp, fl);
-        txtp->add("void " + m_libName + "_protectlib_final(void* vhandlep__V) {\n");
+        txtp->add("void " + m_libName + s_finalSuffix + "(void* vhandlep__V) {\n");
         castPtr(fl, txtp);
         txtp->add(/**/ "handlep__V->final();\n");
         txtp->add("}\n\n");
@@ -756,7 +759,7 @@ class ProtectVisitor final : public VNVisitor {
 
     // The name of a local signal of the wrapper for an output
     std::string localName(const AstVar* varp, const char* suffixp) {
-        return uniqueName(varp->name() + suffixp);
+        return uniqueName(varp->name() + suffixp, true);
     }
 
     // Create the function that settles the library module before the first clock update and

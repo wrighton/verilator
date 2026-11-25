@@ -14,6 +14,7 @@
 `define BLK_T blk_t
 `define BLK_Q blk_q
 `define BLK_C blk_c
+`define BLK_N blk_n
 `endif
 
 module t;
@@ -188,6 +189,37 @@ module t;
     #0 clk2_f = 1'b1;
     #1;
     `checkh(q2_f, 1'b0);
+  end
+
+  // Ports named like the functions of the wrapper of a library
+  bit clk_n = 1'b0;
+  wire q_n;
+  wire blk_n_protectlib_seq_update_n;
+  `BLK_N u_n (
+      .clk(clk_n),
+      .init__V(1'b1),
+      .last_seq_seqnum__V(1'b1),
+      .q(q_n),
+      .blk_n_protectlib_check_hash(1'b1),
+      .blk_n_protectlib_create(1'b1),
+      .blk_n_protectlib_combo_update(1'b1),
+      .blknlib_protectlib_check_hash(1'b1),
+      .blknlib_protectlib_create(1'b1),
+      .blknlib_protectlib_combo_update(1'b1),
+      .blk_n_protectlib_seq_update(blk_n_protectlib_seq_update_n),
+      .blk_n_protectlib_combo_ignore(),
+      .blk_n_protectlib_final(),
+      .blk_n_protectlib_settle(),
+      .blknlib_protectlib_seq_update(),
+      .blknlib_protectlib_combo_ignore(),
+      .blknlib_protectlib_final(),
+      .blknlib_protectlib_settle()
+  );
+  initial begin
+    #1 clk_n = 1'b1;
+    #1;
+    `checkh(q_n, 1'b1);
+    `checkh(blk_n_protectlib_seq_update_n, 1'b1);
   end
 
   // Outputs not written by clocked logic alone already have their values in the first time step
@@ -426,4 +458,40 @@ module blk_c (
   always @(i) e <= i;
   assign fclk = clk;
   always_ff @(posedge clk2) q2 <= d;
+endmodule
+
+module blk_n (
+    input bit clk,
+    input bit init__V,
+    input bit last_seq_seqnum__V,
+    output bit q,
+    input bit blk_n_protectlib_check_hash,
+    input bit blk_n_protectlib_create,
+    input bit blk_n_protectlib_combo_update,
+    input bit blknlib_protectlib_check_hash,
+    input bit blknlib_protectlib_create,
+    input bit blknlib_protectlib_combo_update,
+    output bit blk_n_protectlib_seq_update,
+    output bit blk_n_protectlib_combo_ignore,
+    output bit blk_n_protectlib_final,
+    output bit blk_n_protectlib_settle,
+    output bit blknlib_protectlib_seq_update,
+    output bit blknlib_protectlib_combo_ignore,
+    output bit blknlib_protectlib_final,
+    output bit blknlib_protectlib_settle
+);
+  /*verilator hier_block*/
+  always_ff @(posedge clk)
+    q <= init__V & last_seq_seqnum__V & blk_n_protectlib_check_hash & blk_n_protectlib_create
+        & blk_n_protectlib_combo_update
+        & blknlib_protectlib_check_hash & blknlib_protectlib_create
+        & blknlib_protectlib_combo_update;
+  assign blk_n_protectlib_seq_update = q;
+  assign blk_n_protectlib_combo_ignore = q;
+  assign blk_n_protectlib_final = q;
+  assign blk_n_protectlib_settle = q;
+  assign blknlib_protectlib_seq_update = q;
+  assign blknlib_protectlib_combo_ignore = q;
+  assign blknlib_protectlib_final = q;
+  assign blknlib_protectlib_settle = q;
 endmodule
