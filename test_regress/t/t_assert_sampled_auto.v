@@ -22,6 +22,23 @@ class Cls;
 endclass
 
 module t;
+  // Test: each process reads its own copy of an argument read only through $sampled
+  int seen[3];
+  task automatic record(int k);
+    #10;
+    seen[$sampled(k)] = $sampled(k) + 1;
+  endtask
+  initial begin
+    for (int i = 0; i < 3; i++) begin
+      fork
+        automatic int j = i;
+        record(j);
+      join_none
+    end
+    #20;
+    for (int i = 0; i < 3; i++) `checkd(seen[i], i + 1);
+  end
+
   Cls c = new;
   initial begin
     for (int i = 0; i < 3; i++) begin

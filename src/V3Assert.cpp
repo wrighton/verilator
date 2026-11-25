@@ -1925,6 +1925,7 @@ class AssertVisitor final : public VNVisitor {
         AstVar* const varp = new AstVar{flp, VVarType::MODULETEMP, name, exprp->dtypep()};
         // TODO: this lifetime seems nonsene (can't have NBAs to automatics), but is as before
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        varp->isPastValue(true);
         m_modp->addStmtsp(varp);
         // Before enough clock ticks, $past returns the expression's default sampled value.
         if (initp) {

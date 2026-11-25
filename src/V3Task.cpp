@@ -686,9 +686,10 @@ class TaskVisitor final : public VNVisitor {
                                 const std::string& suffix) {
         const std::string name = refp->taskp()->shortName() + suffix;
         AstVarScope* newvscp = nullptr;
-        if (m_forkItemp) {
+        if (m_forkItemp && !invarp->isPastValue()) {
             // Each process the fork item starts, such as in a loop, has its own automatic
-            // variables (IEEE 1800-2023 9.3.2), so make them variables of the fork item
+            // variables (IEEE 1800-2023 9.3.2), so make them variables of the fork item. Not a
+            // copy of the register of a sampled value function, which is sampled outside it.
             newvscp = createLocalVarScope(
                 invarp->fileline(), "__Vforkitem_" + name + "_" + std::to_string(m_forkVarNum++),
                 invarp->dtypep());

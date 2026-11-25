@@ -2580,6 +2580,7 @@ class AstVar final : public AstNode {
     bool m_keepPort : 1;  // Input port of a non-inlined module, kept per instance
     bool m_sampled : 1;  // Sampled timing region
     bool m_assertLocal : 1;  // Instance copy of a property or sequence local variable
+    bool m_pastValue : 1;  // Register of past values of a sampled value function, or a copy
     bool m_substConstOnly : 1;  // Only substitute if constant
     bool m_overriddenParam : 1;  // Overridden parameter by #(...) or defparam
     bool m_untypedParam : 1;  // Parameter without a type or range, so of its value's type
@@ -2654,6 +2655,7 @@ class AstVar final : public AstNode {
         m_keepPort = false;
         m_sampled = false;
         m_assertLocal = false;
+        m_pastValue = false;
         m_substConstOnly = false;
         m_overriddenParam = false;
         m_untypedParam = false;
@@ -2858,6 +2860,8 @@ public:
     void sampled(bool flag) { m_sampled = flag; }
     bool isAssertLocal() const { return m_assertLocal; }
     void isAssertLocal(bool flag) { m_assertLocal = flag; }
+    bool isPastValue() const { return m_pastValue; }
+    void isPastValue(bool flag) { m_pastValue = flag; }
     bool substConstOnly() const { return m_substConstOnly; }
     void substConstOnly(bool flag) { m_substConstOnly = flag; }
     bool overriddenParam() const { return m_overriddenParam; }

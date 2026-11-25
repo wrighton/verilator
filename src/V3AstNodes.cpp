@@ -5571,6 +5571,7 @@ void AstVar::dump(std::ostream& str) const {
     if (processQueue()) str << " [PROCQ]";
     if (sampled()) str << " [SAMPLED]";
     if (isAssertLocal()) str << " [ASSERTLOCAL]";
+    if (isPastValue()) str << " [PASTVALUE]";
     if (attrFsmState()) str << " [aFSMSTATE]";
     if (attrFsmArcInclCond()) str << " [aFSMARCCOND]";
     if (attrFsmState() || attrFsmArcInclCond()) str << " [" << attrFsmStateExpand() << "]";
@@ -5623,6 +5624,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, processQueue);
     dumpJsonBoolFuncIf(str, sampled);
     dumpJsonBoolFuncIf(str, isAssertLocal);
+    dumpJsonBoolFuncIf(str, isPastValue);
     dumpJsonBoolFuncIf(str, attrFsmState);
     dumpJsonBoolFuncIf(str, attrFsmArcInclCond);
     if (attrFsmState() || attrFsmArcInclCond()) {
