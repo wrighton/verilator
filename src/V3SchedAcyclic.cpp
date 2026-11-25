@@ -147,8 +147,7 @@ std::unique_ptr<Graph> buildGraph(const ProcessList& procList) {
         const VNUser2InUse user2InUse;
         const VNUser3InUse user3InUse;
 
-        nodep->foreach([&](AstVarRef* refp) {
-            AstVarScope* const vscp = refp->varScopep();
+        util::foreachLogicAccess(nodep, [&](AstVarScope* vscp, VAccess access) {
             SchedAcyclicVarVertex* const vvtxp = getVarVertex(vscp);
             // We want to cut the narrowest signals. Breaking a cycle on a variable whose
             // changes cannot be detected is unsupported, so cut one only as a last resort.
@@ -156,12 +155,10 @@ std::unique_ptr<Graph> buildGraph(const ProcessList& procList) {
                                    ? vscp->width() / 8 + 1
                                    : V3GraphEdge::WEIGHT_LAST_RESORT;
             // If written, add logic -> var edge
-            if (refp->access().isWriteOrRW() && !refp->varp()->ignoreSchedWrite()
-                && !vscp->user2SetOnce())
+            if (access.isWriteOrRW() && !vscp->varp()->ignoreSchedWrite() && !vscp->user2SetOnce())
                 addEdge(lvtxp, vvtxp, weight, true);
             // If read, add var -> logic edge
-            if (refp->access().isReadOrRW() && !vscp->user3SetOnce()
-                && process.m_implicitSen.count(vscp))
+            if (access.isReadOrRW() && !vscp->user3SetOnce() && process.m_implicitSen.count(vscp))
                 addEdge(vvtxp, lvtxp, weight, true);
         });
     }

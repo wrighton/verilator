@@ -822,9 +822,8 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
     // so we can make them sc_sensitive
     if (v3Global.opt.systemC()) {
         for (const Process& process : logic) {
-            process.m_procp->foreach([](AstVarRef* refp) {
-                if (refp->access().isWriteOnly()) return;
-                AstVarScope* const vscp = refp->varScopep();
+            util::foreachLogicAccess(process.m_procp, [](AstVarScope* vscp, VAccess access) {
+                if (access.isWriteOnly()) return;
                 if (vscp->scopep()->isTop() && vscp->varp()->isNonOutput()) {
                     vscp->varp()->scSensitive(true);
                 }

@@ -223,8 +223,64 @@ void splitCheck(AstCFunc* const ofuncp) {
     if (subFuncp) splitCheckFinishSubFunc(ofuncp, subFuncp, argVscps);
 }
 
-std::unordered_set<const AstVarScope*>
-computeImplicitSensitivities(const AstNodeProcedure* procp) {
+//######################################################################
+// Visit the variable accesses of logic, following calls into the called functions
+
+class SchedLogicAccessVisitor final : public VNVisitorConst {
+    // STATE
+    const LogicAccessFunc& m_f;  // Called on each access
+    std::unordered_set<const AstCFunc*> m_calledps;  // Functions already followed
+    bool m_inCallee = false;  // Under a called function
+    bool m_readsOnly = false;  // Under a called static class method
+
+    // VISITORS
+    void visit(AstVarRef* nodep) override {
+        // Variables declared in a called function are excluded (IEEE 1800-2023 9.2.2.2.1)
+        if (m_inCallee && nodep->varp()->isFuncLocal()) return;
+        if (!m_readsOnly) {
+            m_f(nodep->varScopep(), nodep->access());
+        } else if (nodep->access().isReadOrRW()) {
+            m_f(nodep->varScopep(), VAccess::READ);
+        }
+    }
+    void visit(AstCCall* nodep) override {
+        iterateChildrenConst(nodep);
+        followCall(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit SchedLogicAccessVisitor(const LogicAccessFunc& f)
+        : m_f{f} {}
+
+    // METHODS
+    void iterateLogic(AstNode* nodep) { iterateConst(nodep); }
+    void followCall(const AstCCall* callp) {
+        AstCFunc* const funcp = callp->funcp();
+        if (!isLogicCallee(funcp)) return;
+        // Each function is visited once per logic, like a once-inlined body: linear in the
+        // total size of the called functions, as inlining all calls would be.
+        if (!m_calledps.emplace(funcp).second) return;
+        VL_RESTORER(m_inCallee);
+        VL_RESTORER(m_readsOnly);
+        m_inCallee = true;
+        // Static class methods often update static state shared by all callers, such as call
+        // counters, which as writes of every caller would make them combinational loops
+        if (VN_IS(funcp->scopep()->modp(), ClassPackage)) m_readsOnly = true;
+        iterateChildrenConst(funcp);
+    }
+};
+
+void foreachLogicAccess(AstNode* nodep, const LogicAccessFunc& f) {
+    SchedLogicAccessVisitor{f}.iterateLogic(nodep);
+}
+
+void foreachCallAccess(const AstCCall* callp, const LogicAccessFunc& f) {
+    SchedLogicAccessVisitor{f}.followCall(callp);
+}
+
+std::unordered_set<const AstVarScope*> computeImplicitSensitivities(AstNodeProcedure* procp) {
     // Dangerous assumption:
     // A variable read after the process assigned it earlier (in tree order, with a read-write
     // reference counting as an assignment) is not an implicit sensitivity, considering it
@@ -237,14 +293,9 @@ computeImplicitSensitivities(const AstNodeProcedure* procp) {
     // TODO: Do this properly with liveness analysis (i.e.: if live, it's an implicit sensitivity)
     std::unordered_set<const AstVarScope*> implicitSensitivities;
     std::unordered_set<const AstVarScope*> assigned;
-    procp->foreach([&](const AstVarRef* refp) {
-        const AstVarScope* const vscp = refp->varScopep();
-        if (refp->access().isWriteOrRW() && !refp->varp()->ignoreSchedWrite()) {
-            assigned.emplace(vscp);
-        }
-        if (refp->access().isReadOrRW() && !assigned.count(vscp)) {
-            implicitSensitivities.emplace(vscp);
-        }
+    foreachLogicAccess(procp, [&](const AstVarScope* vscp, VAccess access) {
+        if (access.isWriteOrRW() && !vscp->varp()->ignoreSchedWrite()) assigned.emplace(vscp);
+        if (access.isReadOrRW() && !assigned.count(vscp)) implicitSensitivities.emplace(vscp);
     });
     // Reads through forced values the process computes itself do not trigger it either
     VarScopeSet forceReadEdgeIgnores;

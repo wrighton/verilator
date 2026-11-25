@@ -644,6 +644,7 @@ class AstCFunc final : public AstNode {
     bool m_isCovergroupSample : 1;  // Automatic covergroup sample() function
     bool m_isProcessKill : 1;  // std::process::kill() method
     bool m_voidSelf : 1;  // Loose method taking its 'self' pointer as 'void* vlVoidSelf'
+    bool m_verilogFunction : 1;  // Made from a Verilog function (versus a task or internal)
     int m_cost;  // Function call cost
 public:
     AstCFunc(FileLine* fl, const string& name, AstScope* scopep, const string& rtnType = "")
@@ -679,6 +680,7 @@ public:
         m_isCovergroupSample = false;
         m_isProcessKill = false;
         m_voidSelf = false;
+        m_verilogFunction = false;
         m_cost = v3Global.opt.instrCountDpi();  // As proxy for unknown general DPI cost
     }
     ASTGEN_MEMBERS_AstCFunc;
@@ -765,6 +767,8 @@ public:
     bool noLife() const { return m_noLife; }
     bool isCovergroupSample() const { return m_isCovergroupSample; }
     void isCovergroupSample(bool flag) { m_isCovergroupSample = flag; }
+    bool verilogFunction() const { return m_verilogFunction; }
+    void verilogFunction(bool flag) { m_verilogFunction = flag; }
     bool voidSelf() const { return m_voidSelf; }
     void voidSelf(bool flag) { m_voidSelf = flag; }
     void cost(int cost) { m_cost = cost; }
