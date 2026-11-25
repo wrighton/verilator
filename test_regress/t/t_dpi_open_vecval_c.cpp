@@ -48,17 +48,15 @@ int dpii_failure() { return errors; }
 
 #define TEST_MAX_NELEMS 1024
 
+// Unused bits of the result are left set, as the canonical form does not define them
 static void _invert(int bits, svBitVecVal o[], const svBitVecVal i[]) {
     for (int w = 0; w < SV_PACKED_DATA_NELEMS(bits); ++w) o[w] = ~i[w];
-    o[SV_PACKED_DATA_NELEMS(bits) - 1] &= SV_MASK(bits & 31);
 }
 static void _invert(int bits, svLogicVecVal o[], const svLogicVecVal i[]) {
     for (int w = 0; w < SV_PACKED_DATA_NELEMS(bits); ++w) {
         o[w].aval = ~i[w].aval;
         o[w].bval = 0;
     }
-    o[SV_PACKED_DATA_NELEMS(bits) - 1].aval &= SV_MASK(bits & 31);
-    o[SV_PACKED_DATA_NELEMS(bits) - 1].bval &= SV_MASK(bits & 31);
 }
 
 static bool _same(int bits, const svBitVecVal o[], const svBitVecVal i[]) {
