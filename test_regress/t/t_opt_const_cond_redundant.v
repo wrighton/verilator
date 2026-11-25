@@ -6,6 +6,11 @@
 
 // bug3806
 
+// verilog_format: off
+`define stop $stop
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0x exp=%0x (%s !== %s)\n", `__FILE__,`__LINE__, (gotv), (expv), `"gotv`", `"expv`"); `stop; end while(0);
+// verilog_format: on
+
 module t (
     input clk
 );
@@ -26,7 +31,24 @@ module t (
 
   int ups;  // Make computable
 
+  // An if/else chain repeating its condition takes its first branch
+  wire chain_sel = idx[1];
+  logic chain;
+  always_comb begin
+    if (chain_sel) chain = idx[2];
+    else if (chain_sel) chain = idx[3];
+    else if (chain_sel) chain = idx[4];
+    else if (chain_sel) chain = idx[5];
+    else chain = 1'b0;
+  end
+
+  // A condition repeated in its then branch takes the then branch
+  logic nested;
+  always_comb nested = chain_sel ? (chain_sel ? idx[2] : idx[3]) : idx[4];
+
   always @(posedge clk) begin
+    `checkh(chain, idx[1] & idx[2]);
+    `checkh(nested, idx[1] ? idx[2] : idx[4]);
     if (idx > 100) begin
 `ifdef TEST_VERBOSE
       $write("ups = %0d\n", ups);
