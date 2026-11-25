@@ -257,8 +257,9 @@ bom             [\357\273\277]
 <INITIAL>{quote}        { yy_push_state(STRMODE); yymore(); }
 <STRMODE><<EOF>>        { FL_FWDC; linenoInc(); yyerrorf("EOF in unterminated string");
                           yyleng=0; return VP_EOF_ERROR; }
-<STRMODE>{crnl}         { FL_FWDC; linenoInc(); yyerrorf("Unterminated string");
-                          FL_BRK; BEGIN(INITIAL); }
+<STRMODE>{crnl}         { yyless(yyleng - 1); FL_FWDC; yyerrorf("Unterminated string");
+                          /* Newline is returned to the enclosing state, e.g. to end a define */
+                          LEXP->m_defQuote = false; yy_pop_state(); FL_BRK; }
 <STRMODE>{word}         { yymore(); }
 <STRMODE>[^\"\\]        { yymore(); }
 <STRMODE>[\\]{crnl}     { linenoInc(); yymore(); }
