@@ -192,16 +192,16 @@ class SchedGraphBuilder final {
         // Add edges based on references
         V3Sched::util::VarScopeSet forceReadEdgeIgnores;
         V3Sched::util::collectForceReadEdgeIgnores(nodep, forceReadEdgeIgnores);
-        nodep->foreach([this, logicVtxp, &forceReadEdgeIgnores](const AstVarRef* vrefp) {
-            AstVarScope* const vscp = vrefp->varScopep();
-            if (vrefp->access().isReadOrRW() && m_readTriggersThisLogic(vscp)
-                && !forceReadEdgeIgnores.count(vscp)) {
-                new V3GraphEdge{m_graphp, getVarVertex(vscp), logicVtxp, 10};
-            }
-            if (vrefp->access().isWriteOrRW() && !vrefp->varp()->ignoreSchedWrite()) {
-                new V3GraphEdge{m_graphp, logicVtxp, getVarVertex(vscp), 10};
-            }
-        });
+        V3Sched::util::foreachLogicAccess(
+            nodep, [this, logicVtxp, &forceReadEdgeIgnores](AstVarScope* vscp, VAccess access) {
+                if (access.isReadOrRW() && m_readTriggersThisLogic(vscp)
+                    && !forceReadEdgeIgnores.count(vscp)) {
+                    new V3GraphEdge{m_graphp, getVarVertex(vscp), logicVtxp, 10};
+                }
+                if (access.isWriteOrRW() && !vscp->varp()->ignoreSchedWrite()) {
+                    new V3GraphEdge{m_graphp, logicVtxp, getVarVertex(vscp), 10};
+                }
+            });
 
         // If the logic calls a 'context' DPI import, it might fire the DPI Export trigger
         if (m_dpiExportTriggerp) {
