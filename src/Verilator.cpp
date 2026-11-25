@@ -691,7 +691,8 @@ static void process() {
 
     // Output DPI protected library files
     if (!v3Global.opt.libCreate().empty()) {
-        if (v3Global.rootp()->delaySchedulerp()) {
+        // Delays in classes or packages the library never calls are not run
+        if (V3Timing::delaysReachable(v3Global.rootp())) {
             v3warn(E_UNSUPPORTED, "Unsupported: --lib-create with --timing and delays");
         }
         V3ProtectLib::protect();
