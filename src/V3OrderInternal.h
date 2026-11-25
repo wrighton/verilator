@@ -41,6 +41,7 @@ std::unique_ptr<OrderGraph> buildOrderGraph(const V3Sched::TriggerKit& trigKit, 
                                             AstVarScope* trigVscp,  //
                                             const std::vector<V3Sched::ProcessList*>& coll,  //
                                             const V3Sched::CovergroupRefBindings& cgRefBindings,
+                                            const V3Sched::VirtIfaceClockedReads& vifReads,
                                             bool parallel);
 
 void orderOrderGraph(OrderGraph& graph, const std::string& tag);

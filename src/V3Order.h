@@ -31,6 +31,7 @@ namespace V3Sched {
 class ProcessList;
 class CovergroupRefBindings;
 class TriggerKit;
+class VirtIfaceClockedReads;
 };  // namespace V3Sched
 
 //============================================================================
@@ -44,6 +45,7 @@ AstCFunc* order(const std::vector<V3Sched::ProcessList*>& logic,  //
                 const V3Sched::TriggerKit& trigKit,  //
                 AstVarScope* trigVscp,  //
                 const V3Sched::CovergroupRefBindings& cgRefBindings,  //
+                const V3Sched::VirtIfaceClockedReads& vifReads,  //
                 const string& tag,  //
                 bool parallel,  //
                 bool slow,  //
