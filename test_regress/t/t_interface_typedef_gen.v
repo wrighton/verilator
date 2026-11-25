@@ -64,15 +64,18 @@ module m_named;
   leaf #(.T(g.b.data_t), .EXP(11)) c ();
 endmodule
 
-// Test: typedef from the instance in a generate block
-module m_typedef;
+// Test: typedef from the instance in a generate block, also in specializations of the module
+module m_typedef #(
+    parameter int W = 13
+);
   if (1) begin : g
-    ifc #(.W(13)) b ();
+    ifc #(.W(W)) b ();
     typedef b.data_t data_t;
     initial begin
       data_t x;
-      `checkd($bits(x), 13);
-      `checkd($bits(b.data_t), 13);
+      `checkd($bits(x), W);
+      `checkd($bits(data_t), W);
+      `checkd($bits(b.data_t), W);
     end
   end
 endmodule
@@ -185,6 +188,8 @@ module t;
   m_hide u_hide ();
   m_named u_named ();
   m_typedef u_typedef ();
+  m_typedef #(.W(5)) u_typedef5 ();
+  m_typedef #(.W(9)) u_typedef9 ();
   m_cond #(.SEL(0)) u_cond0 ();
   m_cond #(.SEL(1)) u_cond1 ();
   m_array u_array ();
