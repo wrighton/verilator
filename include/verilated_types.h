@@ -346,6 +346,7 @@ class VlProcess final {
     VlProcess* m_nextKilledp = nullptr;  // Next process on the killed chain of that list
     size_t m_waitIndex = 0;  // Slot of its handle on that list
     bool m_waitEvaluates = false;  // Waits on that list to evaluate its trigger
+    std::unique_ptr<VlEvent> m_forkDonep;  // Fired as a child completes, if 'wait fork' waited
 
     // Thread-local current process pointer for hierarchical object seeding
     static thread_local VlProcess* t_currentp;
@@ -371,10 +372,7 @@ public:
         m_parentp->attach(this);
     }
 
-    ~VlProcess() {
-        if (m_parentp) m_parentp->detach(this);
-        if (t_currentp == this) currentp(m_parentp.get());
-    }
+    inline ~VlProcess();
 
     void attach(VlProcess* childp) {
         // A killed process runs on until it suspends, so it may fork after leaving its parent.
@@ -416,6 +414,8 @@ public:
             if (!childp->completed()) return false;
         return true;
     }
+    /// Event a 'wait fork' of this process waits on, which a child fires as it completes
+    inline VlEvent& forkDoneEvent();
     template <typename T_Class>
     void initFromSelf(VlClassRef<T_Class>& selfRef) const {
         // std::process with 0 references may be waiting in VlDeleter, so don't assign it to avoid
@@ -724,12 +724,14 @@ public:
     void clearTriggered() override { (*this)->m_triggered = false; }
 };
 
-// Type trait: whether T is an event, or an unpacked array of events
-template <typename T_Element>
-struct VlIsEvent final : std::is_base_of<VlEventBase, T_Element> {};
-template <typename T_Element, std::size_t N_Depth>
-struct VlIsEvent<VlUnpacked<T_Element, N_Depth>> final
-    : std::integral_constant<bool, VlIsEvent<T_Element>::value> {};
+inline VlProcess::~VlProcess() {
+    if (m_parentp) m_parentp->detach(this);
+    if (t_currentp == this) currentp(m_parentp.get());
+}
+VlEvent& VlProcess::forkDoneEvent() {
+    if (!m_forkDonep) m_forkDonep.reset(new VlEvent);
+    return *m_forkDonep;
+}
 
 inline std::string VL_TO_STRING(const VlEventBase& e);
 
