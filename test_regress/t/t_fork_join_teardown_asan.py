@@ -11,6 +11,8 @@ import vltest_bootstrap
 
 test.scenarios('vlt')
 
+if not test.have_dev_asan:
+    test.skip("Requires an AddressSanitizer build (--enable-dev-asan)")
 if test.tsan:
     test.skip("ThreadSanitizer not compatible with AddressSanitizer\n")
 
