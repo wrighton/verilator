@@ -67,6 +67,8 @@ class WidthCommitVisitor final : public VNVisitor {
     bool m_underAlwaysEdged = false;  // Under always with sequential SenTree
     std::vector<AstNew*> m_virtualNewsp;  // Instantiations of virtual classes
     std::vector<AstNodeFTask*> m_tasksp;  // All the tasks, we will check if they are ever called
+    std::vector<std::pair<AstVar*, std::string>> m_portDefaultps;  // Defaulted ports, task names
+    std::unordered_set<std::string> m_defaultedTaskNames;  // Tasks given defaults by dotted calls
 
 public:
     // METHODS
@@ -549,6 +551,9 @@ private:
                               << nodep->taskp()->warnContextSecondary());
         }
         if (nodep->taskp()) nodep->taskp()->user2(1);
+        for (const AstArg* argp = nodep->argsp(); argp; argp = VN_AS(argp->nextp(), Arg)) {
+            if (argp->defaulted()) m_defaultedTaskNames.insert(nodep->taskp()->name());
+        }
         if (AstNew* const newp = VN_CAST(nodep, New)) {
             if (!VN_IS(newp->backp(), Assign)) return;
             if (AstClass* const classp = VN_CAST(newp->classOrPackagep(), Class)) {
@@ -576,8 +581,8 @@ private:
         editDType(nodep);
         if (nodep->isFuncLocal() && nodep->direction() == VDirection::INPUT && nodep->valuep()) {
             // It's the default value of optional argument.
-            // Such values are added to function calls in V3Width so can be removed now
-            pushDeletep(nodep->valuep()->unlinkFrBack());
+            // Such values are added to function calls in V3Width so can be removed, see below
+            m_portDefaultps.emplace_back(nodep, m_ftaskp ? m_ftaskp->name() : "");
         }
     }
     void visit(AstNodePreSel* nodep) override {  // LCOV_EXCL_LINE
@@ -671,6 +676,12 @@ public:
         nodep->typeTablep()->clearCache();
         iterate(nodep);
         deadCheckTasks();
+        // A dotted call given a default may call a task of that name in another module in
+        // each instance. Keep the defaults of such tasks for V3LinkDot to compare, see there.
+        for (const auto& pair : m_portDefaultps) {
+            if (m_defaultedTaskNames.count(pair.second)) continue;
+            pushDeletep(pair.first->valuep()->unlinkFrBack());
+        }
         // Don't want to AstTypeTable::repairCache, as all needed nodes
         // have been added back in; a repair would prevent dead nodes from
         // being detected

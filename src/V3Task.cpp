@@ -2514,6 +2514,9 @@ static V3TaskConnects connectArgs(T_Ref* nodep, const AstNode* calleep, AstNode*
             // or not, we make this into a pin
             UINFO(9, "Default pin for " << portp);
             AstArg* const newp = new AstArg{nodep->fileline(), portp->name(), newvaluep};
+            const AstNodeFTaskRef* const refp
+                = VN_CAST(static_cast<AstNode*>(nodep), NodeFTaskRef);
+            if (refp && !refp->dotted().empty()) newp->defaulted(true);
             if (tconnects[i].second) {  // Have a "nullptr" pin already defined for it
                 VL_DO_CLEAR(tconnects[i].second->unlinkFrBack()->deleteTree(),
                             tconnects[i].second = nullptr);

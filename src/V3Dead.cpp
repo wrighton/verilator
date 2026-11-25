@@ -272,6 +272,7 @@ class DeadVisitor final : public VNVisitor {
     std::vector<AstCell*> m_cellsp;  // All cells
     std::vector<AstClass*> m_classesp;  // All classes
     std::vector<AstTypedef*> m_typedefsp;  // All typedefs
+    std::unordered_set<std::string> m_dottedFTaskNames;  // Names called by dotted references
     AssignMap m_assignMap;  // List of all simple assignments for each variable
     bool m_sideEffect = false;  // Side effects discovered in assign RHS
 
@@ -408,6 +409,7 @@ class DeadVisitor final : public VNVisitor {
         if (!m_sideEffect && !nodep->isPure()) m_sideEffect = true;
         checkAll(nodep);
         needsTask(nodep->taskp(), m_containingFTaskRefp);
+        if (!nodep->dotted().empty()) m_dottedFTaskNames.emplace(nodep->name());
         if (nodep->classOrPackagep()) {
             if (m_elimCells) {
                 nodep->classOrPackagep(nullptr);
@@ -635,6 +637,9 @@ class DeadVisitor final : public VNVisitor {
             if (!nodep) continue;
             UINFO(9, "Dead " << nodep);
             if (AstNodeFTask* const taskp = VN_CAST(nodep, NodeFTask)) {
+                // Before V3Scope an upwards call (IEEE 1800-2023 23.8) is linked to the task of
+                // one instance, but V3LinkDot relinks it to the same named task of each instance
+                if (!v3Global.assertScoped() && m_dottedFTaskNames.count(taskp->name())) continue;
                 if (taskp->isVirtual()) {
                     ++m_statFTasksVirtDeadified;
                 } else if (taskp->classMethod()) {
