@@ -499,6 +499,63 @@ public:
     TimingKit& operator=(TimingKit&&) = default;
 };
 
+// Interface members clocked logic may read through a virtual interface.
+//
+// Such a read references the virtual interface variable, not the member, so V3Order has to be
+// told which member variables it may read, to order it before the commit of the nonblocking
+// assignments to them (IEEE 1800-2023 4.9.4), as it does a direct read.
+class VirtIfaceClockedReads final {
+public:
+    using VarScopes = std::vector<AstVarScope*>;
+    using Sets = std::vector<size_t>;  // Indices of sets of VarScopes
+
+private:
+    static const Sets s_none;  // Empty result
+    // Sets of VarScopes, one per member read through a virtual interface, in every instance,
+    // directly or in the functions called. Each has one ordering barrier (see
+    // V3OrderGraphBuilder).
+    std::vector<VarScopes> m_sets;
+    // Member variable read through a virtual interface -> its set
+    std::unordered_map<const AstVar*, Sets> m_memberReads;
+    // Method called through a virtual interface, or of a class -> the sets of the members it may
+    // read through a virtual interface, including in the functions it calls, transitively
+    std::unordered_map<const AstCFunc*, Sets> m_methodCallReads;
+    // Function called directly -> the sets of the members it may read through a virtual interface,
+    // including in the functions it calls, transitively
+    std::unordered_map<const AstCFunc*, Sets> m_callReads;
+
+    // The sets in 'map' for 'keyp', if any
+    template <typename T_Key>
+    static const Sets& setsFor(const std::unordered_map<T_Key, Sets>& map, T_Key keyp) {
+        const auto it = map.find(keyp);
+        return it == map.end() ? s_none : it->second;
+    }
+
+public:
+    static bool isVirtIfaceRead(const AstMemberRef* nodep);
+    // Add a set, returning its index
+    size_t addSet(VarScopes&& vscps) {
+        m_sets.push_back(std::move(vscps));
+        return m_sets.size() - 1;
+    }
+    const VarScopes& set(size_t index) const { return m_sets[index]; }
+    void setMember(const AstVar* varp, Sets&& sets) { m_memberReads[varp] = std::move(sets); }
+    void setMethodCall(const AstCFunc* funcp, Sets&& sets) {
+        m_methodCallReads[funcp] = std::move(sets);
+    }
+    void setCall(const AstCFunc* funcp, Sets&& sets) { m_callReads[funcp] = std::move(sets); }
+    // The sets a read through a virtual interface may read, if it is one
+    const Sets& forMemberRef(const AstMemberRef* nodep) const;
+    // The sets a call of a method through a virtual interface, or of a class, may read
+    const Sets& forMethodCall(const AstCFunc* funcp) const {
+        return setsFor<const AstCFunc*>(m_methodCallReads, funcp);
+    }
+    // The sets a direct call may read through a virtual interface
+    const Sets& forCall(const AstCFunc* funcp) const {
+        return setsFor<const AstCFunc*>(m_callReads, funcp);
+    }
+};
+
 class VirtIfaceTriggers final {
 public:
     // One entry per VarScope of an interface member that may be written through a virtual
@@ -518,6 +575,7 @@ public:
     // handles holding them, and the arguments of functions reading through their formals --
     // with the interfaces read. They are sensitive to the triggers of those interfaces.
     std::unordered_map<const AstVarScope*, std::set<const AstIface*>> m_combReadRoots;
+    VirtIfaceClockedReads m_clockedReads;  // Members clocked logic may read through a VIF
 
     // Return the interfaces whose members a read through a virtual interface may reach
     std::set<const AstIface*> reachableIfaces(const AstIface* ifacep) const;
