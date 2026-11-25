@@ -75,6 +75,21 @@ class ProtectVisitor final : public VNVisitor {
     AstTextBlock* m_cSettleOutsp = nullptr;  // Settle function's output copies
     AstTextBlock* m_cSeqOutsp = nullptr;  // Sequential output copy list
     AstTextBlock* m_cIgnoreParamsp = nullptr;  // Combo ignore parameter list
+    AstTextBlock* m_lowDeclp = nullptr;  // Where the update at falling edges is declared
+    AstTextBlock* m_lowCallp = nullptr;  // Where it is called, in the update of the clocks
+    AstTextBlock* m_lowEndp = nullptr;  // Where the update of the clocks it skips ends
+    AstTextBlock* m_cLowp = nullptr;  // Where it is defined
+    AstTextBlock* m_lowPortsp = nullptr;  // Its SV declaration ports
+    AstTextBlock* m_lowParamsp = nullptr;  // Its call's arguments
+    AstTextBlock* m_cLowParamsp = nullptr;  // Its C parameters
+    AstTextBlock* m_cLowClksp = nullptr;  // Its clock copies
+    AstTextBlock* m_lowProfilep = nullptr;  // Its profile data
+    struct Clock final {
+        const AstVar* m_varp;  // Port
+        std::string m_name;  // Emitted name
+        std::string m_lastLocal;  // Name of its previous value, of its type
+    };
+    std::vector<Clock> m_clocks;
     // With --vpi, the emitted names of the wrapper's ports and local signals
     std::unordered_set<std::string> m_usedNames;
     std::string m_vpiWritesName;  // Count of writes through the VPI into the library module
@@ -85,6 +100,7 @@ class ProtectVisitor final : public VNVisitor {
     std::string m_seqInitName = "seq_init__V";  // Set after the first update of clocks
     std::string m_seqFirstName = "seq_first__V";  // Set in the first update of clocks
     std::string m_settleName;  // Function settling the library before the first update of clocks
+    std::string m_lowName;  // Function updating the library at falling edges of its clocks
     AstTextBlock* m_selectp = nullptr;  // Results whichever update ran last
     // Suffixes of the C names of the library's DPI functions after the library name
     static constexpr const char* s_checkHashSuffix = "_protectlib_check_hash";
@@ -142,6 +158,7 @@ class ProtectVisitor final : public VNVisitor {
         m_seqInitName = uniqueName(m_seqInitName);
         m_seqFirstName = uniqueName(m_seqFirstName);
         m_settleName = uniqueName(m_libName + "_protectlib_settle");
+        m_lowName = uniqueName(m_libName + "_protectlib_clock_low");
         m_seqNumName = uniqueName(m_seqNumName);
         m_initName = uniqueName(m_initName);
         m_lastSeqName = uniqueName(m_lastSeqName);
@@ -155,6 +172,7 @@ class ProtectVisitor final : public VNVisitor {
         iterateChildren(nodep);
 
         restoreInouts();
+        if (m_lowPortsp) finishLow();
 
         // cppcheck-suppress unreadVariable
         const V3Hash hash = V3Hasher::uncachedHash(m_cfilep);
@@ -192,7 +210,7 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add(new AstComment{fl, comment});
     }
 
-    void configSection(AstNodeModule* /*modp*/, AstTextBlock* txtp, FileLine* /*fl*/) {
+    void configSection(AstNodeModule* /*modp*/, AstTextBlock* txtp, FileLine* fl) {
         txtp->add("\n`ifdef VERILATOR\n");
         txtp->add("`verilator_config\n");
 
@@ -214,6 +232,8 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add("profile_data -hier-dpi \"" + m_libName + s_comboIgnoreSuffix
                   + "\" -cost 64'd1\n");
         txtp->add("profile_data -hier-dpi \"" + m_settleName + "\" -cost 64'd1\n");
+        m_lowProfilep = new AstTextBlock{fl};
+        txtp->add(m_lowProfilep);
 
         txtp->add("hier_workers -hier-dpi \"" + m_libName + s_comboUpdateSuffix
                   + "\" -workers 16'd" + std::to_string(V3Control::getHierWorkers(m_libName))
@@ -304,6 +324,8 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add(m_seqPortsp);
             m_settleDeclp = new AstTextBlock{fl};
             txtp->add(m_settleDeclp);
+            m_lowDeclp = new AstTextBlock{fl};
+            txtp->add(m_lowDeclp);
         }
         comboIgnoreComment(txtp, fl);
         m_comboIgnorePortsp
@@ -379,6 +401,8 @@ class ProtectVisitor final : public VNVisitor {
             if (v3Global.opt.vpi()) m_clkSensp->add(m_vpiWritesName);
             txtp->add(m_clkSensp);
             txtp->add(" begin\n");
+            m_lowCallp = new AstTextBlock{fl};
+            txtp->add(m_lowCallp);
             // The update of the clocks reads all inputs itself after writes through the VPI
             if (!v3Global.opt.vpi()) {
                 m_comboIgnoreParamsp
@@ -397,6 +421,8 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add(m_nbAssignsp);
             m_seqInitp = new AstTextBlock{fl};
             txtp->add(m_seqInitp);
+            m_lowEndp = new AstTextBlock{fl};
+            txtp->add(m_lowEndp);
             txtp->add("end\n\n");
         }
 
@@ -581,6 +607,8 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add("}\n\n");
             m_cSettlep = new AstTextBlock{fl};
             txtp->add(m_cSettlep);
+            m_cLowp = new AstTextBlock{fl};
+            txtp->add(m_cLowp);
         }
 
         comboIgnoreComment(txtp, fl);
@@ -672,6 +700,14 @@ class ProtectVisitor final : public VNVisitor {
             const std::string pname = svPortName(varp);
             m_seqParamsp->add(pname);
             m_clkSensp->add(pname);
+            m_clocks.push_back({varp, pname, localName(varp, "_last__V")});
+            if (varp->isPrimaryPosedge()) {
+                if (!m_lowPortsp) newLow(varp->fileline());
+                m_lowPortsp->add(varp->cloneTree(false));
+                m_lowParamsp->add(pname);
+                m_cLowParamsp->add(varp->dpiArgType(true, false));
+                m_cLowClksp->add(cInputConnection(varp));
+            }
         }
         m_cSeqParamsp->add(varp->dpiArgType(true, false));
         m_cSeqClksp->add(cInputConnection(varp));
@@ -762,6 +798,61 @@ class ProtectVisitor final : public VNVisitor {
     // The name of a local signal of the wrapper for an output
     std::string localName(const AstVar* varp, const char* suffixp) {
         return uniqueName(varp->name() + suffixp, true);
+    }
+
+    // Create the function updating the library at falling edges of the clocks it reads only as
+    // clocks of rising edges. It changes no output, so passes none, nor any data input.
+    void newLow(FileLine* fl) {
+        m_lowPortsp = new AstTextBlock{fl, "import \"DPI-C\" function void " + m_lowName + "(\n",
+                                       ", ", ");\n\n"};
+        m_lowPortsp->add("chandle handle__V\n");
+        m_lowDeclp->add(m_lowPortsp);
+        m_lowParamsp = new AstTextBlock{fl, m_lowName + "(\n", ",\n", "\n);\n"};
+        m_lowParamsp->add("handle__V");
+        m_cLowParamsp = new AstTextBlock{fl, "void " + m_lowName + "(\n", ",\n", "\n) {\n"};
+        m_cLowParamsp->add("void* vhandlep__V");
+        m_cLowp->add(m_cLowParamsp);
+        m_cLowClksp = new AstTextBlock{fl};
+        castPtr(fl, m_cLowClksp);
+        m_cLowp->add(m_cLowClksp);
+        m_cLowp->add("handlep__V->eval();\n");
+        m_cLowp->add("}\n\n");
+        // An evaluation of the library like the other updates, so likewise not a DPI hazard
+        m_lowProfilep->add("profile_data -hier-dpi \"" + m_lowName + "\" -cost 64'd"
+                           + std::to_string(v3Global.currentHierBlockCost()) + "\n");
+        m_lowProfilep->add("hier_workers -hier-dpi \"" + m_lowName + "\" -workers 16'd"
+                           + std::to_string(V3Control::getHierWorkers(m_libName)) + "\n");
+    }
+
+    // The update of the clocks calls that function in place of the full update when its events
+    // are only falling edges of such clocks, which it tells from their previous values
+    void finishLow() {
+        std::string cond;
+        std::string lasts;
+        // The previous value of a signal of the events, and whether it rose or changed since
+        const auto addLast = [&](const std::string& name, const std::string& last, bool rise) {
+            if (!cond.empty()) cond += " && ";
+            cond += rise ? "!(" + name + " && !" + last + ")" : name + " == " + last;
+            lasts += last + " = " + name + ";\n";
+        };
+        const std::string initLast = uniqueName(m_initName + "_last__V");
+        m_seqDeclsp->add("bit " + initLast + ";\n");
+        addLast(m_initName, initLast, false);
+        if (v3Global.opt.vpi()) {
+            const std::string writesLast = uniqueName(m_vpiWritesName + "_last__V");
+            m_seqDeclsp->add("int " + writesLast + ";\n");
+            addLast(m_vpiWritesName, writesLast, false);
+        }
+        for (const Clock& clock : m_clocks) {
+            addLocalVariable(m_seqDeclsp, clock.m_varp, clock.m_lastLocal);
+            addLast(clock.m_name, AstNode::verilogIdent(clock.m_lastLocal),
+                    clock.m_varp->isPrimaryPosedge());
+        }
+        m_lowCallp->add("if (" + cond + ") begin\n");
+        m_lowCallp->add(m_lowParamsp);
+        m_lowCallp->add("end else begin\n");
+        m_lowEndp->add("end\n");
+        m_lowEndp->add(lasts);
     }
 
     // Create the function that settles the library module before the first clock update and
