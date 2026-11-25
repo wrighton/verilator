@@ -472,6 +472,7 @@ private:
     bool m_fFuncBalanceCat = true;  // main switch: -fno-func-balance-cat: expansion of C macros
     bool m_fFuncSplitCat = true;  // main switch: -fno-func-split-cat: expansion of C macros
     bool m_fGate;        // main switch: -fno-gate: gate wire elimination
+    bool m_fHierParamStub = true;  // main switch: -fno-hier-param-stub: see V3LinkCells
     // main switch: -fno-ico-change-detect: input change detection optimization
     VOptionBool m_fIcoChangeDetect{VOptionBool::OPT_DEFAULT_TRUE};
     // main switch: -fico-public-change-detect: change detection of public variables
@@ -836,6 +837,7 @@ public:
     bool fFuncSplitCat() const { return m_fFuncSplitCat; }
     bool fFunc() const { return fFuncSplitCat() || fFuncBalanceCat(); }
     bool fGate() const { return m_fGate; }
+    bool fHierParamStub() const { return m_fHierParamStub; }
     VOptionBool fIcoChangeDetect() const { return m_fIcoChangeDetect; }
     bool fIcoPublicChangeDetect() const { return m_fIcoPublicChangeDetect; }
     bool fInline() const { return m_fInline; }

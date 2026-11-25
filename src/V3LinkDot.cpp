@@ -1654,6 +1654,7 @@ class LinkDotFindVisitor final : public VNVisitor {
     AstClocking* m_clockingp = nullptr;  // Current clocking block
     std::vector<AstScope*> m_scopes;  // Scopes detached during repeated module visits
     uint64_t m_statScopeVisits = 0;  // Non-top scopes encountered while finding instance symbols
+    uint64_t m_statInstances = 0;  // Instances whose module is visited, for statistics
     VSymEnt* m_modSymp = nullptr;  // Symbol Entry for current module
     VSymEnt* m_curSymp = nullptr;  // Symbol Entry for current table, where to lookup/insert
     string
@@ -2090,7 +2091,10 @@ class LinkDotFindVisitor final : public VNVisitor {
             m_inRecursion = nodep->recursive();
             m_inPathBind = m_inPathBind || nodep->pathBind();
             // We don't report NotFoundModule, as may be a unused module in a generate
-            if (nodep->modp()) iterate(nodep->modp());
+            if (nodep->modp()) {
+                ++m_statInstances;
+                iterate(nodep->modp());
+            }
         }
     }
     void visit(AstCellInline* nodep) override {  // FindVisitor::
@@ -3054,6 +3058,7 @@ public:
         if (m_statep->forScopeCreation()) {
             V3Stats::addStat("LinkDot, Scope visits", m_statScopeVisits);
         }
+        if (m_statep->forPrimary()) V3Stats::addStat("LinkDot, Instances", m_statInstances);
     }
     ~LinkDotFindVisitor() override = default;
 };
