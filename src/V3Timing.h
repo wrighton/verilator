@@ -28,8 +28,9 @@ class V3Timing final {
 public:
     static void timingAll(AstNetlist* nodep) VL_MT_DISABLED;
     // Scale a delay in the given time unit to time precision ticks, rounding real delays; #1step
-    // is one tick
-    static AstNodeExpr* delayToTicks(AstNodeExpr* valuep, VTimescale timeunit) VL_MT_DISABLED;
+    // is one tick. With 'ticksPerUnitp', an integral delay is left for the caller to scale by it.
+    static AstNodeExpr* delayToTicks(AstNodeExpr* valuep, VTimescale timeunit,
+                                     uint64_t* ticksPerUnitp = nullptr) VL_MT_DISABLED;
 };
 
 #endif  // Guard
