@@ -901,9 +901,27 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
     }
 
-    void setBitPullDirection(AstVar* varp, int bitIndex, int direction) {
+    static bool constSelPosition(const AstSel* selp, int64_t& pos) {
+        // Set 'pos' to the exact constant position of 'selp'; false if it is unknown or so far
+        // outside any variable that no bit is selected
+        const V3Number& num = VN_AS(selp->lsbp(), Const)->num();
+        if (num.isFourState()) return false;
+        if (num.isSigned() && num.isNegative()) {
+            V3Number magnitude{num};
+            magnitude.opNegate(num);
+            if (!magnitude.fitsInUInt()) return false;
+            pos = -static_cast<int64_t>(magnitude.toUInt());
+            return true;
+        }
+        if (num.mostSetBitP1() >= VL_IDATASIZE) return false;
+        pos = num.toUInt();
+        return true;
+    }
+    void setBitPullDirection(AstVar* varp, int64_t bitIndex, int direction) {
         // Set pull direction for a specific bit of a bus.
         // direction: 1 = pullup, 0 = pulldown
+        // A selection partly outside the bus has no bits there to pull
+        if (bitIndex < 0 || bitIndex >= varp->width()) return;
         auto& bitPulls = m_varAux(varp).bitPulls;
         auto it = bitPulls.find(bitIndex);
         if (it != bitPulls.end() && it->second != direction) {
@@ -943,12 +961,14 @@ class TristateVisitor final : public TristateBaseVisitor {
             return;
         }
         AstNodeExpr* basep = targetp;
-        int offset = 0;
+        int64_t offset = 0;
         while (const AstSel* const selp = VN_CAST(basep, Sel)) {
             // V3Width normalizes packed indices to zero-based bit offsets and requires
-            // constant selection indices on output/inout connections.
-            const AstConst* const indexp = VN_AS(selp->lsbp(), Const);
-            offset += indexp->toSInt();
+            // constant selection indices on output/inout connections. A position outside the
+            // variable connects no bits there to pull.
+            int64_t pos = 0;
+            if (!constSelPosition(selp, pos)) return;
+            offset += pos;
             basep = selp->fromp();
         }
         if (VN_IS(basep, ArraySel) || VN_IS(basep, Replicate) || VN_IS(basep, SliceSel)
@@ -964,7 +984,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (basep == targetp) {
                 setPullDirection(refp->varp(), pullp);
             } else {
-                for (int i = 0; i < bits; ++i) {
+                for (int64_t i = 0; i < bits; ++i) {
                     setBitPullDirection(refp->varp(), offset + i, pullp->direction());
                 }
             }
@@ -1118,8 +1138,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstSel* const selp = VN_CAST(refStrengthp->m_varrefp->backp(), Sel);
         if (!selp || refStrengthp->m_delayp || !VN_IS(refStrengthp->m_varrefp, VarRef)
             || selp != refStrengthp->m_assignp->lhsp() || !VN_IS(selp->lsbp(), Const)
-            || VN_AS(selp->lsbp(), Const)->toSInt() + selp->widthConst()
-                   > selp->fromp()->width()) {
+            || VN_AS(selp->lsbp(), Const)->num().isFourState()
+            || selp->lsbConstOutOfRange(selp->fromp()->width() - 1)) {
             return nullptr;
         }
         const AstShiftL* const depositp = VN_CAST(refStrengthp->m_varrefp->user1p(), ShiftL);
@@ -1806,8 +1826,12 @@ class TristateVisitor final : public TristateBaseVisitor {
         width = 0;
         AstNode* nodep = lhsp;
         while (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+            // A select partly or wholly outside its storage is not yet split by V3Unknown
             const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
-            if (!lsbp) return nullptr;
+            if (!lsbp || lsbp->num().isFourState()
+                || selp->lsbConstOutOfRange(selp->fromp()->width() - 1)) {
+                return nullptr;
+            }
             lsb += lsbp->toSInt();
             if (!width) width = selp->widthConst();
             nodep = selp->fromp();
@@ -2409,7 +2433,30 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstAnd* nodep) override { visitAndOr(nodep, true); }
     void visit(AstOr* nodep) override { visitAndOr(nodep, false); }
 
+    static void clipPartialDriver(AstAssignW* nodep) {
+        // A continuous assignment to a constant select partly outside its storage drives only
+        // the bits within it (IEEE 1800-2023 11.5.1), so it is resolved as a driver of those
+        // bits, from the corresponding bits of its value
+        AstSel* const selp = VN_CAST(nodep->lhsp(), Sel);
+        if (!selp || !VN_IS(selp->lsbp(), Const)) return;
+        int64_t pos = 0;
+        if (!constSelPosition(selp, pos)) return;
+        const int64_t width = selp->widthConst();
+        const int64_t first = std::max<int64_t>(pos, 0);
+        const int64_t pastLast = std::min<int64_t>(pos + width, selp->fromp()->width());
+        if (first >= pastLast || (first == pos && pastLast == pos + width)) return;
+        FileLine* const flp = selp->fileline();
+        const int bits = static_cast<int>(pastLast - first);
+        AstNodeExpr* const valuep = nodep->rhsp()->unlinkFrBack();
+        nodep->rhsp(new AstSel{flp, valuep, static_cast<int>(first - pos), bits});
+        AstNodeExpr* const fromp = selp->fromp()->unlinkFrBack();
+        selp->replaceWith(new AstSel{flp, fromp, static_cast<int>(first), bits});
+        VL_DO_DANGLING(selp->deleteTree(), selp);
+    }
     void visitAssign(AstNodeAssign* nodep) {
+        if (AstAssignW* const assignWp = VN_CAST(nodep, AssignW)) {
+            if (m_graphing) clipPartialDriver(assignWp);
+        }
         VL_RESTORER(m_alhs);
         VL_RESTORER(m_assignp);
         VL_RESTORER(m_currentStrength);
@@ -2874,9 +2921,11 @@ class TristateVisitor final : public TristateBaseVisitor {
                 const AstSel* const selp = VN_CAST(nodep->lhsp(), Sel);
                 const AstConst* const lsbp = selp ? VN_CAST(selp->lsbp(), Const) : nullptr;
                 if (lsbp) {
-                    const int lsb = lsbp->toSInt();
-                    for (int i = 0; i < selp->widthConst(); ++i) {
-                        setBitPullDirection(varrefp->varp(), lsb + i, nodep->direction());
+                    int64_t lsb = 0;
+                    if (constSelPosition(selp, lsb)) {
+                        for (int64_t i = 0; i < selp->widthConst(); ++i) {
+                            setBitPullDirection(varrefp->varp(), lsb + i, nodep->direction());
+                        }
                     }
                 } else {
                     setPullDirection(varrefp->varp(), nodep);

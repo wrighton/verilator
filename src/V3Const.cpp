@@ -2645,6 +2645,16 @@ class ConstVisitor final : public VNVisitor {
                 && varNotReferenced(nodep->op4p(), varp, level + 1));
     }
 
+    void splitConcatDestination(AstNodeAssign* nodep) {
+        // A stream destination becomes a concatenation, which is split into assignments of its
+        // parts now, as for a concatenation written as such, so a part outside its storage
+        // writes nothing without skipping the others (IEEE 1800-2023 11.5.1)
+        // A stream of an unpacked source keeps its stream type, and is not split by part
+        if (VN_IS(nodep->lhsp(), Concat)
+            && !VN_IS(nodep->rhsp()->dtypep()->skipRefp(), StreamDType)) {
+            replaceNodeAssign(nodep);
+        }
+    }
     bool replaceNodeAssign(AstNodeAssign* nodep) {
         if (VN_IS(nodep->lhsp(), VarRef) && VN_IS(nodep->rhsp(), VarRef)
             && VN_AS(nodep->lhsp(), VarRef)->sameNoLvalue(VN_AS(nodep->rhsp(), VarRef))
@@ -2944,6 +2954,7 @@ class ConstVisitor final : public VNVisitor {
             nodep->lhsp(dstp);
             nodep->rhsp(streamp);
             nodep->dtypep(dstDTypep);
+            splitConcatDestination(nodep);
             return true;
         } else if (m_doV && VN_IS(nodep->lhsp(), StreamR)) {
             // The right stream operator on lhs of assignment statement does
@@ -3051,6 +3062,7 @@ class ConstVisitor final : public VNVisitor {
             nodep->rhsp(srcp);
             nodep->dtypep(dstDTypep);
             VL_DO_DANGLING(pushDeletep(streamp), streamp);
+            splitConcatDestination(nodep);
             // Further reduce, any of the nodes may have more reductions.
             return true;
         } else if (m_doV && VN_IS(nodep->rhsp(), StreamL)) {
