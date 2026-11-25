@@ -1424,12 +1424,10 @@ class TaskVisitor final : public VNVisitor {
         // Preamble - fetch the exported function from the scope table
         AstCStmt* const prep = new AstCStmt{flp};
         funcp->addStmtsp(prep);
-        // Static doesn't need save-restore as if below will re-fill proper value
-        prep->add("static int __Vfuncnum = -1;\n");
-        // First time init (faster than what the compiler does if we did a singleton
-        prep->add("if (VL_UNLIKELY(__Vfuncnum == -1)) {\n");
-        prep->add("__Vfuncnum = Verilated::exportFuncNum(\"" + nodep->cname() + "\");\n");
-        prep->add("}\n");
+        // Static doesn't need save-restore, as the number is the same in every model. Its
+        // initialization is thread safe, as models in other threads may make the first call.
+        prep->add("static const int __Vfuncnum = Verilated::exportFuncNum(\"" + nodep->cname()
+                  + "\");\n");
         // If the find fails, it will throw an error
         prep->add("const VerilatedScope* const __Vscopep = Verilated::dpiScope();\n");
         // If 'dpiScope()' fails and '__Vscopep' is null; the exportFind function throws an error
