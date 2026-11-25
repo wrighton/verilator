@@ -812,10 +812,9 @@ class VerilatedVpioScopeList final {
 
     void removeDestroyed() {
         m_generation = VerilatedImp::hierarchyGeneration();
-        const VerilatedHierarchyMap* const mapp = VerilatedImp::hierarchyMap();
-        const auto it = mapp->find(m_parentp);
-        std::unordered_set<const VerilatedScope*> live;
-        if (it != mapp->end()) live.insert(it->second.begin(), it->second.end());
+        const std::vector<const VerilatedScope*> children
+            = VerilatedImp::hierarchyChildren(m_parentp);
+        const std::unordered_set<const VerilatedScope*> live{children.begin(), children.end()};
         m_scopes.erase(
             std::remove_if(m_scopes.begin() + m_index, m_scopes.end(),
                            [&](const VerilatedScope* scopep) { return !live.count(scopep); }),
@@ -3249,41 +3248,35 @@ vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle object) {
     }
     case vpiModule: {
         const VerilatedVpioScope* const vop = VerilatedVpioScope::castp(object);
-        const VerilatedHierarchyMap* const map = VerilatedImp::hierarchyMap();
         const VerilatedScope* const modp = vop ? vop->scopep() : nullptr;
-        const auto it = vlstd::as_const(map)->find(const_cast<VerilatedScope*>(modp));
-        if (it == map->end()) return nullptr;
-        return ((new VerilatedVpioModuleIter{modp, it->second})->castVpiHandle());
+        const std::vector<const VerilatedScope*> children = VerilatedImp::hierarchyChildren(modp);
+        if (children.empty()) return nullptr;
+        return ((new VerilatedVpioModuleIter{modp, children})->castVpiHandle());
     }
     case vpiInterface: {
         // IEEE 1800-2023 37.5: interfaces are a one-to-many of a module
         const VerilatedVpioScope* const vop = VerilatedVpioScope::castp(object);
-        const VerilatedHierarchyMap* const map = VerilatedImp::hierarchyMap();
         const VerilatedScope* const modp = vop ? vop->scopep() : nullptr;
-        const auto it = vlstd::as_const(map)->find(const_cast<VerilatedScope*>(modp));
-        if (it == map->end()) return nullptr;
-        return ((new VerilatedVpioInterfaceIter{modp, it->second})->castVpiHandle());
+        const std::vector<const VerilatedScope*> children = VerilatedImp::hierarchyChildren(modp);
+        if (children.empty()) return nullptr;
+        return ((new VerilatedVpioInterfaceIter{modp, children})->castVpiHandle());
     }
     case vpiInternalScope: {
         const VerilatedVpioScope* const vop = VerilatedVpioScope::castp(object);
-        const VerilatedHierarchyMap* const map = VerilatedImp::hierarchyMap();
         const VerilatedScope* const modp = vop ? vop->scopep() : nullptr;
-        const auto it = vlstd::as_const(map)->find(const_cast<VerilatedScope*>(modp));
+        const std::vector<const VerilatedScope*> children = VerilatedImp::hierarchyChildren(modp);
         // A leaf module with interface ports has no child scopes, yet must iterate
         const std::vector<const VerilatedIfaceRef*>* const refsp
             = modp ? modp->ifaceRefsp() : nullptr;
-        if (it == map->end() && !refsp) return nullptr;
-        return ((new VerilatedVpioScopeIter{
-                     modp, it == map->end() ? std::vector<const VerilatedScope*>{} : it->second,
-                     refsp})
-                    ->castVpiHandle());
+        if (children.empty() && !refsp) return nullptr;
+        return ((new VerilatedVpioScopeIter{modp, children, refsp})->castVpiHandle());
     }
     case vpiInstance: {
         if (object) return nullptr;
-        const VerilatedHierarchyMap* const map = VerilatedImp::hierarchyMap();
-        const auto it = vlstd::as_const(map)->find(nullptr);
-        if (it == map->end()) return nullptr;
-        return ((new VerilatedVpioInstanceIter{it->second})->castVpiHandle());
+        const std::vector<const VerilatedScope*> children
+            = VerilatedImp::hierarchyChildren(nullptr);
+        if (children.empty()) return nullptr;
+        return ((new VerilatedVpioInstanceIter{children})->castVpiHandle());
     }
     default:
         VL_VPI_WARNING_(__FILE__, __LINE__, "%s: Unsupported type %s, nothing will be returned",
