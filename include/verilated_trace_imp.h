@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <cstring>
 #include <list>
+#include <unordered_set>
 
 // clang-format on
 
@@ -153,7 +154,8 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::traceInit() VL_MT_UNSAFE {
     m_maxBits = 0;
 
     m_groupVec.clear();
-    m_modelps.clear();
+    m_models.clear();
+    m_modelsRemoved = m_contextp->modelsRemoved();
 
     // Declare all enum types, in all models, before the signals that reference them
     bool anyTraced = false;
@@ -163,7 +165,7 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::traceInit() VL_MT_UNSAFE {
         if (!rtmdp) continue;
         anyTraced |= rtmdp->m_opt.m_trace;
         anyParallel |= rtmdp->m_opt.m_traceParallel;
-        m_modelps.push_back(pair.second);
+        m_models.push_back({pair.second, pair.second->m_id, rtmdp});
         for (uint32_t i = 0;; ++i) {
             const VlRtmdDataTypeRow& typeRow = rtmdp->dataTypeRow(i);
             if (typeRow.isEnd()) break;
@@ -700,6 +702,33 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::dumpShard(Buffer* bufp, Shard& shard) V
 }
 
 template <>
+void VerilatedTrace<VL_SUB_T, VL_BUF_T>::removeDeadModels() VL_MT_UNSAFE {
+    m_modelsRemoved = m_contextp->modelsRemoved();
+    std::unordered_set<uint32_t> liveIds;
+    for (const auto& pair : m_contextp->models()) liveIds.insert(pair.second->m_id);
+    m_models.erase(std::remove_if(m_models.begin(), m_models.end(),
+                                  [&](const TracedModel& model) {  //
+                                      return !liveIds.count(model.m_id);
+                                  }),
+                   m_models.end());
+    // Remove the groups of the removed models, which keep their last dumped values
+    std::unordered_set<const VlRtmd*> liveRtmdps;
+    for (const TracedModel& model : m_models) liveRtmdps.insert(model.m_rtmdp);
+    size_t n = 0;
+    for (Shard& shard : m_shards) {
+        const size_t begin = n;
+        for (size_t i = shard.m_begin; i < shard.m_end; ++i) {
+            if (!liveRtmdps.count(m_groupVec[i].first.rtmdp())) continue;
+            if (n != i) m_groupVec[n] = std::move(m_groupVec[i]);
+            ++n;
+        }
+        shard.m_begin = begin;
+        shard.m_end = n;
+    }
+    m_groupVec.erase(m_groupVec.begin() + n, m_groupVec.end());
+}
+
+template <>
 void VerilatedTrace<VL_SUB_T, VL_BUF_T>::parallelWorkerTask(void* datap) {
     ParallelWorkerData* const wdp = reinterpret_cast<ParallelWorkerData*>(datap);
     // Dump the shard
@@ -760,6 +789,8 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::dump(uint64_t timeui) VL_MT_SAFE_EXCLUD
         if (!preChangeDump()) return;
     }
 
+    if (VL_UNLIKELY(m_modelsRemoved != m_contextp->modelsRemoved())) removeDeadModels();
+
     // Update time point
     emitTimeChange(timeui);
 
@@ -798,7 +829,7 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::dump(uint64_t timeui) VL_MT_SAFE_EXCLUD
     }
 
     // The models clear their activity flags at their next evaluation
-    for (VerilatedModel* const modelp : m_modelps) modelp->m_didDump = true;
+    for (const TracedModel& model : m_models) model.m_modelp->m_didDump = true;
 }
 
 #endif  // VL_CPPCHECK

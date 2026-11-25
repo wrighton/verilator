@@ -170,6 +170,8 @@ class VlRtmdActSet final {
         , m_index{index} {}
 
 public:
+    // The descriptors of the model the set belongs to
+    const VlRtmd* rtmdp() const { return m_rtmdp; }
     // Number of activity flags in the set, 0 if the variable has no activity set
     uint32_t size() const {
         if (m_index == VlRtmd::NOIDX) return 0;
