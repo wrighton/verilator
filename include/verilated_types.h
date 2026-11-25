@@ -500,6 +500,9 @@ public:
 
 inline std::string VL_TO_STRING(const VlProcessRef&) { return std::string("process"); }
 
+template <typename T_Value>
+class VlRefPin;
+
 //===================================================================
 /// Verilog typeless mailbox message (IEEE 1800-2023 15.4.9). Holds a message value of any
 /// type, or refers to the variable that receives a message.
@@ -575,6 +578,12 @@ public:
         msg.m_lineno = lineno;
         msg.m_receivep = &receive<T_Var>;
         return msg;
+    }
+    // Container element of a get(), try_get(), peek() or try_peek()
+    template <typename T_Var>
+    static VlMailboxMessage ref(const char* typeName, const VlRefPin<T_Var>& pin,
+                                const char* filename, int lineno) {
+        return ref(typeName, static_cast<T_Var&>(pin), filename, lineno);
     }
     // Pass a temporary from ref() as a ref argument
     VlMailboxMessage& lvalue() { return *this; }
