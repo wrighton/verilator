@@ -543,7 +543,6 @@ class TimingControlVisitor final : public VNVisitor {
     AstNode* m_procp = nullptr;  // NodeProcedure/CFunc/ForkItem we're under
     bool m_hasProcess = false;  // True if current scope has a VlProcess handle available
     int m_forkCnt = 0;  // Number of forks inside a module
-    bool m_underProcedure = false;  // True if we are under an always or initial
     bool m_hasStaticZeroDelay = false;  // True if we have a static #0 delay
     std::vector<FileLine*> m_unknownDelayFlps;  // Locations of AstDelay with non-constant value
 
@@ -906,8 +905,6 @@ class TimingControlVisitor final : public VNVisitor {
         VL_RESTORER(m_hasProcess);
         m_procp = nodep;
         m_hasProcess = hasFlags(nodep, T_HAS_PROC);
-        VL_RESTORER(m_underProcedure);
-        m_underProcedure = true;
         iterateChildren(nodep);
         if (hasFlags(nodep, T_SUSPENDEE)) {
             nodep->setSuspendable();
@@ -934,8 +931,6 @@ class TimingControlVisitor final : public VNVisitor {
         VL_RESTORER(m_hasProcess);
         m_procp = nodep;
         m_hasProcess = hasFlags(nodep, T_HAS_PROC);
-        VL_RESTORER(m_underProcedure);
-        m_underProcedure = true;
         // Workaround for killing `always` processes (doing that is pretty much UB)
         // TODO: Disallow killing `always` at runtime (throw an error)
         if (hasFlags(nodep, T_HAS_PROC)
@@ -1290,9 +1285,9 @@ class TimingControlVisitor final : public VNVisitor {
         }
         // The timing control, which is put in a fork for an NBA
         AstNode* const timingp = controlp;
-        // The new vars are locals if we're in a function.
-        // These intra-assignment vars will later be passed to forked processes by value.
-        const bool localVars = !m_underProcedure;
+        // The new vars are locals of the function or fork item, as each of its runs needs its own,
+        // and only a process is not re-entered. They are passed to forked processes by value.
+        const bool localVars = !VN_IS(m_procp, NodeProcedure);
         // Special case for NBA
         if (inAssignDly) {
             // Put it in a fork so it doesn't block
