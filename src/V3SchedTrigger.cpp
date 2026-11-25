@@ -403,6 +403,26 @@ void TriggerKit::addExtraTriggerAssignment(AstVarScope* vscp, uint32_t index) co
     m_compVecp->prependStmtsp(setp);
 }
 
+// The element type compared by (nested) dynamic containers of the given type, or the type itself
+static const AstNodeDType* containerElementDType(const AstNodeDType* dtypep) {
+    while (VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType)
+           || VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, WildcardArrayDType)) {
+        dtypep = dtypep->subDTypep()->skipRefp();
+    }
+    return dtypep;
+}
+
+bool TriggerKit::supportsValueChange(const AstNodeDType* dtypep) {
+    // A virtual interface compares as a handle, but an interface port or cell is not a variable
+    if (const AstBasicDType* const bdtypep = VN_CAST(dtypep, BasicDType)) {
+        return !bdtypep->isEvent();
+    }
+    const AstIfaceRefDType* const ifaceDtypep = VN_CAST(dtypep, IfaceRefDType);
+    return containerElementDType(dtypep) != dtypep || VN_IS(dtypep, PackArrayDType)
+           || VN_IS(dtypep, UnpackArrayDType) || VN_IS(dtypep, NodeUOrStructDType)
+           || VN_IS(dtypep, ClassRefDType) || (ifaceDtypep && ifaceDtypep->isVirtual());
+}
+
 // Value-change detection for a single interface member VarScope written through a VIF.
 // Creates: trigger[bit] = (vscp != prev); prev = vscp;
 void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc* initFuncp,
@@ -415,29 +435,13 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
     FileLine* const flp = netlistp->fileline();
     AstNodeDType* const dtypep = instVscp->dtypep()->skipRefp();
 
-    // Reject types that do not support value-change comparison. A virtual interface compares as
-    // a handle, but an interface port or cell is not a variable.
-    const AstIfaceRefDType* const ifaceDtypep = VN_CAST(dtypep, IfaceRefDType);
-    const AstNodeDType* elemDtp = dtypep;  // Element compared by (nested) dynamic containers
-    while (VN_IS(elemDtp, QueueDType) || VN_IS(elemDtp, DynArrayDType)
-           || VN_IS(elemDtp, AssocArrayDType) || VN_IS(elemDtp, WildcardArrayDType)) {
-        elemDtp = elemDtp->subDTypep()->skipRefp();
-    }
-    if (const AstBasicDType* const bdtypep = VN_CAST(dtypep, BasicDType)) {
-        if (bdtypep->isEvent()) {
-            instVscp->v3warn(E_UNSUPPORTED, "Unsupported: virtual interface trigger on "
-                                                << dtypep->prettyDTypeNameQ() << " type");
-            return;
-        }
-    } else if (elemDtp == dtypep && !VN_IS(dtypep, PackArrayDType)
-               && !VN_IS(dtypep, UnpackArrayDType) && !VN_IS(dtypep, NodeUOrStructDType)
-               && !VN_IS(dtypep, ClassRefDType) && !(ifaceDtypep && ifaceDtypep->isVirtual())) {
+    if (!supportsValueChange(dtypep)) {
         instVscp->v3warn(E_UNSUPPORTED, "Unsupported: virtual interface trigger on "
                                             << dtypep->prettyDTypeNameQ() << " type");
         return;
     }
     // Events in a container are compared as handles, so must be assignable (shared) events
-    if (elemDtp->isEvent()) v3Global.setAssignsEvents();
+    if (containerElementDType(dtypep)->isEvent()) v3Global.setAssignsEvents();
 
     const auto rdInst = [flp](AstVarScope* vp) { return new AstVarRef{flp, vp, VAccess::READ}; };
     const auto wrPrev = [flp](AstVarScope* vp) { return new AstVarRef{flp, vp, VAccess::WRITE}; };

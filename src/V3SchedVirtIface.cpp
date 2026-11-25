@@ -16,7 +16,8 @@
 //*************************************************************************
 // V3SchedVirtIface's Transformations:
 //
-// Identify interface members written through virtual interface variables (VIF writes).
+// Identify interface members written through virtual interface variables (VIF writes),
+// or read through them by combinational logic, which references only the VIF variable.
 // For each such member, collect all VarScopes across all instantiations of that
 // interface type. Each VarScope gets its own value-change trigger in the scheduler.
 //
@@ -36,6 +37,14 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 namespace V3Sched {
 
 namespace {
+
+// Hash a std::pair automatically
+struct PairHash final {
+    template <typename T, typename U>
+    std::size_t operator()(const std::pair<T, U>& x) const {
+        return std::hash<T>()(x.first) + std::hash<U>()(x.second);
+    }
+};
 
 class VirtIfaceVisitor final : public VNVisitor {
 private:
@@ -57,6 +66,23 @@ private:
     std::vector<IfaceCallable> m_reachableIfaceCallables;
     // Callables already added to the worklist
     std::set<IfaceCallable> m_seenReachableIfaceCallables;
+    // (iface, member) pairs read through VIF by combinational logic, in the order found. These
+    // need triggers too, as such logic references the VIF variable, not the member.
+    std::vector<IfaceMember> m_vifCombReadMembers;
+    // Members already added to m_vifCombReadMembers
+    std::unordered_set<IfaceMember, PairHash> m_seenVifCombReadMembers;
+    // Interface variables whose VarScopes are already candidates for a combinational VIF read
+    std::unordered_set<std::pair<const AstIface*, const AstVar*>, PairHash> m_combReadVars;
+    // Worklist of interface callables called through VIF by combinational logic
+    std::vector<IfaceCallable> m_combIfaceCallables;
+    // Callables already added to the worklist
+    std::unordered_set<IfaceCallable, PairHash> m_seenCombIfaceCallables;
+    // Functions called by combinational logic, visited as part of it -> the interfaces they read
+    // through VIF
+    std::unordered_map<const AstCFunc*, std::set<const AstIface*>> m_combCalleeIfaces;
+    // Interfaces read through VIF by the function being visited as part of combinational logic
+    std::set<const AstIface*>* m_calleeIfacesp = nullptr;
+    bool m_inComb = false;  // Under combinational or hybrid logic
     VirtIfaceTriggers m_triggers;  // Triggers found for virtual interface writes
     const AstIface* m_ifacep = nullptr;  // Current interface
     const std::unique_ptr<V3CallTargets> m_callTargetsp;  // For the methods a call may run
@@ -73,6 +99,11 @@ private:
     }
 
     // VISITORS
+    void visit(AstActive* nodep) override {
+        VL_RESTORER(m_inComb);
+        m_inComb = nodep->sentreep()->hasCombo() || nodep->sentreep()->hasHybrid();
+        iterateChildren(nodep);
+    }
     void visit(AstMemberRef* nodep) override {
         // Detect writes through VIF: the MemberRef's fromp resolves to a virtual interface type.
         // Handles both direct VIF access (vif.member) and class chain (obj.vif.member).
@@ -83,7 +114,32 @@ private:
                 addVifWrittenMember(dtypep->ifacep(), nodep->varp()->name());
             }
         }
+        // Detect reads through VIF by combinational logic (IEEE 1800-2023 9.2.2.2.1)
+        if (m_inComb && nodep->access().isReadOrRW()) {
+            const AstIfaceRefDType* const dtypep
+                = VN_CAST(nodep->fromp()->dtypep()->skipRefp(), IfaceRefDType);
+            // A member that cannot have a trigger, such as a nested VIF, is not tracked
+            if (dtypep && dtypep->isVirtual()
+                && TriggerKit::supportsValueChange(nodep->varp()->dtypep()->skipRefp())) {
+                addVifCombReadMember(dtypep->ifacep(), nodep->varp()->name());
+                addCombReadSelect(dtypep->ifacep(), nodep->fromp());
+            }
+        }
         iterateChildren(nodep);
+    }
+    void visit(AstCCall* nodep) override {
+        iterateChildren(nodep);
+        AstCFunc* const funcp = nodep->funcp();
+        if (!m_inComb || !util::isLogicCallee(funcp)) return;
+        // The reads of a function called by combinational logic are reads of that logic
+        const auto pair = m_combCalleeIfaces.emplace(funcp, std::set<const AstIface*>{});
+        if (pair.second) {
+            VL_RESTORER(m_calleeIfacesp);
+            m_calleeIfacesp = &pair.first->second;
+            iterateChildren(funcp);
+        }
+        // Its arguments select the virtual interfaces its formals refer to
+        for (const AstIface* const ifacep : pair.first->second) addCombReadSelect(ifacep, nodep);
     }
     void visit(AstCMethodCall* nodep) override {
         // A method call on a member selected through a virtual interface. This includes the
@@ -94,6 +150,10 @@ private:
             if (dtypep && dtypep->isVirtual()) {
                 for (AstCFunc* const funcp : m_callTargetsp->getTargets(nodep)) {
                     addReachableIfaceCallable(dtypep->ifaceViaCellp(), funcp);
+                    if (m_inComb && util::isLogicCallee(funcp)) {
+                        addCombIfaceCallable(dtypep->ifaceViaCellp(), funcp);
+                        addCombReadSelect(dtypep->ifaceViaCellp(), memberRefp->fromp());
+                    }
                 }
             }
         }
@@ -148,16 +208,70 @@ private:
         }
     }
 
-    // Build final trigger list by intersecting VIF writes with candidate VarScopes
-    void buildTriggers() {
-        for (const auto& written : m_vifWrittenMembers) {
-            const auto it = m_candidateVscps.find(written);
-            if (it == m_candidateVscps.end()) continue;
-            for (AstVarScope* const vscp : it->second) {
-                const AstIface* const ifacep = written.first;
-                m_triggers.addTrigger(ifacep, vscp->varp(), vscp);
-            }
+    // Record that combinational logic reads through a VIF of 'ifacep' that 'selp' selects
+    void addCombReadSelect(const AstIface* const ifacep, const AstNode* const selp) {
+        if (m_calleeIfacesp) m_calleeIfacesp->insert(ifacep);
+        selp->foreach([&](const AstVarRef* const refp) {
+            const AstVar* const varp = refp->varp();
+            // A VIF variable connects by itself, and a formal is selected by the call's arguments
+            if (varp->isVirtIface() || varp->isFuncLocal()) return;
+            m_triggers.m_combReadRoots[refp->varScopep()].insert(ifacep);
+        });
+    }
+
+    void addVifCombReadMember(const AstIface* const ifacep, const std::string& name) {
+        const IfaceMember member{ifacep, name};
+        if (m_seenVifCombReadMembers.emplace(member).second) {
+            m_vifCombReadMembers.push_back(member);
         }
+    }
+
+    void addCombIfaceCallable(AstIface* const ifacep, AstCFunc* const funcp) {
+        const IfaceCallable callable{ifacep, funcp};
+        if (m_seenCombIfaceCallables.emplace(callable).second) {
+            m_combIfaceCallables.push_back(callable);
+        }
+    }
+
+    // Record the interface members read by a callable called through VIF by combinational logic
+    void addCombReadMembers(const IfaceCallable callable) {
+        callable.second->foreach([this, callable](AstNodeExpr* const nodep) {
+            if (const AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
+                AstVar* const varp = refp->varp();
+                // A member that cannot have a trigger, such as a nested VIF, is not tracked
+                if (!refp->access().isReadOrRW() || varp->isFuncLocal() || varp->isTemp()
+                    || !VN_IS(refp->varScopep()->scopep()->modp(), Iface)
+                    || !TriggerKit::supportsValueChange(varp->dtypep()->skipRefp())) {
+                    return;
+                }
+                if (!m_combReadVars.emplace(callable.first, varp).second) return;
+                varp->sensIfacep(callable.first);
+                addVifCombReadMember(callable.first, varp->name());
+                const auto it = m_vscpsByVar.find(varp);
+                UASSERT_OBJ(it != m_vscpsByVar.end(), varp, "No VarScope for interface member");
+                for (AstVarScope* const vscp : it->second) addCandidateVscp(callable.first, vscp);
+            } else if (const AstNodeCCall* const callp = VN_CAST(nodep, NodeCCall)) {
+                if (util::isLogicCallee(callp->funcp())) {
+                    addCombIfaceCallable(callable.first, callp->funcp());
+                }
+            }
+        });
+    }
+
+    // Build final trigger list by intersecting the members written through VIF, or read through
+    // VIF by combinational logic, with candidate VarScopes
+    void buildTriggers() {
+        std::unordered_set<IfaceMember, PairHash> triggeredMembers;
+        const auto addTriggers = [&](const IfaceMember& member) {
+            if (!triggeredMembers.emplace(member).second) return;
+            const auto it = m_candidateVscps.find(member);
+            if (it == m_candidateVscps.end()) return;
+            for (AstVarScope* const vscp : it->second) {
+                m_triggers.addTrigger(member.first, vscp->varp(), vscp);
+            }
+        };
+        for (const IfaceMember& member : m_vifWrittenMembers) addTriggers(member);
+        for (const IfaceMember& member : m_vifCombReadMembers) addTriggers(member);
     }
 
 public:
@@ -190,6 +304,9 @@ public:
                     addReachableIfaceCallable(callable.first, callp->funcp());
                 }
             });
+        }
+        for (size_t i = 0; i < m_combIfaceCallables.size(); ++i) {
+            addCombReadMembers(m_combIfaceCallables[i]);
         }
         buildTriggers();
     }
