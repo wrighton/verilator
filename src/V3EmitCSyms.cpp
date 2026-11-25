@@ -1422,11 +1422,6 @@ void EmitCSyms::emitScopeHier(TextStmts& stmts, bool destroy) {
             stmts.add("vlSymsp->__Vhier.addFromTable(" + args + ");");
         }
     }
-
-    if (destroy) {
-        stmts.add("// Clear keys from hierarchy map after values have been removed");
-        stmts.add("vlSymsp->__Vhier.clear();");
-    }
 }
 
 EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
