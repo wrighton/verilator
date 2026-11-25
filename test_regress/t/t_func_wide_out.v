@@ -42,6 +42,12 @@ class Cls #(
   endfunction
 endclass
 
+class ClsOut;
+  function void put(output u70_t value);
+    value = 70'h3f_0000_0000_0000_0abc;
+  endfunction
+endclass
+
 module t;
 
   parameter MSG_PORT_WIDTH = 4350;
@@ -133,6 +139,17 @@ module t;
       du70 = 12'he34;  // negative if signed
       dpii_inv_u12(du70, qu70);
       `checkh(qu70, 70'h0000000000000001cb);
+    end
+
+    begin
+      // narrow connect to wide output of a method, in a loop
+      static ClsOut o = new;
+      int ids[2];
+      foreach (ids[i]) begin
+        u12_t q;
+        o.put(q);
+        `checkh(q, 12'habc);
+      end
     end
 
     $write("*-* All Finished *-*\n");
