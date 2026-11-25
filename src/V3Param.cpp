@@ -4136,10 +4136,12 @@ public:
             const std::string funcName = ftaskp->name();
             // Find the nearest containing (ancestor) class for a node.
             // Uses aboveLoopp() which correctly skips sibling links
-            // (e.g. covergroup classes) to find the true parent.
+            // (e.g. covergroup classes) to find the true parent. A class is a module, so the
+            // nearest module is it, if any: stop there, as aboveLoopp() of a module is linear in
+            // the number of modules before it.
             const auto ancestorClassOf = [](AstNode* startp) -> AstClass* {
                 for (AstNode* np = startp->aboveLoopp(); np; np = np->aboveLoopp()) {
-                    if (AstClass* const cp = VN_CAST(np, Class)) return cp;
+                    if (VN_IS(np, NodeModule)) return VN_CAST(np, Class);
                 }
                 return nullptr;
             };
