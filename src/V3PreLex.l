@@ -317,8 +317,8 @@ bom             [\357\273\277]
         /* Pass-through include <> filenames */
 <INCMODE><<EOF>>        { FL_FWDC; linenoInc(); yyerrorf("EOF in unterminated include filename");
                           yyleng = 0; return VP_EOF_ERROR; }
-<INCMODE>{crnl}         { FL_FWDC; linenoInc(); yyerrorf("Unterminated include filename");
-                          FL_BRK; BEGIN(INITIAL); }
+<INCMODE>{crnl}         { yyless(yyleng - 1); FL_FWDC; yyerrorf("Unterminated include filename");
+                          yy_pop_state(); FL_BRK; }
 <INCMODE>[^\>\\]        { yymore(); }
 <INCMODE>[\\].          { yymore(); }
 <INCMODE>[\>]           { FL_FWDC; yy_pop_state(); return VP_STRING; }
@@ -491,7 +491,10 @@ bom             [\357\273\277]
 
         /* Generics */
 <INITIAL>{crnl}         { FL_FWDC; linenoInc(); yytext=(char*)"\n"; yyleng=1; return VP_WHITE; }
-<INITIAL><<EOF>>        { FL_FWDC; return VP_EOF; }  /* A "normal" EOF */
+<INITIAL><<EOF>>        { FL_FWDC;  /* A "normal" EOF; every pushed start condition was popped */
+                          if (v3Global.opt.debugCheck())
+                              UASSERT(!yy_start_stack_ptr, "Start condition stack not empty at EOF");
+                          return VP_EOF; }
 <INITIAL>{symb}         { FL_FWDC; return VP_SYMBOL; }
 <INITIAL>{symb}``       { FL_FWDC; yyleng-=2; return VP_SYMBOL_JOIN; }
 <INITIAL>``             { FL_FWDC; yyleng-=2; return VP_JOIN; }
