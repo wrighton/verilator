@@ -7484,7 +7484,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     // it's extended class symbols.
                     return;
                 }
-                if (AstClass* const targetClassp = VN_CAST(dotSymp->nodep(), Class)) {
+                if (AstClass* const targetClassp
+                    = dotSymp ? VN_CAST(dotSymp->nodep(), Class) : nullptr) {
                     if (m_extendsParam.count(targetClassp)) {
                         // Target class has parameterized extends not yet resolved.
                         // Its inherited symbols (e.g. static functions from the base class)
@@ -7539,7 +7540,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 } else if (VN_IS(nodep, New) && !m_statep->forScopeCreation()) {
                     // Resolved in V3Width
                 } else if ((nodep->name() == "pre_randomize" || nodep->name() == "post_randomize")
-                           && VN_IS(dotSymp->nodep(), Class)) {
+                           && dotSymp && VN_IS(dotSymp->nodep(), Class)) {
                     AstClass* const classp = VN_AS(dotSymp->nodep(), Class);
                     // Functions that might be defined by user, but if not, they get empty
                     // definitions within referenced class.
@@ -7553,9 +7554,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     nodep->classOrPackagep(classp);
                     UINFO(9, indent() << " Auto-made " << funcp);
                     return;
-                } else if (nodep->name() == "randomize" || nodep->name() == "srandom"
-                           || nodep->name() == "get_randstate" || nodep->name() == "set_randstate"
-                           || nodep->name() == "rand_mode" || nodep->name() == "constraint_mode") {
+                } else if (dotSymp  // Else a dotted scope was not found, reported below
+                           && (nodep->name() == "randomize" || nodep->name() == "srandom"
+                               || nodep->name() == "get_randstate"
+                               || nodep->name() == "set_randstate" || nodep->name() == "rand_mode"
+                               || nodep->name() == "constraint_mode")) {
                     if (AstClass* const classp = VN_CAST(m_modp, Class)) {
                         // Don't overwrite if already resolved to a package (e.g. std::randomize)
                         if (!VN_IS(nodep->classOrPackagep(), Package))
