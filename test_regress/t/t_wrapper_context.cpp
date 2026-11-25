@@ -32,6 +32,7 @@ VerilatedMutex outputMutex;
 #elif defined(T_WRAPPER_CONTEXT_SEQ)
 VerilatedMutex sequentialMutex;
 #elif defined(T_WRAPPER_CONTEXT_FST)
+#elif defined(T_WRAPPER_CONTEXT_TSAN)
 #else
 #error "Unexpected test name"
 #endif
