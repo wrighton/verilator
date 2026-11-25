@@ -97,6 +97,7 @@ module t (
   // Try non-pure, aliasing with name
   import "DPI-C" dpii_fa_bit =  function int oth_f_int1(input int i);
   import "DPI-C" dpii_fa_bit =  function int oth_f_int2(input int i);
+  import "DPI-C" dpii_fa_bit =  function int oth_f_int3(input int dpii_fa_bit);
 
   // Check Verilator doesn't convert double underscores
   import "DPI-C" pure function int dpii__under___score(input int i);
@@ -257,6 +258,7 @@ module t (
     // Check alias
     if (oth_f_int1(32'd123) !== ~32'd123) $stop;
     if (oth_f_int2(32'd124) !== ~32'd124) $stop;
+    if (oth_f_int3(32'd125) !== ~32'd125) $stop;
 
     if (dpii__under___score(32'd60) != 32'd61) $stop;
 
