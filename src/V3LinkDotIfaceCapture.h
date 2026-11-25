@@ -53,12 +53,10 @@ class V3LinkDotIfaceCapture final {
 
     // --- Internal-only methods (not called outside V3LinkDotIfaceCapture.cpp) ---
     static void enable(bool flag);  // LCOV_EXCL_LINE
-    // Last cell of a cell path without its array index, so paths through generate blocks or
-    // instance arrays to a cell of a name share it
-    static string cellPathKey(const string& cellPath);
     static void reset();
     static void clearModuleCache();
     static AstIfaceRefDType* ifaceRefFromVarDType(AstNodeDType* dtypep);
+    static AstNodeModule* followCellPathFromItems(AstNode* itemsp, const string& cellPath);
     // Point a reference at a typedef and fix its other links.
     static void retargetRefToTypedef(AstRefDType* refp, AstTypedef* typedefp);
     // Same, for a parameter type.
@@ -74,6 +72,9 @@ public:
     static bool enabled() { return s_enabled; }
     // Tag of a reference, or nullptr if untagged or copied into another module
     static const VIfaceCaptureTag* captureTag(AstRefDType* refp);
+    // Last cell of a cell path without its array index, so paths through generate blocks or
+    // instance arrays to a cell of a name share it
+    static string cellPathKey(const string& cellPath);
     // Whether a reference captured in modp's original module may have a cell path to cellName,
     // ignoring the generate blocks and array indices on the way
     static bool hasCapture(const AstNodeModule* modp, const string& cellName);
@@ -93,6 +94,9 @@ public:
     // startModp, returning the module at the end of the path.  Returns
     // nullptr if any component cannot be resolved.
     static AstNodeModule* followCellPath(const AstNodeModule* startModp, const string& cellPath);
+    // Same, but the path is a name used at nodep, so it starts in the innermost
+    // generate block or module around nodep that declares its first component.
+    static AstNodeModule* followCellPathAt(const AstNode* nodep, const string& cellPath);
 
     static void captureTypedefContext(AstRefDType* refp, const char* stageLabel, int dotPos,
                                       const std::string& dotText, VSymEnt* dotSymp,
