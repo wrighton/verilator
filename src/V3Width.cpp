@@ -7090,9 +7090,9 @@ class WidthVisitor final : public VNVisitor {
             methodOkArguments(nodep, 0, 1);
             if (nodep->argsp()) {
                 iterateCheckBool(nodep, "argument", methodArg(nodep, 0), BOTH);
-                nodep->dtypep(nodep->findBasicDType(VBasicDTypeKwd::INT));
-            } else {
                 nodep->dtypeSetVoid();
+            } else {
+                nodep->dtypep(nodep->findBasicDType(VBasicDTypeKwd::INT));
             }
             v3Global.useRandomizeMethods(true);
         } else {
