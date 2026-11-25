@@ -4021,14 +4021,18 @@ VerilatedSyms::~VerilatedSyms() {
 // Verilated:: Methods
 
 VerilatedContext* Verilated::defaultContextp() VL_MT_SAFE {
-    // Never destroyed, as models using it may be destroyed by any static destructor
-    static VerilatedContext* const s_contextp = new VerilatedContext;
-    // Ended when this function static constructed after it is destroyed, where a static
-    // context would have been destroyed
+    // Ends the context when destroyed, where a static context would have been destroyed
     struct EndAtExit final {
-        ~EndAtExit() { s_contextp->endContext(); }
+        VerilatedContext* const m_contextp;  // Context to end
+        ~EndAtExit() { m_contextp->endContext(); }
     };
-    static const EndAtExit s_endAtExit{};
+    // Never destroyed, as models using it may be destroyed by any static destructor. Its ender
+    // is constructed with it, so a later call, even from a static destructor, only reads this.
+    static VerilatedContext* const s_contextp = [] {
+        VerilatedContext* const contextp = new VerilatedContext;
+        static const EndAtExit s_endAtExit{contextp};
+        return contextp;
+    }();
     return s_contextp;
 }
 
