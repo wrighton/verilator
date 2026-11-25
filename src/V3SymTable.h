@@ -48,6 +48,7 @@ class VSymEnt final {
     using IdNameMap = std::multimap<std::string, VSymEnt*>;
     // Most entries (variables, imported symbols) never get children, so only allocate on insert
     struct Names final {
+        bool m_wildSource = false;  // Some table wildcard imports this one
         IdNameMap m_idName;  // Hash of variables by name
         std::unordered_set<std::string> m_idNameSimilar;  // Variables by name with same case
     };
@@ -56,9 +57,6 @@ class VSymEnt final {
     // symbols are only candidates, imported into the name map on first lookup, as copying
     // every symbol is O(package size) per importing scope.
     std::vector<const VSymEnt*> m_wildImportps;
-    VSymWildIndex* m_wildIndexp = nullptr;  // Index of m_wildImportps, see VSymGraph::wildIndexp
-    // Some table wildcard imports this one. Mutable, as being imported does not change the table.
-    mutable bool m_wildSource = false;
     VSymGraph* const m_graphp;  // Graph that owns this entry
     AstNode* m_nodep;  // Node that entry belongs to
     VSymEnt* m_fallbackp = nullptr;  // Table "above" this in name scope, for fallback resolution
@@ -377,7 +375,8 @@ private:
         }
         releaseWildIndex();
         m_wildImportps.push_back(pkgSymp);
-        pkgSymp->m_wildSource = true;
+        // Being imported does not change the package's table, which is not const elsewhere
+        const_cast<VSymEnt*>(pkgSymp)->namesWritable().m_wildSource = true;
         // Names imported by earlier lookups are not looked up again
         for (const auto& itr : idNameMap()) {
             if (itr.second->m_wildImported) checkWildImport(pkgSymp, itr.first, itr.second);
@@ -564,6 +563,9 @@ class VSymGraph final {
     uint64_t m_wildSourceEdits = 0;  // Count of edits of wildcard imported tables
     // Indexes of wildcard imported packages, by the list of packages. Not iterated.
     std::map<std::vector<const VSymEnt*>, std::unique_ptr<VSymWildIndex>> m_wildIndexes;
+    // Index used by each table with wildcard imports, here rather than in VSymEnt as few tables
+    // have wildcard imports, and VSymEnt's size matters
+    std::unordered_map<const VSymEnt*, VSymWildIndex*> m_wildIndexOf;
     size_t m_wildIndexBuilds = 0;  // Count of VSymWildIndex builds, for statistics
     size_t m_wildIndexEntries = 0;  // Entries in the built indexes
     size_t m_wildIndexEntriesPeak = 0;  // Maximum of m_wildIndexEntries, for statistics
@@ -659,13 +661,14 @@ inline VSymEnt::VSymEnt(VSymGraph* graphp, const VSymEnt* symp)
 }
 
 void VSymEnt::noteWildSourceEdit() {
-    if (m_wildSource) ++m_graphp->m_wildSourceEdits;
+    if (m_namesp && m_namesp->m_wildSource) ++m_graphp->m_wildSourceEdits;
 }
 
 void VSymEnt::releaseWildIndex() {
-    if (!m_wildIndexp) return;
+    const auto it = m_graphp->m_wildIndexOf.find(this);
+    if (it == m_graphp->m_wildIndexOf.end()) return;
     m_graphp->releaseWildIndex(m_wildImportps);
-    m_wildIndexp = nullptr;
+    m_graphp->m_wildIndexOf.erase(it);
 }
 
 bool VSymEnt::exportsName(const VSymEnt* pkgSymp, const string& name) const {
@@ -677,9 +680,11 @@ bool VSymEnt::exportsName(const VSymEnt* pkgSymp, const string& name) const {
 
 // The index of m_wildImportps if it holds every name, or nullptr
 const VSymWildIndex* VSymEnt::builtWildIndexp() const {
-    if (!m_wildIndexp || !m_wildIndexp->m_built) return nullptr;
-    if (m_wildIndexp->m_edits != m_graphp->m_wildSourceEdits) return nullptr;
-    return m_wildIndexp;
+    const auto it = m_graphp->m_wildIndexOf.find(this);
+    if (it == m_graphp->m_wildIndexOf.end()) return nullptr;
+    const VSymWildIndex* const indexp = it->second;
+    if (!indexp->m_built || indexp->m_edits != m_graphp->m_wildSourceEdits) return nullptr;
+    return indexp;
 }
 
 // Update wildcard imported entry symp for the wildcard imported packages having name
@@ -701,8 +706,9 @@ const VSymEnt* VSymEnt::wildImportSourcep(const string& name) {
     // Few packages are searched faster than an index is built
     static constexpr size_t WILD_INDEX_MIN_PACKAGES = 4;
     if (m_wildImportps.size() >= WILD_INDEX_MIN_PACKAGES) {
-        if (!m_wildIndexp) m_wildIndexp = m_graphp->wildIndexp(m_wildImportps);
-        VSymWildIndex& index = *m_wildIndexp;
+        VSymWildIndex*& indexpr = m_graphp->m_wildIndexOf[this];
+        if (!indexpr) indexpr = m_graphp->wildIndexp(m_wildImportps);
+        VSymWildIndex& index = *indexpr;
         if (index.m_built && index.m_edits != m_graphp->m_wildSourceEdits) {
             m_graphp->m_wildIndexEntries -= index.m_positions.size();
             index.m_positions.clear();
