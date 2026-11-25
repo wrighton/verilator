@@ -5099,8 +5099,6 @@ void VerilatedHierarchy::removeFromTable(const VlHierTableEntry* entp, size_t n,
     }
 }
 
-void VerilatedHierarchy::clear() { VerilatedImp::hierarchyClear(); }
-
 //===========================================================================
 // VerilatedOneThreaded:: Methods
 
