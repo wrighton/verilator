@@ -388,6 +388,7 @@ class EmitCModel final : public EmitCFunc {
             puts("VlRtmd* const rtmdp = new VlRtmd;\n");
             puts("rtmdp->m_modelp = this;\n");
             puts("rtmdp->m_symsp = vlSymsp;\n");
+            if (v3Global.hasEvents()) puts("rtmdp->m_evalStampp = &vlSymsp->__Vm_evalStamp;\n");
             if (activityp) {
                 puts("rtmdp->m_activityFlagsp = vlSymsp->vlInst.TOP." + varName(activityp)
                      + ".data();\n");
@@ -540,7 +541,10 @@ class EmitCModel final : public EmitCFunc {
             puts(flags + "[0] = 1;\n");  // Always index 0
         }
 
-        if (v3Global.hasEvents()) puts("vlSymsp->clearTriggeredEvents();\n");
+        if (v3Global.hasEvents()) {
+            putsDecoration(nullptr, "// Events fired before this evaluation are not triggered\n");
+            puts("vlSymsp->__Vm_evalStamp += 2;\n");
+        }
 
         puts("}\n");
 

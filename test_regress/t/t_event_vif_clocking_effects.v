@@ -485,7 +485,7 @@ module t;
 `ifdef T_SPOOF
 `line 1 "__STD_FILE__" 0
 `endif
-        $c(m_alias, ".fire();");
+        $c("vlSymsp->fireEvent(", m_alias, ");");
 `ifdef T_SPOOF
 `line 491 "t/t_event_vif_clocking_effects.v" 0
 `endif
