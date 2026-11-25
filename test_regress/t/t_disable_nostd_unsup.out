@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_disable_nostd_unsup.v:26:5: Unsupported: disable of 'frk' without the std package (--no-std)
+   26 |     disable frk;
+      |     ^~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_disable_nostd_unsup.v:27:5: Unsupported: disable of 'tsk' without the std package (--no-std)
+   27 |     disable tsk;
+      |     ^~~~~~~
+%Error-UNSUPPORTED: t/t_disable_nostd_unsup.v:32:7: Unsupported: disable of 'blk_fork' without the std package (--no-std)
+   32 |       disable blk_fork;
+      |       ^~~~~~~
+%Error-UNSUPPORTED: t/t_disable_nostd_unsup.v:11:9: Unsupported: disable of 'frk' without the std package (--no-std)
+   11 |         disable frk;
+      |         ^~~~~~~
+%Error: Exiting due to
