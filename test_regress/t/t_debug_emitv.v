@@ -820,6 +820,8 @@ module sub(input logic clk);
     return {31'd0, v[2]} + 32'd1;
   endfunction
   real r;
+  logic [2:0] up_pm;
+  assign up_pm = pm.pout;  // Upwards reference
 endmodule
 
 module defparam_gen;

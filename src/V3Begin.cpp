@@ -424,10 +424,11 @@ class BeginVisitor final : public VNVisitor {
     }
     void visit(AstVarXRef* nodep) override {
         if (nodep->user1SetOnce()) return;
-        if (nodep->varp()->isParam()) {
-            m_paramRefps.push_back(nodep);
-        } else {
+        if (!nodep->varp()->isParam()) {
             m_staticVarRefps.push_back(nodep);
+        } else if (!nodep->upward()) {
+            // V3LinkDot replaces an upwards reference to a parameter once resolved per scope
+            m_paramRefps.push_back(nodep);
         }
     }
     void visit(AstMemberRef* nodep) override {

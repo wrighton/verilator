@@ -5955,6 +5955,7 @@ void AstVarXRef::dump(std::ostream& str) const {
     if (readOnlyModport()) str << " [ROMODPORT]";
     if (assertCtlOptional()) str << " [ACTLOPT]";
     if (assertCtlAbsolute()) str << " [ACTLABS]";
+    if (upward()) str << " [UPWARD]";
     str << ".=" << dotted() << " ";
     if (inlinedDots() != "") str << " inline.=" << inlinedDots() << " - ";
     if (!resolvedDotted().empty()) str << " resolved.=" << resolvedDotted() << " - ";
@@ -5971,6 +5972,7 @@ void AstVarXRef::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, readOnlyModport);
     dumpJsonBoolFuncIf(str, assertCtlOptional);
     dumpJsonBoolFuncIf(str, assertCtlAbsolute);
+    dumpJsonBoolFuncIf(str, upward);
     dumpJsonStrFunc(str, dotted);
     dumpJsonStrFunc(str, inlinedDots);
     dumpJsonStrFunc(str, resolvedDotted);

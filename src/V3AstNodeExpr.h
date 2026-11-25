@@ -6955,6 +6955,7 @@ class AstVarXRef final : public AstNodeVarRef {
     bool m_readOnlyModport = false;  // Linked via an input-only modport
     bool m_assertCtlOptional = false;  // Assertion control site of another elaboration
     bool m_assertCtlAbsolute = false;  // Assertion control site named by an absolute path
+    bool m_upward = false;  // Upwards reference, may refer to a different variable per instance
 public:
     AstVarXRef(FileLine* fl, const string& name, const string& dotted, const VAccess& access)
         : ASTGEN_SUPER_VarXRef(fl, nullptr, access)
@@ -6980,6 +6981,8 @@ public:
     void assertCtlOptional(const bool flag) { m_assertCtlOptional = flag; }
     bool assertCtlAbsolute() const { return m_assertCtlAbsolute; }
     void assertCtlAbsolute(const bool flag) { m_assertCtlAbsolute = flag; }
+    bool upward() const { return m_upward; }
+    void upward(const bool flag) { m_upward = flag; }
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return true; }
@@ -6991,7 +6994,8 @@ public:
                 && inlinedDots() == asamep->inlinedDots()
                 && readOnlyModport() == asamep->readOnlyModport()
                 && assertCtlOptional() == asamep->assertCtlOptional()
-                && assertCtlAbsolute() == asamep->assertCtlAbsolute());
+                && assertCtlAbsolute() == asamep->assertCtlAbsolute()
+                && upward() == asamep->upward());
     }
 };
 

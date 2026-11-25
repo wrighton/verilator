@@ -2232,6 +2232,8 @@ module sub__Zz461fae86;
         end
     endfunction
     real r;
+    logic [2:0]  up_pm;
+    assign up_pm = pm.pout;
     parameter bit __Vbind0 = 1'h1;
     Iface path_bound_iface ();
 endmodule
