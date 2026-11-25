@@ -708,24 +708,32 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::parallelWorkerTask(void* datap) {
     } else {
         wdp->m_trace.dumpShard<false>(wdp->m_bufp, wdp->m_shard);
     }
-    // Mark buffer as ready
-    const VerilatedLockGuard lock{wdp->m_mutex};
-    wdp->m_ready.store(true);
-    if (wdp->m_waiting) wdp->m_cv.notify_one();
+    // Mark the buffer as ready, releasing its contents to the waiter. Unless the waiter is
+    // suspended, it may free '*wdp' as soon as it sees this, so do not touch it afterwards.
+    if (wdp->m_state.exchange(ParallelWorkerData::READY, std::memory_order_acq_rel)
+        == ParallelWorkerData::WAITING) {
+        // The suspended waiter returns only after taking the mutex once this releases it
+        const VerilatedLockGuard lock{wdp->m_mutex};
+        wdp->m_notified = true;
+        wdp->m_cv.notify_one();
+    }
 }
 
 template <>
 VL_ATTR_NOINLINE void VerilatedTrace<VL_SUB_T, VL_BUF_T>::ParallelWorkerData::wait() {
     // Spin for a while, waiting for the buffer to become ready
     for (int i = 0; i < VL_LOCK_SPINS; ++i) {
-        if (VL_LIKELY(m_ready.load(std::memory_order_relaxed))) return;
+        if (VL_LIKELY(m_state.load(std::memory_order_acquire) == READY)) return;
         VL_CPU_RELAX();
     }
-    // We have been spinning for a while, so yield the thread
+    // We have been spinning for a while, so suspend until woken, unless it became ready
     VerilatedLockGuard lock{m_mutex};
-    m_waiting = true;
-    m_cv.wait(m_mutex, [this] { return m_ready.load(std::memory_order_relaxed); });
-    m_waiting = false;
+    uint8_t expected = PENDING;
+    if (!m_state.compare_exchange_strong(expected, WAITING, std::memory_order_acq_rel,
+                                         std::memory_order_acquire)) {
+        return;
+    }
+    while (!m_notified) m_cv.wait(m_mutex);
 }
 
 template <>
