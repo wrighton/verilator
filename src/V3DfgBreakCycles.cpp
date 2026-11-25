@@ -1202,6 +1202,13 @@ class IndependentBits final : public DfgVisitor {
         size_t m_nLeaves = 1;  // Number of leaves in the tree, a power of 2
         std::vector<DfgVertex*> m_others;  // The other sinks
     };
+    // A subtree of a 'SinkIndex' tree: its node, first select, and number of selects
+    struct SubTree final {
+        size_t m_node;  // Index of its node in 'SinkIndex::m_maxMsbP1s'
+        size_t m_first;  // Index of its first select in 'SinkIndex::m_sels'
+        size_t m_count;  // Number of selects in it
+    };
+    std::vector<SubTree> m_subTrees;  // Subtrees to search in 'enqueueSinks', kept to reuse
     size_t m_nExamined = 0;  // Number of sinks examined when enqueueing sinks, for statistics
     std::unordered_map<const DfgVertex*, SinkIndex> m_sinkIndex;  // Built when first needed
     // The bits of the visited vertex to compute. Visitors of bit-local vertices compute only
@@ -1621,22 +1628,19 @@ class IndependentBits final : public DfgVisitor {
             = std::upper_bound(index.m_sels.begin(), index.m_sels.end(), msb,
                                [](uint32_t bit, const DfgSel* selp) { return bit < selp->lsb(); })
               - index.m_sels.begin();
-        // Entries are a node, its first select, and its number of selects
-        std::vector<std::tuple<size_t, size_t, size_t>> stack{{1, 0, index.m_nLeaves}};
-        while (!stack.empty()) {
-            size_t node;
-            size_t first;
-            size_t count;
-            std::tie(node, first, count) = stack.back();
-            stack.pop_back();
+        m_subTrees.push_back({1, 0, index.m_nLeaves});
+        while (!m_subTrees.empty()) {
+            const SubTree subTree = m_subTrees.back();
+            m_subTrees.pop_back();
             ++m_nExamined;
-            if (first >= end || index.m_maxMsbP1s[node] <= lsb) continue;
-            if (count == 1) {
-                enqueueSink(vtx, *index.m_sels[first], msb, lsb);
+            if (subTree.m_first >= end || index.m_maxMsbP1s[subTree.m_node] <= lsb) continue;
+            if (subTree.m_count == 1) {
+                enqueueSink(vtx, *index.m_sels[subTree.m_first], msb, lsb);
                 continue;
             }
-            stack.emplace_back(2 * node + 1, first + count / 2, count / 2);
-            stack.emplace_back(2 * node, first, count / 2);
+            const size_t half = subTree.m_count / 2;
+            m_subTrees.push_back({2 * subTree.m_node + 1, subTree.m_first + half, half});
+            m_subTrees.push_back({2 * subTree.m_node, subTree.m_first, half});
         }
         for (DfgVertex* const sinkp : index.m_others) {
             ++m_nExamined;
