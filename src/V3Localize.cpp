@@ -68,11 +68,7 @@ class LocalizeVisitor final : public VNVisitor {
     // METHODS
     bool isOptimizable(AstVarScope* nodep) {
         // Don't want to malloc/free the backing store all the time
-        if (const AstBasicDType* const basicp = nodep->varp()->basicp()) {
-            if (basicp->isNbaGenericQueue()) return false;
-            // The model retains a non-assignable event's address until the next evaluation.
-            if (basicp->isEvent() && !v3Global.assignsEvents()) return false;
-        }
+        if (nodep->varp()->basicp() && nodep->varp()->basicp()->isNbaGenericQueue()) return false;
         if (VN_IS(nodep->dtypep()->skipRefp(), ClosurePoolDType)) return false;
         // Do not localize strings used in hot code. They result in unnecessary initialization
         // and bloated code size due to destructor calls when unused. In cold code this cost
