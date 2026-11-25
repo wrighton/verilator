@@ -1257,7 +1257,8 @@ class Verilated final {
     // Debug is reloaded from on command-line settings, so do not need to persist
     static int s_debug;  // See accessors... only when VL_DEBUG set
 
-    static VerilatedContext* s_lastContextp;  // Last context constructed/attached
+    // Last context constructed/attached; atomic, as each thread may attach its own context
+    static std::atomic<VerilatedContext*> s_lastContextp;
 
     // Not covered by mutex, as per-thread
     static thread_local struct ThreadLocal {
@@ -1511,19 +1512,19 @@ private:
     static void endOfThreadMTaskGuts(VerilatedEvalMsgQueue* evalMsgQp) VL_MT_SAFE;
 
     // Set the last VerilatedContext accessed
-    VL_ATTR_NO_SANITIZE_THREAD static void
-    lastContextp(VerilatedContext* contextp) VL_MT_SAFE_PRETEND {
+    static void lastContextp(VerilatedContext* contextp) VL_MT_SAFE {
         // Record last access, only for DPI and initial non-threaded contexts
-        // Marked VL_MT_SAFE_PRETEND due to writes always being safe, reading is the problem
-        s_lastContextp = contextp;
+        s_lastContextp.store(contextp, std::memory_order_relaxed);
     }
     // Return the last VerilatedContext accessed
     // Only for when no threaded context due to DPI and initial non-threaded contexts
     // Generally threadContextp() should be called instead
     static VerilatedContext* lastContextp() VL_MT_SAFE_PRETEND {
         // Marked VL_MT_SAFE_PRETEND due to call tree, and use only when non-threaded
-        if (VL_UNLIKELY(!s_lastContextp)) lastContextp(defaultContextp());
-        return s_lastContextp;
+        if (VL_UNLIKELY(!s_lastContextp.load(std::memory_order_relaxed))) {
+            lastContextp(defaultContextp());
+        }
+        return s_lastContextp.load(std::memory_order_relaxed);
     }
 };
 
