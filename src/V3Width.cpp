@@ -4865,9 +4865,10 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->delayp(), WidthVP{nodep->dtypep(), PRELIM}.p());
         UINFO(4, "varWidthed " << nodep);
         // UINFOTREE(1, nodep, "", "InitOut");
-        // Only std::mailbox has wait queues, as type() of one is an error (see visit(AstRefDType))
+        // Only std::mailbox and std::semaphore have wait queues, as type() of one is an error (see
+        // visit(AstRefDType))
         UASSERT_OBJ(!nodep->basicp() || !nodep->basicp()->isWaitQueue() || nodep->isInternal(),
-                    nodep, "Wait queue outside std::mailbox");
+                    nodep, "Wait queue outside std::mailbox or std::semaphore");
         nodep->didWidth(true);
         nodep->doingWidth(false);
     }
@@ -5784,8 +5785,9 @@ class WidthVisitor final : public VNVisitor {
             return false;
         }
         refp->v3error("Reference to " << varp->prettyNameQ()
-                                      << ", which is internal to the built-in mailbox class,"
-                                         " outside its methods (IEEE 1800-2023 8.18).\n"
+                                      << ", which is internal to the built-in "
+                                      << (ownerp ? ownerp->origName() : "mailbox")
+                                      << " class, outside its methods (IEEE 1800-2023 8.18).\n"
                                       << refp->warnMore() << "... Suggest using its methods");
         return true;
     }

@@ -294,6 +294,14 @@ package std;
     } procKeys;
     procKeys m_queue[$];
     protected int m_keyCount;
+`ifdef VERILATOR_TIMING
+    // Waiting queue, which only this code uses, made a wait queue of the timing scheduler as
+    // those of a mailbox. A process waits only if keys are missing or others wait, and then
+    // behind them, as the waiting queue of a semaphore is first-in first-out (IEEE 1800-2023
+    // 15.3.3). A wake resumes only the first one, which waits again, first, if keys still
+    // miss, and else passes the turn on with the keys it leaves.
+    local chandle m_waitQueue;
+`endif
 
     local task dropKilled;
       // Drop killed processes from the queue
@@ -307,6 +315,9 @@ package std;
 
     function void put(int keyCount = 1);
       m_keyCount += keyCount;
+`ifdef VERILATOR_TIMING
+      if (m_waitQueue.__Vlisted()) m_waitQueue.__Vwake(m_keyCount);
+`endif
     endfunction
 
     task get(int keyCount = 1);
@@ -316,22 +327,40 @@ package std;
       // the head still doesn't fit (so we're not stealing its keys).
       if (m_keyCount >= keyCount && (m_queue.size() == 0 || m_queue[0].reqKeys > keyCount)) begin
         m_keyCount -= keyCount;
+        if (m_waitQueue.__Vlisted()) m_waitQueue.__Vtake(m_keyCount);
         return;
       end
       m_queue.push_back('{process::self(), keyCount});
-      while (m_queue[0].proc != process::self()) begin
-        wait (m_queue[0].proc.status() == process::KILLED || m_queue[0].proc == process::self());
-        dropKilled();
+      if (m_waitQueue.__Vpolled()) begin
+        // Waits as a process testing its condition, as in std::mailbox put()
+        while (m_queue[0].proc != process::self()) begin
+          wait (m_queue[0].proc.status() == process::KILLED || m_queue[0].proc == process::self());
+          dropKilled();
+        end
+        wait (m_keyCount >= keyCount);
+        m_keyCount -= keyCount;
+        m_queue.pop_front();
       end
-      wait (m_keyCount >= keyCount);
-      m_keyCount -= keyCount;
-      m_queue.pop_front();
+      else begin
+        // Waits its turn on the wait queue, which keeps the order of 'm_queue', so the waiter
+        // it resumes is first in it once the killed ones before it are dropped
+        @m_waitQueue;
+        while (m_keyCount < keyCount) @m_waitQueue;
+        dropKilled();
+        m_keyCount -= keyCount;
+        m_queue.pop_front();
+        m_waitQueue.__Vrelease(m_keyCount);
+      end
 `endif
     endtask
 
+    // Does not wait, so it may pass the processes waiting
     function int try_get(int keyCount = 1);
       if (m_keyCount < keyCount) return 0;
       m_keyCount -= keyCount;
+`ifdef VERILATOR_TIMING
+      if (m_waitQueue.__Vlisted()) m_waitQueue.__Vtake(m_keyCount);
+`endif
       return 1;
     endfunction
   endclass

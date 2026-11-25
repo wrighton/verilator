@@ -2342,6 +2342,7 @@ package std;
             int reqKeys;
         } m_queue[$];
         protected int m_keyCount;
+        local chandle m_waitQueue;
         local task dropKilled();
             while (((m_queue.size() > 32'sh0) && ((
                                                    m_queue
@@ -2358,6 +2359,9 @@ package std;
         endfunction
         task put(input int keyCount);
             m_keyCount = (m_keyCount + keyCount);
+            if (m_waitQueue.listed()) begin
+                m_waitQueue.wake(m_keyCount);
+            end
         endtask
         task get(input int keyCount);
             begin : label19
@@ -2374,6 +2378,9 @@ package std;
                     begin
                         m_keyCount = (m_keyCount - 
                                       keyCount);
+                        if (m_waitQueue.listed()) begin
+                            m_waitQueue.take(m_keyCount);
+                        end
                         disable label19;
                     end
                 end
@@ -2384,18 +2391,44 @@ package std;
                     self()
                     ???? // CONSSTRUCTITEM
                     keyCount);
-                while (((m_queue[32'sh0]).proc != self())) begin
+                if (m_waitQueue.polled()) begin
                     begin
-                        wait((((m_queue[32'sh0]).proc.status() 
-                               == process::KILLED) 
-                              || ((m_queue[32'sh0]).proc 
-                                  == self())));
-                        dropKilled();
+                        while (((m_queue[32'sh0]).proc 
+                                != self())) begin
+                            begin
+                                wait((((m_queue[32'sh0]).proc.status() 
+                                       == process::
+                                       KILLED) || (
+                                                   (m_queue
+                                                    [
+                                                    32'sh0]).proc 
+                                                   == 
+                                                   self())));
+                                dropKilled();
+                            end
+                        end
+                        wait((m_keyCount >= keyCount));
+                        m_keyCount = (m_keyCount - 
+                                      keyCount);
+                        m_queue.pop_front();
                     end
                 end
-                wait((m_keyCount >= keyCount));
-                m_keyCount = (m_keyCount - keyCount);
-                m_queue.pop_front();
+                else begin
+                    begin
+
+                        ???? // EVENTCONTROL
+                        @( m_waitQueue)while ((m_keyCount 
+                                               < keyCount)) begin
+
+                            ???? // EVENTCONTROL
+                            @( m_waitQueue)end
+                        dropKilled();
+                        m_keyCount = (m_keyCount - 
+                                      keyCount);
+                        m_queue.pop_front();
+                        m_waitQueue.release(m_keyCount);
+                    end
+                end
             end
         endtask
         function int try_get(input int keyCount);
@@ -2406,6 +2439,9 @@ package std;
                     disable label20;
                 end
                 m_keyCount = (m_keyCount - keyCount);
+                if (m_waitQueue.listed()) begin
+                    m_waitQueue.take(m_keyCount);
+                end
                 try_get = 32'sh1;
                 disable label20;
             end

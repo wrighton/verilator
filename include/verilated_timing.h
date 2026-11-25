@@ -76,7 +76,8 @@ void resumeAborted() VL_MT_UNSAFE_ONE;
 class VlCoroutine;
 
 struct VlPromise final {
-    enum class ListWait : uint8_t { ACTIVE, REACTIVE, EVALUATE };
+    // EVALUATE_DIRECT evaluates a trigger without a post update, as 'wait fork' does
+    enum class ListWait : uint8_t { ACTIVE, REACTIVE, EVALUATE, EVALUATE_DIRECT };
     static_assert(sizeof(ListWait) == sizeof(bool) && alignof(ListWait) == alignof(bool),
                   "Do not increase the coroutine frame size for event wait routing");
 
@@ -179,7 +180,10 @@ public:
     /// Where to resume when this named event's wait list fires.
     VlPromise::ListWait listWait() const { return m_coro.promise().m_listWait; }
     /// Whether the coroutine waits on an event wait list to evaluate its trigger.
-    bool listEvaluates() const { return listWait() == VlPromise::ListWait::EVALUATE; }
+    bool listEvaluates() const {
+        return listWait() == VlPromise::ListWait::EVALUATE
+               || listWait() == VlPromise::ListWait::EVALUATE_DIRECT;
+    }
     /// Order of the coroutine among those awaiting trigger evaluation
     uint64_t waitKey() const { return m_coro.promise().m_waitKey; }
 #ifdef VL_DEBUG
@@ -390,6 +394,9 @@ public:
 // order they started waiting.
 // A std::mailbox waits on its wait queues the same way, via co_await
 // __VdynSched.queueWait(queue), but each wake resumes only the first waiter (see VlWaitQueue).
+// A 'wait fork' awaits co_await __VdynSched.forkEvaluation(vlProcess->forkDoneEvent()) instead
+// of evaluation(), as its trigger can only be set after a child of its process completes, which
+// fires that event, and is then resumed as eventEvaluation() resumes its waiters.
 // A coroutine waiting only on a clocking block event of a virtual interface, through tracked
 // handles (see V3Timing), awaits co_await __VdynSched.eventEvaluation(event) instead of
 // evaluation() while the handles are set. Its trigger can only be set after the event fires, or
@@ -531,6 +538,10 @@ class VlDynamicTriggerScheduler final {
     // the last evaluate(). Written by logic in any MTask.
     mutable std::atomic<bool> m_handlesWritten{false};
 
+#ifdef VL_DEBUG
+    static std::atomic<size_t> s_evaluatedForTest;  // See evaluatedForTest()
+#endif
+
     // CONSTANTS
     // Largest storage a free wait list keeps for its waiters, so a list reused for another
     // event does not hold on to the largest number of waiters it ever had
@@ -647,7 +658,10 @@ class VlDynamicTriggerScheduler final {
 
             bool await_ready() const { return false; }  // Always suspend
             void await_suspend(std::coroutine_handle<VlPromise> coro) {
-                if (kind == VlPromise::ListWait::EVALUATE) sched.startWait(coro);
+                if (kind == VlPromise::ListWait::EVALUATE
+                    || kind == VlPromise::ListWait::EVALUATE_DIRECT) {
+                    sched.startWait(coro);
+                }
                 coro.promise().m_listWait = kind;
                 sched.addWaiter(event, std::move(keepp), coro, process, fileline);
             }
@@ -699,6 +713,10 @@ public:
     VL_UNCOPYABLE(VlDynamicTriggerScheduler);
 
     // METHODS
+#ifdef VL_DEBUG
+    // Coroutines resumed to evaluate their triggers, in any model of the process. For tests only.
+    static size_t evaluatedForTest() { return s_evaluatedForTest.load(std::memory_order_relaxed); }
+#endif
     // Evaluates all dynamic triggers (resumed coroutines that co_await evaluation())
     bool evaluate();
     // Called by coroutines that evaluate triggers to notify the scheduler if any triggers were set
@@ -777,6 +795,14 @@ public:
                          const char* filename, int lineno) {
         return namedEventAwaitable(event, process, eventDescription, filename, lineno,
                                    VlPromise::ListWait::EVALUATE);
+    }
+    /// Used by coroutines in 'wait fork' for co_awaiting trigger evaluation after a child of
+    /// their process completes, which fires 'event'. Only called while no MTask runs in
+    /// parallel, as waits start.
+    auto forkEvaluation(VlEvent& event, VlProcessRef process, const char* eventDescription,
+                        const char* filename, int lineno) {
+        return namedEventAwaitable(event, process, eventDescription, filename, lineno,
+                                   VlPromise::ListWait::EVALUATE_DIRECT);
     }
     /// Notes that a tracked handle (see V3Timing) was written, so the next evaluate() resumes the
     /// coroutines waiting through any of them to evaluate their triggers. Called by logic in any

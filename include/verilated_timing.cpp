@@ -281,6 +281,7 @@ void VlTriggerScheduler::dump(const char* eventDescription) const {
 
 #ifdef VL_DEBUG
 std::atomic<size_t> VlWaitQueue::s_maxSlotsForTest{0};
+std::atomic<size_t> VlDynamicTriggerScheduler::s_evaluatedForTest{0};
 #endif
 
 bool VlDynamicTriggerScheduler::evaluate() {
@@ -315,6 +316,10 @@ bool VlDynamicTriggerScheduler::evaluate() {
     m_anyTriggered = false;
     VL_DEBUG_IF(dump(););
     std::swap(m_suspended, m_evaluated);
+#ifdef VL_DEBUG
+    s_evaluatedForTest.fetch_add(m_evaluated.size() + m_listWoken.size(),
+                                 std::memory_order_relaxed);
+#endif
     m_evaluating = true;
     m_step = Step::EVALUATE;
     if (m_listWoken.empty()) {
@@ -364,10 +369,12 @@ void VlDynamicTriggerScheduler::takeHandleWaiters() {
 
 uint64_t VlDynamicTriggerScheduler::listWokenKey(const VlCoroutineHandle& coro) const {
     // A wait that started before the last evaluate() would have awaited trigger evaluation
-    // again when resumed for its post update, as waits on events have one
+    // again when resumed for its post update, as waits on events have one, or else right after
+    // evaluating its trigger
     const uint64_t key = coro.waitKey();
     if ((key & ~WAIT_KEY_SEQ) == WAIT_KEY_STARTED && (key & WAIT_KEY_SEQ) <= m_seqAtEvaluate) {
-        return (key & WAIT_KEY_SEQ) | WAIT_KEY_POST_UPDATED;
+        const bool direct = coro.listWait() == VlPromise::ListWait::EVALUATE_DIRECT;
+        return (key & WAIT_KEY_SEQ) | (direct ? WAIT_KEY_EVALUATED : WAIT_KEY_POST_UPDATED);
     }
     return key;
 }
@@ -471,7 +478,8 @@ void VlDynamicTriggerScheduler::addWaiter(VlEvent& event, std::shared_ptr<VlEven
     // A waiter that evaluates its trigger retires the fired state of the event by its own post
     // update, as when evaluating its trigger at every evaluate()
     const size_t index = list.m_waiters.size();
-    const bool evaluates = coro.promise().m_listWait == VlPromise::ListWait::EVALUATE;
+    const bool evaluates = coro.promise().m_listWait == VlPromise::ListWait::EVALUATE
+                           || coro.promise().m_listWait == VlPromise::ListWait::EVALUATE_DIRECT;
     if (!evaluates) {
         // The waiters to resume are resumed in the order their lists got their first such
         // waiter, as when only they were on wait lists, whatever waiters to evaluate the lists
@@ -679,10 +687,15 @@ void VlDynamicTriggerScheduler::freeIfIdle(VlEventWaitList& list) {
 
 bool VlDynamicTriggerScheduler::drainQueue(VlEventWaitList& list, VlCoroutineVec& killed) {
     VlCoroutineVec& waiters = list.m_waiters;
-    const bool wake = list.m_wokenOne.exchange(false, std::memory_order_relaxed);
+    bool wake = list.m_wokenOne.exchange(false, std::memory_order_relaxed);
+    // The first waiter, killed or not, which may have waited again with something available
+    // for the ones after it, as a semaphore waiter needing more keys than there are
+    size_t head = list.m_headSlot;
+    while (head < waiters.size() && !waiters[head].framep()) ++head;
     for (VlProcess* processp = list.takeKilled(); processp;) {
         VlProcess* const nextp = processp->nextKilledp();
         const size_t index = processp->waitIndex();
+        if (index == head) wake = true;
         // A selected waiter killed before it resumed passed its turn on where it would have
         // resumed (see resumeSelected)
         VL_DEBUG_IFDEF(assert(index < waiters.size() && waiters[index].processp() == processp););
@@ -830,7 +843,10 @@ bool VlDynamicTriggerScheduler::wakePending(VlCoroutineVec& killed) {
                     // Trigger evaluation is serialized with the Reactive scheduler's resume.
                     m_reactiveSchedp->m_fired.push_back(std::move(coro));
                     break;
-                case VlPromise::ListWait::EVALUATE: m_listWoken.push_back(std::move(coro)); break;
+                case VlPromise::ListWait::EVALUATE:
+                case VlPromise::ListWait::EVALUATE_DIRECT:
+                    m_listWoken.push_back(std::move(coro));
+                    break;
                 }
             }
             // The waiters keep the event alive until the post update step, but not an
@@ -1007,6 +1023,8 @@ void VlProcess::state(int s) {
     }
     m_state = s;
     detachIfDone();
+    // The parent's 'wait fork' may now proceed
+    if (completed() && m_parentp && m_parentp->m_forkDonep) m_parentp->m_forkDonep->fire();
     if (s == KILLED && m_waitListp) m_waitListp->noteKilled(*this);
     // A process waiting to evaluate its trigger, set running, for example by resume(), is set
     // back to waiting when it evaluates its trigger, at every trigger evaluation when polling
