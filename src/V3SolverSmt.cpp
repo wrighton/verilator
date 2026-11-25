@@ -2613,6 +2613,7 @@ private:
         AstNodeExpr* randModeArrayp = randMode.usesMode ? newStaticRandModeRefp(varp) : nullptr;
         if (randMode.usesMode && !randModeArrayp) {
             UASSERT_OBJ(!varp->lifetime().isStatic(), varp, "No static rand_mode array");
+            UASSERT_OBJ(memberRefp, varp, "No member select for an object's rand_mode array");
             if (AstVar* const subRandModeVarp
                 = RandModeVars::randModeVarp(VN_AS(varp->user2p(), NodeModule))) {
                 AstMemberRef* const randModeRefp = new AstMemberRef{
@@ -3189,7 +3190,8 @@ private:
         // is registered in each class using it; a plain class-level variable keys
         // on user3(). Inline 'with' dedups per function (own solver).
         // The objects of a handle array are registered by each class's randomize().
-        const bool perClass = isGlobalConstrained || memberRefp || foreignStatic || isClassRefArray;
+        const bool perClass
+            = isGlobalConstrained || memberRefp || foreignStatic || isClassRefArray;
         // A path through a runtime index is named by the index's expression, not the element,
         // so it is registered at each reference, in its own loop; write_var() ignores repeats
         const bool runtimeIndexPath = memberRefp && memberRefp->exists([](const AstNode* selp) {
@@ -3204,9 +3206,9 @@ private:
             const AstCMethodHard* const atp = VN_CAST(selp, CMethodHard);
             return atp && !VN_IS(atp->pinsp(), Const);
         });
-        // A select or handle array is registered in the setup of each constraint naming it, as a
-        // derived class overriding one of them does not run its setup
-        const bool inSetup = memberRefp || structSelOrCMeth || isClassRefArray;
+        // A select, handle array or foreign static is registered in the setup of each constraint
+        // naming it, as a derived class overriding one of them does not run its setup
+        const bool inSetup = memberRefp || structSelOrCMeth || isClassRefArray || foreignStatic;
         const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
                                     : inSetup          ? m_setupWrittenVars.count(smtName) > 0
                                     : perClass         ? m_writtenVars.count(smtName) > 0
