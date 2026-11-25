@@ -46,7 +46,10 @@ class ActiveTopVisitor final : public VNVisitor {
     // METHODS
     static bool isInitial(AstNode* nodep) {
         const VNUser1InUse user1InUse;
-        // Return true if no variables that read.
+        // Return true if no variables that read, nor a value following the time (see V3Sampled)
+        if (nodep->exists([](const AstSampled* sampledp) { return sampledp->timed(); })) {
+            return false;
+        }
         bool reads = false;
         V3Sched::util::foreachLogicAccess(nodep, [&](AstVarScope* vscp, VAccess access) {
             // Note: Use same heuristic as ordering does to ignore written variables

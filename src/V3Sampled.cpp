@@ -18,6 +18,8 @@
 // Top Scope:
 //   Replace each variable reference under SAMPLED with a new variable.
 //   Capture whole-signal force reads by value, before sampling their children.
+//   Make a process computing a value marked to follow the time read a new variable holding the
+//   time, so it is computed at each evaluation.
 //   Assign the new variables in the 'sample' eval function.
 //   Remove SAMPLED.
 //
@@ -51,6 +53,9 @@ class SampledVisitor final : public VNVisitor {
     // STATE - for current visit position (use VL_RESTORER)
     AstScope* m_scopep = nullptr;  // Current scope
     bool m_inSampled = false;  // True inside a sampled expression
+    bool m_inProcedure = false;  // True inside a process
+    bool m_timedFound = false;  // True once a value following the time is found in the process
+    AstVarScope* m_timeVscp = nullptr;  // Variable holding the time in the current scope
 
     // METHODS
 
@@ -69,12 +74,38 @@ class SampledVisitor final : public VNVisitor {
     // VISITORS
     void visit(AstScope* nodep) override {
         VL_RESTORER(m_scopep);
+        VL_RESTORER(m_timeVscp);
         m_scopep = nodep;
+        m_timeVscp = nullptr;
         iterateChildren(nodep);
+    }
+    void visit(AstNodeProcedure* nodep) override {
+        VL_RESTORER(m_inProcedure);
+        VL_RESTORER(m_timedFound);
+        m_inProcedure = true;
+        m_timedFound = false;
+        iterateChildren(nodep);
+        if (!m_timedFound) return;
+        // Its time functions, also in functions it calls, are read at its evaluation, as
+        // V3Sched evaluates logic reading a sampled variable at the first iteration of each
+        // evaluation. The empty 'if' reading it is removed after scheduling.
+        FileLine* const flp = nodep->fileline();
+        if (!m_timeVscp) {
+            m_timeVscp = createSampledVar(m_sampledTmps,
+                                          new AstTime{flp, m_scopep->modp()->timeunit()}, "time");
+        }
+        AstVarRef* const refp = new AstVarRef{flp, m_timeVscp, VAccess::READ};
+        refp->user1SetOnce();  // Don't sample this one
+        nodep->addStmtsp(new AstIf{flp, refp});
     }
     void visit(AstSampled* nodep) override {
         VL_RESTORER(m_inSampled);
-        m_inSampled = true;
+        // A value following the time reads the current value of the temps it reads
+        m_inSampled = !nodep->timed();
+        if (nodep->timed()) {
+            UASSERT_OBJ(m_inProcedure, nodep, "Value following the time outside a process");
+            m_timedFound = true;
+        }
         iterateChildren(nodep);
         nodep->replaceWith(nodep->exprp()->unlinkFrBack());
         VL_DO_DANGLING(pushDeletep(nodep), nodep);

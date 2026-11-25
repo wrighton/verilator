@@ -135,16 +135,156 @@
                                                                : ... note: In instance 't'
   264 |     @(posedge clk) valid |-> first_match((1, t = cyc) ##[1:2] 1'b1) ##1 (cyc > t);
       |                                                       ^~
-%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:277:35: Unsupported: match item assigning an impure value to a local variable.
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:277:46: Unsupported: match item assignment or subroutine call in a cycle with a match item assigning an impure value to a local variable (IEEE 1800-2023 16.10).
                                                                : ... note: In instance 't'
-  277 |     @(posedge clk) (valid, snap = bump(), snap = cyc) |=> (cyc > snap);
-      |                                   ^~~~
-%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:282:32: Unsupported: match item assigning an impure value to a local variable.
+  277 |     @(posedge clk) (1, snap = bump(), snap = cyc) |=> (cyc > snap);
+      |                                              ^~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:282:22: Unsupported: match item assigning an impure value to a local variable not read.
                                                                : ... note: In instance 't'
-  282 |     @(posedge clk) (valid, t = bump()) |=> (t != 0);
-      |                                ^~~~
-%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:287:32: Unsupported: match item assigning an impure value to a local variable.
+  282 |     @(posedge clk) (1, snap = bump()) |=> 1;
+      |                      ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:287:41: Unsupported: match item assigning an impure value to a local variable read in a later cycle than its assignment.
                                                                : ... note: In instance 't'
-  287 |     @(posedge clk) (valid, t = $urandom_range(9, 1)) |=> (t != 0);
-      |                                ^~~~~~~~~~~~~~
+  287 |     @(posedge clk) (1, t = bump()) |=> (t != 0);
+      |                                         ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:292:55: Unsupported: match item assigning an impure value to a local variable read in a later cycle than its assignment.
+                                                               : ... note: In instance 't'
+  292 |     @(posedge clk) (1, t = $urandom_range(9, 1)) |=> (t != 0);
+      |                                                       ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:299:45: Unsupported: match item assigning an impure value to a local variable read more than once.
+                                                               : ... note: In instance 't'
+  299 |     @(posedge clk) (1, t = bump()) ##0 (t + t != 0);
+      |                                             ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:304:49: Unsupported: match item assigning an impure value to a local variable read conditionally, e.g. by '?:', '&&', '||', '->' or 'inside'.
+                                                               : ... note: In instance 't'
+  304 |     @(posedge clk) (1, t = bump()) ##0 (valid ? t != 0 : 1'b1);
+      |                                                 ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:309:50: Unsupported: match item assigning an impure value to a local variable read conditionally, e.g. by '?:', '&&', '||', '->' or 'inside'.
+                                                               : ... note: In instance 't'
+  309 |     @(posedge clk) (1, t = bump()) ##0 (valid -> t != 0);
+      |                                                  ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:314:41: Unsupported: match item assigning an impure value to a local variable read conditionally, e.g. by '?:', '&&', '||', '->' or 'inside'.
+                                                               : ... note: In instance 't'
+  314 |     @(posedge clk) (1, t = bump()) ##0 (t inside {[1 : 3], 6});
+      |                                         ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:324:56: Unsupported: match item assigning an impure value to a local variable read more than once.
+                                                               : ... note: In instance 't'
+  324 |     @(posedge clk) 1 |=> (1, t = draw()) ##0 (t + 1 == t * 2 - t + 1);
+      |                                                        ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:329:40: Unsupported: match item assigning an impure value to a local variable in a cycle with another match item assignment or subroutine call (IEEE 1800-2023 16.10).
+                                                               : ... note: In instance 't'
+  329 |     @(posedge clk) (1, t = draw(), u = draw()) |=> (t != u);
+      |                                        ^~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:336:28: Unsupported: match item assigning an impure value to a local variable in a cycle with another match item assignment or subroutine call (IEEE 1800-2023 16.10).
+                                                               : ... note: In instance 't'
+  336 |     @(posedge clk) (1, t = bump(), u = t) ##0 1;
+      |                            ^~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:346:57: Unsupported: match item assigning a value calling a function drawing a random value to a local variable read more than once.
+                                                               : ... note: In instance 't'
+  346 |     @(posedge clk) (1, t = draw_arg(cyc)) ##0 (t + 1 == t * 2 - t + 1);
+      |                                                         ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:368:47: Unsupported: match item assigning an impure value to a local variable in a cycle with another match item assignment or subroutine call (IEEE 1800-2023 16.10).
+                                                               : ... note: In instance 't'
+  368 |     @(posedge clk) 1 |=> (1, a = first(), b = second()) ##0 (b & a);
+      |                                               ^~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:373:47: Unsupported: match item assigning an impure value to a local variable in a cycle with another match item assignment or subroutine call (IEEE 1800-2023 16.10).
+                                                               : ... note: In instance 't'
+  373 |     @(posedge clk) 1 |=> (1, a = first(), b = second(), c = identity(b)) ##0 (c & a);
+      |                                               ^~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:387:50: Unsupported: match item assignment or subroutine call in a cycle with a match item assigning an impure value to a local variable (IEEE 1800-2023 16.10).
+                                                               : ... note: In instance 't'
+  387 |     @(posedge clk) 1 |=> (1, x = set_flag(), y = read_flag()) ##0 (x & y);
+      |                                                  ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:392:42: Unsupported: match item assigning an impure value to a local variable in a cycle with another match item assignment or subroutine call (IEEE 1800-2023 16.10).
+                                                               : ... note: In instance 't'
+  392 |     @(posedge clk) (1, v = bump(), w = v + 1) ##0 (w != 0);
+      |                                          ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:408:28: Unsupported: match item assigning an impure value to a local variable in a property with a composite sequence operator, a range delay or a repetition.
+                                                               : ... note: In instance 't'
+  408 |     @(posedge clk) (1, x = setter()) ##0 x
+      |                            ^~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:415:28: Unsupported: match item assigning an impure value to a local variable in a property with a composite sequence operator, a range delay or a repetition.
+                                                               : ... note: In instance 't'
+  415 |     @(posedge clk) (1, x = setter()) ##0 x
+      |                            ^~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:422:28: Unsupported: match item assigning an impure value to a local variable in a property with a composite sequence operator, a range delay or a repetition.
+                                                               : ... note: In instance 't'
+  422 |     @(posedge clk) (1, x = setter()) ##0 x
+      |                            ^~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:435:38: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  435 |     @(posedge clk) valid |=> (1, x = set_wrote()) ##0 x;
+      |                                      ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:447:33: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  447 |     @(posedge clk) (cyc[0], v = increment(cyc)) |-> (v == cyc + 1);
+      |                                 ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:464:33: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  464 |     @(posedge clk) (cyc[0], v = through_tally(cyc)) |-> (v == cyc);
+      |                                 ^~~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:475:33: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  475 |     @(posedge clk) (cyc[0], v = next_id()) |-> (v > 0);
+      |                                 ^~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:485:33: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  485 |     @(posedge clk) (cyc[0], v = next_auto_id()) |-> (v > 0);
+      |                                 ^~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:499:47: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  499 |     @(posedge clk) (cyc[0], v = set_kept(cyc) + get_kept()) |-> (v >= 0);
+      |                                               ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:515:33: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  515 |     @(posedge clk) (cyc[0], v = skip_reset(cyc)) |-> (v >= 0);
+      |                                 ^~~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:529:33: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  529 |     @(posedge clk) (cyc[0], v = hidden_read(cyc)) |-> (v >= 0);
+      |                                 ^~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:544:33: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  544 |     @(posedge clk) (cyc[0], v = set_ping(cyc), w = set_pong(cyc)) |-> (v == w);
+      |                                 ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:549:37: Unsupported: match item assigning an impure value to a local variable, after a condition that may be false.
+                                                               : ... note: In instance 't'
+  549 |     @(posedge clk) 1'bx ##0 (1, x = set_wrote()) ##0 x;
+      |                                     ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:575:51: Unsupported: match item assigning a value calling a function drawing a random value to a local variable read in a later cycle than its assignment.
+                                                               : ... note: In instance 't'
+  575 |     @(posedge clk) (1, x = through_handle()) |=> (x == 0);
+      |                                                   ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:598:54: Unsupported: match item assigning a value calling a function drawing a random value to a local variable read in a later cycle than its assignment.
+                                                               : ... note: In instance 't'
+  598 |     @(posedge clk) (1, x = through_interface()) |=> (x == 0);
+      |                                                      ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:620:56: Unsupported: match item assigning an impure value to a local variable read in a later cycle than its assignment.
+                                                               : ... note: In instance 't'
+  620 |     @(posedge clk) (1, x = through_override(cyc)) |=> (x == cyc - 1);
+      |                                                        ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:638:57: Unsupported: match item assigning an impure value to a local variable read in a later cycle than its assignment.
+                                                               : ... note: In instance 't'
+  638 |     @(posedge clk) (1, x = through_recursion(cyc)) |=> (x == 0);
+      |                                                         ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:659:53: Unsupported: match item assigning an impure value to a local variable read in a later cycle than its assignment.
+                                                               : ... note: In instance 't'
+  659 |     @(posedge clk) (1, x = through_depth(cyc)) |=> (x == 0);
+      |                                                     ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:680:57: Unsupported: match item assigning a value calling a function drawing a random value to a local variable read in a later cycle than its assignment.
+                                                               : ... note: In instance 't'
+  680 |     @(posedge clk) (1, x = through_delegator(cyc)) |=> (x == 0);
+      |                                                         ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:690:48: Unsupported: match item assigning an impure value to a local variable read in a later cycle than its assignment.
+                                                               : ... note: In instance 't'
+  690 |     @(posedge clk) (1, x = through_dpi()) |=> (x == 0);
+      |                                                ^
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:695:51: Unsupported: match item assignment or subroutine call in a cycle with a match item assigning an impure value to a local variable (IEEE 1800-2023 16.10).
+                                                               : ... note: In instance 't'
+  695 |     @(posedge clk) 1 |=> (1, a = first()) ##0 (1, third()) ##0 a;
+      |                                                   ^~~~~
+%Error-UNSUPPORTED: t/t_property_local_var_range_unsup.v:702:48: Unsupported: match item assigning an impure value to a local variable in an operand of a composite sequence operator.
+                                                               : ... note: In instance 't'
+  702 |     @(posedge clk) valid |=> (1'b1 or ((1, t = bump()) ##0 (t != 0)));
+      |                                                ^~~~
 %Error: Exiting due to
