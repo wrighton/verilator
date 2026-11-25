@@ -745,6 +745,7 @@ class AstDelay final : public AstNodeStmt {
     // @astgen op4 := throughoutp : Optional[AstNodeExpr] // Throughout condition (IEEE 16.9.9)
     VTimescale m_timeunit;  // Delay's time unit
     const bool m_isCycleDelay;  // True if it is a cycle delay
+    bool m_isForkBranchStart = false;  // True if it defers the start of a fork branch (V3Fork)
 public:
     AstDelay(FileLine* fl, AstNodeExpr* lhsp, bool isCycleDelay)
         : ASTGEN_SUPER_Delay(fl)
@@ -755,10 +756,14 @@ public:
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     bool isTimingControl() const override { return true; }
-    bool sameNode(const AstNode* /*samep*/) const override { return true; }
+    bool sameNode(const AstNode* samep) const override {
+        return isForkBranchStart() == VN_DBG_AS(samep, Delay)->isForkBranchStart();
+    }
     void timeunit(const VTimescale& flag) { m_timeunit = flag; }
     VTimescale timeunit() const { return m_timeunit; }
     bool isCycleDelay() const { return m_isCycleDelay; }
+    void isForkBranchStart(bool flag) { m_isForkBranchStart = flag; }
+    bool isForkBranchStart() const { return m_isForkBranchStart; }
     bool isRangeDelay() const { return m_isCycleDelay && rhsp(); }
     bool isUnbounded() const { return isRangeDelay() && VN_IS(rhsp(), Unbounded); }
     void fallDelay(AstNodeExpr* const fallDelayp) { rhsp(fallDelayp); }

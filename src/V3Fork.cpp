@@ -599,9 +599,7 @@ class ForkVisitor final : public VNVisitor {
     }
     static bool isForkJoinNoneSentinelDelay(const AstNode* const nodep) {
         const AstDelay* const delayp = VN_CAST(nodep, Delay);
-        if (!delayp) return false;
-        const AstConst* const constp = VN_CAST(delayp->lhsp(), Const);
-        return constp && (constp->toUQuad() == std::numeric_limits<uint64_t>::max());
+        return delayp && delayp->isForkBranchStart();
     }
     static bool isDisableQueuePushSelfPrefix(AstNode* nodep) {
         while (AstJumpBlock* const jumpBlockp = VN_CAST(nodep, JumpBlock)) {
@@ -675,14 +673,11 @@ class ForkVisitor final : public VNVisitor {
             || forkIsDisableable(nodep)) {
             UINFO(9, "Adding fork branch start sentinels " << nodep);
             FileLine* fl = nodep->fileline();
-            // We use a sentinel value of UINT64_MAX to mark this delay so that it goes to the
-            // ACTIVE region with a delay value of 0.
+            // The branch start goes to the ACTIVE region of the current time slot, unlike a #0
             for (AstForkItem* const itemp : nodep->forkspList()) {
                 if (!itemp->stmtsp()) continue;
-                AstDelay* const delayp = new AstDelay{
-                    fl,
-                    new AstConst{fl, AstConst::Unsized64{}, std::numeric_limits<uint64_t>::max()},
-                    false};
+                AstDelay* const delayp = new AstDelay{fl, new AstConst{fl, 0}, false};
+                delayp->isForkBranchStart(true);
                 itemp->prependStmtsp(delayp);
                 moveForkSentinelAfterDisableQueuePushes(itemp);
             }

@@ -1501,9 +1501,6 @@ class TimingControlVisitor final : public VNVisitor {
     }
 
     AstNodeExpr* delayToIntegral(AstDelay* nodep, AstNodeExpr* valuep) {
-        const AstConst* const constp = VN_CAST(valuep, Const);
-        // The fork start sentinel is already in ticks
-        if (constp && constp->toUQuad() == std::numeric_limits<uint64_t>::max()) return valuep;
         return V3Timing::delayToTicks(valuep, nodep->timeunit());
     }
 
@@ -1710,12 +1707,9 @@ class TimingControlVisitor final : public VNVisitor {
         }
         iterateChildren(nodep);
     }
-    void visit(AstDelay* nodep) override {
-        UASSERT_OBJ(!nodep->isCycleDelay(), nodep,
-                    "Cycle delays should have been handled in V3AssertPre");
-        FileLine* const flp = nodep->fileline();
-
-        AstNodeExpr* valuep = delayToIntegral(nodep, nodep->lhsp()->unlinkFrBack());
+    // Return the delay value of 'nodep' in ticks, deciding scheduling support for #0
+    AstNodeExpr* scheduledDelayp(AstDelay* nodep) {
+        AstNodeExpr* const valuep = delayToIntegral(nodep, nodep->lhsp()->unlinkFrBack());
 
         // Statistics
         if (valuep->isZero()) {
@@ -1744,7 +1738,7 @@ class TimingControlVisitor final : public VNVisitor {
             if (valuep->isZero()) {
                 // Statically known #0 delay exists, schedule for #0 support
                 v3Global.setUsesZeroDelay();
-                if (!v3Global.zeroDelayFlp()) v3Global.zeroDelayFlp(flp);
+                if (!v3Global.zeroDelayFlp()) v3Global.zeroDelayFlp(nodep->fileline());
                 m_hasStaticZeroDelay = true;
                 // Don't warn on variable delays, as no point
                 m_unknownDelayFlps.clear();
@@ -1758,11 +1752,20 @@ class TimingControlVisitor final : public VNVisitor {
                 if (!m_hasStaticZeroDelay) m_unknownDelayFlps.push_back(nodep->fileline());
             }
         }
+        return valuep;
+    }
+    void visit(AstDelay* nodep) override {
+        UASSERT_OBJ(!nodep->isCycleDelay(), nodep,
+                    "Cycle delays should have been handled in V3AssertPre");
+        FileLine* const flp = nodep->fileline();
 
-        // Replace self with a 'co_await dlySched.delay(<valuep>)'
-        AstCMethodHard* const delayMethodp = new AstCMethodHard{
-            flp, new AstVarRef{flp, getCreateDelayScheduler(), VAccess::WRITE},
-            VCMethod::SCHED_DELAY, valuep};
+        // Replace self with a 'co_await dlySched.delay(<value>)', or 'forkStart()'
+        AstVarRef* const schedRefp = new AstVarRef{flp, getCreateDelayScheduler(), VAccess::WRITE};
+        AstCMethodHard* const delayMethodp
+            = nodep->isForkBranchStart()
+                  ? new AstCMethodHard{flp, schedRefp, VCMethod::SCHED_FORK_START}
+                  : new AstCMethodHard{flp, schedRefp, VCMethod::SCHED_DELAY,
+                                       scheduledDelayp(nodep)};
         delayMethodp->dtypeSetVoid();
         addProcessInfo(delayMethodp);
         addDebugInfo(delayMethodp);
