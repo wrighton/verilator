@@ -1495,6 +1495,49 @@ public:
     }
 };
 
+// The variables logic may read before writing them in the same evaluation, so whose values it
+// keeps from its previous evaluation: in statement order, a read not preceded by an
+// unconditional write of the whole variable, by a blocking assignment of the logic itself, not
+// in a branch or loop
+class LibLiveInVisitor final : public VNVisitorConst {
+    std::unordered_set<const AstVarScope*> m_written;  // Written unconditionally so far
+    std::unordered_set<const AstVarScope*>& m_liveInr;  // Read before written
+    int m_condDepth = 0;  // Under a branch or loop
+
+    void visit(AstVarRef* nodep) override {
+        if (nodep->access().isReadOrRW() && !m_written.count(nodep->varScopep())) {
+            m_liveInr.emplace(nodep->varScopep());
+        }
+    }
+    void visit(AstNodeAssign* nodep) override {
+        iterateConst(nodep->rhsp());
+        AstVarRef* const refp = VN_CAST(nodep->lhsp(), VarRef);
+        if (refp && m_condDepth == 0 && VN_IS(nodep, Assign)) {
+            m_written.emplace(refp->varScopep());
+        } else {
+            // Its indices, and a read of the variable by a partial write
+            iterateConst(nodep->lhsp());
+        }
+    }
+    void visit(AstIf* nodep) override { conditional(nodep); }
+    void visit(AstCase* nodep) override { conditional(nodep); }
+    void visit(AstLoop* nodep) override { conditional(nodep); }
+    void visit(AstJumpBlock* nodep) override { conditional(nodep); }
+    void visit(AstSenTree*) override {}  // Sensitivities are not reads of the evaluation
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+    void conditional(AstNode* nodep) {
+        ++m_condDepth;
+        iterateChildrenConst(nodep);
+        --m_condDepth;
+    }
+
+public:
+    LibLiveInVisitor(AstNode* nodep, std::unordered_set<const AstVarScope*>& liveInr)
+        : m_liveInr{liveInr} {
+        iterateConst(nodep);
+    }
+};
+
 // Whether a library evaluated again with the inputs it had at its previous evaluation, without
 // an update of its clocks between, gives the same outputs, so the combinational update of its
 // wrapper may reuse its results for unchanged inputs. Only the logic that may affect an output
@@ -1654,6 +1697,14 @@ bool libComboCacheable(const LogicClasses& logicClasses,
         }
         if (LibEffectVisitor::found(logics[index].m_procp)) {
             return notCacheable("logic run at every evaluation with effects");
+        }
+        std::unordered_set<const AstVarScope*> liveIn;
+        LibLiveInVisitor{logics[index].m_procp, liveIn};
+        for (const AstVarScope* const vscp : logics[index].m_writes) {
+            if (liveIn.count(vscp)) {
+                UINFO(4, "Library keeps state in " << vscp);
+                return notCacheable("logic run at every evaluation keeping state");
+            }
         }
     }
     return true;
