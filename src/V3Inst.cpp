@@ -71,6 +71,101 @@ public:
 };
 
 //######################################################################
+// The default values of input ports, as connections
+
+class InstPortDefaultVisitor final : public VNVisitor {
+    // NODE STATE
+    //  AstVar::user1p()        -> AstAssign*. Initializer of an input port with a default value
+    //  AstVar::user2()         -> int. CONNECTED and/or UNCONNECTED, for its instances
+    const VNUser1InUse m_inuser1;
+    const VNUser2InUse m_inuser2;
+    enum : int { CONNECTED = 1, UNCONNECTED = 2 };
+
+    // STATE
+    std::vector<AstVar*> m_varps;  // Input ports with a default value
+    std::vector<AstPin*> m_unconnectedps;  // Pins of those ports not connected
+    AstNodeModule* m_modp = nullptr;  // Current module
+
+    // METHODS
+    // Make the Z bits of a default value X bits, so a value as for a variable
+    static void zToX(AstNode* valuep) {
+        std::vector<AstConst*> constps;
+        valuep->foreach([&](AstConst* constp) {
+            if (constp->num().hasZ()) constps.push_back(constp);
+        });
+        for (AstConst* const constp : constps) {
+            V3Number num{constp->num()};
+            for (int bit = 0; bit < num.width(); ++bit) {
+                if (num.bitIsZ(bit)) num.setBit(bit, 'x');
+            }
+            constp->replaceWith(new AstConst{constp->fileline(), num});
+            VL_DO_DANGLING(constp->deleteTree(), constp);
+        }
+    }
+
+    // VISITORS
+    void visit(AstNetlist* nodep) override {
+        // Find the defaults
+        for (AstNodeModule* modp = nodep->modulesp(); modp;
+             modp = VN_AS(modp->nextp(), NodeModule)) {
+            for (AstNode* itemp = modp->stmtsp(); itemp; itemp = itemp->nextp()) {
+                const AstInitialStatic* const initp = VN_CAST(itemp, InitialStatic);
+                AstAssign* const assignp = initp ? VN_CAST(initp->stmtsp(), Assign) : nullptr;
+                const AstVarRef* const refp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+                if (refp && refp->varp()->isInput() && refp->varp()->hasUserInit()) {
+                    refp->varp()->user1p(assignp);
+                    m_varps.push_back(refp->varp());
+                }
+            }
+        }
+        iterateChildren(nodep);
+        // The default value applies only to instances that do not connect the port (IEEE
+        // 1800-2023 23.2.2.4). If all do, it stays the port's initializer, otherwise it is a
+        // connection of each of them.
+        for (AstPin* const pinp : m_unconnectedps) {
+            AstVar* const varp = pinp->modVarp();
+            if (!(varp->user2() & CONNECTED)) continue;
+            pinp->exprp(VN_AS(varp->user1p(), Assign)->rhsp()->cloneTree(false));
+        }
+        for (AstVar* const varp : m_varps) {
+            AstAssign* const assignp = VN_AS(varp->user1p(), Assign);
+            if (varp->user2() & CONNECTED) {
+                VL_DO_DANGLING(assignp->backp()->unlinkFrBack()->deleteTree(), assignp);
+            }
+        }
+    }
+    void visit(AstNodeModule* nodep) override {
+        VL_RESTORER(m_modp);
+        m_modp = nodep;
+        iterateChildren(nodep);
+    }
+    void visit(AstCell* nodep) override {
+        for (AstPin* pinp = nodep->pinsp(); pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
+            AstVar* const varp = pinp->modVarp();
+            AstAssign* const assignp = varp ? VN_AS(varp->user1p(), Assign) : nullptr;
+            if (!assignp) continue;
+            if (m_modp->isTop()) {
+                // An input of the model takes its default when constructed (addPrimaryDefault),
+                // and a value the user writes replaces it, so its Z bits are a value
+                zToX(assignp->rhsp());
+            } else if (pinp->exprp()) {
+                varp->user2(varp->user2() | CONNECTED);
+            } else {
+                varp->user2(varp->user2() | UNCONNECTED);
+                m_unconnectedps.push_back(pinp);
+            }
+        }
+    }
+    void visit(AstNodeExpr*) override {}  // Accelerate
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit InstPortDefaultVisitor(AstNetlist* nodep) { iterate(nodep); }
+    ~InstPortDefaultVisitor() override = default;
+};
+
+//######################################################################
 // Inst state, as a visitor of each AstNode
 
 class InstVisitor final : public VNVisitor {
@@ -529,6 +624,12 @@ void V3Inst::checkOutputShort(const AstPin* nodep) {
 
 //######################################################################
 // Inst class visitor
+
+void V3Inst::portDefaultsAll(AstNetlist* nodep) {
+    UINFO(2, __FUNCTION__ << ":");
+    { InstPortDefaultVisitor{nodep}; }  // Destruct before checking
+    V3Global::dumpCheckGlobalTree("portdefaults", 0, dumpTreeEitherLevel() >= 3);
+}
 
 void V3Inst::instAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
