@@ -961,6 +961,7 @@ class ConstVisitor final : public VNVisitor {
     const AstAttrOf* m_attrp = nullptr;  // Current attribute
     VDouble0 m_statBitOpReduction;  // Ops reduced in ConstBitOpTreeVisitor
     VDouble0 m_statConcatMerge;  // Concat merges
+    VDouble0 m_statAndOrVisits;  // Visits of bitwise And and Or
     VDouble0 m_statCondExprRedundant;  // Conditional repeated expressions
     VDouble0 m_statIfCondExprRedundant;  // Conditional repeated expressions
     VDouble0 m_statMemberAccessVisits;  // Nodes visited by containsMemberAccessRecurse
@@ -3497,10 +3498,12 @@ class ConstVisitor final : public VNVisitor {
         m_bitwiseFromLogicp = nullptr;
     }
     void visit(AstAnd* nodep) override {
+        ++m_statAndOrVisits;
         iterateBitwiseOperands(nodep);
         visitGen(nodep);
     }
     void visit(AstOr* nodep) override {
+        ++m_statAndOrVisits;
         iterateBitwiseOperands(nodep);
         visitGen(nodep);
     }
@@ -4863,6 +4866,7 @@ public:
                 V3Stats::addStatSum("Optimizations, Const bit op reduction", m_statBitOpReduction);
             }
         }
+        V3Stats::addStatSum("Optimizations, Const and/or visits", m_statAndOrVisits);
         V3Stats::addStatSum("Optimizations, Cond redundant expressions", m_statCondExprRedundant);
         V3Stats::addStatSum("Optimizations, If cond redundant expressions",
                             m_statIfCondExprRedundant);
