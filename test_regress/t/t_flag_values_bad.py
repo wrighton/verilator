@@ -12,8 +12,9 @@ import vltest_bootstrap
 test.scenarios('vlt')
 
 test.lint(verilator_flags2=[
-    "--output-split-cfuncs -1", "--output-split-rtmd -1", "--preproc-token-limit 0",
-    "--reloop-limit -1", "--replication-limit -1"
+    "--converge-limit 0", "--converge-limit 4294967297", "--converge-limit 18446744073709551617",
+    "--converge-limit 5junk", "--output-split-cfuncs -1", "--output-split-rtmd -1",
+    "--preproc-token-limit 0", "--reloop-limit -1", "--replication-limit -1"
 ],
           fails=True,
           expect_filename=test.golden_filename)

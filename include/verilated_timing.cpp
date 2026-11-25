@@ -71,6 +71,9 @@ void VlCoroutineHandle::resume() {
     // Only null if we have a fork..join_any and one of the other child processes resumed the
     // main process
     if (VL_LIKELY(m_coro)) {
+#ifdef VL_DEBUG
+        VerilatedEvalLoop::t_lastResumed = m_fileline;
+#endif
         VL_DEBUG_IF(VL_DBG_MSGF("             Resuming: "); dump(););
         if (m_process) {  // If process state is managed with std::process
             if (m_process->isKilled()) {

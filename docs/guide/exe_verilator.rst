@@ -298,8 +298,26 @@ Summary:
 
 .. option:: --converge-limit <loops>
 
-   Rarely needed. Specifies the maximum number of runtime iterations before
-   creating a model failed to converge error. Defaults to 10000.
+   Rarely needed. Specifies how many iterations each scheduling region loop
+   may take within one evaluation before the model fails with a
+   :option:`DIDNOTCONVERGE` error. Must be between 1 and 2147483647.
+   Defaults to 10000.
+
+   Each region (Settle, Input combinational, Active, Inactive, NBA,
+   Observed and Reactive) counts its own iterations. A region's count
+   restarts each time its loop is entered again, that is, whenever a region
+   later in the scheduling order did work, and at every call to the model's
+   ``eval()``. The Settle region runs only in the first ``eval()``. In the
+   Active region, processes that wake each other within one time slot, such
+   as a producer and a consumer exchanging items through a bounded mailbox
+   with no delay, take an iteration for each wakeup.
+
+   The limit can also be set when the model runs, without Verilating again,
+   with :vlopt:`+verilator+converge+limit+\<value\>` or
+   ``VerilatedContext::convergeLimit()``.
+
+   A very large limit delays the error for a design that never converges,
+   which then appears to hang until the limit is reached.
 
 .. option:: --coverage
 
