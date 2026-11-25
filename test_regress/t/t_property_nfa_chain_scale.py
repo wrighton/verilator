@@ -7,42 +7,28 @@
 # SPDX-FileCopyrightText: 2026 Wilson Snyder
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
-import re
-
 import vltest_bootstrap
 
 test.scenarios('vlt')
 
-STEPS_SMALL = 64
-STEPS_LARGE = STEPS_SMALL * 4
-# Linear scaling gives 4x, quadratic gives 16x
-MAX_RATIO = 8
-# Ignore the ratio when constant folding is fast enough that timer noise dominates
-MIN_SECONDS = 0.1
+STEPS = 1024
 
+# Assertions with a rejecting step, and a throughout guard, per cycle, written out
+test.top_filename = f"{test.obj_dir}/t_property_nfa_chain_scale.v"
+seq = " ##1 ".join("a" if i % 2 == 0 else "!a" for i in range(STEPS))
+with open(test.top_filename, "w", encoding="utf8") as f:
+    f.write("module t (input clk, input a, input b, input c);\n")
+    f.write(f"  assert property (@(posedge clk) {seq} ##1 b);\n")
+    f.write(f"  assert property (@(posedge clk) c throughout ({seq}));\n")
+    f.write("endmodule\n")
 
-def const_seconds(steps):
-    # Assertions with a rejecting step, and a throughout guard, per cycle, written out
-    test.top_filename = f"{test.obj_dir}/t_{steps}.v"
-    seq = " ##1 ".join("a" if i % 2 == 0 else "!a" for i in range(steps))
-    with open(test.top_filename, "w", encoding="utf8") as f:
-        f.write("module t (input clk, input a, input b, input c);\n")
-        f.write(f"  assert property (@(posedge clk) {seq} ##1 b);\n")
-        f.write(f"  assert property (@(posedge clk) c throughout ({seq}));\n")
-        f.write("endmodule\n")
-    test.compile(verilator_flags2=["--stats"], make_main=False, verilator_make_gmake=False)
-    stats = test.file_contents(test.stats)
-    times = re.findall(r'Stage, Elapsed time \(sec\), \d+_const\S*\s+(\S+)', stats)
-    if not times:
-        test.error("Const time not found in " + test.stats)
-    return sum(float(t) for t in times)
+test.compile(verilator_flags2=["--stats"], make_main=False, verilator_make_gmake=False)
 
-
-small = const_seconds(STEPS_SMALL)
-large = const_seconds(STEPS_LARGE)
-if large > MIN_SECONDS and large > small * MAX_RATIO:
-    test.error("Constant folding time scaled superlinearly with assertion length: " +
-               f"{STEPS_SMALL} steps took {small:.3f}s, " +
-               f"{STEPS_LARGE} steps took {large:.3f}s (over {MAX_RATIO}x)")
+# Linear in the steps (300 per step here); ORing the reject conditions in one chain made
+# constant folding revisit it, quadratic (over 2000 per step here)
+visits = int(test.file_grep(test.stats, r'Optimizations, Const and/or visits\s+(\d+)')[0])
+if visits > 600 * STEPS:
+    test.error("Constant folding went quadratic in assertion length: " +
+               f"{visits} and/or visits for {STEPS} steps")
 
 test.passes()
