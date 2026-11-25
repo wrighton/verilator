@@ -276,8 +276,11 @@ class TransformForksVisitor final : public VNVisitor {
             resp = AstNode::addNext(resp, stmtsp->unlinkFrBackWithNext());
         }
         while (AstForkItem* const itemp = nodep->forksp()) {
-            if (AstNode* const declsp = itemp->declsp()) {
-                resp = AstNode::addNext(resp, declsp->unlinkFrBackWithNext());
+            // The fork item runs in this function, so its variables are locals of it, declared
+            // before the forks that follow
+            if (AstVar* const declsp = itemp->declsp()) {
+                for (AstVar* const varp : VNList<AstVar>{declsp}) varp->user1(true);
+                m_funcp->addVarsp(declsp->unlinkFrBackWithNext());
             }
             if (AstNode* const stmtsp = itemp->stmtsp()) {
                 resp = AstNode::addNext(resp, stmtsp->unlinkFrBackWithNext());
