@@ -938,6 +938,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(_NONE,                              "_none",                  false,  CLEAN,  false,      "", "") \
     macro(ARRAY_AT,                           "at",                     PURE,   CLEAN,  false,      "r", "array or queue element selection") \
     macro(ARRAY_AT_BACK,                      "atBack",                 PURE,   CLEAN,  false,      "r", "array or queue element selection") \
+    macro(ARRAY_AT_REF,                       "atRef",                  false,  CLEAN,  false,      "r", "array element passed by const reference") \
     macro(ARRAY_AT_WRITE,                     "atWrite",                PURE,   CLEAN,  false,      "r", "array or queue element selection") \
     macro(ARRAY_AT_WRITE_REF,                 "atWriteRef",             false,  CLEAN,  false,      "r", "array element passed by reference") \
     macro(ARRAY_ELEM_REF,                     "elem",                   false,  CLEAN,  false,      "", "element of a pinned array element") \
@@ -1143,6 +1144,7 @@ public:
         switch (m_e) {
         case ARRAY_AT:
         case ARRAY_AT_BACK:
+        case ARRAY_AT_REF:
         case ARRAY_AT_WRITE:
         case ARRAY_AT_WRITE_REF:
         case DYN_AT_WRITE_APPEND:
@@ -1154,7 +1156,7 @@ public:
     }
     // Element access through a pin, for an element passed to a ref argument
     bool isRefElementAccess() const VL_PURE {
-        return m_e == ARRAY_AT_WRITE_REF || m_e == ARRAY_ELEM_REF
+        return m_e == ARRAY_AT_REF || m_e == ARRAY_AT_WRITE_REF || m_e == ARRAY_ELEM_REF
                || m_e == DYN_AT_WRITE_APPEND_BACK_REF || m_e == DYN_AT_WRITE_APPEND_REF;
     }
     const char* ascii() const VL_PURE {
