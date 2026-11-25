@@ -4544,6 +4544,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
     std::map<std::string, AstNodeModule*> m_modulesToRevisit;  // Modules to revisit a second time
     // Scoped: first parameter each upwards reference resolved to, by module and reference
     std::unordered_map<std::string, const AstVar*> m_upwardParams;
+    // Scoped: first task/function each upwards call resolved to, by module and reference
+    std::unordered_map<std::string, const AstNodeFTask*> m_upwardFTasks;
     AstNode* m_lastDeferredp = nullptr;  // Last node which requested a revisit of its module
     AstNodeDType* m_packedArrayDtp = nullptr;  // Datatype reference for packed array
     bool m_inPackedArray = false;  // Currently traversing a packed array tree
@@ -5314,6 +5316,57 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         return constAtWidth(aConstp, extp->width(), signExtend)
             .isCaseEq(constAtWidth(bConstp, extp->width(), signExtend));
+    }
+    // Key of an upwards reference in the current scope's module, which all its instances share
+    string upwardRefKey(const string& inlinedDots, const string& dotted,
+                        const string& name) const {
+        const AstNode* modp = m_modSymp->nodep();
+        if (const AstCell* const cellp = VN_CAST(modp, Cell)) modp = cellp->modp();
+        return modp->name() + " " + inlinedDots + " " + dotted + "." + name;
+    }
+    // Ports of a task/function, including the function return variable
+    static std::vector<const AstVar*> ftaskPorts(const AstNodeFTask* ftaskp) {
+        std::vector<const AstVar*> portps;
+        for (const AstNode* nodep = ftaskp->declsp(); nodep; nodep = nodep->nextp()) {
+            const AstVar* const varp = VN_CAST(nodep, Var);
+            if (varp && varp->isIO()) portps.push_back(varp);
+        }
+        return portps;
+    }
+    // True if a call typed with task/function ap is also valid for bp. V3Width bound the
+    // call's named arguments by the port names of ap, so these must be the same too.
+    static bool sameFTaskSignature(const AstNodeFTask* ap, const AstNodeFTask* bp) {
+        if (ap->type() != bp->type()) return false;
+        const std::vector<const AstVar*> aPortps = ftaskPorts(ap);
+        const std::vector<const AstVar*> bPortps = ftaskPorts(bp);
+        if (aPortps.size() != bPortps.size()) return false;
+        for (size_t i = 0; i < aPortps.size(); ++i) {
+            if (aPortps[i]->direction() != bPortps[i]->direction()
+                || aPortps[i]->name() != bPortps[i]->name()
+                || !upwardDTypeCompatible(aPortps[i]->dtypep(), bPortps[i]->dtypep())) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // True if tasks/functions ap and bp have the same defaults for the ports the call refp
+    // gives a default value, which V3WidthCommit kept for dotted calls
+    static bool sameFTaskDefaults(const AstNodeFTask* ap, const AstNodeFTask* bp,
+                                  const AstNodeFTaskRef* refp) {
+        const std::vector<const AstVar*> aPortps = ftaskPorts(ap);
+        const std::vector<const AstVar*> bPortps = ftaskPorts(bp);
+        const AstArg* argp = refp->argsp();
+        for (size_t i = 0; i < aPortps.size() && argp; ++i) {
+            if (aPortps[i]->isFuncReturn()) continue;  // Not an argument, as in V3Task
+            const AstNode* const aValuep = aPortps[i]->valuep();
+            const AstNode* const bValuep = bPortps[i]->valuep();
+            if (argp->defaulted()
+                && (aValuep ? !aValuep->sameTree(bValuep) : bValuep != nullptr)) {
+                return false;
+            }
+            argp = VN_AS(argp->nextp(), Arg);
+        }
+        return true;
     }
     static bool isTypeDecl(const AstNode* nodep) {
         return VN_IS(nodep, Typedef) || VN_IS(nodep, ParamTypeDType) || VN_IS(nodep, Class);
@@ -7255,12 +7308,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         // An upwards reference (IEEE 1800-2023 23.8) resolves to the parameter
                         // of this instance, but was typed with that of one instance, so the
                         // parameters of all instances of the referencing module must match
-                        const AstNode* modp = m_modSymp->nodep();
-                        if (const AstCell* const cellp = VN_CAST(modp, Cell)) {
-                            modp = cellp->modp();
-                        }
-                        const string key = modp->name() + " " + nodep->inlinedDots() + " "
-                                           + nodep->dotted() + "." + nodep->name();
+                        const string key
+                            = upwardRefKey(nodep->inlinedDots(), nodep->dotted(), nodep->name());
                         const AstVar*& firstVarpr
                             = m_upwardParams.emplace(key, vscp->varp()).first->second;
                         if (firstVarpr
@@ -7594,6 +7643,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string baddot;
             VSymEnt* okSymp = nullptr;
             VSymEnt* dotSymp;
+            bool upward = false;
             if (nodep->dotted().empty()) {
                 // Non-'super.' dotted reference
                 dotSymp = m_ds.m_dotSymp;
@@ -7611,7 +7661,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     dotSymp = findInlinedDotsSym(nodep, nodep->inlinedDots());
                 }
                 dotSymp = m_statep->findDotted(nodep->fileline(), dotSymp, nodep->dotted(), baddot,
-                                               okSymp, true);  // Maybe nullptr
+                                               okSymp, true, nullptr, false,
+                                               &upward);  // Maybe nullptr
             }
             // Restricted 'with (id_list)': only id_list names bind into target class.
             if (m_randSymp
@@ -7691,6 +7742,30 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 nodep->taskp(taskp);
                 nodep->classOrPackagep(foundp->classOrPackagep());
                 UINFO(7, indent() << "Resolved " << nodep);  // Also prints taskp
+                if (upward && m_statep->forScopeCreation()) {
+                    // An upwards call (IEEE 1800-2023 23.8) resolves to the task of this
+                    // instance, but was typed with that of one instance, so the tasks of all
+                    // instances of the calling module must have the same signature
+                    const string key
+                        = upwardRefKey(nodep->inlinedDots(), nodep->dotted(), nodep->name());
+                    const AstNodeFTask*& firstTaskpr
+                        = m_upwardFTasks.emplace(key, taskp).first->second;
+                    if (firstTaskpr && !sameFTaskSignature(firstTaskpr, taskp)) {
+                        nodep->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: Upwards reference to task/function "
+                                          << nodep->prettyNameQ()
+                                          << " with a different signature in each instance");
+                        firstTaskpr = nullptr;  // Report once
+                    } else if (firstTaskpr && !sameFTaskDefaults(firstTaskpr, taskp, nodep)) {
+                        // V3Width supplied the defaults of one instance's task
+                        nodep->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: Upwards reference to task/function "
+                                          << nodep->prettyNameQ()
+                                          << " using default argument values that differ in"
+                                             " each instance");
+                        firstTaskpr = nullptr;  // Report once
+                    }
+                }
             } else if (AstNodeSchema* const schemap
                        = foundp ? VN_CAST(foundp->nodep(), NodeSchema) : nullptr) {
                 // V3Param might specialize the module a hierarchical reference is into, so link
