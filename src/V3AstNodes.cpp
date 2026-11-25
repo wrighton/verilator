@@ -5772,8 +5772,16 @@ string AstVar::vlEnumDir(bool forMember) const {
     if (isContinuously()) out += "|VLVF_CONTINUOUSLY";
     //
     // Of the elements, also of a dynamic array or queue DPI passes as an open array
-    if (const AstBasicDType* const bdtypep = dtypep()->elemDTypep()->basicp()) {
-        if (bdtypep->keyword().isDpiCLayout() || (isDpiOpenArray() && bdtypep->isDpiCLayout())) {
+    const AstNodeDType* const elemDTypep = dtypep()->elemDTypep();
+    if (const AstBasicDType* const bdtypep = elemDTypep->basicp()) {
+        // Array elements of bit vectors stored as CData/SData are narrower than the
+        // svBitVecVal words of their C representation (IEEE 1800-2023 H.12.4)
+        const bool narrowBitVecElems = elemDTypep != dtypep()->skipRefp()
+                                       && elemDTypep->isDpiBitVec()
+                                       && elemDTypep->width() <= VL_SHORTSIZE;
+        if (!narrowBitVecElems
+            && (bdtypep->keyword().isDpiCLayout()
+                || (isDpiOpenArray() && bdtypep->isDpiCLayout()))) {
             out += "|VLVF_DPI_CLAY";
         }
     }
