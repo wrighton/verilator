@@ -106,6 +106,36 @@ module t;
     `checkd(seed, 1003647461);
     `checkd(sum, 896);
 
+    // Results outside the int range, and NaN, give -2147483648 as the IEEE
+    // reference code does on x86
+    seed = 1;
+    r = $dist_normal(seed, 2147483647, 2147483647);
+    `checkd(r, -2147483648);
+    seed = 1234;
+    r = $dist_normal(seed, -2147483648, 2147483647);
+    `checkd(r, -2147483648);
+    seed = 1234;
+    r = $dist_exponential(seed, 2147483647);
+    `checkd(r, -2147483648);
+    seed = 1234;
+    r = $dist_erlang(seed, 2, 2147483647);
+    `checkd(r, -2147483648);
+    // A zero mean times the logarithm of an underflowed product is NaN
+    seed = 1234;
+    r = $dist_erlang(seed, 2000, 0);
+    `checkd(r, -2147483648);
+    // Seed whose next draw is the largest the generator makes, just past the
+    // top of the range; it converts as above, giving the bottom of the range
+    seed = -1271221770;
+    r = $dist_uniform(seed, 0, 2147483647);
+    `checkd(r, 0);
+    seed = -1271221770;
+    r = $dist_uniform(seed, -2147483648, 2147483646);
+    `checkd(r, -2147483648);
+    seed = -1271221770;
+    r = $dist_uniform(seed, -2147483648, 2147483647);
+    `checkd(r, -2147483648);
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
