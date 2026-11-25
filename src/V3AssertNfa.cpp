@@ -5803,10 +5803,12 @@ class AssertNfaVisitor final : public VNVisitor {
             if (assertAssertp) iterateAndNextNull(assertAssertp->failsp());
         }
         // V3AssertPre runs the action block once per failing attempt of a nonconsecutive
-        // repetition, not at each failing match, but does not support it with a cycle delay.
-        // Left after the module defaults are inherited, which V3AssertPre relies on.
+        // repetition, not at each failing match, but does not support it with a cycle delay or
+        // in an abort operator. Left after the module defaults are inherited, which
+        // V3AssertPre relies on.
         if (propp->exists([](const AstSNonConsRep*) { return true; })
-            && !propp->exists([](const AstSExpr*) { return true; })) {
+            && !propp->exists([](const AstSExpr*) { return true; })
+            && !propp->exists([](const AstAbortOn*) { return true; })) {
             VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
             return;
         }
