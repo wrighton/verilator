@@ -198,6 +198,41 @@ module t;
     `checkh(cont_pb, 16'h0300);
     `checkh(cont_v, 8'h03);
   end
+  // A wide part-select written partly below the vector by a concatenation, at a position known
+  // once propagated from a constant struct member, of a descending and an ascending vector
+  typedef struct packed {
+    bit [7:0] base;
+    bit [7:0] dyn;
+  } late_s;
+  late_s late_cfg;
+  bit [7:0] late_dyn;
+  bit [3:0] late_hi;
+  bit [3:0] late_lo;
+  bit [99:0] late_a;
+  bit [99:0] late_o;
+  // verilator lint_off ASCRANGE
+  bit [0:99] late_asc;
+  // verilator lint_on ASCRANGE
+  assign late_cfg = '{base: 8'd3, dyn: late_dyn};
+  always_comb begin
+    late_o = late_a;
+    late_o[late_cfg.base-:8] = {late_hi, late_lo};
+  end
+  always_comb begin
+    late_asc = late_a;
+    late_asc[late_cfg.base+8'd93+:8] = {late_hi, late_lo};
+  end
+  initial begin
+    late_a = {25{4'h9}};
+    for (int i = 0; i < 4; ++i) begin
+      late_dyn = 8'(i);
+      late_hi = 4'(i * 5 + 1);
+      late_lo = 4'(i * 3 + 2);
+      #1;
+      `checkh(late_o, {late_a[99:4], late_hi});
+      `checkh(late_asc, {late_a[99:4], late_hi});
+    end
+  end
   // Forcing and releasing a constant part-select partly out of range, also of a packed array
   // element next to a forced bit of another
   logic [7:0] force_v;
