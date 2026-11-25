@@ -457,6 +457,13 @@ protected:
     // Map that represents scope hierarchy
     // Used by hierarchyAdd, hierarchyRemove, hierarchyMap
     VerilatedHierarchyMap m_hierMap VL_GUARDED_BY(m_hierMapMutex);
+    // Incremented when scopes are removed from m_hierMap, so iterations can skip them
+    std::atomic<uint64_t> m_hierGeneration{0};
+    // Scopes in m_hierMap, each with a number unique to its insertion, so that a scope destroyed
+    // and another created at its address are told apart
+    std::unordered_map<const VerilatedScope*, uint64_t>
+        m_hierSerials VL_GUARDED_BY(m_hierMapMutex);
+    uint64_t m_hierNextSerial VL_GUARDED_BY(m_hierMapMutex) = 0;  // Last number in m_hierSerials
 
     // Slow - somewhat static:
     VerilatedMutex m_exportMutex;  // Protect m_nameMap
@@ -568,21 +575,31 @@ public:
         // Slow ok - called at construction for VPI accessible elements
         const VerilatedLockGuard lock{s().m_hierMapMutex};
         s().m_hierMap[fromp].push_back(top);
+        s().m_hierSerials.emplace(top, ++s().m_hierNextSerial);
     }
     static void hierarchyRemove(const VerilatedScope* fromp,
                                 const VerilatedScope* top) VL_MT_SAFE {
         // Slow ok - called at destruction for VPI accessible elements
         const VerilatedLockGuard lock{s().m_hierMapMutex};
         VerilatedHierarchyMap& map = s().m_hierMap;
-        if (map.find(fromp) == map.end()) return;
-        auto& scopes = map[fromp];
-        const auto it = find(scopes.begin(), scopes.end(), top);
-        if (it != scopes.end()) scopes.erase(it);
+        const auto it = map.find(fromp);
+        if (it == map.end()) return;
+        std::vector<const VerilatedScope*>& scopes = it->second;
+        const auto sit = find(scopes.begin(), scopes.end(), top);
+        if (sit != scopes.end()) {
+            scopes.erase(sit);
+            s().m_hierSerials.erase(top);
+        }
+        // A destroyed scope must not remain a key, as its address may be reused
+        if (scopes.empty()) map.erase(it);
+        ++s().m_hierGeneration;
     }
-    static void hierarchyClear() VL_MT_SAFE {
+    static uint64_t hierarchyGeneration() VL_MT_SAFE { return s().m_hierGeneration; }
+    // Return the number of the scope's insertion in the hierarchy, or 0 if it is not in it
+    static uint64_t hierarchySerial(const VerilatedScope* scopep) VL_MT_SAFE {
         const VerilatedLockGuard lock{s().m_hierMapMutex};
-        VerilatedHierarchyMap& map = s().m_hierMap;
-        map.clear();
+        const auto it = s().m_hierSerials.find(scopep);
+        return it == s().m_hierSerials.end() ? 0 : it->second;
     }
     static const VerilatedHierarchyMap* hierarchyMap() VL_MT_SAFE_POSTINIT {
         // Thread save only assuming this is called only after model construction completed
