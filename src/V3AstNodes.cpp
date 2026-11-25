@@ -4716,9 +4716,11 @@ void AstSampleQueueDType::dumpSmall(std::ostream& str) const {
 void AstSampled::dump(std::ostream& str) const {
     Super::dump(str);
     if (internal()) str << " [INTERNAL]";
+    if (timed()) str << " [TIMED]";
 }
 void AstSampled::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, internal);
+    dumpJsonBoolFuncIf(str, timed);
     dumpJsonGen(str);
 }
 void AstSchemaRef::dump(std::ostream& str) const {

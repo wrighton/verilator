@@ -548,6 +548,12 @@ module t (/*AUTOARG*/
   endproperty
   assert property (p_local_random);
 
+  property p_local_time;
+    time stamp;
+    @(posedge clk) (in, stamp = $time) |-> ##1 (stamp != $time);
+  endproperty
+  assert property (p_local_time);
+
   assert property (@(clk) not ##1 in);
   cover property (@(posedge clk) not strong (in ##1 sum[0]));
 
