@@ -223,6 +223,9 @@ protected:
     mutable VerilatedMutex m_modelsMutex;  // Protect m_models
     std::map<std::string, VerilatedModel*> m_models VL_GUARDED_BY(m_modelsMutex);
     uint32_t m_nextModelId VL_GUARDED_BY(m_modelsMutex) = 0;  // Id of the next model added
+
+    // $timeformat argument warnings already given, one bit per kind
+    std::atomic<uint8_t> m_timeFormatWarned{0};
 };
 
 //======================================================================
@@ -269,6 +272,12 @@ public:  // But only for verilated*.cpp
     void timeFormatPrecision(int value) VL_MT_SAFE { m_s.m_timeFormatPrecision = value; }
     int timeFormatWidth() const VL_MT_SAFE { return m_s.m_timeFormatWidth; }
     void timeFormatWidth(int value) VL_MT_SAFE { m_s.m_timeFormatWidth = value; }
+    // Give a $timeformat argument warning of the given kind only once
+    void timeFormatWarnOnce(uint8_t kindBit, const std::string& msg) VL_MT_SAFE {
+        if (!(m_impdatap->m_timeFormatWarned.fetch_or(kindBit) & kindBit)) {
+            VL_WARN_MT("", 0, "", msg.c_str());
+        }
+    }
     std::string timeFormatSuffix() const VL_MT_SAFE_EXCLUDES(m_timeDumpMutex) {
         const VerilatedLockGuard lock{m_timeDumpMutex};
         return m_timeFormatSuffix;
