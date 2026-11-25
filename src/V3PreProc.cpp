@@ -731,7 +731,7 @@ string V3PreProcImp::defineSubst(VDefineRef* refp) {
                         } else if (!haveDefault) {
                             fileline()->v3error("Define missing argument '" + argName
                                                 + "' for: " + refp->name());
-                            return " `" + refp->name() + " ";
+                            return "";
                         }
                         numArgs++;
                     }
@@ -769,7 +769,7 @@ string V3PreProcImp::defineSubst(VDefineRef* refp) {
             && !(refp->args().size() == 1 && numArgs == 0
                  && trimWhitespace(refp->args()[0], false) == "")) {
             fileline()->v3error("Define passed too many arguments: " + refp->name());
-            return " `" + refp->name() + " ";
+            return "";
         }
     }
 
@@ -1408,6 +1408,9 @@ int V3PreProcImp::getStateToken() {
                 const VDefineRef* const refp = &(m_defRefs.top());
                 fileline()->v3error("Expecting ( to begin argument list for define reference `"s
                                     + refp->name());
+                // The lexer has already left the argument list; abandon the reference
+                VL_DO_DANGLING(m_defRefs.pop(), refp);
+                m_lexp->m_parenLevel = m_defRefs.empty() ? 0 : m_defRefs.top().parenLevel();
                 statePop();
                 goto next_tok;
             }
