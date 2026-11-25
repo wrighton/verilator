@@ -197,7 +197,41 @@ class Caller;
   endfunction
 endclass
 
+// A static rand member of a class the object reaches through a rand class handle is a
+// random variable of the object, not a caller variable
+class Shared;
+  static rand int unsigned s;
+  constraint c {s inside {[0 : 50]};}
+endclass
+
+class SharedHolder;
+  rand Shared sh;
+  rand int unsigned y;
+  function new();
+    sh = new;
+  endfunction
+endclass
+
 module t;
+  initial begin
+    automatic SharedHolder sh = new;
+    automatic int randomize_result;
+    randomize_result = sh.randomize() with {
+      Shared::s == 9;
+      y == Shared::s;
+    };
+    `checkd(randomize_result, 1);
+    `checkd(Shared::s, 9);
+    `checkd(sh.y, 9);
+    randomize_result = sh.randomize() with {
+      sh.s == 11;
+      y == sh.s;
+    };
+    `checkd(randomize_result, 1);
+    `checkd(Shared::s, 11);
+    `checkd(sh.y, 11);
+  end
+
   initial begin
     automatic UniqueList u = new;
     automatic Caller c = new;
