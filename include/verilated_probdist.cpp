@@ -90,16 +90,17 @@ static double _vl_dbase_chi_square(IData& seedr, int32_t deg_of_free) VL_MT_SAFE
     return x;
 }
 
+// Truncate toward zero; NaN and values that do not truncate into int32_t give
+// INT32_MIN, as the IEEE reference code's conversion does on x86
+static int32_t _vl_dist_trunc_int32(double r) VL_PURE {
+    if (r > -2147483649.0 && r < 2147483648.0) return static_cast<int32_t>(r);
+    return std::numeric_limits<int32_t>::min();
+}
+
 static IData _vl_round_to_int32(double r) VL_PURE {
-    int32_t i;
-    if (r >= 0) {
-        i = static_cast<int32_t>(r + 0.5);  // cppcheck-suppress bugprone-incorrect-rounding
-    } else {
-        r = -r;
-        i = static_cast<int32_t>(r + 0.5);  // cppcheck-suppress bugprone-incorrect-rounding
-        i = -i;
-    }
-    return static_cast<IData>(i);
+    // Round half away from zero, computed as in the IEEE reference code
+    // cppcheck-suppress bugprone-incorrect-rounding
+    return static_cast<IData>(_vl_dist_trunc_int32(r >= 0 ? r + 0.5 : r - 0.5));
 }
 
 IData VL_DIST_CHI_SQUARE(IData& seedr, IData udf) VL_MT_SAFE {
@@ -183,31 +184,19 @@ IData VL_DIST_UNIFORM(IData& seedr, IData ustart, IData uend) VL_MT_SAFE {
     if (end != std::numeric_limits<int32_t>::max()) {
         ++end;
         const double r = _vl_dbase_uniform(seedr, start, end);
-        if (r >= 0) {
-            i = static_cast<int32_t>(r);
-        } else {
-            i = static_cast<int32_t>(r - 1);
-        }
+        i = _vl_dist_trunc_int32(r >= 0 ? r : r - 1);
         if (i < start) i = start;
         if (i >= end) i = end - 1;
     } else if (start != std::numeric_limits<int32_t>::min()) {
         --start;
         const double r = _vl_dbase_uniform(seedr, start, end) + 1.0;
-        if (r >= 0) {
-            i = static_cast<int32_t>(r);
-        } else {
-            i = static_cast<int32_t>(r - 1);  // LCOV_EXCL_LINE
-        }
+        i = _vl_dist_trunc_int32(r >= 0 ? r : r - 1);
         if (i <= start) i = start + 1;
         if (i > end) i = end;
     } else {
         double r = (_vl_dbase_uniform(seedr, start, end) + 2147483648.0) / 4294967295.0;
         r = r * 4294967296.0 - 2147483648.0;
-        if (r >= 0) {
-            i = static_cast<int32_t>(r);
-        } else {
-            i = static_cast<int32_t>(r - 1);
-        }
+        i = _vl_dist_trunc_int32(r >= 0 ? r : r - 1);
     }
     return static_cast<IData>(i);
 }
