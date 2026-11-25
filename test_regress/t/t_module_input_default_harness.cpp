@@ -32,6 +32,8 @@ int main(int argc, char** argv) {
     ap->set_i = 5;
     ap->arr_set_i[0] = 3;
     ap->arr_set_i[1] = 0;
+    // Z bits of a default are a value, which the X and Z bits take as 0, not a driver
+    ap->z_set_i = 5;
     for (int cycle = 0; cycle < 4; ++cycle) {
         ap->clk = !ap->clk;
         bp->clk = !bp->clk;
@@ -47,6 +49,8 @@ int main(int argc, char** argv) {
         TEST_CHECK_EQ(static_cast<int>(bp->arr_set_o), 6);
         TEST_CHECK_EQ(static_cast<int>(ap->x_o), 0x45);
         TEST_CHECK_EQ(static_cast<int>(ap->other_o), 0x12 + 3 + 6);
+        TEST_CHECK_EQ(static_cast<int>(ap->z_o), 0x85);
+        TEST_CHECK_EQ(static_cast<int>(bp->z_o), 0x88);
     }
     ap->final();
     bp->final();
