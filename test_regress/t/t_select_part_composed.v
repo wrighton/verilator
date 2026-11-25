@@ -47,6 +47,62 @@ module t;
   assign mb = m[m5][m4].x[m2];
   // verilator lint_on WIDTHTRUNC
 
+  // Reads of members of the same element of a wide row
+  typedef struct packed {
+    logic [2:0] x;
+    logic [23:0] y;
+  } l1_t;
+  l1_t [33:0][2:0] lm;
+  logic [2:0] l5;
+  logic [7:0] l4;
+  logic [23:0] ly;
+  logic [2:0] lyp;
+  logic [2753:0] lv;
+  // verilator lint_off WIDTHTRUNC
+  assign ly = lm[l5][l4].y;
+  assign lyp = lm[l5][l4].y[l4+:3];
+  // verilator lint_on WIDTHTRUNC
+
+  initial begin
+    for (int i = 0; i < 512; ++i) begin
+      lm = 2754'({43{64'h0f0f_5aa5_9876_1234 * 64'(i + 1)}});
+      l5 = 3'(i * 5);
+      l4 = 8'(i * 7 >> 1);
+      lv = lm;
+      #STEP;
+      if (l4 < 3) begin
+        `checkh(ly, 24'(lv >> (l5 * 81 + l4 * 27)));
+        `checkh(lyp, 3'(lv >> (l5 * 81 + l4 * 28)));
+      end
+    end
+  end
+
+  // Reads of two members of the same element of a wide row
+  l1_t [33:0][2:0] km;
+  logic [2:0] k5;
+  logic [7:0] k4;
+  logic [23:0] ky;
+  logic [2:0] kx;
+  logic [2753:0] kv;
+  // verilator lint_off WIDTHTRUNC
+  assign ky = km[k5][k4].y;
+  assign kx = km[k5][k4].x;
+  // verilator lint_on WIDTHTRUNC
+
+  initial begin
+    for (int i = 0; i < 512; ++i) begin
+      km = 2754'({43{64'h5a0f_a5f0_1234_9876 * 64'(i + 3)}});
+      kv = km;
+      k5 = 3'(i * 3);
+      k4 = 8'(i * 5 >> 1);
+      #STEP;
+      if (k4 < 3) begin
+        `checkh(ky, 24'(kv >> (k5 * 81 + k4 * 27)));
+        `checkh(kx, 3'(kv >> (k5 * 81 + k4 * 27 + 24)));
+      end
+    end
+  end
+
   initial begin
     for (int i = 0; i < 512; ++i) begin
       m = 2754'({43{64'h5aa5_0f0f_1234_9876 * 64'(i + 1)}});
