@@ -8629,8 +8629,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     } else {
                         nodep->v3error("Can't find typedef/interface: " << nodep->prettyNameQ());
                     }
+                    // Prevent errors on the parameters of the unresolved type
+                    if (nodep->paramsp()) pushDeletep(nodep->paramsp()->unlinkFrBackWithNext());
                 }
             }
+        }
+        if (AstPin* const paramsp = nodep->paramsp()) {
+            // Only a class reference takes parameter values, and it was replaced above
+            nodep->v3error("Parameter values applied to "
+                           << nodep->prettyNameQ()
+                           << ", which is not a parameterized class (IEEE 1800-2023 A.2.2.1)");
+            pushDeletep(paramsp->unlinkFrBackWithNext());
         }
         iterateChildren(nodep);
     }

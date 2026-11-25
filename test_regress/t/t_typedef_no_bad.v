@@ -8,4 +8,7 @@ typedef sometype;
 
 module t;
   sometype p;
+  sometype #(int) q;
+  logic r;
+  r #(int) s;
 endmodule
