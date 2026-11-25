@@ -180,7 +180,9 @@ public:
 #endif
 };
 
-enum class VlDelayPhase : bool { ACTIVE, INACTIVE };
+// Where a delayed coroutine waits: the time queue, the #0 queue, or forever, for a delay past
+// the maximum simulation time
+enum class VlDelayPhase : uint8_t { ACTIVE, INACTIVE, NEVER };
 
 //=============================================================================
 // VlDelayScheduler stores coroutines to be resumed at a certain simulation time. If the current
@@ -190,6 +192,27 @@ class VlDelayScheduler final {
     // TYPES
     // Time-sorted queue of timestamps and handles
     using VlDelayedCoroutineQueue = std::multimap<uint64_t, VlCoroutineHandle>;
+    // Awaitable of delay() and forkStart()
+    struct DelayAwaitable final {
+        VlDelayScheduler& sched;  // Scheduler to suspend in
+        VlProcessRef process;  // Data of the suspended process, null if not needed
+        const uint64_t time;  // Resumption time, for the ACTIVE phase
+        const VlDelayPhase phase;
+        const VlFileLineDebug fileline;
+
+        bool await_ready() const { return false; }  // Always suspend
+        void await_suspend(std::coroutine_handle<VlPromise> coro) {
+            if (phase == VlDelayPhase::ACTIVE) {
+                sched.m_queue.emplace(time, VlCoroutineHandle{coro, process, fileline});
+            } else if (phase == VlDelayPhase::INACTIVE) {
+                sched.m_zeroDelayed.emplace_back(VlCoroutineHandle{coro, process, fileline});
+            } else {
+                coro.promise().m_forever = true;
+                sched.m_forevered.emplace_back(VlCoroutineHandle{coro, process, fileline});
+            }
+        }
+        void await_resume() const {}
+    };
 
     // MEMBERS
     VerilatedContext& m_context;  // Context to get current time from
@@ -198,7 +221,7 @@ class VlDelayScheduler final {
     // Coroutines that waited for #0 and are being resumed now. As member to avoid reallocations
     std::vector<VlCoroutineHandle> m_zeroDelayesSwap;
     std::vector<VlCoroutineHandle>
-        m_forevered;  // Coroutines, that called wait(0), and are to be freed.
+        m_forevered;  // Coroutines that never resume (wait(0), delay past max time), to be freed.
     // Their callers are freed recursively through m_continuation.
     //
     // NOTE: it would be possible to clean up forevered coroutines immedietely without storing
@@ -232,37 +255,23 @@ public:
     // Used by coroutines for co_awaiting a certain simulation time
     auto delay(uint64_t delay, VlProcessRef process, const char* filename = VL_UNKNOWN_FILENAME,
                int lineno = 0) {
-        struct Awaitable final {
-            VlProcessRef process;  // Data of the suspended process, null if not needed
-            VlDelayedCoroutineQueue& queue;
-            std::vector<VlCoroutineHandle>& queueZeroDelay;
-            const uint64_t delay;
-            const VlDelayPhase phase;
-            const VlFileLineDebug fileline;
-
-            bool await_ready() const { return false; }  // Always suspend
-            void await_suspend(std::coroutine_handle<VlPromise> coro) {
-                // Both active delays and fork..join_none #0 are resumed out of the time queue.
-                if (phase != VlDelayPhase::INACTIVE) {
-                    queue.emplace(delay, VlCoroutineHandle{coro, process, fileline});
-                } else {
-                    queueZeroDelay.emplace_back(VlCoroutineHandle{coro, process, fileline});
-                }
-            }
-            void await_resume() const {}
-        };
-
-        VlDelayPhase phase;
-        if (delay != 0) {
-            // UINT64_MAX is a sentinel for synthetic fork..join_none delays.
-            if (delay == std::numeric_limits<uint64_t>::max()) delay = 0;
-            phase = VlDelayPhase::ACTIVE;
-        } else {
+        const uint64_t now = m_context.time();
+        VlDelayPhase phase = VlDelayPhase::ACTIVE;
+        if (delay == 0) {
             phase = VlDelayPhase::INACTIVE;
+        } else if (VL_UNLIKELY(delay > std::numeric_limits<uint64_t>::max() - now)) {
+            // Resumption time not representable in 64-bit time (IEEE 1800-2023 9.4.1)
+            phase = VlDelayPhase::NEVER;
         }
-        return Awaitable{process,       m_queue,
-                         m_zeroDelayed, m_context.time() + delay,
-                         phase,         VlFileLineDebug{filename, lineno}};
+        return DelayAwaitable{*this, process, now + delay, phase,
+                              VlFileLineDebug{filename, lineno}};
+    }
+    // Used by coroutines for co_awaiting the start of a forked process, which resumes in the
+    // active region of the current time slot
+    auto forkStart(VlProcessRef process, const char* filename = VL_UNKNOWN_FILENAME,
+                   int lineno = 0) {
+        return DelayAwaitable{*this, process, m_context.time(), VlDelayPhase::ACTIVE,
+                              VlFileLineDebug{filename, lineno}};
     }
 
     // Helper awaitable func for suspending coroutines forever.
