@@ -500,6 +500,9 @@ public:
 
 inline std::string VL_TO_STRING(const VlProcessRef&) { return std::string("process"); }
 
+template <typename T_Value>
+class VlRefPin;
+
 //===================================================================
 /// Verilog typeless mailbox message (IEEE 1800-2023 15.4.9). Holds a message value of any
 /// type, or refers to the variable that receives a message.
@@ -575,6 +578,12 @@ public:
         msg.m_lineno = lineno;
         msg.m_receivep = &receive<T_Var>;
         return msg;
+    }
+    // Container element of a get(), try_get(), peek() or try_peek()
+    template <typename T_Var>
+    static VlMailboxMessage ref(const char* typeName, const VlRefPin<T_Var>& pin,
+                                const char* filename, int lineno) {
+        return ref(typeName, static_cast<T_Var&>(pin), filename, lineno);
     }
     // Pass a temporary from ref() as a ref argument
     VlMailboxMessage& lvalue() { return *this; }
@@ -894,6 +903,222 @@ IData vl_with_extreme_index(const T_Array& array, IData size, T_Func with_func, 
 }
 
 //===================================================================
+// Elements of dynamically sized containers passed to ref arguments
+//
+// IEEE 1800-2023 13.5.2 requires such a reference to stay bound to its element: the element
+// continues to exist until the call completes, also when it is removed from the container,
+// as an outdated reference whose changes are not seen in the container. The call passes a
+// VlRefPin, a temporary of the call's full-expression, so it lives until the call completes,
+// across any suspension, and it links the element to its container's VlRefList. Before an
+// operation destroys or moves a pinned element, the container gives what holds the element
+// to a VlRefKept shared by the element's pins:
+// - VlRefSlot: an element removed from an end of a queue, constructed again in its slot, and
+//   the deque node holding the slot, which VlRefAlloc keeps when the deque deallocates it;
+// - VlRefStorage: the whole storage, for an operation that replaces or shifts all of it.
+// Slots rely on libstdc++'s std::deque, which deallocates a node when its last element is
+// removed and otherwise constructs only next to an end; other libraries keep and reuse nodes
+// themselves, so there removing a pinned element from an end gives the pins the whole storage.
+// The work for elements passed by reference is in functions of the container that the pins
+// refer to; only pins create references to them, so they are compiled only for the types of
+// the containers whose elements a model passes by reference. Work that does not depend on the
+// type is in verilated.cpp.
+
+#ifdef __GLIBCXX__
+#define VL_REF_SLOTS 1
+#else
+#define VL_REF_SLOTS 0
+#endif
+
+class VlRefList;
+
+// What keeps outdated elements alive; deleted with the last pin referring to it
+class VlRefKept VL_NOT_FINAL {
+public:
+    size_t m_pins = 0;  // Pins referring to it
+    virtual ~VlRefKept() = default;
+};
+
+// Element passed to a ref argument, see VlRefPin
+class VlRefPinBase VL_NOT_FINAL {
+    friend class VlRefList;
+    void* const m_elemp;  // Element passed by reference
+    const void* const m_opsp;  // Functions of the container for elements passed by reference
+    VlRefList* m_listp;  // Container's list, nullptr once outdated
+    VlRefPinBase* m_nextp;  // Next pin of the list
+    VlRefKept* m_keptp = nullptr;  // What keeps the element alive, once outdated
+    void release() VL_MT_UNSAFE;
+
+protected:
+    VL_ATTR_ALWINLINE VlRefPinBase(VlRefList& list, void* elemp, const void* opsp);
+    VL_ATTR_ALWINLINE ~VlRefPinBase();
+    void* elemp() const { return m_elemp; }
+
+public:
+    VlRefPinBase(const VlRefPinBase&) = delete;
+    VlRefPinBase& operator=(const VlRefPinBase&) = delete;
+};
+
+// Element passed to a ref argument
+template <typename T_Value>
+class VlRefPin final : public VlRefPinBase {
+public:
+    VL_ATTR_ALWINLINE VlRefPin(VlRefList& list, T_Value& elem, const void* opsp)
+        : VlRefPinBase{list, &elem, opsp} {}
+    VL_ATTR_ALWINLINE ~VlRefPin() {}
+    operator T_Value&() const { return *static_cast<T_Value*>(elemp()); }
+    // The element, for a select within it, e.g. of a member of a struct element
+    T_Value& elem() const { return *static_cast<T_Value*>(elemp()); }
+};
+
+// Node of a storage given to the slots in it when the storage deallocated it
+class VlRefNode final {
+public:
+    void* const m_p;  // The node, from ::operator new
+    size_t m_slots;  // Slots in it
+    VlRefNode(void* p, size_t slots)
+        : m_p{p}
+        , m_slots{slots} {}
+};
+
+// Slot of an element removed from an end of a queue while pinned
+class VlRefSlot VL_NOT_FINAL : public VlRefKept {
+    friend class VlRefList;
+    VlRefSlot* m_nextp = nullptr;  // Next slot of the list
+    VlRefList* m_listp = nullptr;  // List of the storage holding the node, while it does
+    VlRefNode* m_nodep = nullptr;  // Node holding the slot, once the storage deallocated it
+    bool m_atEnd = false;  // First in a node that the storage keeps beyond its last element
+
+protected:
+    const char* const m_slotp;  // Address of the element
+    const void* const m_opsp;  // As VlRefPinBase::m_opsp
+    VlRefSlot(const void* slotp, const void* opsp)
+        : m_slotp{static_cast<const char*>(slotp)}
+        , m_opsp{opsp} {}
+
+public:
+    ~VlRefSlot() override;
+};
+
+// The element of a VlRefSlot
+template <typename T_Value>
+class VlRefSlotOf final : public VlRefSlot {
+    T_Value m_value;  // Value of the element while it is removed
+
+public:
+    VlRefSlotOf(T_Value& elem, const void* opsp)
+        : VlRefSlot{&elem, opsp}
+        , m_value{std::move(elem)} {}
+    T_Value* elemp() const { return reinterpret_cast<T_Value*>(const_cast<char*>(m_slotp)); }
+    // Construct the element again in its slot, once removed from the storage
+    void restore() { new (elemp()) T_Value{std::move(m_value)}; }
+    ~VlRefSlotOf() override { elemp()->~T_Value(); }
+};
+
+// Pins and slots of a container; a copied or moved-to container starts with none
+class VlRefList final {
+    friend class VlRefPinBase;
+    friend class VlRefSlot;
+    VlRefPinBase* m_pinsp = nullptr;  // Most recent pin
+    VlRefSlot* m_slotsp = nullptr;  // Slots in nodes of the container's storage
+
+public:
+    VlRefList() = default;
+    VlRefList(const VlRefList&) {}
+    // Pins and slots belong to the storage they are in, so they are not copied
+    // cppcheck-suppress operatorEqVarError
+    VlRefList& operator=(const VlRefList&) { return *this; }
+    ~VlRefList();
+    bool any() const { return hasPins() | hasSlots(); }
+    bool hasPins() const { return m_pinsp; }
+    bool hasSlots() const { return m_slotsp; }
+    // The container functions of the pins or slots, if any()
+    const void* opsp() const { return m_pinsp ? m_pinsp->m_opsp : m_slotsp->m_opsp; }
+    bool has(const void* elemp) const {
+        for (const VlRefPinBase* pinp = m_pinsp; pinp; pinp = pinp->m_nextp) {
+            if (pinp->m_elemp == elemp) return true;
+        }
+        return false;
+    }
+    // Outdate the pins of an element, or with elemp nullptr all pins, giving them keptp
+    void outdate(const void* elemp, VlRefKept* keptp);
+    void addSlot(VlRefSlot* slotp, bool atEnd);
+    // Whether a slot is in a node beyond the last element, where push_back may construct
+    bool slotAtEnd() const;
+    // Whether a slot is in [p, p + bytes)
+    bool slotIn(const void* p, size_t bytes) const;
+    // Give a node being deallocated to the slots in it; false if there are none
+    bool keepNode(void* p, size_t bytes);
+    void takeSlots(VlRefList& from);
+};
+
+VL_ATTR_ALWINLINE VlRefPinBase::VlRefPinBase(VlRefList& list, void* elemp, const void* opsp)
+    : m_elemp{elemp}
+    , m_opsp{opsp}
+    , m_listp{&list}
+    , m_nextp{list.m_pinsp} {
+    list.m_pinsp = this;
+}
+
+VL_ATTR_ALWINLINE VlRefPinBase::~VlRefPinBase() {
+    if (VL_LIKELY(m_listp)) {
+        VlRefPinBase** pinpp = &m_listp->m_pinsp;
+        while (*pinpp != this) pinpp = &(*pinpp)->m_nextp;
+        *pinpp = m_nextp;
+    } else {
+        release();
+    }
+}
+
+// Allocator of queue storage, keeping deallocated nodes that hold slots
+template <typename T>
+class VlRefAlloc VL_NOT_FINAL {  // Not final, as std::deque derives from it
+    static_assert(alignof(T) <= alignof(std::max_align_t), "Nodes are from ::operator new");
+
+public:
+    using value_type = T;
+    using propagate_on_container_copy_assignment = std::false_type;
+    using propagate_on_container_move_assignment = std::false_type;
+    using propagate_on_container_swap = std::false_type;
+    using is_always_equal = std::true_type;
+    VlRefList* m_listp;  // Pins and slots of the storage, nullptr if it can hold none
+    explicit VlRefAlloc(VlRefList* listp = nullptr)
+        : m_listp{listp} {}
+    // Implicit, as containers convert the allocator to that of their nodes
+    template <typename U>
+    // cppcheck-suppress noExplicitConstructor
+    VlRefAlloc(const VlRefAlloc<U>& that)
+        : m_listp{that.m_listp} {}
+    VlRefAlloc select_on_container_copy_construction() const { return VlRefAlloc{}; }
+    T* allocate(size_t n) { return static_cast<T*>(::operator new(n * sizeof(T))); }
+    void deallocate(T* p, size_t n) {
+        if (VL_UNLIKELY(m_listp && m_listp->hasSlots()) && m_listp->keepNode(p, n * sizeof(T))) {
+            return;
+        }
+        ::operator delete(p);
+    }
+    template <typename U>
+    bool operator==(const VlRefAlloc<U>&) const {
+        return true;
+    }
+    template <typename U>
+    bool operator!=(const VlRefAlloc<U>&) const {
+        return false;
+    }
+};
+
+// Storage of outdated elements
+template <typename T_Storage>
+class VlRefStorage final : public VlRefKept {
+public:
+    VlRefList m_list;  // Slots in nodes of m_storage
+    T_Storage m_storage;  // The storage
+    VlRefStorage(T_Storage& from, VlRefList& fromList)
+        : m_storage{std::move(from), typename T_Storage::allocator_type{&m_list}} {
+        m_list.takeSlots(fromList);
+    }
+};
+
+//===================================================================
 // Verilog queue and dynamic array container
 // There are no multithreaded locks on this; the base variable must
 // be protected by other means
@@ -904,7 +1129,7 @@ template <typename T_Value, size_t N_MaxSize = 0>
 class VlQueue final {
 private:
     // TYPES
-    using Deque = std::deque<T_Value>;
+    using Deque = std::deque<T_Value, VlRefAlloc<T_Value>>;
 
 public:
     using const_iterator = typename Deque::const_iterator;
@@ -918,14 +1143,158 @@ public:
 
 private:
     // MEMBERS
-    Deque m_deque;  // State of the assoc array
+    VlRefList m_refs;  // Elements passed by reference; before m_deque, whose nodes may hold slots
+    Deque m_deque{VlRefAlloc<T_Value>{&m_refs}};  // State of the assoc array
     T_Value m_defaultValue{};  // Default value
 
     // METHODS
+    // Functions for elements passed by reference, called through the pins instead of directly
+    // so that only the queue types whose elements are passed by reference compile them
+    struct RefOps final {
+        void (*outdate)(VlQueue& q, bool keepContents);  // Before storage is freed or moved
+        void (*push)(VlQueue& q, const T_Value& value, bool front);
+        T_Value (*pop)(VlQueue& q, bool front);
+        void (*erase)(VlQueue& q, int32_t index);
+        void (*insert)(VlQueue& q, int32_t index, const T_Value& value);
+        void (*resize)(VlQueue& q, size_t size);
+    };
+    static const RefOps s_refOps;
+    const RefOps& refOps() const { return *static_cast<const RefOps*>(m_refs.opsp()); }
+    void outdateRefs(bool keepContents) {
+        if (VL_UNLIKELY(m_refs.any())) refOps().outdate(*this, keepContents);
+    }
+    // Keep the storage for the pins, outdating them, and leave a copy of it, or nothing
+    static void refOutdate(VlQueue& q, bool keepContents) {
+        if (!q.m_refs.hasPins()) {
+            const Deque old{std::move(q.m_deque), VlRefAlloc<T_Value>{&q.m_refs}};
+            if (keepContents) q.m_deque = old;  // The slots keep the nodes of old
+            return;
+        }
+        VlRefStorage<Deque>* const keptp = new VlRefStorage<Deque>{q.m_deque, q.m_refs};
+        if (keepContents) q.m_deque = keptp->m_storage;
+        q.m_refs.outdate(nullptr, keptp);
+    }
+    // The functions for elements passed by reference walk the storage with const_iterator, so
+    // that they share no iterator functions with the operations, which -Os then still inlines
+    const_iterator constAt(size_t index) const {
+        const_iterator it = m_deque.cbegin();
+        it += index;
+        return it;
+    }
+    static T_Value& elemAt(const_iterator it) { return const_cast<T_Value&>(*it); }
+    size_t constSize() const { return m_deque.cend() - m_deque.cbegin(); }
+    // Before constructing 'count' elements beyond the front or the back, release slots that the
+    // construction would reuse: std::deque constructs next to that end, or in a new node. An
+    // empty deque holds no pinned element, so its storage is given to the slots. Beyond the
+    // back, the construction may start in a node kept beyond the last element, which only a
+    // single element can be checked for (see refPop), so constructing more releases any slot.
+    void guardEnd(bool front, size_t count = 1) {
+        if (!m_refs.hasSlots()) return;
+        if (m_deque.empty()) return refOutdate(*this, true);
+        const size_t bytes = count * sizeof(T_Value);
+        const char* const endp
+            = front ? reinterpret_cast<const char*>(&*m_deque.cbegin()) - bytes
+                    : reinterpret_cast<const char*>(&*(m_deque.cend() - 1)) + sizeof(T_Value);
+        if (m_refs.slotIn(endp, bytes) || (!front && (count > 1 || m_refs.slotAtEnd()))) {
+            refOutdate(*this, true);
+        }
+    }
+    static void refPush(VlQueue& q, const T_Value& value, bool front) {
+        q.guardEnd(front);
+        if (front) {
+            q.m_deque.push_front(value);
+        } else {
+            q.m_deque.push_back(value);
+        }
+        q.applyBound();
+    }
+    // Remove an end element; if pinned, keep it in its slot
+    static T_Value refPop(VlQueue& q, bool front) {
+        T_Value& elem = elemAt(q.constAt(front ? 0 : q.constSize() - 1));
+        T_Value value = elem;
+        if (!VL_REF_SLOTS && q.m_refs.has(&elem)) refOutdate(q, true);
+        VlRefSlotOf<T_Value>* const slotp
+            = q.m_refs.has(&elem) ? new VlRefSlotOf<T_Value>{elem, &s_refOps} : nullptr;
+        // libstdc++ keeps a node emptied by pop_back as the one beyond the last element
+        if (slotp) {
+            q.m_refs.addSlot(slotp, !front && q.constSize() > 1
+                                        && &*q.constAt(q.constSize() - 2) + 1 != &elem);
+        }
+        if (front) {
+            q.m_deque.pop_front();
+        } else {
+            q.m_deque.pop_back();
+        }
+        if (slotp) {
+            slotp->restore();
+            q.m_refs.outdate(&elem, slotp);
+        }
+        return value;
+    }
+    // Whether an element passed by reference is at an index in [first, last); linear in the
+    // range times the pins, which are few, as is erase() or insert() shifting the range
+    bool refPinnedIn(size_t first, size_t last) const {
+        const_iterator it = constAt(first);
+        for (size_t i = first; i < last; ++i, ++it) {
+            if (m_refs.has(&*it)) return true;
+        }
+        return false;
+    }
+    // Move the element at index 'from' to index 'to', shifting the elements between
+    void refMove(size_t from, size_t to) {
+        const_iterator it = constAt(from);
+        T_Value value{std::move(elemAt(it))};
+        for (; from > to; --from, --it) elemAt(it) = std::move(elemAt(it - 1));
+        for (; from < to; ++from, ++it) elemAt(it) = std::move(elemAt(it + 1));
+        elemAt(it) = std::move(value);
+    }
+    // Erase or insert, shifting the side holding no element passed by reference, so references
+    // stay bound
+    static void refErase(VlQueue& q, int32_t index) {
+        const size_t size = q.constSize();
+        const bool pinned = q.m_refs.has(&*q.constAt(index));
+        if (pinned ? index == 0 : !q.refPinnedIn(0, index)) {
+            q.refMove(index, 0);
+            refPop(q, true);
+        } else if (pinned ? index == size - 1 : !q.refPinnedIn(index + 1, size)) {
+            q.refMove(index, size - 1);
+            refPop(q, false);
+        } else {
+            refOutdate(q, true);
+            q.m_deque.erase(q.m_deque.begin() + index);
+        }
+    }
+    static void refInsert(VlQueue& q, int32_t index, const T_Value& value) {
+        const size_t size = q.constSize();
+        if (!q.m_refs.hasPins()) {
+            // As libstdc++'s insert(), which constructs at the end nearer the index
+            q.guardEnd(index != size && (index == 0 || index < size / 2));
+            q.m_deque.insert(q.m_deque.begin() + index, value);
+        } else if (!q.refPinnedIn(0, index)) {
+            q.guardEnd(true);
+            q.m_deque.push_front(value);
+            q.refMove(0, index);
+        } else if (!q.refPinnedIn(index, size)) {
+            q.guardEnd(false);
+            q.m_deque.push_back(value);
+            q.refMove(size, index);
+        } else {
+            refOutdate(q, true);
+            q.m_deque.insert(q.m_deque.begin() + index, value);
+        }
+        q.applyBound();
+    }
+    // Resize, removing elements from the back as pop_back does
+    static void refResize(VlQueue& q, size_t size) {
+        while (q.m_refs.hasPins() && size < q.constSize()) refPop(q, false);
+        if (size > q.constSize()) q.guardEnd(false, size - q.constSize());
+        q.m_deque.resize(size, q.atDefault());
+    }
     // Discard elements beyond the bound, with the warning IEEE 1800-2023 7.10.5 requires
     void applyBound() {
         if (VL_UNLIKELY(N_MaxSize && N_MaxSize < m_deque.size())) {
             Verilated::queueBoundError(N_MaxSize, m_deque.size());
+            while (m_refs.hasPins() && N_MaxSize < m_deque.size()) refPop(*this, false);
             m_deque.resize(N_MaxSize);
         }
     }
@@ -980,11 +1349,35 @@ public:
     // CONSTRUCTORS
     // cppcheck-suppress uninitMemberVar // m_defaultValue isn't defaulted, caller must
     VlQueue() = default;
-    ~VlQueue() = default;
-    VlQueue(const VlQueue&) = default;
-    VlQueue(VlQueue&&) = default;
-    VlQueue& operator=(const VlQueue&) = default;
-    VlQueue& operator=(VlQueue&&) = default;
+    ~VlQueue() {
+        if (VL_UNLIKELY(m_refs.hasPins())) refOps().outdate(*this, false);
+    }
+    VlQueue(const VlQueue& rhs)
+        : m_deque{rhs.m_deque, VlRefAlloc<T_Value>{&m_refs}}
+        , m_defaultValue{rhs.m_defaultValue} {}
+    // Elements passed by reference stay in the outdated storage of the source
+    VlQueue(VlQueue&& rhs) noexcept
+        : m_defaultValue{rhs.m_defaultValue} {
+        rhs.outdateRefs(true);
+        m_deque = std::move(rhs.m_deque);
+    }
+    VlQueue& operator=(const VlQueue& rhs) {
+        if (this != &rhs) {
+            outdateRefs(false);
+            m_deque = rhs.m_deque;
+            m_defaultValue = rhs.m_defaultValue;
+        }
+        return *this;
+    }
+    VlQueue& operator=(VlQueue&& rhs) noexcept {
+        if (this != &rhs) {
+            outdateRefs(false);
+            rhs.outdateRefs(true);
+            m_deque = std::move(rhs.m_deque);
+            m_defaultValue = rhs.m_defaultValue;
+        }
+        return *this;
+    }
 
     // Template constuctors that construct from containers holding sub-classes
     template <typename T_Subclass>
@@ -1039,6 +1432,7 @@ public:
     // Also must allow conversion from a different N_MaxSize queue
     template <size_t N_RhsMaxSize = 0>
     VlQueue operator=(const VlQueue<T_Value, N_RhsMaxSize>& rhs) {
+        outdateRefs(false);
         m_deque = rhs.privateDeque();
         applyBound();
         return *this;
@@ -1062,10 +1456,15 @@ public:
     // Size. Verilog: function int size(), or int num()
     int size() const { return m_deque.size(); }
     // Clear array. Verilog: function void delete([input index])
-    void clear() { m_deque.clear(); }
+    void clear() {
+        // Also with only slots, as the deque may keep a node holding one for new elements
+        if (VL_UNLIKELY(m_refs.any())) refOps().outdate(*this, false);
+        m_deque.clear();
+    }
     void erase(int32_t index) {
-        if (VL_LIKELY(index >= 0 && index < m_deque.size()))
-            m_deque.erase(m_deque.begin() + index);
+        if (VL_UNLIKELY(index < 0 || index >= m_deque.size())) return;
+        if (VL_UNLIKELY(m_refs.hasPins())) return refOps().erase(*this, index);
+        m_deque.erase(m_deque.begin() + index);
     }
 
     // Dynamic array new[] becomes a renew()
@@ -1078,6 +1477,7 @@ public:
         if (size == 0) {
             clear();
         } else {
+            outdateRefs(&rhs == this);
             *this = rhs;
             m_deque.resize(size, atDefault());
         }
@@ -1086,21 +1486,27 @@ public:
     template <typename T_UnpackedValue, std::size_t N_UnpackedDepth>
     void renew_copy(size_t size, const VlUnpacked<T_UnpackedValue, N_UnpackedDepth>& rhs);
 
-    void resize(size_t size) { m_deque.resize(size, atDefault()); }
+    void resize(size_t size) {
+        if (VL_UNLIKELY(m_refs.any())) return refOps().resize(*this, size);
+        m_deque.resize(size, atDefault());
+    }
     // Assign the elements of a range, as DPI does from a C layout copy
     template <typename T_Iterator>
     void assign(const T_Iterator& first, const T_Iterator& last) {
+        outdateRefs(false);
         m_deque.assign(first, last);
         applyBound();
     }
 
     // function void q.push_front(value)
     void push_front(const T_Value& value) {
+        if (VL_UNLIKELY(m_refs.any())) return refOps().push(*this, value, true);
         m_deque.push_front(value);
         applyBound();
     }
     // function void q.push_back(value)
     void push_back(const T_Value& value) {
+        if (VL_UNLIKELY(m_refs.any())) return refOps().push(*this, value, false);
         m_deque.push_back(value);
         applyBound();
     }
@@ -1118,6 +1524,7 @@ public:
     // function value_t q.pop_front();
     T_Value pop_front() {
         if (m_deque.empty()) return m_defaultValue;
+        if (VL_UNLIKELY(m_refs.hasPins())) return refOps().pop(*this, true);
         T_Value v = m_deque.front();
         m_deque.pop_front();
         return v;
@@ -1125,6 +1532,7 @@ public:
     // function value_t q.pop_back();
     T_Value pop_back() {
         if (m_deque.empty()) return m_defaultValue;
+        if (VL_UNLIKELY(m_refs.hasPins())) return refOps().pop(*this, false);
         T_Value v = m_deque.back();
         m_deque.pop_back();
         return v;
@@ -1160,11 +1568,20 @@ public:
     }
     // Access with an index counted from end (e.g. q[$])
     T_Value& atWriteAppendBack(int32_t index) { return atWriteAppend(m_deque.size() - 1 - index); }
+    // Element passed to a ref argument
+    VlRefPin<T_Value> atWriteRef(int32_t index) { return {m_refs, atWrite(index), &s_refOps}; }
+    VlRefPin<T_Value> atWriteAppendRef(int32_t index) {
+        return {m_refs, atWriteAppend(index), &s_refOps};
+    }
+    VlRefPin<T_Value> atWriteAppendBackRef(int32_t index) {
+        return {m_refs, atWriteAppendBack(index), &s_refOps};
+    }
     const T_Value& atBack(int32_t index) const { return at(m_deque.size() - 1 - index); }
 
     // function void q.insert(index, value);
     void insert(int32_t index, const T_Value& value) {
         if (VL_UNLIKELY(index < 0 || index > m_deque.size())) return;
+        if (VL_UNLIKELY(m_refs.any())) return refOps().insert(*this, index, value);
         m_deque.insert(m_deque.begin() + index, value);
         applyBound();
     }
@@ -2349,6 +2766,10 @@ template <typename T_Value, std::size_t N_Depth>
 struct VlContainsCustomStruct<VlUnpacked<T_Value, N_Depth>> : VlContainsCustomStruct<T_Value> {};
 
 template <typename T_Value, size_t N_MaxSize>
+const typename VlQueue<T_Value, N_MaxSize>::RefOps VlQueue<T_Value, N_MaxSize>::s_refOps
+    = {&refOutdate, &refPush, &refPop, &refErase, &refInsert, &refResize};
+
+template <typename T_Value, size_t N_MaxSize>
 template <typename T_UnpackedValue, std::size_t N_UnpackedDepth>
 void VlQueue<T_Value, N_MaxSize>::renew_copy(
     size_t size, const VlUnpacked<T_UnpackedValue, N_UnpackedDepth>& rhs) {
@@ -2828,7 +3249,8 @@ template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(const VlQueue<VlClassRef<T_Subclass>>& that)
     : m_deque{that.privateDeque().begin(),  // lintok-begin-on-ref
-              that.privateDeque().end()}  // lintok-begin-on-ref
+              that.privateDeque().end(),  // lintok-begin-on-ref
+              VlRefAlloc<T_Value>{&m_refs}}
     , m_defaultValue{that.atDefault()} {
     applyBound();
 }
@@ -2837,7 +3259,8 @@ template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(VlQueue<VlClassRef<T_Subclass>>&& that)
     : m_deque{std::make_move_iterator(that.privateDeque().begin()),  // lintok-begin-on-ref
-              std::make_move_iterator(that.privateDeque().end())}  // lintok-begin-on-ref
+              std::make_move_iterator(that.privateDeque().end()),  // lintok-begin-on-ref
+              VlRefAlloc<T_Value>{&m_refs}}
     , m_defaultValue{std::move(that.atDefault())} {
     applyBound();
 }
