@@ -43,6 +43,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -579,8 +580,29 @@ public:
     }
 };
 
+// Whether the scope a VPI iteration is about is still alive, as its model may be destroyed
+// during the iteration. A scope not in the VPI scope hierarchy is assumed alive.
+class VerilatedVpioScopeLife final {
+    const VerilatedScope* const m_scopep;  // Scope watched
+    const uint64_t m_serial = VerilatedImp::hierarchySerial(m_scopep);  // 0 if not watched
+    uint64_t m_generation = VerilatedImp::hierarchyGeneration();  // When last checked
+    bool m_alive = true;  // Scope was alive when last checked
+
+public:
+    explicit VerilatedVpioScopeLife(const VerilatedScope* scopep)
+        : m_scopep{scopep} {}
+    bool alive() {
+        if (VL_UNLIKELY(m_generation != VerilatedImp::hierarchyGeneration())) {
+            m_generation = VerilatedImp::hierarchyGeneration();
+            if (m_serial) m_alive = m_alive && VerilatedImp::hierarchySerial(m_scopep) == m_serial;
+        }
+        return m_alive;
+    }
+};
+
 class VerilatedVpioVarIter final : public VerilatedVpio {
     const VerilatedScope* const m_scopep;  // Scope whose variables are iterated
+    VerilatedVpioScopeLife m_scopeLife{m_scopep};  // Whether m_scopep is alive
     VerilatedVarNameMap::const_iterator m_it;  // Next variable to return
     bool m_started = false;  // Iteration has begun
     const VerilatedScope* m_topscopep = nullptr;  // Top scope, found on first iteration
@@ -601,7 +623,7 @@ public:
     }
     uint32_t type() const override { return vpiIterator; }
     vpiHandle dovpi_scan() override {
-        if (VL_UNLIKELY(!m_scopep->varsp())) {
+        if (VL_UNLIKELY(!m_scopeLife.alive() || !m_scopep->varsp())) {
             delete this;  // IEEE 37.2.2 vpi_scan at end does a vpi_release_handle
             return nullptr;  // End of list - only one deep
         }
@@ -641,6 +663,7 @@ public:
 
 class VerilatedVpioRegIter final : public VerilatedVpio {
     VerilatedVpioVar* m_varp;  // Variable whose elements are iterated
+    VerilatedVpioScopeLife m_scopeLife;  // Whether the scope of m_varp is alive
     std::vector<VerilatedRange> m_ranges;  // Ranges of each dimension of the variable
     std::vector<int> m_nextIndex;  // Next index to return in each dimension
     const int32_t m_maxDim;  // Highest dimension to iterate
@@ -648,6 +671,7 @@ class VerilatedVpioRegIter final : public VerilatedVpio {
 public:
     explicit VerilatedVpioRegIter(const VerilatedVpioVar* vop)
         : m_varp{new VerilatedVpioVar(vop)}
+        , m_scopeLife{vop->scopep()}
         , m_maxDim{vop->varp()->udims() - 1} {
         for (auto it = vop->indexedDim() + 1; it <= m_maxDim; ++it)
             m_ranges.push_back(*vop->varp()->range(it));
@@ -660,8 +684,8 @@ public:
     }
     uint32_t type() const override { return vpiIterator; }
     vpiHandle dovpi_scan() override {
-        if (VL_UNLIKELY(m_varp->indexedDim() >= m_maxDim)) {
-            // Trying to iterate over a non-array object
+        if (VL_UNLIKELY(!m_scopeLife.alive() || m_varp->indexedDim() >= m_maxDim)) {
+            // Variable destroyed, or trying to iterate over a non-array object
             delete this;
             return nullptr;
         }
@@ -690,6 +714,7 @@ public:
 
 class VerilatedVpioMemberIter final : public VerilatedVpio {
     VerilatedVpioVar* m_varp;  // Variable whose members are iterated
+    VerilatedVpioScopeLife m_scopeLife;  // Whether the scope of m_varp is alive
     std::vector<const VerilatedVar*> m_members;  // Direct members, in iteration order
     size_t m_next = 0;  // Index of next member to return
 
@@ -700,7 +725,8 @@ class VerilatedVpioMemberIter final : public VerilatedVpio {
 
 public:
     explicit VerilatedVpioMemberIter(const VerilatedVpioVar* vop)
-        : m_varp{new VerilatedVpioVar{vop}} {  // LCOV_EXCL_BR_LINE
+        : m_varp{new VerilatedVpioVar{vop}}  // LCOV_EXCL_BR_LINE
+        , m_scopeLife{vop->scopep()} {
         const VerilatedVarNameMap* const varsp = vop->scopep()->varsp();
         // vop's own variable is in its scope, so the scope always has variables
         if (VL_UNCOVERABLE(!varsp)) return;
@@ -728,7 +754,7 @@ public:
     }
     uint32_t type() const override { return vpiIterator; }
     vpiHandle dovpi_scan() override {
-        while (m_next < m_members.size()) {
+        while (m_scopeLife.alive() && m_next < m_members.size()) {
             VerilatedVpioVar* const memberp = m_varp->withMember(m_members[m_next++]);
             if (VL_UNLIKELY(!memberp)) continue;
             return memberp->castVpiHandle();
@@ -763,15 +789,49 @@ public:
     uint32_t type() const override { return vpiInterface; }
 };
 
-class VerilatedVpioModuleIter final : public VerilatedVpio {
-    const std::vector<const VerilatedScope*>* m_vecp;
-    std::vector<const VerilatedScope*>::const_iterator m_it;
+// Child scopes of a scope in the VPI scope hierarchy, iterated from a copy, so that other
+// models created or destroyed during the iteration cannot invalidate it. Scopes removed from
+// the hierarchy since the iteration started are skipped. A scope created under the same parent
+// during the iteration at the address of one removed during it is returned in its place; it
+// is a live scope, and which scopes such an iteration sees is not defined anyway, so this is
+// not worth tracking an identity for every scope.
+class VerilatedVpioScopeList final {
+    const VerilatedScope* const m_parentp;  // Parent scope, nullptr for the top level
+    std::vector<const VerilatedScope*> m_scopes;  // Child scopes
+    size_t m_index = 0;  // Next child scope
+    uint64_t m_generation = VerilatedImp::hierarchyGeneration();  // When m_scopes was checked
+
+    void removeDestroyed() {
+        m_generation = VerilatedImp::hierarchyGeneration();
+        const VerilatedHierarchyMap* const mapp = VerilatedImp::hierarchyMap();
+        const auto it = mapp->find(m_parentp);
+        std::unordered_set<const VerilatedScope*> live;
+        if (it != mapp->end()) live.insert(it->second.begin(), it->second.end());
+        m_scopes.erase(
+            std::remove_if(m_scopes.begin() + m_index, m_scopes.end(),
+                           [&](const VerilatedScope* scopep) { return !live.count(scopep); }),
+            m_scopes.end());
+    }
 
 public:
-    explicit VerilatedVpioModuleIter(const std::vector<const VerilatedScope*>& vec)
-        : m_vecp{&vec} {
-        m_it = m_vecp->begin();
+    VerilatedVpioScopeList(const VerilatedScope* parentp,
+                           const std::vector<const VerilatedScope*>& scopes)
+        : m_parentp{parentp}
+        , m_scopes{scopes} {}
+    // Return the next child scope, or nullptr at the end
+    const VerilatedScope* next() {
+        if (VL_UNLIKELY(m_generation != VerilatedImp::hierarchyGeneration())) removeDestroyed();
+        return m_index < m_scopes.size() ? m_scopes[m_index++] : nullptr;
     }
+};
+
+class VerilatedVpioModuleIter final : public VerilatedVpio {
+    VerilatedVpioScopeList m_scopes;  // Child scopes to iterate
+
+public:
+    VerilatedVpioModuleIter(const VerilatedScope* parentp,
+                            const std::vector<const VerilatedScope*>& scopes)
+        : m_scopes{parentp, scopes} {}
     ~VerilatedVpioModuleIter() override = default;
     // cppcheck-suppress duplInheritedMember
     static VerilatedVpioModuleIter* castp(vpiHandle h) {
@@ -779,17 +839,13 @@ public:
     }
     uint32_t type() const override { return vpiIterator; }
     vpiHandle dovpi_scan() override {
-        while (true) {
-            if (m_it == m_vecp->end()) {
-                delete this;  // IEEE 37.2.2 vpi_scan at end does a vpi_release_handle
-                return nullptr;
-            }
-            const VerilatedScope* const modp = *m_it++;
-            const VerilatedScope::Type itype = modp->type();
-            if (itype == VerilatedScope::SCOPE_MODULE) {
+        while (const VerilatedScope* const modp = m_scopes.next()) {
+            if (modp->type() == VerilatedScope::SCOPE_MODULE) {
                 return (new VerilatedVpioModule{modp})->castVpiHandle();
             }
         }
+        delete this;  // IEEE 37.2.2 vpi_scan at end does a vpi_release_handle
+        return nullptr;
     }
 };
 
@@ -872,18 +928,19 @@ public:
 // References are not scopes, but are yielded here so a tool walking the
 // hierarchy by vpiInternalScope alone can discover them
 class VerilatedVpioScopeIter final : public VerilatedVpio {
-    const std::vector<const VerilatedScope*>* const m_vecp;  // Child scopes, or nullptr
-    std::vector<const VerilatedScope*>::const_iterator m_it;  // Next child scope
+    VerilatedVpioScopeList m_scopes;  // Child scopes to iterate
+    VerilatedVpioScopeLife m_scopeLife;  // Whether the scope declaring m_refsp is alive
     const std::vector<const VerilatedIfaceRef*>* const
         m_refsp;  // Interface references, or nullptr
     std::vector<const VerilatedIfaceRef*>::const_iterator m_refIt;  // Next interface reference
 
 public:
-    VerilatedVpioScopeIter(const std::vector<const VerilatedScope*>* vecp,
+    VerilatedVpioScopeIter(const VerilatedScope* parentp,
+                           const std::vector<const VerilatedScope*>& scopes,
                            const std::vector<const VerilatedIfaceRef*>* refsp)
-        : m_vecp{vecp}
+        : m_scopes{parentp, scopes}
+        , m_scopeLife{parentp}
         , m_refsp{refsp} {
-        if (m_vecp) m_it = m_vecp->begin();
         if (m_refsp) m_refIt = m_refsp->begin();
     }
     ~VerilatedVpioScopeIter() override = default;
@@ -893,8 +950,7 @@ public:
     }
     uint32_t type() const override { return vpiIterator; }
     vpiHandle dovpi_scan() override {
-        while (m_vecp && m_it != m_vecp->end()) {
-            const VerilatedScope* const modp = *m_it++;
+        while (const VerilatedScope* const modp = m_scopes.next()) {
             const VerilatedScope::Type itype = modp->type();
             if (itype == VerilatedScope::SCOPE_OTHER) {
                 return (new VerilatedVpioScope{modp})->castVpiHandle();
@@ -904,7 +960,7 @@ public:
                 return (new VerilatedVpioInterface{modp})->castVpiHandle();
             }
         }
-        if (m_refsp && m_refIt != m_refsp->end()) {
+        if (m_refsp && m_scopeLife.alive() && m_refIt != m_refsp->end()) {
             return (new VerilatedVpioIfaceRef{**m_refIt++})->castVpiHandle();
         }
         delete this;  // IEEE 1800-2023 37.2.2 vpi_scan at end does a vpi_release_handle
@@ -913,14 +969,12 @@ public:
 };
 
 class VerilatedVpioInterfaceIter final : public VerilatedVpio {
-    const std::vector<const VerilatedScope*>* m_vecp;
-    std::vector<const VerilatedScope*>::const_iterator m_it;
+    VerilatedVpioScopeList m_scopes;  // Child scopes to iterate
 
 public:
-    explicit VerilatedVpioInterfaceIter(const std::vector<const VerilatedScope*>& vec)
-        : m_vecp{&vec} {
-        m_it = m_vecp->begin();
-    }
+    VerilatedVpioInterfaceIter(const VerilatedScope* parentp,
+                               const std::vector<const VerilatedScope*>& scopes)
+        : m_scopes{parentp, scopes} {}
     ~VerilatedVpioInterfaceIter() override = default;
     // cppcheck-suppress duplInheritedMember
     static VerilatedVpioInterfaceIter* castp(vpiHandle h) {
@@ -928,28 +982,22 @@ public:
     }
     uint32_t type() const override { return vpiIterator; }
     vpiHandle dovpi_scan() override {
-        while (true) {
-            if (m_it == m_vecp->end()) {
-                delete this;  // IEEE 37.2.2 vpi_scan at end does a vpi_release_handle
-                return nullptr;
-            }
-            const VerilatedScope* const scopep = *m_it++;
+        while (const VerilatedScope* const scopep = m_scopes.next()) {
             if (scopep->type() == VerilatedScope::SCOPE_INTERFACE) {
                 return (new VerilatedVpioInterface{scopep})->castVpiHandle();
             }
         }
+        delete this;  // IEEE 37.2.2 vpi_scan at end does a vpi_release_handle
+        return nullptr;
     }
 };
 
 class VerilatedVpioInstanceIter final : public VerilatedVpio {
-    const std::vector<const VerilatedScope*>* m_vecp;
-    std::vector<const VerilatedScope*>::const_iterator m_it;
+    VerilatedVpioScopeList m_scopes;  // Child scopes to iterate
 
 public:
-    explicit VerilatedVpioInstanceIter(const std::vector<const VerilatedScope*>& vec)
-        : m_vecp{&vec} {
-        m_it = m_vecp->begin();
-    }
+    explicit VerilatedVpioInstanceIter(const std::vector<const VerilatedScope*>& scopes)
+        : m_scopes{nullptr, scopes} {}
     ~VerilatedVpioInstanceIter() override = default;
     // cppcheck-suppress duplInheritedMember
     static VerilatedVpioInstanceIter* castp(vpiHandle h) {
@@ -957,13 +1005,8 @@ public:
     }
     uint32_t type() const override { return vpiIterator; }
     vpiHandle dovpi_scan() override {
-        while (true) {
-            if (m_it == m_vecp->end()) {
-                delete this;  // IEEE 37.2.2 vpi_scan at end does a vpi_release_handle
-                return nullptr;
-            }
-            const VerilatedScope::Type itype = (*m_it)->type();
-            const VerilatedScope* const modp = *m_it++;
+        while (const VerilatedScope* const modp = m_scopes.next()) {
+            const VerilatedScope::Type itype = modp->type();
             if (itype == VerilatedScope::SCOPE_MODULE) {
                 return (new VerilatedVpioModule{modp})->castVpiHandle();
             }
@@ -971,6 +1014,8 @@ public:
                 return (new VerilatedVpioPackage{modp})->castVpiHandle();
             }
         }
+        delete this;  // IEEE 37.2.2 vpi_scan at end does a vpi_release_handle
+        return nullptr;
     }
 };
 
@@ -3179,7 +3224,7 @@ vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle object) {
         const VerilatedScope* const modp = vop ? vop->scopep() : nullptr;
         const auto it = vlstd::as_const(map)->find(const_cast<VerilatedScope*>(modp));
         if (it == map->end()) return nullptr;
-        return ((new VerilatedVpioModuleIter{it->second})->castVpiHandle());
+        return ((new VerilatedVpioModuleIter{modp, it->second})->castVpiHandle());
     }
     case vpiInterface: {
         // IEEE 1800-2023 37.5: interfaces are a one-to-many of a module
@@ -3188,20 +3233,21 @@ vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle object) {
         const VerilatedScope* const modp = vop ? vop->scopep() : nullptr;
         const auto it = vlstd::as_const(map)->find(const_cast<VerilatedScope*>(modp));
         if (it == map->end()) return nullptr;
-        return ((new VerilatedVpioInterfaceIter{it->second})->castVpiHandle());
+        return ((new VerilatedVpioInterfaceIter{modp, it->second})->castVpiHandle());
     }
     case vpiInternalScope: {
         const VerilatedVpioScope* const vop = VerilatedVpioScope::castp(object);
         const VerilatedHierarchyMap* const map = VerilatedImp::hierarchyMap();
         const VerilatedScope* const modp = vop ? vop->scopep() : nullptr;
         const auto it = vlstd::as_const(map)->find(const_cast<VerilatedScope*>(modp));
-        const std::vector<const VerilatedScope*>* const scopesp
-            = (it == map->end()) ? nullptr : &it->second;
         // A leaf module with interface ports has no child scopes, yet must iterate
         const std::vector<const VerilatedIfaceRef*>* const refsp
             = modp ? modp->ifaceRefsp() : nullptr;
-        if (!scopesp && !refsp) return nullptr;
-        return ((new VerilatedVpioScopeIter{scopesp, refsp})->castVpiHandle());
+        if (it == map->end() && !refsp) return nullptr;
+        return ((new VerilatedVpioScopeIter{
+                     modp, it == map->end() ? std::vector<const VerilatedScope*>{} : it->second,
+                     refsp})
+                    ->castVpiHandle());
     }
     case vpiInstance: {
         if (object) return nullptr;

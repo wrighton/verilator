@@ -1108,7 +1108,6 @@ public:
     static void addFromTable(const VlHierTableEntry* entp, size_t n, const VerilatedSyms* symsp);
     static void removeFromTable(const VlHierTableEntry* entp, size_t n,
                                 const VerilatedSyms* symsp);
-    static void clear();
 };
 
 //===========================================================================

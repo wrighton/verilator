@@ -1339,11 +1339,6 @@ void EmitCSyms::emitScopeHier(TextStmts& stmts, bool destroy) {
                   + hierTableName() + ", " + std::to_string(m_hierTableRows.size())
                   + ", vlSymsp);");
     }
-
-    if (destroy) {
-        stmts.add("// Clear keys from hierarchy map after values have been removed");
-        stmts.add("vlSymsp->__Vhier.clear();");
-    }
 }
 
 EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
