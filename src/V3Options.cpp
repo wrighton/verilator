@@ -1571,6 +1571,7 @@ void V3Options::parseOptsList(FileLine* fl, const string& optdir, int argc,
     DECL_OPTION("-ffunc-opt-balance-cat", FOnOff, &m_fFuncBalanceCat);
     DECL_OPTION("-ffunc-opt-split-cat", FOnOff, &m_fFuncSplitCat);
     DECL_OPTION("-fgate", FOnOff, &m_fGate);
+    DECL_OPTION("-fhier-param-stub", FOnOff, &m_fHierParamStub);
     DECL_OPTION("-fico-change-detect", CbFOnOff, [this](bool flag) {  //
         m_fIcoChangeDetect.setTrueOrFalse(flag);
     });
