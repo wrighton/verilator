@@ -293,6 +293,14 @@ class OrderGraphBuilder final : public VNVisitorConst {
         iterateChildrenConst(nodep);
         accountEnqueuingCall(nodep);
     }
+    void visit(AstCCall* nodep) override {
+        iterateChildrenConst(nodep);
+        accountEnqueuingCall(nodep);
+        // A logic callee accesses its non-local variables at the call
+        V3Sched::util::foreachCallAccess(nodep, [&](AstVarScope* vscp, VAccess access) {
+            accountVarAccess(vscp, access, nodep);
+        });
+    }
     // A covergroup sample() is not inlined and may read design signals through cross-scope
     // references held by the covergroup. This attributes those references to the calling block.
     void visit(AstCMethodCall* nodep) override {
@@ -371,10 +379,9 @@ class OrderGraphBuilder final : public VNVisitorConst {
     void visit(AstTypeTable* nodep) override { nodep->v3fatalSrc("Should not reach V3Order"); }
     void visit(AstClass* nodep) override { nodep->v3fatalSrc("Should not reach V3Order"); }
     void visit(AstCFunc*) override {
-        // Calls to DPI exports handled with AstCCall. /* verilator public */ functions are
-        // ignored for now (and hence potentially mis-ordered), but could use the same or
-        // similar mechanism as DPI exports. Every other impure function (including those
-        // that may set a non-local variable) must have been inlined in V3Task.
+        // Functions are visited from their calls. Calls to DPI exports handled with AstCCall.
+        // /* verilator public */ functions are ignored for now (and hence potentially
+        // mis-ordered), but could use the same or similar mechanism as DPI exports.
     }
 
     //---
