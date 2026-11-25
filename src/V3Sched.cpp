@@ -1413,6 +1413,35 @@ std::unordered_set<const AstVar*> regOutTaints(const LogicClasses& logicClasses,
     return taints;
 }
 
+// Mark the 1-bit top level inputs read only as the clock of rising edges. The wrapper of a library
+// updates the library at their falling edges without passing its inputs or taking its outputs.
+void markPrimaryPosedges(AstNetlist* netlistp) {
+    std::unordered_set<const AstVarRef*> posedgeRefps;
+    netlistp->foreach([&](const AstSenItem* itemp) {
+        if (itemp->edgeType() != VEdgeType::ET_POSEDGE) return;
+        if (const AstVarRef* const refp = VN_CAST(itemp->sensp(), VarRef)) {
+            posedgeRefps.emplace(refp);
+        }
+    });
+    std::unordered_set<AstVar*> posedgeVarps;
+    std::unordered_set<const AstVar*> otherVarps;
+    netlistp->foreach([&](const AstVarRef* refp) {
+        if (!refp->varp()->isPrimaryInish()) return;
+        if (posedgeRefps.count(refp)) {
+            posedgeVarps.emplace(refp->varp());
+        } else {
+            otherVarps.emplace(refp->varp());
+        }
+    });
+    size_t posedges = 0;
+    for (AstVar* const varp : posedgeVarps) {
+        if (varp->width() != 1 || otherVarps.count(varp)) continue;
+        varp->setPrimaryPosedge();
+        ++posedges;
+    }
+    V3Stats::addStat("Scheduling, library clocks of rising edges alone", posedges);
+}
+
 // Mark the top level outputs the combinational update of the wrapper of a library cannot change,
 // which it then takes from its clock update alone. That update passes the inputs other than the
 // clocks, so taint spreads from those and from the variables of regOutTaints() through the logic
@@ -1553,6 +1582,9 @@ void schedule(AstNetlist* netlistp) {
         for (const Process& process : procList) size += process.m_procp->nodeCount();
         V3Stats::addStat("Scheduling, " + name, size);
     };
+
+    // Before any logic is moved out of the netlist
+    if (!v3Global.opt.libCreate().empty()) markPrimaryPosedges(netlistp);
 
     // Step 2: Prepare external domains for timing and virtual interfaces
     // Create extra triggers for virtual interfaces
