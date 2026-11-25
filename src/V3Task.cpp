@@ -599,7 +599,7 @@ class TaskVisitor final : public VNVisitor {
                     outPinp->v3fatalSrc("Inout pin resizing should have had extend or select");
                 }
                 if (outPinp->width() < portp->width()) {
-                    postRhsp = new AstSel{pinp->fileline(), postRhsp, 0, pinp->width()};
+                    postRhsp = new AstSel{pinp->fileline(), postRhsp, 0, outPinp->width()};
                 } else {  // pin width > port width
                     if (pinp->isSigned() && postRhsp->isSigned()) {
                         postRhsp = new AstExtendS{pinp->fileline(), postRhsp};
