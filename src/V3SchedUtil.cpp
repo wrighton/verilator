@@ -173,12 +173,20 @@ static std::vector<bool> splitCheckBreakable(const AstCFunc* ofuncp) {
     return breakable;
 }
 
+size_t emittedSizeEstimate(const AstNode* nodep) {
+    size_t size = 0;
+    nodep->foreach(
+        [&](const AstNode* itemp) { size += itemp->isWide() ? itemp->widthWords() : 1; });
+    return size;
+}
+
 // Split large function according to --output-split-cfuncs
 void splitCheck(AstCFunc* const ofuncp) {
     if (!ofuncp) return;
     UASSERT_OBJ(!ofuncp->varsp(), ofuncp, "Can't split function with local variables");
     if (!v3Global.opt.outputSplitCFuncs() || !ofuncp->stmtsp()) return;
-    if (ofuncp->nodeCount() < v3Global.opt.outputSplitCFuncs()) return;
+    if (emittedSizeEstimate(ofuncp) < static_cast<size_t>(v3Global.opt.outputSplitCFuncs()))
+        return;
 
     // Statement boundaries that would separate a local declaration from a reference to it
     const std::vector<bool> breakable = splitCheckBreakable(ofuncp);
@@ -208,7 +216,7 @@ void splitCheck(AstCFunc* const ofuncp) {
     for (size_t index = 0; AstNodeStmt* const itemp = stmtsp; ++index) {
         stmtsp = VN_AS(stmtsp->nextp(), NodeStmt);
         if (stmtsp) stmtsp->unlinkFrBackWithNext();
-        const size_t itemSize = static_cast<size_t>(itemp->nodeCount());
+        const size_t itemSize = emittedSizeEstimate(itemp);
         size += itemSize;
 
         if (size > static_cast<size_t>(v3Global.opt.outputSplitCFuncs()) && breakable[index]) {
