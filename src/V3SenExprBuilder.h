@@ -54,6 +54,13 @@ private:
 
     V3UniqueNames m_prevNames{"__Vtrigprevexpr"};  // For generating unique temporary names
 
+    // The drivers of kept ports (see V3Inst) and of variables computed from them, which a
+    // 'previous value' starts from
+    const std::unordered_map<const AstVarScope*, AstNodeExpr*>* const m_keptPortDriversp;
+    size_t m_keptPortInits = 0;  // Number of 'previous value' initializers using them
+    // Largest initializer read through to the connections, against reconverging paths
+    static constexpr int MAX_CONNECTION_NODES = 1000;
+
     static bool isSupportedDType(AstNodeDType* dtypep) {
         dtypep = dtypep->skipRefp();
         if (VN_IS(dtypep, BasicDType)) return true;
@@ -180,6 +187,48 @@ private:
         return new AstVarRef{flp, currp, VAccess::READ};
     }
 
+    // A kept port is a copy of its connection, and so are the variables computed from it only
+    // once the logic is first evaluated. A 'previous value' is initialized before that, so read
+    // through to the connections, as the instance would without the copy. Returns the given
+    // expression when this does not end in a small expression reading a variable.
+    AstNodeExpr* keptPortConnection(AstNodeExpr* exprp) {
+        if (!m_keptPortDriversp) return exprp;
+        const auto isDriven = [this](AstVarRef* refp) {
+            return m_keptPortDriversp->count(refp->varScopep()) != 0;
+        };
+        if (!exprp->exists(isDriven)) return exprp;
+        AstNodeExpr* connp = exprp->cloneTree(false);
+        // Each round reads through one variable or port of the paths to the connections
+        for (size_t round = 0; round <= m_keptPortDriversp->size(); ++round) {
+            std::vector<AstVarRef*> refps;
+            connp->foreach([&](AstVarRef* refp) {
+                if (isDriven(refp)) refps.push_back(refp);
+            });
+            if (refps.empty()) {
+                // A constant is an edge from the initial value, as for an unconnected
+                // variable that would be set to it
+                const auto anyVarRef = [](const AstNodeVarRef*) { return true; };
+                if (!connp->exists(anyVarRef)) break;
+                ++m_keptPortInits;
+                VL_DO_DANGLING(exprp->deleteTree(), exprp);
+                return connp;
+            }
+            for (AstVarRef* const refp : refps) {
+                AstNodeExpr* const driverp
+                    = m_keptPortDriversp->at(refp->varScopep())->cloneTree(false);
+                if (refp == connp) {
+                    connp = driverp;
+                } else {
+                    refp->replaceWith(driverp);
+                }
+                VL_DO_DANGLING(refp->deleteTree(), refp);
+            }
+            if (connp->nodeCount() > MAX_CONNECTION_NODES) break;
+        }
+        VL_DO_DANGLING(connp->deleteTree(), connp);
+        return exprp;
+    }
+
     AstVarScope* getPrev(AstNodeExpr* exprp) {
         FileLine* const flp = exprp->fileline();
         const auto rdCurr = [this, exprp]() { return getCurr(exprp); };
@@ -196,7 +245,7 @@ private:
             pair.first->second = prevp;
             // Add the initializer init (guarded if through a nullable reference)
             AstAssign* const initp = new AstAssign{flp, new AstVarRef{flp, prevp, VAccess::WRITE},
-                                                   exprp->cloneTree(false)};
+                                                   keptPortConnection(exprp->cloneTree(false))};
             m_results.m_inits.push_back(wrapStmtWithNullChecks(flp, initp, bases));
         }
 
@@ -363,9 +412,14 @@ public:
         return std::move(m_results);
     }
 
+    size_t keptPortInits() const { return m_keptPortInits; }
+
     // CONSTRUCTOR
-    explicit SenExprBuilder(AstScope* scopep)
-        : m_scopep{scopep} {}
+    explicit SenExprBuilder(
+        AstScope* scopep,
+        const std::unordered_map<const AstVarScope*, AstNodeExpr*>* keptPortDriversp = nullptr)
+        : m_scopep{scopep}
+        , m_keptPortDriversp{keptPortDriversp} {}
 };
 
 #endif  // Guard
