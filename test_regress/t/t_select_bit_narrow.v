@@ -1821,4 +1821,20 @@ module t;
     $write("*-* All Finished *-*\n");
     $finish;
   end
+
+  // A wide part-select written partly out of range from its own vector reads the vector before
+  // the write
+  bit self_clk = 0;
+  int self_p;
+  bit [129:0] self_v;
+  always @(posedge self_clk) self_v[self_p+:130] = self_v;
+  initial begin
+    bit [129:0] init;
+    init = 130'h3_123abc67_8ff56122_fa637873_11223344;
+    self_v = init;
+    self_p = pos[0] - 8;
+    #1 self_clk = 1;
+    #1;
+    `checkh(self_v, {init[128:0], init[0]});
+  end
 endmodule
