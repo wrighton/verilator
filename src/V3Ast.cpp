@@ -154,7 +154,10 @@ AstNode* AstNode::aboveLoopp() const {
     // Returns parent node. Avoid using this, may have performance issues.
     const AstNode* nodep = this;
     // Backwards over peers (versus parents)
-    while (nodep->backp() && nodep->backp()->nextp() == nodep) nodep = nodep->backp();
+    while (nodep->backp() && nodep->backp()->nextp() == nodep) {
+        V3Global::opCountInc();
+        nodep = nodep->backp();
+    }
     return nodep->backp();
 }
 
