@@ -1563,10 +1563,11 @@ class CaptureVisitor final : public VNVisitor {
         if (varClassp && varRefp->varp()->lifetime().isStatic()) {
             // A static member is not reached through 'this'. One of the class the randomize
             // function is created in, or of a base, is referenced directly, which keeps the
-            // object's static rand members random (IEEE 1800-2023 18.4). Any other is captured
-            // by value.
+            // object's static rand members random (IEEE 1800-2023 18.4), as is any other that
+            // is random, so the solution is written to it. Any other is captured by value.
             const AstClass* const funcClassp = m_targetp ? m_targetp : callerClassp;
             if (AstClass::isClassExtendedFrom(funcClassp, varClassp)) return CaptureMode::CAP_NO;
+            if (varRefp->user1()) return CaptureMode::CAP_NO;
             return CaptureMode::CAP_VALUE;
         }
         if (callerIsClass && varIsFieldOfCaller) return CaptureMode::CAP_THIS;
