@@ -462,6 +462,9 @@ class TristateVisitor final : public TristateBaseVisitor {
     const VNUser2InUse m_inuser2;
     const VNUser3InUse m_inuser3;
     const VNUser4InUse m_inuser4;
+    // Input ports an instance connects to a constant with Z bits. Tristate in their module,
+    // with only an enable input from the connections (see visit(AstPin)).
+    std::unordered_set<const AstVar*> m_zInputs;
 
     struct AuxAstVar final {
         AstPull* pullp = nullptr;  // pullup/pulldown direction (whole variable)
@@ -910,6 +913,11 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (!m_tgraph.isTristate(varp)) continue;
             const auto it = m_lhsmap.find(varp);
             if (it != m_lhsmap.end()) continue;
+            // Such an input drives nothing, unless it has a pull
+            if (m_zInputs.count(varp) && !m_varAux(varp).pullp
+                && m_varAux(varp).bitPulls.empty()) {
+                continue;
+            }
             // This variable is floating, set output enable to always be off on this assign.
             // For pullup/pulldown vars, use pull value with en=0 - the final resolution will
             // apply the pull formula: final = (driven_value & en) | (~en & pull_value)
@@ -2507,7 +2515,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 nodep->addNextHere(newp);
                 // We'll iterate on the new AstPull later
             }
-            if (nodep->isInout()) {
+            if (nodep->isInout() || m_zInputs.count(nodep)) {
                 //|| varp->isOutput()
                 // Note unconnected output only changes behavior vs. previous
                 // versions and causes outputs that don't come from anywhere to
@@ -2670,6 +2678,16 @@ public:
     // CONSTRUCTORS
     explicit TristateVisitor(AstNetlist* netlistp) {
         m_tgraph.clearAndCheck();
+        // Modules under an instance are processed before it, so first find the inputs its
+        // connections make tristate
+        netlistp->foreach([&](const AstPin* pinp) {
+            const AstVar* const varp = pinp->modVarp();
+            const AstConst* const constp = VN_CAST(pinp->exprp(), Const);
+            if (varp && varp->direction() == VDirection::INPUT
+                && !varp->declDirection().isWritable() && constp && constp->num().hasZ()) {
+                m_zInputs.emplace(varp);
+            }
+        });
         // Process interface modules first, so an interface tristate net is recorded
         // (AuxAstVar::ifaceTristate) before any module that drives it across hierarchy is
         // graphed. A module driving such a net with a plain (non-Z) assign has no Z in its
