@@ -421,6 +421,15 @@ class LinkJumpVisitor final : public VNVisitor {
         AstJumpBlock* const jmpBlockp = getJumpBlock(targetp, false);
         killStmtp->addNextHere(new AstJumpGo{killStmtp->fileline(), jmpBlockp});
     }
+    // Report and delete a disable that kills processes, if --no-std left out std::process
+    bool stdProcessMissing(AstDisable* const nodep) {
+        if (v3Global.rootp()->stdPackageProcessp()) return false;
+        nodep->v3warn(E_UNSUPPORTED, "Unsupported: disable of "
+                                         << nodep->targetp()->prettyNameQ()
+                                         << " without the std package (--no-std)");
+        VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+        return true;
+    }
     void handleDisableOnFork(AstDisable* const nodep) {
         // The support utilizes the process::kill()` method. For each disabled fork a queue of
         // processes is declared. At the beginning of each fork branch (and each nested fork
@@ -644,6 +653,7 @@ class LinkJumpVisitor final : public VNVisitor {
                 VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
                 return;
             }
+            if (stdProcessMissing(nodep)) return;
             AstVar* const processQueuep = getOrCreateTaskDisableQueuep(taskp, nodep->fileline());
             AstStmtExpr* const killStmtp = insertKillStmtp(nodep, processQueuep);
 
@@ -651,6 +661,7 @@ class LinkJumpVisitor final : public VNVisitor {
             // If we disable the current task by name from inside itself, jump to its end.
             if (m_ftaskp == taskp) addJumpAfterKill(killStmtp, taskp);
         } else if (VN_IS(targetp, Fork)) {
+            if (stdProcessMissing(nodep)) return;
             handleDisableOnFork(nodep);
         } else if (AstBegin* const beginp = VN_CAST(targetp, Begin)) {
             // A block directly under a procedure or fork item may be a process's outermost
@@ -671,6 +682,7 @@ class LinkJumpVisitor final : public VNVisitor {
                     AstJumpBlock* const blockp = getJumpBlock(beginp, false);
                     nodep->addNextHere(new AstJumpGo{nodep->fileline(), blockp});
                 } else {
+                    if (stdProcessMissing(nodep)) return;
                     // Disable inside a fork branch of this named block must also kill the
                     // process running the block, so the block needs a process of its own
                     AstNode* const branchEndp = innerForkItemEndp(beginp);
@@ -685,6 +697,7 @@ class LinkJumpVisitor final : public VNVisitor {
                     addJumpAfterKill(killStmtp, branchEndp ? branchEndp : beginp);
                 }
             } else if (inFunction() || maySuspend(beginp)) {  // As for a task target
+                if (stdProcessMissing(nodep)) return;
                 needBeginDisableProcess(beginp, nodep->fileline());
                 AstVar* const processQueuep
                     = getOrCreateBeginDisableQueuep(beginp, nodep->fileline());
