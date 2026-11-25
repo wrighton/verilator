@@ -30,6 +30,7 @@
 
 #include <functional>
 #include <limits>
+#include <unordered_map>
 #include <vector>
 
 // clang-format off
@@ -327,6 +328,12 @@ public:
 // The coroutines get resumed at trigger evaluation time, evaluate their local triggers, optionally
 // await the post update step, and if the trigger is set, await proper resumption in the 'act' eval
 // step.
+// A 'wait fork' awaits co_await __VdynSched.forkWait() instead of evaluation(), which awaits
+// trigger evaluation only once a child of its process completed, as its trigger can only be set
+// then (see forkDone). The coroutines awaiting trigger evaluation are resumed in the order they
+// were suspended, where one suspended again while evaluate() resumes it keeps its place, so each
+// carries the key of that place; a coroutine in 'wait fork' keeps its key, and is merged back at
+// it, so it is resumed where it would have been had it awaited trigger evaluation all along.
 
 class VlDynamicTriggerScheduler final {
     // TYPES
@@ -335,12 +342,33 @@ class VlDynamicTriggerScheduler final {
     // MEMBERS
     bool m_anyTriggered = false;  // If true, at least one trigger was set
     VlCoroutineVec m_suspended;  // Suspended coroutines awaiting trigger evaluation
+    std::vector<uint64_t> m_suspendedKeys;  // Their keys, ascending (see suspendKey)
     VlCoroutineVec m_evaluated;  // Coroutines currently being evaluated (for evaluate())
+    std::vector<uint64_t> m_evaluatedKeys;  // Their keys
+    uint64_t m_lastKey = 0;  // Key of the last coroutine suspended other than by evaluate()
+    uint64_t m_evaluatingKey = 0;  // Key of the coroutine evaluate() resumes, 0 if none
     VlCoroutineVec m_triggered;  // Coroutines whose triggers were set, and are awaiting resumption
     VlCoroutineVec m_post;  // Coroutines awaiting the post update step (only relevant for triggers
                             // with destructive post updates, e.g. named events)
+    // Coroutines in 'wait fork', by process, until a child completes (see forkDone). Changed by
+    // logic in parallel MTasks too, as killing a process wakes them.
+    using KeyedCoroutine = std::pair<uint64_t, VlCoroutineHandle>;
+    VerilatedMutex m_forkMutex;  // Protects 'm_forkWaiting' and 'm_forkWoken'
+    std::unordered_map<VlProcess*, KeyedCoroutine> m_forkWaiting VL_GUARDED_BY(m_forkMutex);
+    // Coroutines in 'wait fork' woken, for evaluate() to merge into 'm_suspended'
+    std::vector<KeyedCoroutine> m_forkWoken VL_GUARDED_BY(m_forkMutex);
+#ifdef VL_DEBUG
+    static std::atomic<size_t> s_evaluatedForTest;  // See evaluatedForTest()
+#endif
 
     // METHODS
+    // Destroys the coroutines in 'wait fork'
+    void clearForkWaiting() VL_EXCLUDES(m_forkMutex);
+    // Key of a coroutine suspending to await trigger evaluation: that of its place if
+    // evaluate() resumed it, else after all others
+    uint64_t suspendKey() { return m_evaluatingKey ? m_evaluatingKey : ++m_lastKey; }
+    // Merges the woken coroutines in 'wait fork' into 'm_suspended' at their keys
+    void mergeForkWoken() VL_EXCLUDES(m_forkMutex);
     auto awaitable(VlProcessRef process, VlCoroutineVec& queue, const char* filename, int lineno) {
         struct Awaitable final {
             VlProcessRef process;  // Data of the suspended process, null if not needed
@@ -357,8 +385,21 @@ class VlDynamicTriggerScheduler final {
     }
 
 public:
+    // CONSTRUCTORS
+    VlDynamicTriggerScheduler() = default;
+    ~VlDynamicTriggerScheduler() { clearForkWaiting(); }
+    VL_UNCOPYABLE(VlDynamicTriggerScheduler);
+
+    // METHODS
+#ifdef VL_DEBUG
+    // Coroutines resumed to evaluate their triggers, in any model of the process. For tests only.
+    static size_t evaluatedForTest() { return s_evaluatedForTest.load(std::memory_order_relaxed); }
+#endif
     // Evaluates all dynamic triggers (resumed coroutines that co_await evaluation())
     bool evaluate();
+    // Moves the coroutine of 'processp' in 'wait fork' to await trigger evaluation, as a child
+    // completed, or it was killed
+    void forkDone(VlProcess* processp) VL_MT_SAFE;
     // Called by coroutines that evaluate triggers to notify the scheduler if any triggers were set
     void anyTriggered(bool triggered) { m_anyTriggered = m_anyTriggered || triggered; }
     // Runs post updates for all dynamic triggers (resumes coroutines that co_await postUpdate())
@@ -373,7 +414,43 @@ public:
                     int lineno) {
         VL_DEBUG_IF(VL_DBG_MSGF("         Suspending process waiting for %s at %s:%d\n",
                                 eventDescription, filename, lineno););
-        return awaitable(process, m_suspended, filename, lineno);
+        struct Awaitable final {
+            VlDynamicTriggerScheduler& sched;
+            VlProcessRef process;
+            VlFileLineDebug fileline;
+
+            bool await_ready() const { return false; }  // Always suspend
+            void await_suspend(std::coroutine_handle<VlPromise> coro) {
+                sched.m_suspended.emplace_back(coro, process, fileline);
+                sched.m_suspendedKeys.push_back(sched.suspendKey());
+            }
+            void await_resume() const {}
+        };
+        return Awaitable{*this, process, VlFileLineDebug{filename, lineno}};
+    }
+    // Used by coroutines in 'wait fork' for co_awaiting trigger evaluation, which a child
+    // completing makes them await (see forkDone)
+    auto forkWait(VlProcessRef process, const char* eventDescription, const char* filename,
+                  int lineno) {
+        VL_DEBUG_IF(VL_DBG_MSGF("         Suspending process waiting for %s at %s:%d\n",
+                                eventDescription, filename, lineno););
+        struct Awaitable final {
+            VlDynamicTriggerScheduler& sched;
+            VlProcessRef process;
+            VlFileLineDebug fileline;
+
+            bool await_ready() const { return false; }  // Always suspend
+            void await_suspend(std::coroutine_handle<VlPromise> coro) {
+                const uint64_t key = sched.suspendKey();
+                const VerilatedLockGuard lock{sched.m_forkMutex};
+                process->forkWaitp(&sched);
+                sched.m_forkWaiting.emplace(
+                    process.get(),
+                    KeyedCoroutine{key, VlCoroutineHandle{coro, process, fileline}});
+            }
+            void await_resume() const {}
+        };
+        return Awaitable{*this, process, VlFileLineDebug{filename, lineno}};
     }
     // Used by coroutines for co_awaiting the trigger post update step
     auto postUpdate(VlProcessRef process, const char* eventDescription, const char* filename,

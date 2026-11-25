@@ -45,6 +45,7 @@
 class VlClass;
 template <typename T_Class>
 class VlClassRef;
+class VlDynamicTriggerScheduler;
 class VlProcess;
 template <typename T_Value, std::size_t N_Depth>
 class VlUnpacked;
@@ -336,6 +337,9 @@ class VlProcess final {
     bool m_forkSyncOnKillDone = false;  // Ensure on-kill callback fires only once
     VlRNG m_rng;  // Per-process RNG (IEEE 1800-2023 18.14)
     VlClass* m_selfp = nullptr;  // std::process object of this process, not owned
+    // Scheduler its 'wait fork' waits on, which a child completing wakes it from, if any
+    // Atomic as a process may complete in a parallel MTask, as it is killed
+    std::atomic<VlDynamicTriggerScheduler*> m_forkWaitp{nullptr};
 
     // Thread-local current process pointer for hierarchical object seeding
     static thread_local VlProcess* t_currentp;
@@ -394,6 +398,10 @@ public:
         for (const VlProcess* const childp : m_children)
             if (!childp->completed()) return false;
         return true;
+    }
+    /// Set the scheduler its 'wait fork' waits on, or nullptr once it no longer waits there
+    void forkWaitp(VlDynamicTriggerScheduler* schedp) {
+        m_forkWaitp.store(schedp, std::memory_order_relaxed);
     }
     template <typename T_Class>
     void initFromSelf(VlClassRef<T_Class>& selfRef) const {

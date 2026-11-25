@@ -574,12 +574,16 @@ class TimingControlVisitor final : public VNVisitor {
     // Other
     SenTreeFinder m_finder{m_netlistp};  // Sentree finder and uniquifier
     SenExprBuilder* m_senExprBuilderp = nullptr;  // Sens expression builder for current m_scope
+    // Sentrees of the 'wait fork' controls not lowered yet, which a child completing wakes
+    // instead of polling
+    std::unordered_set<const AstSenTree*> m_forkWaitSenTreeps;
 
     // Stats
     size_t m_statZeroDelays = 0;  // Number of statically known #0 delays
     size_t m_statConstDelays = 0;  // Number of statically known #const (non-zero) delays
     size_t m_statVariableDelays = 0;  // Number of delays with value unknown at compile time
     size_t m_statSuspendableProcs = 0;  // Number of suspendable processes
+    size_t m_statForkWaits = 0;  // Number of 'wait fork' woken by children completing
 
     // METHODS
     // Transform an assignment with an intra timing control into a timing control with the
@@ -1242,6 +1246,10 @@ class TimingControlVisitor final : public VNVisitor {
             AstCAwait* const awaitResumep = awaitEvalp->cloneTree(false);
             VN_AS(awaitResumep->exprp(), CMethodHard)->method(VCMethod::SCHED_RESUMPTION);
             AstNode::addNext<AstNodeStmt, AstNodeStmt>(loopp, awaitResumep);
+            // A 'wait fork' only evaluates its trigger after a child of its process completes
+            if (m_forkWaitSenTreeps.erase(sentreep)) {
+                evalMethodp->method(VCMethod::SCHED_FORK_WAIT);
+            }
             // Replace the event control with one explicit stmt chain:
             //   init -> [inits] -> [optional destructive pre-clears] -> loop -> awaitResumption
             AstNodeStmt* chainp = nullptr;
@@ -1470,11 +1478,16 @@ class TimingControlVisitor final : public VNVisitor {
     }
     void visit(AstWaitFork* nodep) override {
         if (m_hasProcess) {
+            // Waits as for 'wait (vlProcess->completedFork())', if not completed already
             FileLine* const flp = nodep->fileline();
-            AstCExpr* const exprp = new AstCExpr{flp, "vlProcess->completedFork()", 1};
-            AstWait* const waitp
-                = new AstWait{flp, exprp, takeDeferredAssertFlush(nodep->nextp())};
-            nodep->replaceWith(waitp);
+            AstCExpr* const condp = new AstCExpr{flp, "vlProcess->completedFork()", 1};
+            AstSenTree* const sentreep = new AstSenTree{
+                flp, new AstSenItem{flp, VEdgeType::ET_TRUE, condp->cloneTree(false)}};
+            m_forkWaitSenTreeps.emplace(sentreep);
+            ++m_statForkWaits;
+            nodep->replaceWith(new AstIf{
+                flp, new AstLogNot{flp, condp},
+                new AstEventControl{flp, sentreep, takeDeferredAssertFlush(nodep->nextp())}});
         } else {
             // never reached by any process; remove to avoid compilation error
             nodep->unlinkFrBack();
@@ -1607,6 +1620,8 @@ public:
         V3Stats::addStat("Timing, known #const delays", m_statConstDelays);
         V3Stats::addStat("Timing, unknown #variable delays", m_statVariableDelays);
         V3Stats::addStat("Timing, suspendable processes", m_statSuspendableProcs);
+        V3Stats::addStat("Timing, wait fork without polling", m_statForkWaits);
+        UASSERT(m_forkWaitSenTreeps.empty(), "'wait fork' control not lowered");
     }
 };
 

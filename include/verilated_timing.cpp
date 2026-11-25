@@ -265,20 +265,89 @@ void VlTriggerScheduler::dump(const char* eventDescription) const {
 //======================================================================
 // VlDynamicTriggerScheduler:: Methods
 
+#ifdef VL_DEBUG
+std::atomic<size_t> VlDynamicTriggerScheduler::s_evaluatedForTest{0};
+#endif
+
+void VlDynamicTriggerScheduler::forkDone(VlProcess* processp) {
+    const VerilatedLockGuard lock{m_forkMutex};
+    const auto it = m_forkWaiting.find(processp);
+    if (it == m_forkWaiting.end()) return;
+    processp->forkWaitp(nullptr);
+    m_forkWoken.push_back(std::move(it->second));
+    m_forkWaiting.erase(it);
+}
+
+void VlDynamicTriggerScheduler::mergeForkWoken() {
+    std::vector<KeyedCoroutine> woken;
+    {
+        const VerilatedLockGuard lock{m_forkMutex};
+        if (m_forkWoken.empty()) return;
+        woken.swap(m_forkWoken);
+    }
+    std::sort(woken.begin(), woken.end(),
+              [](const KeyedCoroutine& a, const KeyedCoroutine& b) { return a.first < b.first; });
+    VlCoroutineVec merged;
+    std::vector<uint64_t> mergedKeys;
+    merged.reserve(m_suspended.size() + woken.size());
+    mergedKeys.reserve(merged.capacity());
+    size_t i = 0;
+    for (KeyedCoroutine& keyed : woken) {
+        for (; i < m_suspended.size() && m_suspendedKeys[i] < keyed.first; ++i) {
+            merged.push_back(std::move(m_suspended[i]));
+            mergedKeys.push_back(m_suspendedKeys[i]);
+        }
+        merged.push_back(std::move(keyed.second));
+        mergedKeys.push_back(keyed.first);
+    }
+    for (; i < m_suspended.size(); ++i) {
+        merged.push_back(std::move(m_suspended[i]));
+        mergedKeys.push_back(m_suspendedKeys[i]);
+    }
+    m_suspended.swap(merged);
+    m_suspendedKeys.swap(mergedKeys);
+}
+
+void VlDynamicTriggerScheduler::clearForkWaiting() {
+    std::unordered_map<VlProcess*, KeyedCoroutine> waiting;
+    std::vector<KeyedCoroutine> woken;
+    {
+        const VerilatedLockGuard lock{m_forkMutex};
+        waiting.swap(m_forkWaiting);
+        woken.swap(m_forkWoken);
+    }
+    // Unlink all processes first, as destroying a coroutine finishes its process, which may
+    // wake its parent (see forkDone)
+    for (const auto& procCoro : waiting) procCoro.first->forkWaitp(nullptr);
+}
+
 bool VlDynamicTriggerScheduler::evaluate() {
     if (VL_UNLIKELY(Verilated::threadContextp()->gotFinish())) {
         m_anyTriggered = false;
+        clearForkWaiting();
         m_suspended.clear();
+        m_suspendedKeys.clear();
         m_evaluated.clear();
+        m_evaluatedKeys.clear();
         m_triggered.clear();
         m_post.clear();
         return false;
     }
     m_anyTriggered = false;
     VL_DEBUG_IF(dump(););
+    mergeForkWoken();
     std::swap(m_suspended, m_evaluated);
-    for (auto& coro : m_evaluated) coro.resume();
+    std::swap(m_suspendedKeys, m_evaluatedKeys);
+#ifdef VL_DEBUG
+    s_evaluatedForTest.fetch_add(m_evaluated.size(), std::memory_order_relaxed);
+#endif
+    for (size_t i = 0; i < m_evaluated.size(); ++i) {
+        m_evaluatingKey = m_evaluatedKeys[i];
+        m_evaluated[i].resume();
+    }
+    m_evaluatingKey = 0;
     m_evaluated.clear();
+    m_evaluatedKeys.clear();
     return m_anyTriggered;
 }
 
@@ -344,14 +413,22 @@ void VlProcess::state(int s) {
         // We can't change the sttaus of completed process
         return;
     }
+    m_state = s;
+    if (completed()) {
+        // The parent's 'wait fork' may now proceed, and a killed one's own one ends
+        if (m_parentp) {
+            VlDynamicTriggerScheduler* const schedp
+                = m_parentp->m_forkWaitp.load(std::memory_order_relaxed);
+            if (schedp) schedp->forkDone(m_parentp.get());
+        }
+        VlDynamicTriggerScheduler* const schedp = m_forkWaitp.load(std::memory_order_relaxed);
+        if (schedp) schedp->forkDone(this);
+    }
     if (s == KILLED && m_forkSyncOnKillp && !m_forkSyncOnKillDone) {
         m_forkSyncOnKillDone = true;
-        m_state = s;
         m_forkSyncOnKillp->done();
         m_forkSyncOnKillp = nullptr;
-        return;
     }
-    m_state = s;
 }
 
 void VlForkSync::onKill(VlProcessRef process) {
