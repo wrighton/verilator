@@ -17,8 +17,9 @@ if test.tsan:
     test.skip("ThreadSanitizer not compatible with AddressSanitizer\n")
 
 # Selects of members and parts of elements of packed arrays of structures at variable positions,
-# from a seed that reads past a value when guards are lost; the sanitizers report such a read
-random.seed(9)
+# from seeds that read past a value when guards are lost; the sanitizers report such a read
+unique = test.name == "t_select_part_composed_rand_unique"
+random.seed(14 if unique else 9)
 test.top_filename = f"{test.obj_dir}/t.v"
 lines = [
     "module t;", "  logic clk = 0;", "  int cyc = 0;",
@@ -88,8 +89,9 @@ with open(test.top_filename, "w", encoding="utf8") as f:
     f.write("\n".join(lines) + "\n")
 
 test.compile(verilator_flags2=[
-    "--binary", "-Wno-fatal", "--x-assign fast", "-CFLAGS -fsanitize=address,undefined",
-    "-CFLAGS -fno-sanitize-recover=undefined", "-LDFLAGS -fsanitize=address,undefined"
+    "--binary", "-Wno-fatal", "--x-assign unique" if unique else "--x-assign fast",
+    "-CFLAGS -fsanitize=address,undefined", "-CFLAGS -fno-sanitize-recover=undefined",
+    "-LDFLAGS -fsanitize=address,undefined"
 ])
 
 test.execute()
