@@ -2920,6 +2920,7 @@ void VlRandomizer::clearConstraints() {
     m_softVarEnds.clear();
     m_uniqueArrays.clear();  // Re-registered by constraint setup
     m_frozenPins.clear();  // Likewise re-added
+    m_elemVarsCleared.clear();
     // Keep m_vars for class member randomization
 }
 
@@ -2934,14 +2935,24 @@ void VlRandomizer::clearAll() {
     m_randcConstraintHash = 0;
 }
 
-void VlRandomizer::clear_elem_vars(const std::string& arrayName) {
+bool VlRandomizer::clear_elem_vars(const std::string& arrayName) {
     // Registered as "<arrayName>.<index>.<field>", and again for the objects the array holds
-    // at each randomize(), so objects that were removed or replaced are not referenced
+    // at each randomize(), so objects that were removed or replaced are not referenced. Each
+    // constraint setup naming the array registers it, but only the first clears it, as a later
+    // one would also unregister the members of its objects an earlier one registered.
+    if (!m_elemVarsCleared.emplace(arrayName).second) return false;
     const std::string prefix = arrayName + ".";
     auto it = m_vars.lower_bound(prefix);
     while (it != m_vars.end() && it->first.compare(0, prefix.size(), prefix) == 0) {
         it = m_vars.erase(it);
     }
+    // An array of those objects is unregistered with them, so registered again
+    auto clearedIt = m_elemVarsCleared.lower_bound(prefix);
+    while (clearedIt != m_elemVarsCleared.end()
+           && clearedIt->compare(0, prefix.size(), prefix) == 0) {
+        clearedIt = m_elemVarsCleared.erase(clearedIt);
+    }
+    return true;
 }
 
 void VlRandomizer::markRandc(const std::string& name) { m_randcVarNames.insert(name); }
