@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_func_upward_unsup.v:69:17: Unsupported: Upwards reference to task/function 'cfg.f' with a different signature in each instance
+                                                 : ... note: In instance 't.pb.c'
+   69 |     named = cfg.f(.b(10), .a(2));   
+      |                 ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_func_upward_unsup.v:70:15: Unsupported: Upwards reference to task/function 'cfg.g' using default argument values that differ in each instance
+                                                 : ... note: In instance 't.pb.c'
+   70 |     def = cfg.g();   
+      |               ^
+%Error-UNSUPPORTED: t/t_func_upward_unsup.v:35:20: Unsupported: Upwards reference to task/function 'ret_width' with a different signature in each instance
+                                                 : ... note: In instance 't.m5.l'
+   35 |     ret = int'(mid.ret_width());   
+      |                    ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_func_upward_unsup.v:36:15: Unsupported: Upwards reference to task/function 'arg_width' with a different signature in each instance
+                                                 : ... note: In instance 't.m5.l'
+   36 |     arg = mid.arg_width(1);   
+      |               ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_func_upward_unsup.v:37:15: Unsupported: Upwards reference to task/function 'default_value' using default argument values that differ in each instance
+                                                 : ... note: In instance 't.m5.l'
+   37 |     def = mid.default_value();   
+      |               ^~~~~~~~~~~~~
+%Error: Exiting due to
