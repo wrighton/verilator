@@ -88,25 +88,34 @@ public:
     // The given vertex is known to have become acyclic after some edits,
     // propagate through graph to mark connected vertices as well.
     void updateAcyclic(const DfgVertex& vtx) {
-        // Mark as acyclic
-        uint64_t& sccIdxr = m_vtx2Scc.at(&vtx);
-        UASSERT_OBJ(sccIdxr, &vtx, "Vertex should be cyclic");
-        sccIdxr = 0;
-        --m_nCyclicVertices;
-        // Propagate the update through the graph forward
-        vtx.foreachSink([&](const DfgVertex& dst) {
-            // Sink was known to be acyclic, stop
-            if (!m_vtx2Scc.at(&dst)) return false;
-            if (!stillCyclicFwd(dst)) updateAcyclic(dst);
-            return false;
-        });
-        // Propagate the update through the graph backward
-        vtx.foreachSource([&](const DfgVertex& src) {
-            // Source was known to be acyclic, stop
-            if (!m_vtx2Scc.at(&src)) return false;
-            if (!stillCyclicBwd(src)) updateAcyclic(src);
-            return false;
-        });
+        // Uses a work list, as recursion would overflow the C++ stack on long paths
+        std::vector<const DfgVertex*> workList;
+        const auto markAcyclic = [&](const DfgVertex& acyclicVtx) {
+            uint64_t& sccIdxr = m_vtx2Scc.at(&acyclicVtx);
+            UASSERT_OBJ(sccIdxr, &acyclicVtx, "Vertex should be cyclic");
+            sccIdxr = 0;
+            --m_nCyclicVertices;
+            workList.push_back(&acyclicVtx);
+        };
+        markAcyclic(vtx);
+        while (!workList.empty()) {
+            const DfgVertex& currVtx = *workList.back();
+            workList.pop_back();
+            // Propagate the update through the graph forward
+            currVtx.foreachSink([&](const DfgVertex& dst) {
+                // Sink was known to be acyclic, stop
+                if (!m_vtx2Scc.at(&dst)) return false;
+                if (!stillCyclicFwd(dst)) markAcyclic(dst);
+                return false;
+            });
+            // Propagate the update through the graph backward
+            currVtx.foreachSource([&](const DfgVertex& src) {
+                // Source was known to be acyclic, stop
+                if (!m_vtx2Scc.at(&src)) return false;
+                if (!stillCyclicBwd(src)) markAcyclic(src);
+                return false;
+            });
+        }
     }
 
     // Update after replacing 'vtxp' with 'replacement'
@@ -1426,15 +1435,29 @@ class IndependentBits final : public DfgVisitor {
     void dfsPostOrder(std::unordered_set<DfgVertex*>& visited,  //
                       std::vector<DfgVertex*>& postOrderEnumeration,  //
                       DfgVertex& vtx) {
-        // Mark visited, skip if already visited
-        if (!visited.insert(&vtx).second) return;
-        // Visit un-visited successors
-        vtx.foreachSink([&](DfgVertex& snk) {
-            dfsPostOrder(visited, postOrderEnumeration, snk);
-            return false;
-        });
-        // Add to post order enumeration
-        postOrderEnumeration.emplace_back(&vtx);
+        // Uses an explicit stack, as recursion would overflow the C++ stack on long paths. An
+        // entry is a vertex to visit, or with 'true', a visited vertex to add to the enumeration.
+        std::vector<std::pair<DfgVertex*, bool>> stack{{&vtx, false}};
+        while (!stack.empty()) {
+            DfgVertex* const currp = stack.back().first;
+            const bool done = stack.back().second;
+            stack.pop_back();
+            // Add to post order enumeration after all successors
+            if (done) {
+                postOrderEnumeration.emplace_back(currp);
+                continue;
+            }
+            // Mark visited, skip if already visited
+            if (!visited.insert(currp).second) continue;
+            stack.emplace_back(currp, true);
+            // Visit un-visited successors, in order, so push them reversed
+            const size_t firstSuccessor = stack.size();
+            currp->foreachSink([&](DfgVertex& snk) {
+                stack.emplace_back(&snk, false);
+                return false;
+            });
+            std::reverse(stack.begin() + firstSuccessor, stack.end());
+        }
     };
 
     IndependentBits(DfgGraph& dfg, const SccInfo& sccInfo)

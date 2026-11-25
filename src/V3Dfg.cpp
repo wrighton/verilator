@@ -762,46 +762,69 @@ DfgVertexVar* DfgVertex::getResultVar() {
     return resp;
 }
 
-AstScope* DfgVertex::scopep(ScopeCache& cache, bool tryResultVar) VL_MT_DISABLED {
+// Returns the scope of 'vtx' if known without considering its sources, otherwise nullptr.
+// See 'DfgVertex::scopep'. A nullptr in 'cache' marks a vertex with its scope being computed.
+static AstScope* dfgKnownScopep(DfgVertex& vtx, const DfgVertex::ScopeCache& cache,
+                                bool tryResultVar) VL_MT_DISABLED {
     // If this is a variable, we are done
-    if (const DfgVertexVar* const varp = this->cast<DfgVertexVar>()) {
+    if (const DfgVertexVar* const varp = vtx.cast<DfgVertexVar>()) {
         return varp->vscp()->scopep();
     }
 
-    // Try the result var first if instructed (usully only in the recursive case)
+    // Try the result var first if instructed (usually only for sources)
     if (tryResultVar) {
-        if (const DfgVertexVar* const varp = this->getResultVar()) {
-            return varp->vscp()->scopep();
-        }
+        if (const DfgVertexVar* const varp = vtx.getResultVar()) { return varp->vscp()->scopep(); }
     }
+
+    const auto it = cache.find(&vtx);
+    if (it == cache.end()) return nullptr;
+
+    // Die on a graph circular through operation vertices
+    UASSERT_OBJ(it->second, &vtx, "DfgVertex::scopep called on graph with circular operations");
+    return it->second;
+}
+
+AstScope* DfgVertex::scopep(ScopeCache& cache, bool tryResultVar) VL_MT_DISABLED {
+    if (AstScope* const knownp = dfgKnownScopep(*this, cache, tryResultVar)) return knownp;
 
     AstScope* const rootp = v3Global.rootp()->topScopep()->scopep();
 
-    // Note: the recursive invocation can cause a re-hash but that will not invalidate references
-    AstScope*& resultr = cache[this];
-    if (!resultr) {
-        // Mark to prevent infinite recursion on circular graphs - should never be called on such
-        resultr = reinterpret_cast<AstScope*>(1);
-        // Find scope based on sources, falling back on the root scope. Never use a package
-        // scope, including the constant pool, so new variables are not created in packages.
-        AstScope* foundp = nullptr;
-        foreachSource([&](DfgVertex& src) {
-            AstScope* const scp = src.scopep(cache, true);
+    // Find scope based on sources, falling back on the root scope. Never use a package
+    // scope, including the constant pool, so new variables are not created in packages.
+    // Uses an explicit stack, as recursion would overflow the C++ stack on long paths.
+    // An entry is a vertex, and the index of its next input to consider.
+    std::vector<std::pair<DfgVertex*, size_t>> stack;
+    cache[this] = nullptr;
+    stack.emplace_back(this, 0);
+    while (true) {
+        DfgVertex& vtx = *stack.back().first;
+        size_t& nextInput = stack.back().second;
+        AstScope* foundp = nullptr;  // Usable scope of a source
+        DfgVertex* pendingp = nullptr;  // Source with scope not yet computed
+        for (; nextInput < vtx.nInputs(); ++nextInput) {
+            DfgVertex* const srcp = vtx.inputp(nextInput);
+            if (!srcp) continue;
+            AstScope* const scp = dfgKnownScopep(*srcp, cache, true);
+            if (!scp) {
+                pendingp = srcp;
+                break;
+            }
             if (scp != rootp && !VN_IS(scp->modp(), Package)) {
                 foundp = scp;
-                return true;
+                break;
             }
-            return false;
-        });
-        resultr = foundp ? foundp : rootp;
+        }
+        // Compute the scope of the source first, then consider it again
+        if (pendingp) {
+            cache[pendingp] = nullptr;
+            stack.emplace_back(pendingp, 0);
+            continue;
+        }
+        AstScope* const resultp = foundp ? foundp : rootp;
+        cache[&vtx] = resultp;
+        stack.pop_back();
+        if (stack.empty()) return resultp;
     }
-
-    // Die on a graph circular through operation vertices
-    UASSERT_OBJ(resultr != reinterpret_cast<AstScope*>(1), this,
-                "DfgVertex::scopep called on graph with circular operations");
-
-    // Done
-    return resultr;
 }
 
 void DfgVertex::unlinkDelete(DfgGraph& dfg) {
