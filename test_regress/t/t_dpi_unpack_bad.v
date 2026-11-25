@@ -92,4 +92,16 @@ module t;
     // fewer unpacked dimensions, not counting the unsized packed dimension
     import_func9(bits_dyn);
   end
+
+  import "DPI-C" function void import_func10(input int in[]);
+  import "DPI-C" function void import_func11(input bit [] in);
+  bit [7:0] bits8;
+  bit [7:0] bits8_u[2];
+
+  initial begin
+    // unpacked dimensions differ for an open array
+    import_func10(bits8);
+    import_func10(ints32);
+    import_func11(bits8_u);
+  end
 endmodule
