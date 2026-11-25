@@ -2244,9 +2244,11 @@ string AstDefParam::name() const VL_MT_STABLE {
 void AstDelay::dump(std::ostream& str) const {
     Super::dump(str);
     if (isCycleDelay()) str << " [CYCLE]";
+    if (isForkBranchStart()) str << " [FORKBRANCHSTART]";
 }
 void AstDelay::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isCycleDelay);
+    dumpJsonBoolFuncIf(str, isForkBranchStart);
     dumpJsonGen(str);
 }
 const char* AstDisable::broken() const {
