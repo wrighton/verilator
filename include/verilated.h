@@ -1009,8 +1009,11 @@ public:
     }
 
     /// Add callback to run once when the context is destroyed, after final blocks and any
-    /// coverage write
+    /// coverage write. Adding or removing one while another thread destroys the context is
+    /// a user error.
     void addEndContextCb(void (*cb)(void*), void* datap) VL_MT_SAFE_EXCLUDES(m_endContextMutex);
+    /// Remove a callback added by addEndContextCb, if it has not run
+    void removeEndContextCb(void (*cb)(void*), void* datap) VL_MT_SAFE_EXCLUDES(m_endContextMutex);
 
     // Internal: Model and thread setup
     void addModel(VerilatedModel* modelp);
