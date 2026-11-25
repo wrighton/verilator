@@ -61,6 +61,9 @@ module t (  /*AUTOARG*/
   reg signed [95:0] w_wrights;
   reg [95:0] w_wleft;
 
+  reg [31:0] p_iright;
+  reg [P64-1:0] p_qleft;
+
   reg [31:0] iamt;
   reg [63:0] qamt;
   reg [95:0] wamt;
@@ -118,6 +121,10 @@ module t (  /*AUTOARG*/
     w_wright = 96'hf784bf8f_12734089_190abe48 >> wamt;
     w_wrights = 96'shf784bf8f_12734089_190abe48 >>> signed'(wamt);
     w_wleft = 96'hf784bf8f_12734089_190abe48 << wamt;
+
+    // Shift amount between 32 and 64 bits wide
+    p_iright = 32'h819b018a >> qamt[62:0];
+    p_qleft = 64'hf784bf8f_12734089 << qamt[62:0];
 
     c_wright_32 = rand_96 >> 32;
     c_wleft_32 = rand_96 << 32;
@@ -263,6 +270,9 @@ module t (  /*AUTOARG*/
         if (wleft != w_wleft) $stop;
         if (wright != w_wright) $stop;
         if (wrights != w_wrights) $stop;
+
+        if (iright != p_iright) $stop;
+        if (qleft != p_qleft) $stop;
 
         if (c_wright_32 << 32 != {rand_96[95:32], 32'd0}) $stop;
         if (c_wleft_32 >> 32 != {32'd0, rand_96[63:0]}) $stop;
