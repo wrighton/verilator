@@ -2603,41 +2603,27 @@ private:
             callp->addPinsp(namep);
             return callp->makeStmt();
         };
-        AstNodeExpr* activep = newHandlesActivep(m_memberMap, memberRefp->fromp(), true, false);
-        AstVar* const subRandModeVarp
-            = RandModeVars::randModeVarp(VN_AS(varp->user2p(), NodeModule));
-        if (randMode.usesMode && subRandModeVarp) {
-            AstMemberRef* const randModeRefp
-                = new AstMemberRef{varp->fileline(), parentAccessp, subRandModeVarp};
-            randModeRefp->dtypep(subRandModeVarp->dtypep());
-            AstCMethodHard* const atp
-                = new AstCMethodHard{varp->fileline(), randModeRefp, VCMethod::ARRAY_AT,
-                                     new AstConst{varp->fileline(), randMode.index}};
-            atp->dtypeSetUInt32();
-            // rand_mode ON: clear disabled state
-            AstCMethodHard* const enablep = new AstCMethodHard{
-                varp->fileline(),
-                new AstVarRef{varp->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
-                              VAccess::READWRITE},
-                VCMethod::RANDOMIZER_CLEAR_VAR_DISABLED};
-            enablep->dtypeSetVoid();
-            AstNodeExpr* const nameExprp
-                = m_nestedAccessp ? m_nestedAccessp->cloneName()
-                                  : new AstSFormatF{varp->fileline(), smtName, false, nullptr};
-            nameExprp->dtypep(varp->dtypep());
-            enablep->addPinsp(nameExprp);
-            // rand_mode OFF: set disabled state
-            AstCMethodHard* const disablep = new AstCMethodHard{
-                varp->fileline(),
-                new AstVarRef{varp->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
-                              VAccess::READWRITE},
-                VCMethod::RANDOMIZER_SET_VAR_DISABLED};
-            disablep->dtypeSetVoid();
-            AstNodeExpr* const disnp = nameExprp->cloneTree(false);
-            disablep->addPinsp(disnp);
-            AstIf* const ifp
-                = new AstIf{varp->fileline(), atp, enablep->makeStmt(), disablep->makeStmt()};
-            addRegistrationStmt(ifp, initp);
+        AstNodeExpr* activep
+            = memberRefp ? newHandlesActivep(m_memberMap, memberRefp->fromp(), true, false)
+                         : nullptr;
+        AstNodeExpr* randModeArrayp = randMode.usesMode ? newStaticRandModeRefp(varp) : nullptr;
+        if (randMode.usesMode && !randModeArrayp) {
+            UASSERT_OBJ(!varp->lifetime().isStatic(), varp, "No static rand_mode array");
+            UASSERT_OBJ(memberRefp, varp, "No member select for an object's rand_mode array");
+            if (AstVar* const subRandModeVarp
+                = RandModeVars::randModeVarp(VN_AS(varp->user2p(), NodeModule))) {
+                AstMemberRef* const randModeRefp = new AstMemberRef{
+                    fl, memberRefp->fromp()->cloneTree(false), subRandModeVarp};
+                randModeRefp->dtypep(subRandModeVarp->dtypep());
+                randModeArrayp = randModeRefp;
+            }
+        }
+        if (randModeArrayp) {
+            AstCMethodHard* const leafAtp = new AstCMethodHard{
+                fl, randModeArrayp, VCMethod::ARRAY_AT, new AstConst{fl, randMode.index}};
+            leafAtp->dtypeSetUInt32();
+            activep = activep ? new AstLogAnd{fl, activep, leafAtp}
+                              : static_cast<AstNodeExpr*>(leafAtp);
         }
         if (activep) {
             regp->addNext(new AstIf{fl, activep,
@@ -3195,7 +3181,8 @@ private:
         // is registered in each class using it; a plain class-level variable keys
         // on user3(). Inline 'with' dedups per function (own solver).
         // The objects of a handle array are registered by each class's randomize().
-        const bool perClass = isGlobalConstrained || memberRefp || foreignStatic || isClassRefArray;
+        const bool perClass
+            = isGlobalConstrained || memberRefp || foreignStatic || isClassRefArray;
         // A path through a runtime index is named by the index's expression, not the element,
         // so it is registered at each reference, in its own loop; write_var() ignores repeats
         const bool runtimeIndexPath = memberRefp && memberRefp->exists([](const AstNode* selp) {
@@ -3210,9 +3197,9 @@ private:
             const AstCMethodHard* const atp = VN_CAST(selp, CMethodHard);
             return atp && !VN_IS(atp->pinsp(), Const);
         });
-        // A select or handle array is registered in the setup of each constraint naming it, as a
-        // derived class overriding one of them does not run its setup
-        const bool inSetup = memberRefp || structSelOrCMeth || isClassRefArray;
+        // A select, handle array or foreign static is registered in the setup of each constraint
+        // naming it, as a derived class overriding one of them does not run its setup
+        const bool inSetup = memberRefp || structSelOrCMeth || isClassRefArray || foreignStatic;
         const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
                                     : inSetup          ? m_setupWrittenVars.count(smtName) > 0
                                     : perClass         ? m_writtenVars.count(smtName) > 0
