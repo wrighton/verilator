@@ -1,0 +1,6 @@
+%Error: t/t_interface_typedef_gen_bad.v:23:20: Interface typedef reference through a generate block or instance that does not exist: 'g[2].b'
+                                             : ... note: In instance 't'
+   23 |   leaf #(.T(g[2].b.data_t)) c ();
+      |                    ^~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to
