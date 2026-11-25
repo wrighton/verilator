@@ -136,6 +136,10 @@ CASES = (
   always_comb t = $sampled(a);
   assign o = t + 8'd1;
 """),
+    # Nor with a port its wrapper's import cannot pass as an integral value
+    ("string_port", "ports not passed as integral values", """
+  assign o = a + 8'(name.len());
+""", "input string name, ", []),
     # Nor for an input whose changes are not detected, so whose readers run at every evaluation
     ("unpacked_input", "logic run at every evaluation with effects", """
   assign o = a;
