@@ -82,6 +82,9 @@ class CastVisitor final : public VNVisitor {
         }
     }
     static int castSize(const AstNode* nodep) { return castSize(nodep->width()); }
+    // The C type of a variable follows its widthMin (see cTypeRecurse), which is below its
+    // width for a temporary made from an expression after V3Clean
+    static int castSizeByWidthMin(const AstVar* varp) { return castSize(varp->widthMin()); }
     void ensureCast(AstNodeExpr* nodep) {
         if (castSize(nodep->backp()) != castSize(nodep) || !nodep->user1()) {
             if (!nodep->isNull() && !nodep->isString() && !nodep->isDouble())
@@ -244,7 +247,7 @@ class CastVisitor final : public VNVisitor {
             && !VN_IS(abovep, CExprUser)
             && (nodep->varp()->basicp() && !nodep->varp()->basicp()->isForkSync()
                 && !nodep->varp()->basicp()->isProcessRef() && !nodep->varp()->basicp()->isEvent())
-            && abovep->width() && castSize(nodep) != castSize(nodep->varp())) {
+            && abovep->width() && castSize(nodep) != castSizeByWidthMin(nodep->varp())) {
             // Cast vars to IData first, else below has upper bits wrongly set
             //  CData x=3; out = (QData)(x<<30);
             insertCast(nodep, castSize(nodep));
