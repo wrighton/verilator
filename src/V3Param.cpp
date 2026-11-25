@@ -328,6 +328,7 @@ class ParamProcessor final {
             : m_modp{modp} {}
     };
     std::map<const std::string, ModInfo> m_modNameMap;  // Hash of created module flavors by name
+    VDouble0 m_statSpecializations;  // Modules and classes made by specialization
 
     std::map<const std::string, std::string>
         m_longMap;  // Hash of very long names to unique identity number
@@ -358,8 +359,9 @@ class ParamProcessor final {
     std::map<AstNodeModule*, DefaultValueMap> m_defaultParameterValues;
     // Module -> a defparam in it or below it, or nullptr (see nestedDefparamp)
     std::map<const AstNodeModule*, const AstPin*> m_nestedDefparamps;
-    // "instance.parameter" path -> value of a defparam, see ParamVisitor::visit(AstDefParam)
-    std::unordered_map<std::string, AstNodeExpr*> m_defparamValues;
+    // "instance.parameter" path -> value of a defparam, see ParamVisitor::visit(AstDefParam).
+    // Ordered, to find the values for the instances below a path (see defparamValuesKey).
+    std::map<std::string, AstNodeExpr*> m_defparamValues;
     VNDeleter m_deleter;  // Used to delay deletion of nodes
     // Class default type paramater dependencies
     std::vector<std::pair<AstParamTypeDType*, int>> m_classTypeParams;
@@ -599,7 +601,10 @@ class ParamProcessor final {
         // Name the value by its text, which is the same for equal values or types in every run.
         // V3Hasher is unsuitable, as it hashes node pointers, which can differ for equal types.
         // V3Hash of a string is unsuitable, as std::hash varies between C++ libraries.
-        const string text = paramValueString(nodep);
+        return textNumber(paramValueString(nodep));
+    }
+    // Name for a text, the same in every run
+    string textNumber(const string& text) {
         const auto pair = m_valueNames.emplace(text, "");
         if (pair.second) pair.first->second = "z" + digestSuffix(text, m_valueSuffixes);
         return pair.first->second;
@@ -695,22 +700,44 @@ class ParamProcessor final {
             }
         }
     }
-    // Return a defparam in the module or below it, including inside generate constructs.
+    // Return a defparam in the module or below it, including inside generate constructs,
+    // preferring one with its value, that is set from outside its scope (see V3LinkDot).
     // Memoized, so each module is searched once.
     const AstPin* nestedDefparamp(const AstNodeModule* modp) {
         const auto pair = m_nestedDefparamps.emplace(modp, nullptr);
         if (!pair.second) return pair.first->second;  // Searched, or being searched
         const AstPin* foundp = nullptr;
+        const auto consider = [&foundp](const AstPin* pinp) {
+            if (pinp && (!foundp || pinp->exprp())) foundp = pinp;
+        };
         modp->exists([&](const AstCell* cellp) {
-            for (const AstPin* pinp = cellp->paramsp(); pinp && !foundp;
-                 pinp = VN_AS(pinp->nextp(), Pin)) {
-                if (!pinp->paramPath().empty()) foundp = pinp;
+            for (const AstPin* const pinp : cellp->paramspList()) {
+                if (!pinp->paramPath().empty()) consider(pinp);
             }
-            if (!foundp && cellp->modp()) foundp = nestedDefparamp(cellp->modp());
-            return foundp != nullptr;
+            if (cellp->modp()) consider(nestedDefparamp(cellp->modp()));
+            return foundp && foundp->exprp();
         });
         pair.first->second = foundp;
         return foundp;
+    }
+    // Key of the defparam values given to the instances below the instance at 'path', so
+    // instances of a module with the same key can share a specialization: each constant by its
+    // path relative to the instance, any other value by its full path, unique to the instance.
+    // Values for the instance's own parameters are in its pins instead.
+    string defparamValuesKey(const string& path) const {
+        const string prefix = defparamPath(path) + ".";
+        string key;
+        for (auto it = m_defparamValues.lower_bound(prefix);
+             it != m_defparamValues.end() && VString::startsWith(it->first, prefix); ++it) {
+            const string relPath = it->first.substr(prefix.size());
+            if (relPath.find('.') == string::npos) continue;
+            if (const AstConst* const constp = VN_CAST(it->second, Const)) {
+                key += relPath + "=" + constp->name() + ";";
+            } else {
+                key += it->first + ";";
+            }
+        }
+        return key;
     }
     // Check if parameter setting during instantiation is simple enough for hierarchical Verilation
     void checkSupportedParam(AstNodeModule* modp, AstPin* pinp) const {
@@ -1078,6 +1105,7 @@ class ParamProcessor final {
             insertp = insertp->nextp();
         }
         insertp->addNextHere(newModp);
+        ++m_statSpecializations;
 
         m_modNameMap.emplace(newModp->name(), ModInfo{newModp});
         const auto iter = m_modNameMap.find(newname);
@@ -2182,10 +2210,18 @@ class ParamProcessor final {
                 }
             }
         }
-        if (VN_IS(nodep, Cell) && nestedDefparamp(srcModp)) {
-            // Defparams may give each instance different values (see nodeDeparam)
-            longname += "__Vdefparam" + V3Hash{srcModp->someInstanceName()}.toString();
-            any_overrides = true;
+        if (VN_IS(nodep, Cell)) {
+            if (const AstPin* const defparamp = nestedDefparamp(srcModp)) {
+                // Defparams may give each instance different values (see nodeDeparam). Always a
+                // copy, as elaborating a module drops the defparams of instances not under it.
+                if (defparamp->exprp()) {  // Matched to instances by their paths
+                    longname += "__Vdefparam" + V3Hash{srcModp->someInstanceName()}.toString();
+                } else {
+                    longname += "__Vdefparam"
+                                + textNumber(defparamValuesKey(srcModp->someInstanceName()));
+                }
+                any_overrides = true;
+            }
         }
         if (VN_IS(nodep, Cell) && srcModp->hasUpwardRef()) {
             // Upward references may resolve differently from each enclosing generate block
@@ -2702,7 +2738,7 @@ public:
             m_allModuleNames.insert(modp->name());
         }
     }
-    ~ParamProcessor() = default;
+    ~ParamProcessor() { V3Stats::addStat("Param, Module specializations", m_statSpecializations); }
     VL_UNCOPYABLE(ParamProcessor);
 };
 
