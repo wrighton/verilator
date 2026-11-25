@@ -272,6 +272,23 @@ const VIfaceCaptureTag* V3LinkDotIfaceCapture::captureTag(AstRefDType* refp) {
 }
 
 namespace {
+// Index of a cell path component that V3LinkDot could not evaluate (see visit(AstSelBit))
+constexpr const char* UNKNOWN_INDEX = "__BRA__??__KET__";
+
+bool hasUnknownIndex(const string& component) {
+    return component.find(UNKNOWN_INDEX) != string::npos;
+}
+
+// Whether itemp is a generate block that the component names, where an unknown index names
+// each block of a generate loop
+bool isPathBlock(const AstNode* itemp, const string& component) {
+    if (!VN_IS(itemp, GenBlock)) return false;
+    if (itemp->name() == component) return true;
+    const string componentBase = AstNode::nameNoArray(component);
+    return hasUnknownIndex(component) && itemp->name() != componentBase
+           && AstNode::nameNoArray(itemp->name()) == componentBase;
+}
+
 // Find the item that one cell path component names among a scope's items: an instance, an
 // interface port, or a generate block, as these are not flattened until V3Begin
 AstNode* findPathItem(AstNode* itemsp, const string& component) {
@@ -295,7 +312,7 @@ AstNode* findPathItem(AstNode* itemsp, const string& component) {
                     return itemp;
                 }
             }
-        } else if (VN_IS(itemp, GenBlock) && itemp->name() == component) {
+        } else if (isPathBlock(itemp, component)) {
             return itemp;
         }
     }
@@ -310,35 +327,35 @@ AstNode* findPathItem(AstNode* itemsp, const string& component) {
 // identically on template and cloned modules.
 AstNodeModule* V3LinkDotIfaceCapture::followCellPathFromItems(AstNode* itemsp,
                                                               const string& cellPath) {
-    AstNodeModule* modp = nullptr;
-    string remaining = cellPath;
-    while (!remaining.empty()) {
-        string component;
-        const size_t dotPos = remaining.find('.');
-        if (dotPos == string::npos) {
-            component = remaining;
-            remaining.clear();
-        } else {
-            component = remaining.substr(0, dotPos);
-            remaining = remaining.substr(dotPos + 1);
+    const size_t dotPos = cellPath.find('.');
+    const string component = cellPath.substr(0, dotPos);
+    const string rest = dotPos == string::npos ? "" : cellPath.substr(dotPos + 1);
+    AstNode* const itemp = findPathItem(itemsp, component);
+    if (VN_IS(itemp, GenBlock)) {
+        if (rest.empty()) return nullptr;
+        // An unknown index may select any block of the loop that has the rest of the path, so
+        // the path resolves only if those blocks all lead to the same module
+        AstNodeModule* resultp = nullptr;
+        for (AstNode* blockp = itemp; blockp; blockp = blockp->nextp()) {
+            if (!isPathBlock(blockp, component)) continue;
+            AstNodeModule* const modp
+                = followCellPathFromItems(VN_AS(blockp, GenBlock)->itemsp(), rest);
+            if (!modp) continue;
+            if (resultp && modp != resultp) return nullptr;
+            resultp = modp;
         }
-        AstNode* const itemp = findPathItem(itemsp, component);
-        modp = nullptr;
-        if (const AstGenBlock* const blockp = VN_CAST(itemp, GenBlock)) {
-            itemsp = blockp->itemsp();
-            continue;
-        }
-        if (const AstCell* const cellp = VN_CAST(itemp, Cell)) {
-            modp = cellp->modp();
-        } else if (AstVar* const varp = VN_CAST(itemp, Var)) {
-            if (AstIfaceRefDType* const irefp = ifaceRefFromVarDType(varp->subDTypep())) {
-                modp = irefp->ifaceViaCellp();
-            }
-        }
-        if (!modp) return nullptr;
-        itemsp = modp->stmtsp();
+        return resultp;
     }
-    return modp;
+    AstNodeModule* modp = nullptr;
+    if (const AstCell* const cellp = VN_CAST(itemp, Cell)) {
+        modp = cellp->modp();
+    } else if (AstVar* const varp = VN_CAST(itemp, Var)) {
+        if (AstIfaceRefDType* const irefp = ifaceRefFromVarDType(varp->subDTypep())) {
+            modp = irefp->ifaceViaCellp();
+        }
+    }
+    if (!modp || rest.empty()) return modp;
+    return followCellPathFromItems(modp->stmtsp(), rest);
 }
 
 AstNodeModule* V3LinkDotIfaceCapture::followCellPath(const AstNodeModule* startModp,
@@ -370,10 +387,56 @@ AstNodeModule* V3LinkDotIfaceCapture::followCellPathAt(const AstNode* nodep,
     return nullptr;
 }
 
+// The cell path text, with the placeholder of each generate block or instance array index
+// that the unresolved scope selects by a literal number replaced by that index
+string V3LinkDotIfaceCapture::constIndexCellPath(const string& dotText, AstNode* unlinkedScopep) {
+    string path = dotText;
+    if (!unlinkedScopep) return path;
+    const string placeholder = UNKNOWN_INDEX;
+    unlinkedScopep->foreach([&](const AstCellArrayRef* arrayRefp) {
+        size_t pos = path.find(arrayRefp->name() + placeholder);
+        if (pos == string::npos) return;
+        pos += arrayRefp->name().length();
+        for (const AstNodeExpr* const selp : arrayRefp->selpList()) {
+            const AstNegate* const negatep = VN_CAST(selp, Negate);
+            const AstConst* const constp = VN_CAST(negatep ? negatep->lhsp() : selp, Const);
+            if (!constp) return;
+            const int64_t value = negatep ? -constp->toSInt() : constp->toSInt();
+            const string index = "__BRA__" + AstNode::encodeNumber(value) + "__KET__";
+            path.replace(pos, placeholder.length(), index);
+            pos += index.length();
+        }
+    });
+    return path;
+}
+
+bool V3LinkDotIfaceCapture::reportIfUnresolved(AstRefDType* refp,
+                                               const AstNodeModule* resolvedModp) {
+    // A path without an index resolved when it was linked
+    const string& cellPath = refp->captureTagp()->m_cellPath;
+    if (resolvedModp || cellPath.find("__BRA__") == string::npos) return false;
+    if (hasUnknownIndex(cellPath)) {
+        refp->v3warn(E_UNSUPPORTED, "Unsupported: Interface typedef reference through a "
+                                    "generate block index that is not a literal number, "
+                                    "selecting differently specialized interfaces");
+    } else {
+        refp->v3error("Interface typedef reference through a generate block or instance "
+                      "that does not exist: "
+                      << AstNode::prettyNameQ(cellPath));
+    }
+    // Continue with a valid type, as the unspecialized interface may be deleted
+    refp->typedefp(nullptr);
+    refp->refDTypep(refp->findBitDType());
+    refp->dtypep(refp->refDTypep());
+    refp->captureTagp(nullptr);
+    return true;
+}
+
 // replaces the lambda used in V3LinkDot.cpp for iface capture
 void V3LinkDotIfaceCapture::captureTypedefContext(AstRefDType* refp, const char* stageLabel,
                                                   int dotPos, const std::string& dotText,
-                                                  VSymEnt* dotSymp, AstNodeModule* modp,
+                                                  AstNode* unlinkedScopep, VSymEnt* dotSymp,
+                                                  AstNodeModule* modp,
                                                   const std::function<std::string()>& indentFn) {
     if (!enabled() || !refp) return;
 
@@ -402,7 +465,7 @@ void V3LinkDotIfaceCapture::captureTypedefContext(AstRefDType* refp, const char*
     // fires, the caller resolved to an interface Cell but did not accumulate
     // a dotText path - investigate the dot-state in visitParseRef.
     UASSERT_OBJ(!dotText.empty(), refp, "captureTypedefContext: dotText empty");
-    const string cellPath = dotText;
+    const string cellPath = constIndexCellPath(dotText, unlinkedScopep);
 
     // A reference to a ParamTypeDType is captured as a parameter type, else as a typedef
     if (AstParamTypeDType* const paramTypep = VN_CAST(refp->refDTypep(), ParamTypeDType)) {
@@ -476,6 +539,7 @@ int V3LinkDotIfaceCapture::resolveCapturedRefs() {
                          << ownerModp->name() << "', '" << tagp->m_cellPath
                          << "') = " << (correctModp ? correctModp->name() : "<null>")
                          << (correctModp ? (correctModp->dead() ? " (DEAD)" : " (live)") : ""));
+            if (reportIfUnresolved(refp, correctModp)) return;
             UASSERT_OBJ(correctModp && !correctModp->dead()
                             && moduleMatchesOwner(correctModp, tagp->m_ownerModName),
                         refp,
