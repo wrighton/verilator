@@ -4,61 +4,128 @@
 // SPDX-License-Identifier: CC0-1.0
 // ======================================================================
 
-// DESCRIPTION: Scope hierarchy map clearing upon VerilatedModel destruction
+// DESCRIPTION: Scope hierarchy map upon VerilatedModel construction and destruction
 //
 // VerilatedImp::s() is a VerilatedImpData singleton that contains an m_hierMap
 // whose keys are pointers to VerilatedScope objects. Because it is a
-// singleton, it is not automatically destroyed together with the
-// VerilatedModel, so this test checks that the VerilatedSyms destructor that is
-// invoked upon the VerilatedModel's destruction clears the keys from the map.
+// singleton shared by all models, this test checks that destroying a model
+// removes the keys of its scopes, but keeps the scope hierarchy of the other
+// models, including while it is being iterated.
 
 // Workaround to be able to include verilated_imp.h, needed to directly test the hierarchy map
 #define VERILATOR_VERILATED_CPP_
 #include "verilated_imp.h"
 #include <verilated.h>
+#include <verilated_vpi.h>
 
-#include "TestVpi.h"
+#include "TestCheck.h"
 #include VM_PREFIX_INCLUDE
-#include "Vt_vpi_hierarchy_clear__Syms.h"
 
 #include <memory>
 
-int main(int argc, char** argv) {
-    const std::unique_ptr<VerilatedContext> contextp{new VerilatedContext};
-    contextp->commandArgs(argc, argv);
+int errors = 0;
 
-    // Vt_vpi_hierarchy_clear::vlSymsp is private, so create a dummy syms object just to be able to
-    // construct the VerilatedScope objects
-    std::unique_ptr<Vt_vpi_hierarchy_clear__Syms> dummySymsp
-        = std::make_unique<Vt_vpi_hierarchy_clear__Syms>(contextp.get(), nullptr,
-                                                         "dummySymsObject", true);
-    std::unique_ptr<VerilatedScope> additionalScope = std::make_unique<VerilatedScope>(
-        dummySymsp.get(), dummySymsp->name(), "t.additional", "additional", "Additional", -12,
-        VerilatedScope::SCOPE_MODULE);
+// Scan the rest of an iteration, returning the number of objects
+static int scanCount(vpiHandle iterp) {
+    int count = 0;
+    if (!iterp) return count;
+    while (const vpiHandle objp = vpi_scan(iterp)) {
+        ++count;
+        vpi_release_handle(objp);
+    }
+    return count;
+}
+
+static int moduleCount(vpiHandle parentp) { return scanCount(vpi_iterate(vpiModule, parentp)); }
+
+int main(int argc, char** argv) {
+    const std::unique_ptr<VerilatedContext> contextAp{new VerilatedContext};
+    const std::unique_ptr<VerilatedContext> contextBp{new VerilatedContext};
+    const std::unique_ptr<VerilatedContext> contextCp{new VerilatedContext};
+    contextAp->commandArgs(argc, argv);
 
     {
         // Construct and destroy
-        const std::unique_ptr<VM_PREFIX> topp{
-            new VM_PREFIX{contextp.get(),
-                          // Note null name - we're flattening it out
-                          ""}};
-
-        // Insert additional scope into map for the first topp
-        VerilatedImp::hierarchyAdd(additionalScope.get(), nullptr);
-        const bool scopeFound = (VerilatedImp::hierarchyMap()->find(additionalScope.get())
-                                 != VerilatedImp::hierarchyMap()->end());
-        CHECK_RESULT_NZ(scopeFound);  // NOLINT(concurrency-mt-unsafe)
+        const size_t emptySize = VerilatedImp::hierarchyMap()->size();
+        {
+            // Note null name - we're flattening it out
+            const std::unique_ptr<VM_PREFIX> topp{new VM_PREFIX{contextAp.get(), ""}};
+            TEST_CHECK_NE(VerilatedImp::hierarchyMap()->size(), emptySize);
+        }
+        TEST_CHECK_EQ(VerilatedImp::hierarchyMap()->size(), emptySize);
     }
 
-    // Test second construction
-    const std::unique_ptr<VM_PREFIX> topp{new VM_PREFIX{contextp.get(),
-                                                        // Note null name - we're flattening it out
-                                                        ""}};
+    std::unique_ptr<VM_PREFIX> topAp{new VM_PREFIX{contextAp.get(), ""}};
+    std::unique_ptr<VM_PREFIX> topBp{new VM_PREFIX{contextBp.get(), ""}};
+    TEST_CHECK_EQ(moduleCount(nullptr), 2);
+    // Top modules iterate in construction order
+    const vpiHandle topsIterp = vpi_iterate(vpiModule, nullptr);
+    vpi_release_handle(vpi_scan(topsIterp));
+    const vpiHandle topBh = vpi_scan(topsIterp);
+    TEST_CHECK_NZ(topBh);
+    vpi_release_handle(topsIterp);
+    TEST_CHECK_EQ(moduleCount(topBh), 1);
 
-    // Do not insert additionalScope this time, so it should not be present in the map any more
-    const bool scopeFound = (VerilatedImp::hierarchyMap()->find(additionalScope.get())
-                             != VerilatedImp::hierarchyMap()->end());
-    CHECK_RESULT_Z(scopeFound);  // NOLINT(concurrency-mt-unsafe)
+    {
+        // Iterating the top modules while another model is constructed
+        const vpiHandle iterp = vpi_iterate(vpiModule, nullptr);
+        vpi_release_handle(vpi_scan(iterp));
+        std::unique_ptr<VM_PREFIX> topCp{new VM_PREFIX{contextCp.get(), ""}};
+        const int count = scanCount(iterp);
+        TEST_CHECK_EQ(count, 1);
+    }
 
-    return 0;
+    {
+        // Iterating the scopes of a model while another model is destroyed
+        const vpiHandle iterp = vpi_iterate(vpiModule, topBh);
+        topAp.reset();
+        const int count = scanCount(iterp);
+        TEST_CHECK_EQ(count, 1);
+        TEST_CHECK_EQ(moduleCount(topBh), 1);
+        TEST_CHECK_EQ(moduleCount(nullptr), 1);
+    }
+
+    {
+        // Iterating the top modules while the visited model is destroyed
+        topAp.reset(new VM_PREFIX{contextAp.get(), ""});
+        std::unique_ptr<VM_PREFIX> topCp{new VM_PREFIX{contextCp.get(), ""}};
+        const vpiHandle iterp = vpi_iterate(vpiModule, nullptr);
+        vpi_release_handle(vpi_scan(iterp));  // Model B's top
+        vpi_release_handle(topBh);
+        topBp.reset();
+        const int count = scanCount(iterp);
+        TEST_CHECK_EQ(count, 2);
+    }
+
+    {
+        // Iterating the top modules while the model of a later one is destroyed
+        topBp.reset(new VM_PREFIX{contextBp.get(), ""});
+        const vpiHandle iterp = vpi_iterate(vpiModule, nullptr);
+        vpi_release_handle(vpi_scan(iterp));  // Model A's top
+        topBp.reset();
+        const int count = scanCount(iterp);
+        TEST_CHECK_EQ(count, 0);
+    }
+
+    {
+        // Iterating the top modules while the last model is destroyed
+        const vpiHandle iterp = vpi_iterate(vpiModule, nullptr);
+        topAp.reset();
+        const int count = scanCount(iterp);
+        TEST_CHECK_EQ(count, 0);
+    }
+
+    {
+        // Iterating the top modules while the last model is destroyed and another created,
+        // which may reuse the address of the destroyed top scope, so may be returned
+        topAp.reset(new VM_PREFIX{contextAp.get(), ""});
+        const vpiHandle iterp = vpi_iterate(vpiModule, nullptr);
+        topAp.reset();
+        topBp.reset(new VM_PREFIX{contextBp.get(), ""});
+        const int count = scanCount(iterp);
+        TEST_CHECK(count, "0 or 1", count <= 1);
+    }
+
+    if (!errors) VL_PRINTF("*-* All Finished *-*\n");
+    return errors ? 10 : 0;
 }

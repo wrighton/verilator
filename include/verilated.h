@@ -1267,7 +1267,6 @@ public:
                              const VerilatedScope* abovep = nullptr);
     static void removeFromTable(const VlHierTableEntry* entp, size_t n, const VerilatedSyms* symsp,
                                 const VerilatedScope* abovep = nullptr);
-    static void clear();
 };
 
 //===========================================================================
