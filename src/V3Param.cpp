@@ -352,6 +352,7 @@ class ParamProcessor final {
     std::unordered_map<const AstNodeModule*, std::map<int, AstNodeModule*>> m_insertJumps;
     VDouble0 m_statInsertSteps;  // Modules passed or jumped from to find where clones go
     VDouble0 m_statRetargetWalks;  // Cell paths followed to retarget interface references
+    VDouble0 m_statSpecializations;  // Modules and classes made by specialization
 
     std::map<const std::string, std::string>
         m_longMap;  // Hash of very long names to unique identity number
@@ -436,8 +437,11 @@ class ParamProcessor final {
     std::map<AstNodeModule*, DefaultValueMap> m_defaultParameterValues;
     // Module -> a defparam in it or below it, or nullptr (see nestedDefparamp)
     std::map<const AstNodeModule*, const AstPin*> m_nestedDefparamps;
-    // "instance.parameter" path -> value of a defparam, see ParamVisitor::visit(AstDefParam)
-    std::unordered_map<std::string, AstNode*> m_defparamValues;
+    // "instance.parameter" path -> value of a defparam, see ParamVisitor::visit(AstDefParam).
+    // Ordered, to find the values for the instances below a path (see defparamValuesKey).
+    std::map<std::string, AstNode*> m_defparamValues;
+    // "instance.parameter" path -> path of the instance of the module of its defparam
+    std::unordered_map<std::string, std::string> m_defparamValueScopes;
     // Instance name -> original name of its module, for instances deparameterized so far
     std::unordered_map<string, string> m_instanceOrigNames;
     // Module name -> whether a class in it or below it refers to its instance (see
@@ -492,6 +496,16 @@ class ParamProcessor final {
     // Paths of parameters defparams set to different values, reported so
     std::unordered_set<string> m_defparamTargetsDiffering;
     std::set<const FileLine*> m_defparamsMatched;  // Locations of defparams naming an instance
+    // Copy of a module with a defparam below, shared by instances given the same defparam
+    // values (see nodeDeparamCommon) -> path of its first instance, which its body is
+    // elaborated as
+    std::unordered_map<const AstNodeModule*, string> m_defparamCopyPaths;
+    // Path of another instance of such a copy -> path of its first instance, which the
+    // defparams below it are matched and recorded with (see sharedParamPath)
+    std::unordered_map<string, string> m_sharedInstancePaths;
+    // Values of defparams for instances under them, by path, with the defparam, in order
+    // registered (see defparamValueSite)
+    std::vector<std::pair<string, FileLine*>> m_defparamValueSites;
     VNDeleter m_deleter;  // Used to delay deletion of nodes
 
     // Guard against infinite recursion in classTypeMatchesDefaultClone slow path
@@ -790,7 +804,10 @@ class ParamProcessor final {
         // Name the value by its text, which is the same for equal values or types in every run.
         // V3Hasher is unsuitable, as it hashes node pointers, which can differ for equal types.
         // V3Hash of a string is unsuitable, as std::hash varies between C++ libraries.
-        const string text = paramValueString(nodep);
+        return textNumber(paramValueString(nodep));
+    }
+    // Name for a text, the same in every run
+    string textNumber(const string& text) {
         const auto pair = m_valueNames.emplace(text, "");
         if (pair.second) pair.first->second = "z" + digestSuffix(text, m_valueSuffixes);
         return pair.first->second;
@@ -890,22 +907,51 @@ class ParamProcessor final {
             }
         }
     }
-    // Return a defparam in the module or below it, also inside generate constructs
+    // Return a defparam in the module or below it, also inside generate constructs, preferring
+    // one with its value, that is set from outside its scope (see V3LinkDot)
     const AstPin* nestedDefparamp(const AstNodeModule* modp) {
         // Memoized, so each module is searched once
         const auto pair = m_nestedDefparamps.emplace(modp, nullptr);
         if (!pair.second) return pair.first->second;  // Searched, or being searched
         const AstPin* foundp = nullptr;
+        const auto consider = [&foundp](const AstPin* pinp) {
+            if (pinp && (!foundp || pinp->exprp())) foundp = pinp;
+        };
         modp->exists([&](const AstCell* cellp) {
-            for (const AstPin* pinp = cellp->paramsp(); pinp && !foundp;
-                 pinp = VN_AS(pinp->nextp(), Pin)) {
-                if (!pinp->paramPath().empty()) foundp = pinp;
+            for (const AstPin* const pinp : cellp->paramspList()) {
+                if (!pinp->paramPath().empty()) consider(pinp);
             }
-            if (!foundp && cellp->modp()) foundp = nestedDefparamp(cellp->modp());
-            return foundp != nullptr;
+            if (cellp->modp()) consider(nestedDefparamp(cellp->modp()));
+            return foundp && foundp->exprp();
         });
         pair.first->second = foundp;
         return foundp;
+    }
+    // Key of the defparam values given to the instances below the instance at 'path' by
+    // defparams above it, so instances of a module with the same key can share a specialization:
+    // each constant by its path relative to the instance, any other value by its full path,
+    // unique to the instance. Values for the instance's own parameters are in its pins instead.
+    // The defparams of the module or below it are registered for the instance its copy is
+    // elaborated as, but some earlier, for a copy of an instance (see copyDefparams).
+    string defparamValuesKey(const string& path) const {
+        const string prefix = defparamPath(path) + ".";
+        string key;
+        for (auto it = m_defparamValues.lower_bound(prefix);
+             it != m_defparamValues.end() && VString::startsWith(it->first, prefix); ++it) {
+            const string relPath = it->first.substr(prefix.size());
+            if (relPath.find('.') == string::npos) continue;
+            // Registered by defparamValue with each value, so present
+            const string& scope = m_defparamValueScopes.at(it->first);
+            // The scope of a defparam setting a path under the prefix is the prefix's instance,
+            // one below it, or one of its ancestors, so a shorter scope is an ancestor's
+            if (scope.size() + 1 >= prefix.size()) continue;  // Not from above
+            if (const AstConst* const constp = VN_CAST(it->second, Const)) {
+                key += relPath + "=" + constp->name() + ";";
+            } else {
+                key += it->first + ";";
+            }
+        }
+        return key;
     }
     // Return a hierarchical name without generate loop indices
     static string withoutIndices(const string& name) {
@@ -1404,6 +1450,7 @@ class ParamProcessor final {
         }
         insertp->addNextHere(newModp);
         for (AstNodeModule* const modp : passedps) { m_insertJumps[modp][level] = newModp; }
+        ++m_statSpecializations;
 
         m_allModuleNames.insert(newname);
         const auto pair = m_modNameMap.emplace(modKey(srcModp, newname), ModInfo{newModp});
@@ -2668,10 +2715,18 @@ class ParamProcessor final {
                 }
             }
         }
-        if (VN_IS(nodep, Cell) && nestedDefparamp(srcModp)) {
-            // Defparams may give each instance different values (see nodeDeparam)
-            longname += "__Vdefparam" + V3Hash{srcModp->someInstanceName()}.toString();
-            any_overrides = true;
+        if (VN_IS(nodep, Cell)) {
+            if (const AstPin* const defparamp = nestedDefparamp(srcModp)) {
+                // Defparams may give each instance different values (see nodeDeparam). Always a
+                // copy, as elaborating a module drops the defparams of instances not under it.
+                if (defparamp->exprp()) {  // Matched to instances by their paths
+                    longname += "__Vdefparam" + V3Hash{srcModp->someInstanceName()}.toString();
+                } else {
+                    longname += "__Vdefparam"
+                                + textNumber(defparamValuesKey(srcModp->someInstanceName()));
+                }
+                any_overrides = true;
+            }
         }
         if (VN_IS(nodep, Cell) && !srcModp->hierBlock() && hasInstanceClasses(srcModp)) {
             // A class referring to its module's instance needs a copy for each instance. A copy
@@ -3025,10 +3080,15 @@ public:
         }
         return m_defparamValues.find(path);
     }
-    void defparamValue(const string& path, AstNode* valuep) {
+    void defparamValue(const string& path, AstNode* valuep, const string& scope) {
         m_deleter.pushDeletep(valuep);
         m_defparamValues[path] = valuep;
+        m_defparamValueScopes[path] = defparamPath(scope);
         m_copyDefparamsUnknown.erase(path);
+    }
+    // The defparam at flp gave the value at path, of an instance under it
+    void defparamValueSite(const string& path, FileLine* flp) {
+        m_defparamValueSites.emplace_back(path, flp);
     }
     // Record a visit of a defparam V3LinkDot checks
     void defparamChecked(const AstDefParam* nodep, CheckedVisit&& visit) {
@@ -3134,7 +3194,8 @@ public:
                 const string cellp = defparamTarget(defparamPath(*instanceNamep + visit.genHier),
                                                     visit.cellPath, built);
                 if (cellp.empty()) continue;
-                const auto setIt = m_defparamTargets.find(cellp + "." + visit.paramName);
+                const auto setIt
+                    = m_defparamTargets.find(sharedParamPath(cellp + "." + visit.paramName));
                 // Set by it or a later one in its scope, or to its value
                 if (setIt != m_defparamTargets.end()
                     && (setIt->second.scopes.count(scope)
@@ -3315,12 +3376,33 @@ public:
         return "Unsupported: defparam with instance select through generate blocks of the same"
                " name, naming no instance built";
     }
+    // Return the path that stands for the "instance.parameter" path in the defparam records:
+    // the path of the first instance of each copy shared above the instance. The instance's own
+    // parameters are recorded under its own path, see checkDefparamPins.
+    string sharedParamPath(const string& path) const {
+        const std::deque<string> names = VString::split(path, '.');
+        string result;
+        for (size_t i = 0; i < names.size(); ++i) {
+            result = VString::dot(result, ".", names[i]);
+            if (i + 2 >= names.size()) continue;
+            const auto it = m_sharedInstancePaths.find(result);
+            if (it != m_sharedInstancePaths.end()) result = it->second;
+        }
+        return result;
+    }
     // Report defparams whose path named no instance once generate loops were elaborated
     void checkUnmatchedDefparams() {
+        // A defparam setting an instance of a shared copy other than its first names an
+        // instance, as an equal defparam sets the parameter of the first
+        for (const auto& site : m_defparamValueSites) {
+            if (m_defparamTargets.count(sharedParamPath(site.first))) {
+                m_defparamsMatched.emplace(site.second);
+            }
+        }
         // A defparam for an instance under it naming one in some instances of its module only,
         // e.g. a loop iteration that only some have (IEEE 1800-2023 23.6)
         for (const auto& site : m_defparamInstanceValues) {
-            if (m_defparamTargets.count(std::get<0>(site))) continue;
+            if (m_defparamTargets.count(sharedParamPath(std::get<0>(site)))) continue;
             if (!m_defparamsMatched.count(std::get<1>(site))) continue;  // Reported below
             if (m_defparamsSharedName.count(std::get<1>(site))) {
                 std::get<1>(site)->v3warn(E_UNSUPPORTED, sharedNameUnsupported());
@@ -3569,7 +3651,7 @@ public:
             if (!refersToTemplate({defParamp->rhsp()}, containerp, deps)) {
                 evaluateParams(deps);
                 // As when visited, replacing a value an enclosing module gives
-                defparamValue(path, defParamp->rhsp()->cloneTree(false));
+                defparamValue(path, defParamp->rhsp()->cloneTree(false), instanceName);
             } else {
                 // Replacing it too, so copies do not use that value
                 m_copyDefparamsUnknown.emplace(path);
@@ -4104,8 +4186,19 @@ public:
         // 'newModp' might be nullptr on error
         if (!newModp) return nullptr;
 
-        // Set name for later warnings
-        setInstanceName(newModp, instanceName);
+        // Set name for later warnings. A copy instances share for their defparam values keeps
+        // the path of its first instance, which the others' paths stand for.
+        if (VN_IS(nodep, Cell) && newModp != srcModp && m_copyOriginals.empty()
+            && nestedDefparamp(srcModp)) {
+            const auto pair = m_defparamCopyPaths.emplace(newModp, defparamPath(instanceName));
+            if (pair.second) {
+                setInstanceName(newModp, instanceName);
+            } else if (pair.first->second != defparamPath(instanceName)) {
+                m_sharedInstancePaths.emplace(defparamPath(instanceName), pair.first->second);
+            }
+        } else {
+            setInstanceName(newModp, instanceName);
+        }
         // In the cells' turn, so final, unlike an interface instance specialized while visiting
         // the body of its module, which its interface port actuals may specialize again. Also
         // nested interface cells specialized then, which are not specialized again.
@@ -4148,6 +4241,7 @@ public:
     ~ParamProcessor() {
         V3Stats::addStat("Param, Clone insertion steps", m_statInsertSteps);
         V3Stats::addStat("Param, Interface retarget walks", m_statRetargetWalks);
+        V3Stats::addStat("Param, Module specializations", m_statSpecializations);
     }
     VL_UNCOPYABLE(ParamProcessor);
 };
@@ -5780,7 +5874,9 @@ class ParamVisitor final : public VNVisitor {
         const string instanceName
             = m_modp->someInstanceName() + m_generateHierName + "." + targetp->dotted();
         const string valuePath = defparamPath(instanceName) + "." + targetp->name();
-        m_processor.defparamValue(valuePath, nodep->rhsp()->unlinkFrBack());
+        m_processor.defparamValue(valuePath, nodep->rhsp()->unlinkFrBack(),
+                                  m_modp->someInstanceName());
+        m_processor.defparamValueSite(valuePath, nodep->fileline());
         // A path selecting generate loop iterations is checked in each instance
         if (targetp->dotted().find('[') != string::npos) {
             m_processor.defparamInstanceValue(valuePath, nodep->fileline(),
