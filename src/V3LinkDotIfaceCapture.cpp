@@ -49,6 +49,7 @@
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 std::deque<VIfaceCaptureTag> V3LinkDotIfaceCapture::s_tags{};
+std::unordered_map<string, std::unordered_set<string>> V3LinkDotIfaceCapture::s_cellPaths{};
 bool V3LinkDotIfaceCapture::s_enabled = true;
 
 // LCOV_EXCL_START
@@ -60,6 +61,7 @@ void V3LinkDotIfaceCapture::enable(bool flag) {
 
 void V3LinkDotIfaceCapture::reset() {
     s_tags.clear();
+    s_cellPaths.clear();
     clearModuleCache();
 }
 
@@ -248,6 +250,17 @@ void V3LinkDotIfaceCapture::tag(AstRefDType* refp, const AstNodeModule* captured
     UASSERT_OBJ(!cellPath.empty(), refp, "Captured reference has no cell path");
     s_tags.emplace_back(VIfaceCaptureTag{kind, cellPath, ownerModName, capturedInp->origName()});
     refp->captureTagp(&s_tags.back());
+    s_cellPaths[capturedInp->origName()].emplace(cellPathKey(cellPath));
+}
+
+string V3LinkDotIfaceCapture::cellPathKey(const string& cellPath) {
+    const size_t dotPos = cellPath.rfind('.');
+    return AstNode::nameNoArray(dotPos == string::npos ? cellPath : cellPath.substr(dotPos + 1));
+}
+
+bool V3LinkDotIfaceCapture::hasCapture(const AstNodeModule* modp, const string& cellName) {
+    const auto it = s_cellPaths.find(modp->origName());
+    return it != s_cellPaths.end() && it->second.count(cellPathKey(cellName));
 }
 
 const VIfaceCaptureTag* V3LinkDotIfaceCapture::captureTag(AstRefDType* refp) {
