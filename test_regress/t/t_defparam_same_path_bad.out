@@ -1,11 +1,11 @@
-%Error: t/t_defparam_same_path_bad.v:29:20: Expecting expression to be constant, but variable isn't const: 'rv'
+%Error: t/t_defparam_same_path_bad.v:36:20: Expecting expression to be constant, but variable isn't const: 'rv'
                                           : ... note: In instance 't'
-   29 |   defparam s.x.P = rv;   
+   36 |   defparam s.x.P = rv;   
       |                    ^~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_defparam_same_path_bad.v:29:18: Can't convert defparam value to constant: Param 'P' of 'x'
+%Error: t/t_defparam_same_path_bad.v:36:18: Can't convert defparam value to constant: Param 'P' of 'x'
                                           : ... note: In instance 't'
-   29 |   defparam s.x.P = rv;   
+   36 |   defparam s.x.P = rv;   
       |                  ^
 %Error: t/t_defparam_same_path_bad.v:22:22: Expecting expression to be constant, but variable isn't const: 'ov'
                                           : ... note: In instance 't.o'
@@ -15,4 +15,12 @@
                                           : ... note: In instance 't.o'
    22 |   defparam t.s.x.P = ov;   
       |                    ^
+%Error: t/t_defparam_same_path_bad.v:29:27: Expecting expression to be constant, but variable isn't const: 'sv'
+                                          : ... note: In instance 't.e'
+   29 |   defparam t.g[1].s.x.P = sv;   
+      |                           ^~
+%Error: t/t_defparam_same_path_bad.v:29:25: Can't convert defparam value to constant: Param 'P' of 'x'
+                                          : ... note: In instance 't.e'
+   29 |   defparam t.g[1].s.x.P = sv;   
+      |                         ^
 %Error: Exiting due to
