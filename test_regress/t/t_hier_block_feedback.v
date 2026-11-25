@@ -62,6 +62,22 @@ module t;
       .q(q_reg)
   );
 
+  // Registered feedback through a block with ports named like the functions of its wrapper
+  wire q_names;
+  fb_names u_names (
+      .clk(clk),
+      .d(~q_names),
+      .fb_names_protectlib_check_hash(1'b1),
+      .fb_names_protectlib_create(1'b1),
+      .fb_names_protectlib_combo_update(1'b1),
+      .fb_names_protectlib_seq_update(1'b1),
+      .fb_names_protectlib_combo_ignore(),
+      .fb_names_protectlib_final(),
+      .fb_names_protectlib_settle(),
+      .fb_names_protectlib_vpi_written(),
+      .q(q_names)
+  );
+
   initial begin
     for (int k = 1; k <= 4; ++k) begin
       #1 clk = 1;
@@ -71,6 +87,7 @@ module t;
       `checkh(q_alias, k[0]);
       `checkh(q_init, k[0]);
       `checkh(q_gate, k[0]);
+      `checkh(q_names, k[0]);
       `checkh(q_reg, 7'(3 * k));
       `checkh(o_comb, 7'(3 * k + 3));
       clk = 0;
@@ -128,6 +145,29 @@ module fb_gate (
   always_latch if (!clk) en_l = en;
   wire gclk = clk & en_l;
   always_ff @(posedge gclk) q <= d;
+endmodule
+
+module fb_names (
+    input bit clk,
+    input bit d,
+    input bit fb_names_protectlib_check_hash,
+    input bit fb_names_protectlib_create,
+    input bit fb_names_protectlib_combo_update,
+    input bit fb_names_protectlib_seq_update,
+    output bit fb_names_protectlib_combo_ignore,
+    output bit fb_names_protectlib_final,
+    output bit fb_names_protectlib_settle,
+    output bit fb_names_protectlib_vpi_written,
+    output bit q
+);
+  /*verilator hier_block*/
+  always_ff @(posedge clk)
+    q <= d & fb_names_protectlib_check_hash & fb_names_protectlib_create
+        & fb_names_protectlib_combo_update & fb_names_protectlib_seq_update;
+  assign fb_names_protectlib_combo_ignore = q;
+  assign fb_names_protectlib_final = q;
+  assign fb_names_protectlib_settle = q;
+  assign fb_names_protectlib_vpi_written = q;
 endmodule
 
 module fb_alias (
