@@ -21,8 +21,8 @@ test.file_grep_any(files, r'::__VnoInFunc_run____Vfork_\d+__\d+\([^{]*\{[^}]*VL_
 
 test.execute()
 
-test.file_grep(test.stats, r'Outline, functions created\s+(\d+)', 124)
+test.file_grep(test.stats, r'Outline, functions created\s+(\d+)', 234)
 test.file_grep(test.stats, r'Outline, variables declared in functions created\s+(\d+)', 43)
-test.file_grep(test.stats, r'Outline, variables passed to functions created\s+(\d+)', 194)
+test.file_grep(test.stats, r'Outline, variables passed to functions created\s+(\d+)', 304)
 
 test.passes()
