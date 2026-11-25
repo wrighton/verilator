@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_lib_prot.v:98:9: Unsupported: --savable with --lib-create library 'secret'
+   98 |         secret (
+      |         ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
