@@ -67,6 +67,8 @@ class ProtectVisitor final : public VNVisitor {
     AstTextBlock* m_cSeqClksp = nullptr;  // Sequential clock copy list
     AstTextBlock* m_cSeqOutsp = nullptr;  // Sequential output copy list
     AstTextBlock* m_cIgnoreParamsp = nullptr;  // Combo ignore parameter list
+    // The SV names of the library's DPI functions by their C names, which ports may take
+    std::unordered_map<std::string, std::string> m_dpiNames;
     const string m_libName;
     const string m_topName;
     bool m_foundTop = false;  // Have seen the top module
@@ -93,6 +95,21 @@ class ProtectVisitor final : public VNVisitor {
         FileLine* const fl = nodep->fileline();
         // Need to know the existence of clk before createSvFile()
         m_hasClk = checkIfClockExists(nodep);
+        std::unordered_set<std::string> portNames;
+        for (const AstNode* const stmtp : nodep->stmtspList()) {
+            const AstVar* const varp = VN_CAST(stmtp, Var);
+            if (varp && varp->isIO()) portNames.emplace(svPortName(varp));
+        }
+        for (const char* const suffixp :
+             {"_protectlib_check_hash", "_protectlib_create", "_protectlib_combo_update",
+              "_protectlib_seq_update", "_protectlib_combo_ignore", "_protectlib_final"}) {
+            const std::string cName = m_libName + suffixp;
+            std::string name = cName;
+            for (int suffix = 1; portNames.count(name); ++suffix) {
+                name = cName + "_" + std::to_string(suffix);
+            }
+            m_dpiNames.emplace(cName, name);
+        }
         createSvFile(fl, nodep);
         createCppFile(fl);
 
@@ -105,6 +122,16 @@ class ProtectVisitor final : public VNVisitor {
         m_hashValuep->add(cvtToStr(hash.value()) + ";\n");
         m_cHashValuep->add(cvtToStr(hash.value()) + "U;\n");
         m_foundTop = true;
+    }
+
+    // The SV name of the library's DPI function with C name '<lib><suffix>'
+    std::string dpiName(const char* suffixp) const { return m_dpiNames.at(m_libName + suffixp); }
+    // The SV declaration of that DPI function, up to its arguments
+    std::string dpiImport(const char* suffixp, const std::string& rtnType) const {
+        const std::string cName = m_libName + suffixp;
+        const std::string& svName = m_dpiNames.at(cName);
+        return "import \"DPI-C\" " + (svName == cName ? "" : cName + " = ") + "function " + rtnType
+               + " " + svName + "(";
     }
 
     void addComment(AstTextBlock* txtp, FileLine* fl, const string& comment) {
@@ -207,41 +234,30 @@ class ProtectVisitor final : public VNVisitor {
 
         // DPI declarations
         hashComment(txtp, fl);
-        txtp->add("import \"DPI-C\" function void " + m_libName
-                  + "_protectlib_check_hash(int protectlib_hash__V);\n\n");
+        txtp->add(dpiImport("_protectlib_check_hash", "void") + "int protectlib_hash__V);\n\n");
         initialComment(txtp, fl);
-        txtp->add("import \"DPI-C\" function chandle " + m_libName
-                  + "_protectlib_create(string scope__V);\n\n");
+        txtp->add(dpiImport("_protectlib_create", "chandle") + "string scope__V);\n\n");
         comboComment(txtp, fl);
-        m_comboPortsp = new AstTextBlock{fl,  //
-                                         "import \"DPI-C\" function longint unsigned " + m_libName
-                                             + "_protectlib_combo_update(\n",  //
-                                         ", ",  //
-                                         ");\n\n"};
+        m_comboPortsp = new AstTextBlock{
+            fl, dpiImport("_protectlib_combo_update", "longint unsigned") + "\n", ", ", ");\n\n"};
         m_comboPortsp->add("chandle handle__V\n");
         txtp->add(m_comboPortsp);
         seqComment(txtp, fl);
         if (m_hasClk) {
-            m_seqPortsp = new AstTextBlock{fl,  //
-                                           "import \"DPI-C\" function longint unsigned "
-                                               + m_libName + "_protectlib_seq_update(\n",  //
-                                           ", ",  //
-                                           ");\n\n"};
+            m_seqPortsp = new AstTextBlock{
+                fl, dpiImport("_protectlib_seq_update", "longint unsigned") + "\n", ", ",
+                ");\n\n"};
             m_seqPortsp->add("chandle handle__V\n");
             txtp->add(m_seqPortsp);
         }
         comboIgnoreComment(txtp, fl);
-        m_comboIgnorePortsp = new AstTextBlock{fl,  //
-                                               "import \"DPI-C\" function void " + m_libName
-                                                   + "_protectlib_combo_ignore(\n",  //
-                                               ", ",  //
-                                               ");\n\n"};
+        m_comboIgnorePortsp = new AstTextBlock{
+            fl, dpiImport("_protectlib_combo_ignore", "void") + "\n", ", ", ");\n\n"};
         m_comboIgnorePortsp->add("chandle handle__V\n");
         txtp->add(m_comboIgnorePortsp);
 
         finalComment(txtp, fl);
-        txtp->add("import \"DPI-C\" function void " + m_libName
-                  + "_protectlib_final(chandle handle__V);\n\n");
+        txtp->add(dpiImport("_protectlib_final", "void") + "chandle handle__V);\n\n");
 
         // Local variables
         // Avoid tracing handle, as it is not a stable value, so breaks wavediff
@@ -274,21 +290,18 @@ class ProtectVisitor final : public VNVisitor {
 
         // Initial
         txtp->add("initial begin\n");
-        txtp->add(m_libName + "_protectlib_check_hash(protectlib_hash__V);\n");
-        txtp->add("if (handle__V == null) handle__V = " + m_libName
-                  + "_protectlib_create"
-                    "($sformatf(\"%m\"));\n");
+        txtp->add(dpiName("_protectlib_check_hash") + "(protectlib_hash__V);\n");
+        txtp->add("if (handle__V == null) handle__V = " + dpiName("_protectlib_create")
+                  + "($sformatf(\"%m\"));\n");
         if (m_hasClk) txtp->add("init__V = 1'b1;\n");
         txtp->add("end\n\n");
 
         // Combinatorial process
         addComment(txtp, fl, "Combinatorially evaluate changes to inputs");
         txtp->add("always_comb begin\n");
-        m_comboParamsp = new AstTextBlock{fl,  //
-                                          "last_combo_seqnum__V = " + m_libName
-                                              + "_protectlib_combo_update(\n",  //
-                                          ",\n",  //
-                                          "\n);\n"};
+        m_comboParamsp = new AstTextBlock{
+            fl, "last_combo_seqnum__V = " + dpiName("_protectlib_combo_update") + "(\n", ",\n",
+            "\n);\n"};
         m_comboParamsp->add("handle__V");
         txtp->add(m_comboParamsp);
         txtp->add("end\n\n");
@@ -302,14 +315,12 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add(" begin\n");
             m_comboIgnoreParamsp
                 = new AstTextBlock{fl,  //
-                                   m_libName + "_protectlib_combo_ignore(\n", ",\n", "\n);\n"};
+                                   dpiName("_protectlib_combo_ignore") + "(\n", ",\n", "\n);\n"};
             m_comboIgnoreParamsp->add("handle__V");
             txtp->add(m_comboIgnoreParamsp);
-            m_seqParamsp = new AstTextBlock{fl,  //
-                                            "last_seq_seqnum__V <= " + m_libName
-                                                + "_protectlib_seq_update(\n",  //
-                                            ",\n",  //
-                                            "\n);\n"};
+            m_seqParamsp = new AstTextBlock{
+                fl, "last_seq_seqnum__V <= " + dpiName("_protectlib_seq_update") + "(\n", ",\n",
+                "\n);\n"};
             m_seqParamsp->add("handle__V");
             txtp->add(m_seqParamsp);
             m_nbAssignsp = new AstTextBlock{fl};
@@ -335,7 +346,7 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add("end\n\n");
 
         // Final
-        txtp->add("final " + m_libName + "_protectlib_final(handle__V);\n\n");
+        txtp->add("final " + dpiName("_protectlib_final") + "(handle__V);\n\n");
 
         txtp->add("endmodule\n");
         txtp->add("/*verilator lint_restore*/\n");
