@@ -12959,9 +12959,11 @@ class WidthVisitor final : public VNVisitor {
     }
     static bool isStatusCall(const AstNode* nodep) {
         // Built-in methods whose int result is 1 or 0: randomize (IEEE 1800-2023 18.6.1, 18.12)
-        // and the rand_mode query (IEEE 1800-2023 18.8)
+        // and the rand_mode and constraint_mode queries (IEEE 1800-2023 18.8, 18.9)
         const AstNodeFTaskRef* const refp = VN_CAST(nodep, NodeFTaskRef);
-        return refp && (refp->name() == "randomize" || refp->name() == "rand_mode");
+        return refp
+               && (refp->name() == "randomize" || refp->name() == "rand_mode"
+                   || refp->name() == "constraint_mode");
     }
     void iterateCheckBool(AstNode* parentp, const char* side, AstNode* underp, Stage stage) {
         UASSERT_OBJ(stage == BOTH, parentp,
