@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_property_eventually_nostd_unsup.v:11:35: Unsupported: s_eventually without the std package (--no-std)
+                                                               : ... note: In instance 't'
+   11 |   assert property (@(posedge clk) s_eventually a);
+      |                                   ^~~~~~~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
