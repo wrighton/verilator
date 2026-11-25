@@ -10,13 +10,6 @@
 # ThreadSanitizer (--tsan option, or test.enable_tsan()). Suppress known
 # races in the runtime library. TODO: most of these should likely be fixed.
 
-# The parallel trace buffer handoff between worker threads and the commit
-# on the dumping thread is not visible to ThreadSanitizer; this includes
-# the trace worker unlocking a mutex locked by the dumping thread
-race:*VerilatedTrace*
-race:*VerilatedVcd*
-mutex:*VerilatedTrace*
-
 # vl_stop (e.g. on assertion failure) tears the model down via exit
 # handlers while worker threads may still be executing the current eval
 race:*vl_stop*
