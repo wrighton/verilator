@@ -132,20 +132,66 @@ bool areDisjoint(const std::set<const AstVar*>& a, const std::set<const AstVar*>
 //######################################################################
 // Structure containing information required for code motion/merging
 
+// The variable references under the statements analyzed, in visit order, so the references
+// under a statement are a contiguous range. Storing ranges rather than variable sets of every
+// statement keeps memory linear in the tree size, as a statement's sets also hold all of its
+// sub-statements' variables.
+struct StmtVarRefs final {
+    std::vector<std::pair<const AstVar*, VAccess>> m_refs;  // References, in visit order
+    // Indices into m_refs of the writes of each variable, in increasing order
+    std::unordered_map<const AstVar*, std::vector<uint32_t>> m_writes;
+    // References gathered into statement sets or tested, and write indices searched, for
+    // statistics
+    mutable size_t m_work = 0;
+    // Whether a reference in [begin, end) writes varp
+    bool writes(const AstVar* varp, uint32_t begin, uint32_t end) const {
+        const auto it = m_writes.find(varp);
+        if (it == m_writes.end()) return false;
+        const auto posIt = std::lower_bound(it->second.begin(), it->second.end(), begin);
+        return posIt != it->second.end() && *posIt < end;
+    }
+};
+
 struct StmtProperties final {
     AstNodeExpr* m_condp = nullptr;  // The condition expression, if a conditional node
-    std::set<const AstVar*> m_rdVars;  // Variables read by this statement
-    std::set<const AstVar*> m_wrVars;  // Variables written by this statement
+    uint32_t m_refBegin = 0;  // Start of the StmtVarRefs::m_refs of this statement
+    uint32_t m_refEnd = 0;  // End of the StmtVarRefs::m_refs of this statement, exclusive
+    // Variables read or written by this statement, set on first use by gatherVars
+    mutable std::set<const AstVar*> m_rdVars;  // Variables read by this statement
+    mutable std::set<const AstVar*> m_wrVars;  // Variables written by this statement
+    mutable bool m_varsGathered = false;  // m_rdVars and m_wrVars are set
     bool m_isFence = false;  // Nothing should move across this statement, nor should it be merged
     bool m_sideEffect = false;  // Statement may have side effect, without access to model state
     bool m_implPubRd = false;  // Statement may implicitly read public state (without VarRef)
     bool m_implPubWr = false;  // Statement may implicitly write public state (without VarRef)
     bool m_explPubRef = false;  // Statement explicitly references public state via VarRef
     AstNodeStmt* m_prevWithSameCondp = nullptr;  // Previous node in same list, with same condition
-    bool writesConditionVar(bool condPubWritable) const {
-        // This relies on MarkVarsVisitor having been called on the condition node
-        for (const AstVar* const varp : m_wrVars) {
-            if (varp->user1()) return true;
+    void gatherVars(const StmtVarRefs& refs) const {
+        if (m_varsGathered) return;
+        m_varsGathered = true;
+        refs.m_work += m_refEnd - m_refBegin;
+        for (uint32_t i = m_refBegin; i < m_refEnd; ++i) {
+            const std::pair<const AstVar*, VAccess>& ref = refs.m_refs[i];
+            if (ref.second.isReadOrRW()) m_rdVars.insert(ref.first);
+            if (ref.second.isWriteOrRW()) m_wrVars.insert(ref.first);
+        }
+    }
+    // Whether this statement writes one of condVarps, the variables of a condition, which have
+    // user1 set. Searches the write indices of condVarps, or tests the statement's references if
+    // fewer.
+    bool writesConditionVar(const StmtVarRefs& refs, const std::vector<const AstVar*>& condVarps,
+                            bool condPubWritable) const {
+        if (condVarps.size() < m_refEnd - m_refBegin) {
+            refs.m_work += condVarps.size();
+            for (const AstVar* const varp : condVarps) {
+                if (refs.writes(varp, m_refBegin, m_refEnd)) return true;
+            }
+        } else {
+            refs.m_work += m_refEnd - m_refBegin;
+            for (uint32_t i = m_refBegin; i < m_refEnd; ++i) {
+                const std::pair<const AstVar*, VAccess>& ref = refs.m_refs[i];
+                if (ref.second.isWriteOrRW() && ref.first->user1()) return true;
+            }
         }
         // If the condition contains a public variable, check if it might be written
         if (condPubWritable && m_implPubWr) return true;
@@ -172,6 +218,7 @@ class CodeMotionAnalysisVisitor final : public VNVisitorConst {
     // AstNode::user4       -> Used by V3Hasher
 
     StmtPropertiesAllocator& m_stmtProperties;  // Properties of each statement
+    StmtVarRefs& m_refs;  // References under the statements
 
     // MEMBERS
     V3Hasher m_hasher;  // Used by V3DupFinder
@@ -230,14 +277,14 @@ class CodeMotionAnalysisVisitor final : public VNVisitorConst {
             }
         }
 
-        // Analyze this statement
+        // Analyze this statement. Its references, including those of nested statements, are
+        // added to m_refs while analyzing it.
+        m_propsp->m_refBegin = m_refs.m_refs.size();
         analyzeNode(nodep);
+        m_propsp->m_refEnd = m_refs.m_refs.size();
 
         // If there is an enclosing statement, propagate properties upwards
         if (outerPropsp) {
-            // Add all rd/wr vars to outer statement
-            outerPropsp->m_rdVars.insert(m_propsp->m_rdVars.cbegin(), m_propsp->m_rdVars.cend());
-            outerPropsp->m_wrVars.insert(m_propsp->m_wrVars.cbegin(), m_propsp->m_wrVars.cend());
             // Propagate flags to enclosing statement
             outerPropsp->m_isFence |= m_propsp->m_isFence;
             outerPropsp->m_sideEffect |= m_propsp->m_sideEffect;
@@ -251,8 +298,8 @@ class CodeMotionAnalysisVisitor final : public VNVisitorConst {
         const VAccess access = nodep->access();
         AstVar* const varp = nodep->varp();
         // Gather read and written variables
-        if (access.isReadOrRW()) m_propsp->m_rdVars.insert(varp);
-        if (access.isWriteOrRW()) m_propsp->m_wrVars.insert(varp);
+        if (access.isWriteOrRW()) m_refs.m_writes[varp].push_back(m_refs.m_refs.size());
+        m_refs.m_refs.emplace_back(varp, access);
         if (varp->isSigPublic() || varp->isWrittenByDpi() || varp->isReadByDpi()) {
             m_propsp->m_explPubRef = true;
         }
@@ -319,15 +366,18 @@ class CodeMotionAnalysisVisitor final : public VNVisitorConst {
     }
 
     // CONSTRUCTOR
-    CodeMotionAnalysisVisitor(AstNode* nodep, StmtPropertiesAllocator& stmtProperties)
-        : m_stmtProperties{stmtProperties} {
+    CodeMotionAnalysisVisitor(AstNode* nodep, StmtPropertiesAllocator& stmtProperties,
+                              StmtVarRefs& refs)
+        : m_stmtProperties{stmtProperties}
+        , m_refs{refs} {
         iterateAndNextConstNull(nodep);
     }
 
 public:
-    // Analyze the statement list starting at nodep, filling in stmtProperties.
-    static void analyze(AstNode* nodep, StmtPropertiesAllocator& stmtProperties) {
-        CodeMotionAnalysisVisitor{nodep, stmtProperties};
+    // Analyze the statement list starting at nodep, filling in stmtProperties and refs.
+    static void analyze(AstNode* nodep, StmtPropertiesAllocator& stmtProperties,
+                        StmtVarRefs& refs) {
+        CodeMotionAnalysisVisitor{nodep, stmtProperties, refs};
     }
 };
 
@@ -344,6 +394,7 @@ class CodeMotionOptimizeVisitor final : public VNVisitor {
     VNUser4InUse m_user4InUse;
 
     const StmtPropertiesAllocator& m_stmtProperties;  // Properties of each statement
+    const StmtVarRefs& m_refs;  // References under the statements
 
     // MEMBERS
 
@@ -361,6 +412,8 @@ class CodeMotionOptimizeVisitor final : public VNVisitor {
         if (aProps.m_implPubWr && bPubRef) return false;
         const bool aPubRef = aProps.m_implPubWr || aProps.m_implPubRd || aProps.m_explPubRef;
         if (aPubRef && bProps.m_implPubWr) return false;
+        aProps.gatherVars(m_refs);
+        bProps.gatherVars(m_refs);
         // If either statement writes a variable that the other reads, they are not swappable
         if (!areDisjoint(aProps.m_rdVars, bProps.m_wrVars)) return false;
         if (!areDisjoint(bProps.m_rdVars, aProps.m_wrVars)) return false;
@@ -449,8 +502,10 @@ class CodeMotionOptimizeVisitor final : public VNVisitor {
     void visit(AstNode* nodep) override {}  // Ignore all non-statements
 
     // CONSTRUCTOR
-    CodeMotionOptimizeVisitor(AstNode* nodep, const StmtPropertiesAllocator& stmtProperties)
-        : m_stmtProperties{stmtProperties} {
+    CodeMotionOptimizeVisitor(AstNode* nodep, const StmtPropertiesAllocator& stmtProperties,
+                              const StmtVarRefs& refs)
+        : m_stmtProperties{stmtProperties}
+        , m_refs{refs} {
         // We assert the given node is at the head of the list otherwise we might move a node
         // before the given node. This is easy to fix in the above iteration with a check on a
         // boundary node we should not move past, if we ever need to do so.
@@ -463,8 +518,9 @@ class CodeMotionOptimizeVisitor final : public VNVisitor {
 public:
     // Given an AstNode list (held via AstNode::nextp()), move conditional statements as close
     // together as possible
-    static AstNode* optimize(AstNode* nodep, const StmtPropertiesAllocator& stmtProperties) {
-        { CodeMotionOptimizeVisitor{nodep, stmtProperties}; }
+    static AstNode* optimize(AstNode* nodep, const StmtPropertiesAllocator& stmtProperties,
+                             const StmtVarRefs& refs) {
+        { CodeMotionOptimizeVisitor{nodep, stmtProperties, refs}; }
         // It is possible for the head of the list to be moved later such that it is no longer
         // in head position. If so, rewind the list and return the new head.
         while (nodep->backp()->nextp() == nodep) nodep = nodep->backp();
@@ -477,7 +533,7 @@ public:
 
 class MergeCondVisitor final : public VNVisitor {
     // NODE STATE
-    // AstVar::user1        -> bool: Set for variables referenced by m_mgCondp
+    // AstVar::user1        -> bool: Set for variables referenced by m_mgCondp, in m_mgCondVarps
     //                         (Only below MergeCondVisitor::process).
     // AstNode::user2       -> bool: Marking node as included in merge because cheap to duplicate
     //                         (Only below MergeCondVisitor::process).
@@ -492,6 +548,7 @@ class MergeCondVisitor final : public VNVisitor {
     VDouble0 m_statMergedItems;  // Statistic tracking
     VDouble0 m_statCandidateItems;  // Statistic tracking
     VDouble0 m_statLongestList;  // Statistic tracking
+    VDouble0 m_statVarEntries;  // Variable references recorded, and StmtVarRefs::m_work
 
     AstNode* m_mgFirstp = nullptr;  // First node in merged sequence
     AstNodeExpr* m_mgCondp = nullptr;  // The condition of the first node
@@ -503,6 +560,8 @@ class MergeCondVisitor final : public VNVisitor {
     std::queue<AstNode*>* m_workQueuep = nullptr;  // Node lists (via AstNode::nextp()) to merge
     // Statement properties for code motion and merging
     StmtPropertiesAllocator* m_stmtPropertiesp = nullptr;
+    const StmtVarRefs* m_refsp = nullptr;  // References under the statements
+    std::vector<const AstVar*> m_mgCondVarps;  // Variables of m_mgCondp
 
     // METHODS
 
@@ -522,16 +581,18 @@ class MergeCondVisitor final : public VNVisitor {
             // then memory is released immediately.
             StmtPropertiesAllocator stmtProperties;
             m_stmtPropertiesp = &stmtProperties;
+            StmtVarRefs refs;
+            m_refsp = &refs;
 
             // Pop off current work item
             AstNode* currp = m_workQueuep->front();
             m_workQueuep->pop();
 
             // Analyze sub-tree list for code motion and conditional merging
-            CodeMotionAnalysisVisitor::analyze(currp, stmtProperties);
+            CodeMotionAnalysisVisitor::analyze(currp, stmtProperties, refs);
             // Perform the code motion within the whole sub-tree list
             if (v3Global.opt.fMergeCondMotion()) {
-                currp = CodeMotionOptimizeVisitor::optimize(currp, stmtProperties);
+                currp = CodeMotionOptimizeVisitor::optimize(currp, stmtProperties, refs);
             }
 
             // Merge conditionals in the whole sub-tree list (this might create new work items)
@@ -540,9 +601,17 @@ class MergeCondVisitor final : public VNVisitor {
             // Close pending merge, if there is one at the end of the whole sub-tree list
             if (m_mgFirstp) mergeEnd();
             m_stmtPropertiesp = nullptr;
+            m_refsp = nullptr;
+            m_statVarEntries += refs.m_refs.size() + refs.m_work;
         } while (!m_workQueuep->empty());
 
         m_workQueuep = nullptr;
+    }
+
+    // Whether nodep writes a variable of the pending merge's condition
+    bool writesConditionVar(const AstNodeStmt* nodep) {
+        return (*m_stmtPropertiesp)(nodep).writesConditionVar(*m_refsp, m_mgCondVarps,
+                                                              m_mgCondPubWritable);
     }
 
     // Skip past AstArraySel and AstWordSel with const index
@@ -777,6 +846,7 @@ class MergeCondVisitor final : public VNVisitor {
         m_mgNextp = nullptr;
         m_mgCondPubWritable = false;
         AstNode::user1ClearTree();  // Clear marked variables
+        m_mgCondVarps.clear();
         AstNode::user2ClearTree();
         // Merge recursively within the branches of an un-merged AstNodeIF
         if (recursivep) {
@@ -815,15 +885,16 @@ class MergeCondVisitor final : public VNVisitor {
             // Mark variable references in the condition, record if a public variable is involved
             condp->foreach([&](const AstVarRef* nodep) {
                 AstVar* const varp = nodep->varp();
-                varp->user1(1);
+                if (!varp->user1SetOnce()) m_mgCondVarps.push_back(varp);
                 if (varp->isSigPublic() || varp->isWrittenByDpi()) m_mgCondPubWritable = true;
             });
             // Now check again if mergeable. We need this to pick up assignments to conditions,
             // e.g.: 'c = c ? a : b' at the beginning of the list, which is in fact not mergeable
             // because it updates the condition. We simply bail on these.
-            if ((*m_stmtPropertiesp)(nodep).writesConditionVar(m_mgCondPubWritable)) {
+            if (writesConditionVar(nodep)) {
                 // Clear marked variables
                 AstNode::user1ClearTree();
+                m_mgCondVarps.clear();
                 m_mgCondPubWritable = false;
                 // We did not add to the list
                 return false;
@@ -837,7 +908,7 @@ class MergeCondVisitor final : public VNVisitor {
                 AstNodeStmt* const backp = VN_CAST(m_mgFirstp->backp(), NodeStmt);
                 if (!backp || backp->nextp() != m_mgFirstp) break;  // Don't move up the tree
                 const StmtProperties& props = (*m_stmtPropertiesp)(backp);
-                if (props.m_isFence || props.writesConditionVar(m_mgCondPubWritable)) break;
+                if (props.m_isFence || writesConditionVar(backp)) break;
                 if (isSimplifiableNode(backp)) {
                     ++m_listLenght;
                     m_mgFirstp = backp;
@@ -888,7 +959,7 @@ class MergeCondVisitor final : public VNVisitor {
         if (props.m_isFence) return false;  // Fence node never mergeable
         // If the statement writes a condition variable of a pending merge,
         // we must end the pending merge
-        if (m_mgFirstp && props.writesConditionVar(m_mgCondPubWritable)) mergeEnd();
+        if (m_mgFirstp && writesConditionVar(nodep)) mergeEnd();
         return true;  // Now surely mergeable
     }
 
@@ -950,6 +1021,7 @@ public:
         V3Stats::addStat("Optimizations, MergeCond candidate items", m_statCandidateItems);
         V3Stats::addStat("Optimizations, MergeCond merged items", m_statMergedItems);
         V3Stats::addStat("Optimizations, MergeCond longest merge", m_statLongestList);
+        V3Stats::addStat("Optimizations, MergeCond variable entries", m_statVarEntries);
     }
 };
 
