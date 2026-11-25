@@ -35,6 +35,7 @@
 
 class VSymGraph;
 class VSymEnt;
+struct VSymWildIndex;
 
 //######################################################################
 // Symbol table
@@ -47,6 +48,7 @@ class VSymEnt final {
     using IdNameMap = std::multimap<std::string, VSymEnt*>;
     // Most entries (variables, imported symbols) never get children, so only allocate on insert
     struct Names final {
+        bool m_wildSource = false;  // Some table wildcard imports this one
         IdNameMap m_idName;  // Hash of variables by name
         std::unordered_set<std::string> m_idNameSimilar;  // Variables by name with same case
     };
@@ -175,6 +177,7 @@ public:
             }  // LCOV_EXCL_STOP
         } else {
             namesWritable().m_idName.emplace(name, entp);
+            noteWildSourceEdit();
         }
         if (!name.empty() && name.find("__DOT__") == std::string::npos  // ignore hierarchical
             && checkSimilarname(entp->nodep())) {
@@ -193,6 +196,7 @@ public:
                                            << cvtToHex(entp) << "  " << entp->nodep());
             VSymEnt* const replacedp = it->second;
             it->second = entp;  // Replace
+            noteWildSourceEdit();
             return replacedp;
         }
         insert(name, entp);
@@ -210,16 +214,12 @@ public:
                                                     + " n=" + cvtToHex(it->second->nodep())));
         if (it != nameMapr.end()) return it->second;
         // Then import it from the first wildcard imported package that exports it
-        for (const VSymEnt* const pkgSymp : m_wildImportps) {
-            const IdNameMap& pkgNameMapr = pkgSymp->idNameMap();
-            const auto pkgIt = pkgNameMapr.find(name);
-            if (pkgIt != pkgNameMapr.end() && pkgIt->second->exported()) {
-                VSymEnt* const symp = insert(name, newImportedSymbol(pkgIt->second));
-                symp->m_wildImported = true;
-                return symp;
-            }
-        }
-        return nullptr;
+        const VSymEnt* const pkgSymp = wildImportSourcep(name);
+        if (!pkgSymp) return nullptr;
+        VSymEnt* const symp
+            = insert(name, newImportedSymbol(pkgSymp->idNameMap().find(name)->second));
+        symp->m_wildImported = true;
+        return symp;
     }
     VSymEnt* findIdFlatOrShadowed(const string& name) {
         // Find identifier without looking upward, also in the same-named entries of earlier
@@ -302,6 +302,10 @@ private:
             }
         }
     }
+    inline void noteWildSourceEdit();
+    inline void releaseWildIndex();
+    inline const VSymEnt* wildImportSourcep(const string& name);
+    inline bool exportsName(const VSymEnt* pkgSymp, const string& name) const;
     VSymEnt* newImportedSymbol(const VSymEnt* srcp) const {
         VSymEnt* const symp = new VSymEnt{m_graphp, srcp};
         symp->exported(false);  // Can't reimport an import without an export
@@ -312,7 +316,10 @@ private:
         // Repeated imports of a package would only slow lookups that miss
         if (std::find(m_wildImportps.begin(), m_wildImportps.end(), pkgSymp)
             == m_wildImportps.end()) {
+            releaseWildIndex();
             m_wildImportps.push_back(pkgSymp);
+            // Being imported does not change the package's table, which is not const elsewhere
+            const_cast<VSymEnt*>(pkgSymp)->namesWritable().m_wildSource = true;
         }
     }
     void importOneSymbol(const string& name, const VSymEnt* srcp, bool honorExport) {
@@ -436,6 +443,29 @@ public:
 };
 
 //######################################################################
+// Index of the names of a list of wildcard imported packages, shared by the tables importing the
+// same list. Built once lookups that missed have done as many package lookups as building it
+// costs, so a list with few misses never pays for it; emptied when a wildcard imported table
+// changes. Whether a package exports a name is checked on lookup, as it may change.
+
+struct VSymWildIndex final {
+    struct NameHash final {
+        size_t operator()(const std::string* namep) const {
+            return std::hash<std::string>{}(*namep);
+        }
+    };
+    struct NameEqual final {
+        bool operator()(const std::string* ap, const std::string* bp) const { return *ap == *bp; }
+    };
+    // Names to the positions of the packages having each. Keys point to the packages' names.
+    std::unordered_multimap<const std::string*, uint32_t, NameHash, NameEqual> m_positions;
+    bool m_built = false;  // m_positions holds every name
+    uint64_t m_edits = 0;  // VSymGraph::m_wildSourceEdits when built
+    size_t m_lookups = 0;  // Package lookups by misses since emptied
+    size_t m_users = 0;  // Tables using this index
+};
+
+//######################################################################
 // Symbol tables
 
 class VSymGraph final {
@@ -446,6 +476,16 @@ class VSymGraph final {
     // MEMBERS
     VSymEnt* m_symRootp;  // Root symbol table
     SymStack m_symsp;  // All symbol tables, to cleanup
+    uint64_t m_wildSourceEdits = 0;  // Count of edits of wildcard imported tables
+    // Indexes of wildcard imported packages, by the list of packages. Not iterated.
+    std::map<std::vector<const VSymEnt*>, std::unique_ptr<VSymWildIndex>> m_wildIndexes;
+    // Index used by each table with wildcard imports, here rather than in VSymEnt as few tables
+    // have wildcard imports, and VSymEnt's size matters
+    std::unordered_map<const VSymEnt*, VSymWildIndex*> m_wildIndexOf;
+    size_t m_wildIndexBuilds = 0;  // Count of VSymWildIndex builds, for statistics
+    size_t m_wildIndexEntries = 0;  // Entries in the built indexes
+    size_t m_wildIndexEntriesPeak = 0;  // Maximum of m_wildIndexEntries, for statistics
+    size_t m_wildPackageLookups = 0;  // Count of name lookups in packages, for statistics
 
     // CONSTRUCTORS
     VL_UNCOPYABLE(VSymGraph);
@@ -460,6 +500,9 @@ public:
 
     // METHODS
     VSymEnt* rootp() const { return m_symRootp; }
+    size_t wildIndexBuilds() const { return m_wildIndexBuilds; }
+    size_t wildIndexEntriesPeak() const { return m_wildIndexEntriesPeak; }
+    size_t wildPackageLookups() const { return m_wildPackageLookups; }
     size_t importedCount() const {
         return std::count_if(m_symsp.begin(), m_symsp.end(),
                              [](const VSymEnt* const entp) { return entp->imported(); });
@@ -493,6 +536,22 @@ public:
 protected:
     friend class VSymEnt;
     void pushNewEnt(VSymEnt* entp) { m_symsp.push_back(entp); }
+    VSymWildIndex* wildIndexp(const std::vector<const VSymEnt*>& pkgps) {
+        std::unique_ptr<VSymWildIndex>& indexpr = m_wildIndexes[pkgps];
+        if (!indexpr) indexpr = std::make_unique<VSymWildIndex>();
+        ++indexpr->m_users;
+        return indexpr.get();
+    }
+    // A table using the index of pkgps no longer does. Deletes an index no table uses, as a
+    // table adding wildcard imports one by one would otherwise keep one for each prefix.
+    void releaseWildIndex(const std::vector<const VSymEnt*>& pkgps) {
+        const auto it = m_wildIndexes.find(pkgps);
+        UASSERT(it != m_wildIndexes.end() && it->second->m_users,
+                "Releasing a wildcard import index not in use");
+        if (--it->second->m_users) return;
+        m_wildIndexEntries -= it->second->m_positions.size();
+        m_wildIndexes.erase(it);
+    }
 };
 
 //######################################################################
@@ -515,6 +574,77 @@ inline VSymEnt::VSymEnt(VSymGraph* graphp, const VSymEnt* symp)
     , m_exported{symp->m_exported}
     , m_imported{symp->m_imported} {
     graphp->pushNewEnt(this);
+}
+
+void VSymEnt::noteWildSourceEdit() {
+    if (m_namesp && m_namesp->m_wildSource) ++m_graphp->m_wildSourceEdits;
+}
+
+void VSymEnt::releaseWildIndex() {
+    const auto it = m_graphp->m_wildIndexOf.find(this);
+    if (it == m_graphp->m_wildIndexOf.end()) return;
+    m_graphp->releaseWildIndex(m_wildImportps);
+    m_graphp->m_wildIndexOf.erase(it);
+}
+
+bool VSymEnt::exportsName(const VSymEnt* pkgSymp, const string& name) const {
+    ++m_graphp->m_wildPackageLookups;
+    const IdNameMap& pkgNameMapr = pkgSymp->idNameMap();
+    const auto it = pkgNameMapr.find(name);
+    return it != pkgNameMapr.end() && it->second->exported();
+}
+
+// The first wildcard imported package that exports name, or nullptr
+const VSymEnt* VSymEnt::wildImportSourcep(const string& name) {
+    // Few packages are searched faster than an index is built
+    static constexpr size_t WILD_INDEX_MIN_PACKAGES = 4;
+    if (m_wildImportps.size() >= WILD_INDEX_MIN_PACKAGES) {
+        VSymWildIndex*& indexpr = m_graphp->m_wildIndexOf[this];
+        if (!indexpr) indexpr = m_graphp->wildIndexp(m_wildImportps);
+        VSymWildIndex& index = *indexpr;
+        if (index.m_built && index.m_edits != m_graphp->m_wildSourceEdits) {
+            m_graphp->m_wildIndexEntries -= index.m_positions.size();
+            index.m_positions.clear();
+            index.m_built = false;
+            index.m_lookups = 0;
+        }
+        if (!index.m_built) {
+            index.m_lookups += m_wildImportps.size();
+            size_t names = 0;
+            for (const VSymEnt* const pkgSymp : m_wildImportps) {
+                names += pkgSymp->idNameMap().size();
+            }
+            if (index.m_lookups > names) {
+                index.m_positions.reserve(names);
+                for (uint32_t pos = 0; pos < m_wildImportps.size(); ++pos) {
+                    for (const auto& itr : m_wildImportps[pos]->idNameMap()) {
+                        index.m_positions.emplace(&itr.first, pos);
+                    }
+                }
+                index.m_built = true;
+                index.m_edits = m_graphp->m_wildSourceEdits;
+                ++m_graphp->m_wildIndexBuilds;
+                m_graphp->m_wildIndexEntries += index.m_positions.size();
+                m_graphp->m_wildIndexEntriesPeak
+                    = std::max(m_graphp->m_wildIndexEntriesPeak, m_graphp->m_wildIndexEntries);
+            }
+        }
+        if (index.m_built) {
+            // Packages having the name, in no particular order
+            const auto range = index.m_positions.equal_range(&name);
+            size_t firstPos = m_wildImportps.size();
+            for (auto it = range.first; it != range.second; ++it) {
+                if (it->second < firstPos && exportsName(m_wildImportps[it->second], name)) {
+                    firstPos = it->second;
+                }
+            }
+            return firstPos < m_wildImportps.size() ? m_wildImportps[firstPos] : nullptr;
+        }
+    }
+    for (const VSymEnt* const pkgSymp : m_wildImportps) {
+        if (exportsName(pkgSymp, name)) return pkgSymp;
+    }
+    return nullptr;
 }
 
 #endif  // guard
