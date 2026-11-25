@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_func_ref_queue_bound_unsup.v:21:13: Unsupported: Ref argument of a queue type with another bound; port 'q' requires 'bit[3:0][1:0]$[$:1]' but connection is 'bit[7:0]$[$:4]'.
+                                                          : ... note: In instance 't'
+   21 |     f_split(q4);   
+      |             ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_func_ref_queue_bound_unsup.v:22:12: Unsupported: Ref argument of a queue type with another bound; port 'q' requires 'byte$[$]' but connection is 'byte$[$:1]'.
+                                                          : ... note: In instance 't'
+   22 |     f_byte(q1);   
+      |            ^~
+%Error: Exiting due to
