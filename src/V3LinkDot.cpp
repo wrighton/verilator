@@ -3611,10 +3611,14 @@ class LinkDotParamVisitor final : public VNVisitor {
                 // IEEE 1800-2023 23.10.1: Last defparam in source text wins, also over a kept
                 // defparam that would give V3Param its value. Two selecting generate loop
                 // iterations from different scopes are both kept, for V3Param to check that
-                // they agree.
+                // they agree. So are one of an instance under its scope, whose value V3Param
+                // registers, and one of an instance not under its scope from another scope, for
+                // V3Param to keep the one last in the source text.
                 const bool bothSelect
                     = checkTarget && prevr.defParamp && prevr.defParamp->checkTarget();
-                if (prevr.pinp && (!bothSelect || prevr.defSymp == defSymp)) {
+                const bool prevBelow = prevr.defParamp && !prevr.defParamp->checkTarget();
+                const bool oneBelow = below != prevBelow && prevr.defSymp != defSymp;
+                if (prevr.pinp && !oneBelow && (!bothSelect || prevr.defSymp == defSymp)) {
                     VL_DO_DANGLING(prevr.pinp->unlinkFrBack()->deleteTree(), prevr.pinp);
                     if (prevr.defParamp) {
                         VL_DO_DANGLING(pushDeletep(prevr.defParamp->unlinkFrBack()),

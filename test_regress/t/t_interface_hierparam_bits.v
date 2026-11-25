@@ -315,7 +315,8 @@ module dm_holder #(
   defparam x.V = EN ? 29 : 1;
 endmodule
 
-// With values from functions and type parameters, also replacing the value of an enclosing one
+// With values from functions and type parameters, also replaced by a later one of an enclosing
+// module (IEEE 1800-2023 23.10.1)
 module du_holder;
   function automatic int f();
     return 29;
@@ -1168,7 +1169,7 @@ module t;
   dq_chk dqcy (.axi(dq.y.axi));
   dq_chk dns (.axi(dn.x.axi));
   dn_holder dn ();
-  dq_chk dnes (.axi(dne.x.axi));
+  dq_chk #(.EXPECT(34)) dnes (.axi(dne.x.axi));
   dn_holder dne ();
   defparam dne.x.V = 30;
   dq_chk dms (.axi(dm1.x.axi));
@@ -1176,7 +1177,7 @@ module t;
   dm_holder #(.EN(0)) dm0 ();
   dq_chk dus (.axi(du.x.axi));
   du_holder du ();
-  dq_chk dues (.axi(due.x.axi));
+  dq_chk #(.EXPECT(34)) dues (.axi(due.x.axi));
   du_holder due ();
   defparam due.x.V = 30;
   dq_chk dts (.axi(dt.x.axi));
@@ -1313,11 +1314,11 @@ module t;
     `checkh($bits(dq.y.axi.AWADDR), 33);
     `checkh($bits(dq.g_z.z.axi.AWADDR), 32);
     `checkh($bits(dn.x.axi.AWADDR), 33);
-    `checkh($bits(dne.x.axi.AWADDR), 33);
+    `checkh($bits(dne.x.axi.AWADDR), 34);
     `checkh($bits(dm1.x.axi.AWADDR), 33);
     `checkh($bits(dm0.x.axi.AWADDR), 5);
     `checkh($bits(du.x.axi.AWADDR), 33);
-    `checkh($bits(due.x.axi.AWADDR), 33);
+    `checkh($bits(due.x.axi.AWADDR), 34);
     `checkh($bits(dt.x.axi.AWADDR), 33);
     `checkh($bits(df.x.axi.AWADDR), 33);
     `checkh($bits(df.y.a), 11);
