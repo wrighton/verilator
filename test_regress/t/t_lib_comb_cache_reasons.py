@@ -93,6 +93,27 @@ CASES = (
   always @(ev) cnt++;
   final $display("CNT=%0d", cnt);
 """),
+    # Nor if it keeps a value from its previous evaluation
+    ("every_eval_state", "logic run at every evaluation keeping state", """
+  logic [7:0] pr  /*verilator public_flat_rw*/ = 8'd3;
+  // verilator lint_off LATCH
+  // verilator lint_off UNOPTFLAT
+  logic [7:0] cnt = 8'd0;
+  always @* if (pr[0]) cnt = cnt + 8'd1;
+  // verilator lint_on UNOPTFLAT
+  // verilator lint_on LATCH
+  assign o = a + cnt;
+"""),
+    # But it may write a temporary before reading it
+    ("every_eval_temp", None, """
+  logic [7:0] pr  /*verilator public_flat_rw*/ = 8'd3;
+  logic [7:0] t, u;
+  always_comb begin
+    t = a ^ pr;
+    u = t + 8'd1;
+  end
+  assign o = u;
+"""),
     # Nor if it affects the outputs, reading a sampled variable
     ("every_eval_sampled", "logic run at every evaluation reading sampled values", """
   logic [7:0] t  /*verilator public_flat_rd*/;
