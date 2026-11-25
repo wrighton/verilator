@@ -4164,7 +4164,7 @@ class WidthVisitor final : public VNVisitor {
         {
             VL_RESTORER(m_underCast);
             m_underCast = true;
-            const int calcWidth = std::max(width, underDtp->width());
+            const int calcWidth = std::max(width, underp->dtypep()->width());
             AstNodeDType* const calcDtp = nodep->findBitOrLogicDType(
                 calcWidth, calcWidth, underDtp->numeric(), underDtp->isFourstate());
             nodep->dtypep(calcDtp);
