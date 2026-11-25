@@ -1517,7 +1517,7 @@ bool libComboCacheable(const LogicClasses& logicClasses,
           &logicClasses.m_observed, &logicClasses.m_reactive}) {
         for (const Process& process : *listp) {
             const size_t index = logics.size();
-            logics.push_back({process.m_procp, listp, {}});
+            logics.push_back({process.m_procp, listp, {}, {}});
             Logic& logic = logics.back();
             process.m_senTreep->foreach(
                 [&](const AstVarRef* refp) { logic.m_reads.push_back(refp->varScopep()); });
