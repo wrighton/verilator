@@ -265,7 +265,12 @@ class ReloopVisitor final : public VNVisitor {
     // node now in place of 'startp', and the next statement that can start a run.
     std::pair<AstNode*, AstNode*> reroll(AstNode* startp) {
         AstNodeStmt* const firstp = VN_CAST(startp, NodeStmt);
-        if (!firstp || !ReloopAnalysis::gather(firstp, m_firstConsts, m_firstTypes)) {
+        // A run needs a next statement of the same type. Checking that before walking 'firstp'
+        // keeps nested statements, e.g. an 'if'/'else if' chain, from being walked once for
+        // each statement enclosing them.
+        const AstNodeStmt* const nextp = firstp ? nextStmt(firstp) : nullptr;
+        if (!nextp || nextp->type() != firstp->type()
+            || !ReloopAnalysis::gather(firstp, m_firstConsts, m_firstTypes)) {
             return {startp, startp->nextp()};
         }
         const std::pair<uint32_t, AstNodeStmt*> run = runLength(firstp);
