@@ -1716,10 +1716,13 @@ class AssertVisitor final : public VNVisitor {
         return new AstAssign{flp, newMonitorPendingVarRefp(nodep, VAccess::WRITE),
                              new AstConst{flp, AstConst::BitTrue{}}};
     }
+    // A module temporary is static; one copied when a process forks must be made automatic by
+    // its caller, as the "Const" temporaries are
     static AstVar* newModuleTemp(FileLine* flp, const string& name, AstNodeDType* dtypep,
                                  AstNodeModule* ownerp) {
         AstVar* const varp = new AstVar{flp, VVarType::MODULETEMP, name, dtypep};
         varp->isInternal(true);
+        varp->lifetime(VLifetime::STATIC_EXPLICIT);
         ownerp->addStmtsp(varp);
         return varp;
     }
@@ -2192,7 +2195,6 @@ class AssertVisitor final : public VNVisitor {
         }
         AstVar* const epochp
             = newModuleTemp(flp, m_actionNames.get("Epoch"), m_modp->findUInt32DType(), m_modp);
-        epochp->lifetime(VLifetime::STATIC_EXPLICIT);
         const auto newDropIfp = [&](bool update) {
             AstIf* const ifp = new AstIf{
                 flp,
@@ -2298,9 +2300,7 @@ class AssertVisitor final : public VNVisitor {
         actionsp->foreachAndNext([&](const AstVar* varp) { ownps.insert(varp); });
         // Queued from the process of the attempt, a fork of the process of the assertion
         const auto newTemp = [&](const string& name, AstNodeDType* dtypep) {
-            AstVar* const varp = newModuleTemp(flp, m_actionNames.get(name), dtypep, m_modp);
-            varp->lifetime(VLifetime::STATIC_EXPLICIT);
-            return varp;
+            return newModuleTemp(flp, m_actionNames.get(name), dtypep, m_modp);
         };
         if (!m_actionEventp) {
             m_actionEventp = newTemp("Event", m_modp->findBasicDType(VBasicDTypeKwd::EVENT));
@@ -2385,7 +2385,6 @@ class AssertVisitor final : public VNVisitor {
         AstNodeDType* const u64p = m_modp->findUInt64DType();
         const auto newStatic = [&](const string& name, AstNodeDType* dtypep) {
             AstVar* const varp = newModuleTemp(flp, m_actionNames.get(name), dtypep, m_modp);
-            varp->lifetime(VLifetime::STATIC_EXPLICIT);
             varp->setIgnoreSchedWrite();
             return varp;
         };
@@ -3432,7 +3431,6 @@ class AssertVisitor final : public VNVisitor {
                 for (AstVar** const varpp : {&m_strongPassOnp, &m_strongFailOnp}) {
                     *varpp = newModuleTemp(flp, m_actionNames.get("StrongOn"),
                                            m_modp->findUInt32DType(), m_modp);
-                    (*varpp)->lifetime(VLifetime::STATIC_EXPLICIT);
                 }
             }
             {
