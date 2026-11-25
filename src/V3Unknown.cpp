@@ -222,6 +222,17 @@ class UnknownVisitor final : public VNVisitor {
         if (nodep->isParam() || nodep->constPoolEntry()) m_allowXUnique = false;
         iterateChildren(nodep);
     }
+    void visit(AstInitialStatic* nodep) override {
+        VL_RESTORER(m_allowXUnique);
+        // The default value of an input port is a constant expression, as for a parameter, and
+        // V3Inst applies it to the model's primary inputs when the model is constructed
+        const AstAssign* const assignp = VN_CAST(nodep->stmtsp(), Assign);
+        const AstVarRef* const refp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+        if (refp && refp->varp()->isInput() && refp->varp()->hasUserInit()) {
+            m_allowXUnique = false;
+        }
+        iterateChildren(nodep);
+    }
     void visitEqNeqCase(AstNodeBiop* nodep) {
         UINFO(4, " N/EQCASE->EQ " << nodep);
         V3Const::constifyEdit(nodep->lhsp());  // lhsp may change

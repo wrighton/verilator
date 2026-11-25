@@ -1635,6 +1635,7 @@ class AstNetlist final : public AstNode {
     // @astgen ptr := m_dollarUnitPkgp : Optional[AstPackage]  // $unit
     // @astgen ptr := m_stdPackagep : Optional[AstPackage]  // SystemVerilog std package
     // @astgen ptr := m_stdPackageProcessp : Optional[AstClass]  // SystemVerilog std process class
+    // @astgen ptr := m_ctorInitp : Optional[AstCFunc]  // Primary input defaults, see V3Sched
     // @astgen ptr := m_dpiExportTriggerp : Optional[AstVarScope]  // DPI export trigger variable
     // @astgen ptr := m_delaySchedulerp : Optional[AstVar]  // Delay scheduler variable
     // @astgen ptr := m_activityp : Optional[AstVar]  // Trace activity flags
@@ -1658,6 +1659,9 @@ class AstNetlist final : public AstNode {
     std::array<AstCFunc*, VEval::_ENUM_END> m_evalFuncps{};
     // The trigger dump function of each region if exists, otherwise nullptr
     std::array<AstCFunc*, VEval::_ENUM_END> m_dumpTriggersFuncps{};
+    // Default value of each primary input that has one, as Verilog for the --lib-create
+    // wrapper (V3ProtectLib), if of a type it supports
+    std::unordered_map<const AstVar*, string> m_primaryDefaults;
     // Activity flag sets of the design, built by V3Trace for the RTMD.
     std::vector<std::vector<uint32_t>> m_actSets;
 
@@ -1697,6 +1701,14 @@ public:
     void delaySchedulerp(AstVar* const varScopep) { m_delaySchedulerp = varScopep; }
     AstVar* activityp() const { return m_activityp; }
     void activityp(AstVar* const varp) { m_activityp = varp; }
+    AstCFunc* ctorInitp() const { return m_ctorInitp; }
+    void primaryDefault(const AstVar* varp, const string& text) { m_primaryDefaults[varp] = text; }
+    // The default value of a primary input, as Verilog, or nullptr if it has none
+    const string* primaryDefaultp(const AstVar* varp) const {
+        const auto it = m_primaryDefaults.find(varp);
+        return it == m_primaryDefaults.end() ? nullptr : &it->second;
+    }
+    void ctorInitp(AstCFunc* funcp) { m_ctorInitp = funcp; }
     AstVarScope* nbaQueuep() const { return m_nbaQueuep; }
     void nbaQueuep(AstVarScope* varScopep) { m_nbaQueuep = varScopep; }
     void stdPackagep(AstPackage* const packagep) { m_stdPackagep = packagep; }

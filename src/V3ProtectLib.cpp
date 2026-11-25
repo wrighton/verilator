@@ -19,6 +19,7 @@
 #include "V3ProtectLib.h"
 
 #include "V3Control.h"
+#include "V3EmitV.h"
 #include "V3File.h"
 #include "V3Hasher.h"
 #include "V3InstrCount.h"
@@ -535,7 +536,21 @@ class ProtectVisitor final : public VNVisitor {
             portp->direction(VDirection::INOUT);
             portp->varType(VVarType::WIRE);
         }
-        m_modPortsp->add(portp);
+        // An unconnected input of the wrapper takes the library's default value
+        const string* const defaultp = v3Global.rootp()->primaryDefaultp(varp);
+        if (!defaultp) {
+            m_modPortsp->add(portp);
+        } else {
+            // The declaration, without its ';' and line end, then the value
+            std::ostringstream os;
+            V3EmitV::verilogForTree(portp, os);
+            string decl = os.str();
+            while (!decl.empty() && (decl.back() == '\n' || decl.back() == ';')) {
+                decl.pop_back();
+            }
+            m_modPortsp->add(decl + " = " + *defaultp + "\n");
+            VL_DO_DANGLING(portp->deleteTree(), portp);
+        }
     }
 
     void restoreInouts() {

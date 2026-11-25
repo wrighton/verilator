@@ -27,6 +27,7 @@
 
 #include "V3Const.h"
 #include "V3Control.h"
+#include "V3EmitV.h"
 #include "V3Width.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -87,6 +88,9 @@ class InstVisitor final : public VNVisitor {
 
     // STATE
     AstCell* m_cellp = nullptr;  // Current cell
+    // Initializer of each input port of m_portDefaultsModp, see addPrimaryDefault
+    std::unordered_map<const AstVar*, AstAssign*> m_portDefaults;
+    const AstNodeModule* m_portDefaultsModp = nullptr;  // Module m_portDefaults indexes
 
     // METHODS
     // If appropriate, add an AstAlias to connect the given Cell pin to the given expression.
@@ -157,6 +161,87 @@ class InstVisitor final : public VNVisitor {
         return true;
     }
 
+    // Whether defaultVerilog can write the default value
+    static bool defaultWritable(const AstNode* valuep) {
+        return !valuep->exists([](const AstNode* nodep) {
+            return !VN_IS(nodep, Const) && !VN_IS(nodep, ConsArray)
+                   && !VN_IS(nodep, ConsArrayItem);
+        });
+    }
+    // The default value as Verilog for the --lib-create wrapper (V3ProtectLib)
+    static string defaultVerilog(const AstNode* valuep) {
+        const AstConsArray* const consp = VN_CAST(valuep, ConsArray);
+        if (!consp) {
+            const V3Number& num = VN_AS(valuep, Const)->num();
+            std::ostringstream os;
+            if (num.isString()) {
+                // As a literal, with its escapes
+                V3EmitV::verilogForTree(valuep, os);
+            } else if (num.isDouble()) {
+                // Exactly, including infinities and NaNs
+                const double value = num.toDouble();
+                uint64_t bits;
+                std::memcpy(&bits, &value, sizeof(bits));
+                os << "$bitstoreal(64'h" << std::hex << std::setw(16) << std::setfill('0') << bits
+                   << ")";
+            } else {
+                // V3Unknown resolved any X or Z bits, so a hex digit is not partly X or Z
+                UASSERT_OBJ(!num.isFourState(), valuep, "Default value should be two-state");
+                os << num.width() << "'h" << num.displayed(valuep, "%0h");
+            }
+            return os.str();
+        }
+        // The indices of the items count from the lowest index of the array
+        const AstUnpackArrayDType* const arrayp
+            = VN_AS(consp->dtypep()->skipRefp(), UnpackArrayDType);
+        string text;
+        for (const AstConsArrayItem* itemp = consp->itemsp(); itemp;
+             itemp = VN_AS(itemp->nextp(), ConsArrayItem)) {
+            if (!text.empty()) text += ", ";
+            text += cvtToStr(arrayp->lo() + static_cast<int>(itemp->index())) + ": "
+                    + defaultVerilog(itemp->valuep());
+        }
+        // The elements without an item take the default
+        if (const AstNodeExpr* const defaultp = consp->defaultp()) {
+            if (!text.empty()) text += ", ";
+            text += "default: " + defaultVerilog(defaultp);
+        }
+        return "'{" + text + "}";
+    }
+
+    // A primary input connected to an input port with a default value takes that value when
+    // the model is constructed (see V3Sched), so before the user, or the parent of a
+    // hierarchical block, writes it. Not as the port's own initializer, which runs at the first
+    // evaluation, so after those writes.
+    void addPrimaryDefault(AstVar* primaryp, const AstVar* portp) {
+        if (!portp->hasUserInit()) return;
+        // Index the module's port default values, which are its initializers of inputs
+        AstNodeModule* const modp = m_cellp->modp();
+        if (m_portDefaultsModp != modp) {
+            m_portDefaultsModp = modp;
+            m_portDefaults.clear();
+            for (AstNode* itemp = modp->stmtsp(); itemp; itemp = itemp->nextp()) {
+                const AstInitialStatic* const initp = VN_CAST(itemp, InitialStatic);
+                AstAssign* const assignp = initp ? VN_CAST(initp->stmtsp(), Assign) : nullptr;
+                const AstVarRef* const refp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+                if (refp && refp->varp()->isInput()) m_portDefaults.emplace(refp->varp(), assignp);
+            }
+        }
+        const auto it = m_portDefaults.find(portp);
+        if (it == m_portDefaults.end()) return;
+        const AstAssign* const assignp = it->second;
+        UASSERT_OBJ(assignp->rhsp()->isConstantTree(), assignp,
+                    "Input port default value should be constant (see V3Width)");
+        FileLine* const flp = assignp->fileline();
+        m_cellp->addNextHere(new AstInitialStatic{
+            flp, new AstAssign{flp, new AstVarRef{flp, primaryp, VAccess::WRITE},
+                               assignp->rhsp()->cloneTree(false)}});
+        // Other types are not supported by --lib-create
+        if (defaultWritable(assignp->rhsp())) {
+            v3Global.rootp()->primaryDefault(primaryp, defaultVerilog(assignp->rhsp()));
+        }
+    }
+
     // VISITORS
     void visit(AstCell* nodep) override {
         UINFO(4, "  CELL   " << nodep);
@@ -196,6 +281,10 @@ class InstVisitor final : public VNVisitor {
                     m_cellp->addNextHere(new AstAlways{assp});
                 }
             } else if (nodep->modVarp()->isNonOutput()) {
+                const AstVarRef* const refp = VN_CAST(exprp, VarRef);
+                if (refp && refp->varp()->isPrimaryIO()) {
+                    addPrimaryDefault(refp->varp(), nodep->modVarp());
+                }
                 if (!tryAliasPin(nodep, exprp)) {
                     // Don't bother moving constants now,
                     // we'll be pushing the const down to the cell soon enough.
