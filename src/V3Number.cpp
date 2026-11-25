@@ -2444,24 +2444,24 @@ V3Number& V3Number::opModDivGuts(const V3Number& lhs, const V3Number& rhs, bool 
     // Algorithm requires divisor MSB to be set
     // Copy and shift to normalize divisor so MSB of vn[vw-1] is set
     const int s = 31 - ((vmsbp1 - 1) & 31);  // shift amount (0...31)
-    const uint32_t shift_mask = s ? 0xffffffff : 0;  // otherwise >> 32 won't mask the value
-    for (int i = vw - 1; i > 0; i--) {
-        vn[i] = (rhs.m_data.num()[i].m_value << s)
-                | (shift_mask & (rhs.m_data.num()[i - 1].m_value >> (32 - s)));
-    }
-    vn[0] = rhs.m_data.num()[0].m_value << s;
-
     // Copy and shift dividend by same amount; may set new upper word
     if (s) {
+        for (int i = vw - 1; i > 0; i--) {
+            vn[i] = (rhs.m_data.num()[i].m_value << s)
+                    | (rhs.m_data.num()[i - 1].m_value >> (32 - s));
+        }
+        vn[0] = rhs.m_data.num()[0].m_value << s;
         un[uw] = lhs.m_data.num()[uw - 1].m_value >> (32 - s);
+        for (int i = uw - 1; i > 0; i--) {
+            un[i] = (lhs.m_data.num()[i].m_value << s)
+                    | (lhs.m_data.num()[i - 1].m_value >> (32 - s));
+        }
+        un[0] = lhs.m_data.num()[0].m_value << s;
     } else {
+        for (int i = 0; i < vw; ++i) vn[i] = rhs.m_data.num()[i].m_value;
         un[uw] = 0;
+        for (int i = 0; i < uw; ++i) un[i] = lhs.m_data.num()[i].m_value;
     }
-    for (int i = uw - 1; i > 0; i--) {
-        un[i] = (lhs.m_data.num()[i].m_value << s)
-                | (shift_mask & (lhs.m_data.num()[i - 1].m_value >> (32 - s)));
-    }
-    un[0] = lhs.m_data.num()[0].m_value << s;
 
     // printf("  un="); for (int i=5; i>=0; i--) printf(" %08x",un[i]); printf("\n");
     // printf("  vn="); for (int i=5; i>=0; i--) printf(" %08x",vn[i]); printf("\n");
@@ -2513,8 +2513,12 @@ V3Number& V3Number::opModDivGuts(const V3Number& lhs, const V3Number& rhs, bool 
 
     if (is_modulus) {  // modulus
         // Need to reverse normalization on copy to output
-        for (int i = 0; i < vw; ++i) {
-            m_data.num()[i].m_value = (un[i] >> s) | (shift_mask & (un[i + 1] << (32 - s)));
+        if (s) {
+            for (int i = 0; i < vw; ++i) {
+                m_data.num()[i].m_value = (un[i] >> s) | (un[i + 1] << (32 - s));
+            }
+        } else {
+            for (int i = 0; i < vw; ++i) m_data.num()[i].m_value = un[i];
         }
         for (int i = vw; i < lWords; ++i) m_data.num()[i].m_value = 0;
         opCleanThis();
