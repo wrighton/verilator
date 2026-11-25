@@ -545,3 +545,10 @@ $test$plusargs, $value$plusargs
 
    to register the command line before calling $test$plusargs or
    $value$plusargs. Or use :vlopt:`--binary` or :vlopt:`--main`.
+
+$timeformat
+   Units outside the IEEE 1800-2023 20.4.3 range of 2 to -15 are replaced
+   by the nearest end of that range, and a negative precision prints no
+   fractional digits. Precision is limited to 1048576 digits. A warning is
+   given once per kind per simulation context when units or precision are
+   changed this way.
