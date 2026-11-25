@@ -959,6 +959,7 @@ public:
             UASSERT_OBJ(npins == 2 || npins == 5, nodep, "Unexpected hard() pin layout");
         }
         puts("(");
+        if (nodep->method() == VCMethod::EVENT_IS_TRIGGERED) puts("vlSymsp->__Vm_evalStamp");
         bool comma = false;
         int argNum = 0;
         for (AstNode* const subnodep : nodep->pinspList()) {

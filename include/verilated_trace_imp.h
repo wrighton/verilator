@@ -87,7 +87,9 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::addSignal(const char* namep, const VlRt
         // way. A slice also with the others of packed values stored the same way.
         const StorageKind storage = dtype.storageKind();
         const auto groupOf = [&](StorageKind valueStorage) -> Group& {
-            return m_groupMap[actSet][{storage, valueStorage}];
+            Group& group = m_groupMap[actSet][{storage, valueStorage}];
+            group.m_evalStampp = actSet.rtmd().m_evalStampp;
+            return group;
         };
         // If a slice exactly fills its storage, which is aligned, then extraction is pointer math
         const auto sliceIsWhole = [bits, lsb]() {
@@ -261,7 +263,7 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::traceInit() VL_MT_UNSAFE {
                 const size_t nWholes = std::min(n, group.m_wholes.size());
                 const auto wholesEnd = group.m_wholes.begin() + nWholes;
                 const auto slicesEnd = group.m_slices.begin() + (n - nWholes);
-                Group first{group.m_storage, group.m_valueStorage, {}, {}};
+                Group first{group.m_storage, group.m_valueStorage, {}, {}, group.m_evalStampp};
                 first.m_wholes.assign(group.m_wholes.begin(), wholesEnd);
                 first.m_slices.assign(group.m_slices.begin(), slicesEnd);
                 groupVec.emplace_back(pair.first, std::move(first));
@@ -432,9 +434,10 @@ void VerilatedTraceBuffer<VL_BUF_T>::fullBit(uint32_t code, CData newval) {
 }
 
 template <>
-void VerilatedTraceBuffer<VL_BUF_T>::fullEvent(uint32_t code, const VlEventBase* newvalp) {
+void VerilatedTraceBuffer<VL_BUF_T>::fullEvent(uint32_t code, const VlEventBase* newvalp,
+                                               QData evalStamp) {
     // No need to update the previous value
-    if (newvalp->isTriggered()) emitEvent(code);
+    if (newvalp->isTriggered(evalStamp)) emitEvent(code);
 }
 
 template <>
@@ -550,15 +553,7 @@ VL_ATTR_ALWINLINE void VerilatedTrace<VL_SUB_T, VL_BUF_T>::dumpValue(Buffer* buf
         }
         break;
     }
-    case StorageKind::EVENT: {
-        const VlEventBase* const valp = static_cast<const VlEventBase*>(datap);
-        if VL_CONSTEXPR_CXX17 (T_Full) {
-            bufp->fullEvent(code, valp);
-        } else {
-            bufp->chgEvent(code, valp);
-        }
-        break;
-    }
+    case StorageKind::EVENT: assert(false); break;  // LCOV_EXCL_LINE  // See dumpGroupEvents
     }
 }
 
@@ -643,6 +638,22 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::dumpGroupWholes(Buffer* bufp,
 
 template <>
 template <bool T_Full>
+void VerilatedTrace<VL_SUB_T, VL_BUF_T>::dumpGroupEvents(Buffer* bufp,
+                                                         const Group& group) VL_MT_UNSAFE {
+    // All of one model, so of one evaluation
+    const QData evalStamp = *group.m_evalStampp;
+    for (const Whole& whole : group.m_wholes) {
+        const VlEventBase* const valp = static_cast<const VlEventBase*>(whole.m_datap);
+        if VL_CONSTEXPR_CXX17 (T_Full) {
+            bufp->fullEvent(whole.m_code, valp, evalStamp);
+        } else {
+            bufp->chgEvent(whole.m_code, valp, evalStamp);
+        }
+    }
+}
+
+template <>
+template <bool T_Full>
 void VerilatedTrace<VL_SUB_T, VL_BUF_T>::dumpGroupDispatch(Buffer* bufp, const Group& group,
                                                            EData* wideSlicep) VL_MT_UNSAFE {
     // Dispatch on how the values are stored once for the whole group. Events and reals have no
@@ -669,7 +680,7 @@ void VerilatedTrace<VL_SUB_T, VL_BUF_T>::dumpGroupDispatch(Buffer* bufp, const G
         dumpGroupSlices<T_Full, StorageKind::WDATA>(bufp, group, wideSlicep);
         break;
     case StorageKind::DOUBLE: dumpGroupWholes<T_Full, StorageKind::DOUBLE>(bufp, group); break;
-    case StorageKind::EVENT: dumpGroupWholes<T_Full, StorageKind::EVENT>(bufp, group); break;
+    case StorageKind::EVENT: dumpGroupEvents<T_Full>(bufp, group); break;
     }
 }
 

@@ -438,31 +438,34 @@ class VlEventBase VL_NOT_FINAL {
 public:
     virtual ~VlEventBase() = default;
 
-    virtual void fire() = 0;
+    // 'evalStamp' is the stamp of the model's current evaluation, see VlEvent
+    virtual void fire(QData evalStamp) = 0;
     virtual bool isFired() const = 0;
-    virtual bool isTriggered() const = 0;
+    virtual bool isTriggered(QData evalStamp) const = 0;
     virtual void clearFired() = 0;
-    virtual void clearTriggered() = 0;
 };
 
 class VlEvent final : public VlEventBase {
     // MEMBERS
-    bool m_fired = false;  // Fired on this scheduling iteration
-    bool m_triggered = false;  // Triggered state of event persisting until next time step
+    // Bit 0: fired on this scheduling iteration. Other bits: stamp of the model evaluation it was
+    // last fired in. The model increases the stamp by 2 at the start of each evaluation, so the
+    // event is triggered until then, while its stamp is not less than the current one. Clearing
+    // visits no event, and a copy keeps the triggered state.
+    QData m_state = 0;
 
 public:
     // CONSTRUCTOR
     VlEvent() = default;
     ~VlEvent() override = default;
 
-    friend std::string VL_TO_STRING(const VlEvent& e);
     friend class VlAssignableEvent;
     // METHODS
-    void fire() override { m_fired = m_triggered = true; }
-    bool isFired() const override { return m_fired; }
-    bool isTriggered() const override { return m_triggered; }
-    void clearFired() override { m_fired = false; }
-    void clearTriggered() override { m_triggered = false; }
+    VL_ATTR_ALWINLINE void fire(QData evalStamp) override { m_state = evalStamp | 1; }
+    VL_ATTR_ALWINLINE bool isFired() const override { return m_state & 1; }
+    VL_ATTR_ALWINLINE bool isTriggered(QData evalStamp) const override {
+        return m_state >= evalStamp;
+    }
+    VL_ATTR_ALWINLINE void clearFired() override { m_state &= ~static_cast<QData>(1); }
 };
 
 class VlAssignableEvent final : public std::shared_ptr<VlEvent>, public VlEventBase {
@@ -473,29 +476,16 @@ public:
     ~VlAssignableEvent() override = default;
 
     // METHODS
-    void fire() override { (*this)->m_fired = (*this)->m_triggered = true; }
-    bool isFired() const override { return (*this)->m_fired; }
-    bool isTriggered() const override { return (*this)->m_triggered; }
-    void clearFired() override { (*this)->m_fired = false; }
-    void clearTriggered() override { (*this)->m_triggered = false; }
+    VL_ATTR_ALWINLINE void fire(QData evalStamp) override { (*this)->m_state = evalStamp | 1; }
+    VL_ATTR_ALWINLINE bool isFired() const override { return (*this)->m_state & 1; }
+    VL_ATTR_ALWINLINE bool isTriggered(QData evalStamp) const override {
+        return (*this)->m_state >= evalStamp;
+    }
+    VL_ATTR_ALWINLINE void clearFired() override { (*this)->m_state &= ~static_cast<QData>(1); }
 };
 
-inline std::string VL_TO_STRING(const VlEventBase& e);
-
-inline std::string VL_TO_STRING(const VlEvent& e) {
-    return "triggered="s + (e.isTriggered() ? "true" : "false");
-}
-
-inline std::string VL_TO_STRING(const VlAssignableEvent& e) {
-    return "&{ " + VL_TO_STRING(*e) + " }";
-}
-
-inline std::string VL_TO_STRING(const VlEventBase& e) {
-    if (const VlAssignableEvent& assignable = dynamic_cast<const VlAssignableEvent&>(e)) {
-        return VL_TO_STRING(assignable);
-    }
-    return "triggered="s + (e.isTriggered() ? "true" : "false");
-}
+// The triggered state is relative to the evaluation of the model, which is not known here
+inline std::string VL_TO_STRING(const VlEventBase&) { return "event"s; }
 
 // RNG for shuffle()
 class VlURNG final {
