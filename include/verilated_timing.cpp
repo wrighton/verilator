@@ -684,10 +684,15 @@ void VlDynamicTriggerScheduler::freeIfIdle(VlEventWaitList& list) {
 
 bool VlDynamicTriggerScheduler::drainQueue(VlEventWaitList& list, VlCoroutineVec& killed) {
     VlCoroutineVec& waiters = list.m_waiters;
-    const bool wake = list.m_wokenOne.exchange(false, std::memory_order_relaxed);
+    bool wake = list.m_wokenOne.exchange(false, std::memory_order_relaxed);
+    // The first waiter, killed or not, which may have waited again with something available
+    // for the ones after it, as a semaphore waiter needing more keys than there are
+    size_t head = list.m_headSlot;
+    while (head < waiters.size() && !waiters[head].framep()) ++head;
     for (VlProcess* processp = list.takeKilled(); processp;) {
         VlProcess* const nextp = processp->nextKilledp();
         const size_t index = processp->waitIndex();
+        if (index == head) wake = true;
         // A selected waiter killed before it resumed passed its turn on where it would have
         // resumed (see resumeSelected)
         VL_DEBUG_IFDEF(assert(index < waiters.size() && waiters[index].processp() == processp););
