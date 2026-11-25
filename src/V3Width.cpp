@@ -10764,10 +10764,12 @@ class WidthVisitor final : public VNVisitor {
                     = portIfacep ? AstNode::computeCastable(portDTypep, pinDTypep, pinp,
                                                             /* checkIfaceArgCompat */ true)
                                  : VCastable{VCastable::UNSUPPORTED};
-                const bool matchingRefDTypes
-                    = portIfacep ? ifaceCastable.isSameish()
-                                 : (similarDTypeRecurse(portDTypep, pinDTypep)
-                                    || packedEquivalentDType(portDTypep, pinDTypep));
+                // An enumeration also matches its base type
+                const bool enumRef = VN_IS(portDTypep, EnumDType) || VN_IS(pinDTypep, EnumDType);
+                const bool matchingRefDTypes = portIfacep ? ifaceCastable.isSameish()
+                                               : enumRef
+                                                   ? similarDTypeRecurse(portDTypep, pinDTypep)
+                                                   : equivalentDType(portDTypep, pinDTypep, false);
                 const bool pinIsNull = VN_IS(pinp, Const) && VN_AS(pinp, Const)->num().isNull();
                 const AstCvtPackString* const cvtp = VN_CAST(pinp, CvtPackString);
                 if (cvtp && portp->isWritable() && !portp->isRef()
@@ -10782,6 +10784,13 @@ class WidthVisitor final : public VNVisitor {
                                       << portp->prettyNameQ()
                                       << " requires the same interface type, parameters, and "
                                          "modport.");
+                    } else if (equivalentDType(portDTypep, pinDTypep, true)) {
+                        pinp->v3warn(
+                            E_UNSUPPORTED,
+                            "Unsupported: Ref argument of a queue type with another bound;"
+                                << " port " << portp->prettyNameQ() << " requires "
+                                << portDTypep->prettyDTypeNameQ() << " but connection is "
+                                << pinDTypep->prettyDTypeNameQ() << ".");
                     } else {
                         pinp->v3error("Ref argument requires matching types;"
                                       << " port " << portp->prettyNameQ() << " requires "
@@ -12695,6 +12704,37 @@ class WidthVisitor final : public VNVisitor {
         return elem1p && elem2p && node1p->width() == node2p->width()
                && elem1p->isFourstate() == elem2p->isFourstate()
                && node1p->isSigned() == node2p->isSigned();
+    }
+    // Return true if the types are equivalent (IEEE 1800-2023 6.22.2), and queues have the same
+    // bound unless 'anyBound', as a reference to a queue has the type of its bound
+    static bool equivalentDType(const AstNodeDType* node1p, const AstNodeDType* node2p,
+                                bool anyBound) {
+        node1p = node1p->skipRefToEnump();
+        node2p = node2p->skipRefToEnump();
+        // Unpacked arrays of the same kind and range, with equivalent index types for
+        // associative arrays, are equivalent when their element types are (6.22.2 d and e)
+        if (node1p->type() == node2p->type()) {
+            if (const AstUnpackArrayDType* const array1p = VN_CAST(node1p, UnpackArrayDType)) {
+                if (!(array1p->declRange() == VN_AS(node2p, UnpackArrayDType)->declRange())) {
+                    return false;
+                }
+            } else if (const AstAssocArrayDType* const assoc1p
+                       = VN_CAST(node1p, AssocArrayDType)) {
+                if (!equivalentDType(assoc1p->keyDTypep(),
+                                     VN_AS(node2p, AssocArrayDType)->keyDTypep(), anyBound)) {
+                    return false;
+                }
+            } else if (const AstQueueDType* const queue1p = VN_CAST(node1p, QueueDType)) {
+                if (!anyBound
+                    && queue1p->boundConst() != VN_AS(node2p, QueueDType)->boundConst()) {
+                    return false;
+                }
+            } else if (!VN_IS(node1p, DynArrayDType) && !VN_IS(node1p, WildcardArrayDType)) {
+                return node1p->similarDType(node2p) || packedEquivalentDType(node1p, node2p);
+            }
+            return equivalentDType(node1p->subDTypep(), node2p->subDTypep(), anyBound);
+        }
+        return node1p->similarDType(node2p) || packedEquivalentDType(node1p, node2p);
     }
     void iterateCheckFileDesc(AstNode* parentp, AstNode* underp, Stage stage) {
         UASSERT_OBJ(stage == BOTH, parentp, "Bad call");
