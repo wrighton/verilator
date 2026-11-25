@@ -226,9 +226,12 @@ class PremitVisitor final : public VNVisitor {
             }
         } else {
             // Shift amount not known at compile time. Convert to *Ovr version. Don't need to do
-            // if it would use a wide operation which works correctly at runtime, of if the max
-            // value of the shift amount is less than the with of the shifted value.
-            if (!nodep->isWide() && (nodep->width() < (1LL << nodep->rhsp()->widthMin()))) {
+            // if it would use a wide operation which works correctly at runtime, or if the max
+            // value of the shift amount, 2**widthMin - 1, is less than the width of the shifted
+            // value. Any amount of at least 32 bits can exceed every width.
+            const int amountWidth = nodep->rhsp()->widthMin();
+            if (!nodep->isWide()
+                && (amountWidth >= VL_IDATASIZE || nodep->width() < (1LL << amountWidth))) {
                 replaceWithOvrShift(nodep);
                 return;
             }
