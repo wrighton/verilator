@@ -1460,16 +1460,27 @@ public:
 
 // Whether logic has an effect other than writing variables, or computes something differently
 // each time: any node not pure, an outputter (a display, an assertion action, the end of the
-// simulation, a file write), or an expression not predictable from its operands (a file read, a
-// random number, the time, user C code, or a function call, whatever the function does)
+// simulation, a file write), an expression not predictable from its operands (a file read, a
+// random number, the time, user C code, or a function call, whatever the function does), or a
+// statement other than plain assignments and control flow (an event trigger, which wakes
+// processes without changing a value, a compound assignment, a force or release, a disable, a
+// wait, process control)
 class LibEffectVisitor final : public VNVisitorConst {
     bool m_found = false;  // Found one
 
+    static bool plainStmt(const AstNode* nodep) {
+        return VN_IS(nodep, Assign) || VN_IS(nodep, AssignW) || VN_IS(nodep, AssignDly)
+               || VN_IS(nodep, If) || VN_IS(nodep, Case) || VN_IS(nodep, Loop)
+               || VN_IS(nodep, LoopTest) || VN_IS(nodep, JumpBlock) || VN_IS(nodep, JumpGo)
+               || VN_IS(nodep, Break) || VN_IS(nodep, Continue) || VN_IS(nodep, Begin)
+               || VN_IS(nodep, StmtExpr) || VN_IS(nodep, Comment) || VN_IS(nodep, Return)
+               || VN_IS(nodep, CReturn);
+    }
     void visit(AstNode* nodep) override {
         if (m_found) return;
         const AstNodeExpr* const exprp = VN_CAST(nodep, NodeExpr);
-        if (!nodep->isPure() || nodep->isOutputter()
-            || (exprp && !exprp->isPredictOptimizable())) {
+        if (!nodep->isPure() || nodep->isOutputter() || (exprp && !exprp->isPredictOptimizable())
+            || (VN_IS(nodep, NodeStmt) && !plainStmt(nodep))) {
             m_found = true;
             return;
         }
@@ -1638,8 +1649,10 @@ bool libComboCacheable(const LogicClasses& logicClasses,
     }
     for (size_t index = 0; index < logics.size(); ++index) {
         if (!everyEval[index]) continue;
-        if ((sampledRead[index] && affects[index])
-            || LibEffectVisitor::found(logics[index].m_procp)) {
+        if (sampledRead[index] && affects[index]) {
+            return notCacheable("logic run at every evaluation reading sampled values");
+        }
+        if (LibEffectVisitor::found(logics[index].m_procp)) {
             return notCacheable("logic run at every evaluation with effects");
         }
     }
