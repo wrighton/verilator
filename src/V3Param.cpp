@@ -343,6 +343,15 @@ class ParamProcessor final {
     // Created module flavors. A class in a key stays valid, as classes are deleted only after
     // V3Param, and a failed clone is deleted before it is added.
     std::unordered_map<ModKey, ModInfo, ModKeyHash> m_modNameMap;
+    // Module -> level -> a later module in its list, the modules after it up to that one all of
+    // no greater level, so a search for where a clone of that level or a greater one goes jumps
+    // there. A module inserted between them by deepCloneModule has a smaller level, as its search
+    // stopped before a module of no greater level. No other node is inserted between modules
+    // during V3Param. Ordered by level, as a search takes the jump of the greatest level not
+    // above its own.
+    std::unordered_map<const AstNodeModule*, std::map<int, AstNodeModule*>> m_insertJumps;
+    VDouble0 m_statInsertSteps;  // Modules passed or jumped from to find where clones go
+    VDouble0 m_statRetargetWalks;  // Cell paths followed to retarget interface references
 
     std::map<const std::string, std::string>
         m_longMap;  // Hash of very long names to unique identity number
@@ -1372,13 +1381,29 @@ class ParamProcessor final {
         // Keep tree sorted by level. Note: Different parameterizations of the same recursive
         // module end up with the same level, which we will need to fix up at the end, as we do not
         // know up front how recursive modules are expanded, and a later expansion might re-use an
-        // earlier expansion (see t_recursive_module_bug_2).
-        AstNode* insertp = srcModp;
-        while (VN_IS(insertp->nextp(), NodeModule)
-               && VN_AS(insertp->nextp(), NodeModule)->level() <= newModp->level()) {
-            insertp = insertp->nextp();
+        // earlier expansion (see t_recursive_module_bug_2). The search jumps over modules a
+        // previous search of the same or a smaller level passed (see m_insertJumps), and each
+        // module it passes then jumps to the new clone.
+        const int level = newModp->level();
+        AstNodeModule* insertp = srcModp;
+        std::vector<AstNodeModule*> passedps;  // Modules the search passed or jumped from
+        while (true) {
+            passedps.push_back(insertp);
+            ++m_statInsertSteps;
+            const auto jumpsIt = m_insertJumps.find(insertp);
+            if (jumpsIt != m_insertJumps.end()) {
+                const auto it = jumpsIt->second.upper_bound(level);
+                if (it != jumpsIt->second.begin()) {
+                    insertp = std::prev(it)->second;
+                    continue;
+                }
+            }
+            AstNodeModule* const nextp = VN_CAST(insertp->nextp(), NodeModule);
+            if (!nextp || nextp->level() > level) break;
+            insertp = nextp;
         }
         insertp->addNextHere(newModp);
+        for (AstNodeModule* const modp : passedps) { m_insertJumps[modp][level] = newModp; }
 
         m_allModuleNames.insert(newname);
         const auto pair = m_modNameMap.emplace(modKey(srcModp, newname), ModInfo{newModp});
@@ -3324,23 +3349,52 @@ public:
             flp->v3error("In defparam, the path names no instance");
         }
     }
+    // Visitor retargeting the references of one module captured through one cell path. Only
+    // links of the references change, not the tree, so it iterates as a const visitor.
+    class ParamIfaceRefRetargetVisitor final : public VNVisitorConst {
+        const AstNodeModule* const m_modp;  // Module whose references are retargeted
+        const string& m_cellName;  // Cell path of the references
+        AstNodeModule* const m_targetModp;  // Specialized interface at the end of the path
+
+        void visit(AstNodeModule* nodep) override {
+            // A nested class owns its references
+            if (nodep == m_modp) iterateChildrenConst(nodep);
+        }
+        void visit(AstRefDType* nodep) override {
+            const VIfaceCaptureTag* const tagp = nodep->captureTagp();
+            if (tagp && tagp->m_cellPath == m_cellName
+                && tagp->m_capturedInName == m_modp->origName()
+                && V3LinkDotIfaceCapture::retargetRefToModule(nodep, m_targetModp)) {
+                UINFO(9, "retargetIfaceRefs: " << nodep << " -> " << m_targetModp->prettyNameQ());
+            }
+            iterateChildrenConst(nodep);
+        }
+        void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+    public:
+        ParamIfaceRefRetargetVisitor(AstNodeModule* modp, const string& cellName,
+                                     AstNodeModule* targetModp)
+            : m_modp{modp}
+            , m_cellName{cellName}
+            , m_targetModp{targetModp} {
+            iterateConst(modp);
+        }
+    };
+
     // After an interface cell inside parentModp has been deparameterized
     // (rewired from template to clone), retarget REFDTYPEs that still
     // reference the old template's types so that $bits(iface_typedef)
     // evaluates with the clone's widths.
     void retargetIfaceRefs(AstNodeModule* parentModp, const string& cellName) {
+        // Most cells have no captured references; skip walking the module for them. The walk
+        // per cell with them is quadratic in the number of such cells, as references to an
+        // interface instance's types through the instance are a rare extension.
+        if (!V3LinkDotIfaceCapture::hasCapture(parentModp, cellName)) return;
+        ++m_statRetargetWalks;
         AstNodeModule* const correctModp
             = V3LinkDotIfaceCapture::followCellPath(parentModp, cellName);
         if (!correctModp || correctModp->dead() || correctModp->parameterizedTemplate()) return;
-        parentModp->foreach([&](AstRefDType* refp) {
-            const VIfaceCaptureTag* const tagp = V3LinkDotIfaceCapture::captureTag(refp);
-            if (!tagp || tagp->m_cellPath != cellName) return;
-            // Only retarget REFDTYPEs owned by parentModp.
-            if (V3LinkDotIfaceCapture::findOwnerModule(refp) != parentModp) return;
-            if (V3LinkDotIfaceCapture::retargetRefToModule(refp, correctModp)) {
-                UINFO(9, "retargetIfaceRefs: " << refp << " -> " << correctModp->prettyNameQ());
-            }
-        });
+        ParamIfaceRefRetargetVisitor{parentModp, cellName, correctModp};
     }
 
     // Resolve deferred class-scoped values and types reachable from rootp. In
@@ -4084,7 +4138,10 @@ public:
         }
         markStdMailboxInternals();
     }
-    ~ParamProcessor() = default;
+    ~ParamProcessor() {
+        V3Stats::addStat("Param, Clone insertion steps", m_statInsertSteps);
+        V3Stats::addStat("Param, Interface retarget walks", m_statRetargetWalks);
+    }
     VL_UNCOPYABLE(ParamProcessor);
 };
 
