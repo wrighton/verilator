@@ -328,6 +328,40 @@ public:
 using VlProcessRef = std::shared_ptr<VlProcess>;
 class VlForkSync;
 class VlForkSyncState;
+// Reference from a forked process to the fork..join that its kill completes. Dropping it calls
+// the release function given with it, so a process can be destroyed without the timing runtime.
+class VlForkSyncOnKillRef final {
+    std::shared_ptr<VlForkSyncState> m_statep;  // Fork..join to complete, or nullptr
+    void (*m_releasep)(VlForkSyncState*) = nullptr;  // Called once when the reference is dropped
+
+    void reset() {
+        // Clear first, as releasing may destroy coroutines
+        const std::shared_ptr<VlForkSyncState> statep = std::move(m_statep);
+        if (statep) m_releasep(statep.get());
+    }
+
+public:
+    VlForkSyncOnKillRef() = default;
+    VlForkSyncOnKillRef(std::shared_ptr<VlForkSyncState> statep,
+                        void (*releasep)(VlForkSyncState*))
+        : m_statep{std::move(statep)}
+        , m_releasep{releasep} {}
+    VL_UNCOPYABLE(VlForkSyncOnKillRef);
+    VlForkSyncOnKillRef& operator=(VlForkSyncOnKillRef&& other) {
+        reset();
+        m_statep = std::move(other.m_statep);
+        m_releasep = other.m_releasep;
+        return *this;
+    }
+    VlForkSyncOnKillRef& operator=(std::nullptr_t) {
+        reset();
+        return *this;
+    }
+    ~VlForkSyncOnKillRef() { reset(); }
+    VlForkSyncState* get() const { return m_statep.get(); }
+    VlForkSyncState* operator->() const { return m_statep.get(); }
+    explicit operator bool() const { return static_cast<bool>(m_statep); }
+};
 
 class VlEvent;
 struct VlEventWaitLink;
@@ -337,8 +371,7 @@ class VlProcess final {
     int m_state;  // Current state of the process
     VlProcessRef m_parentp = nullptr;  // Parent process, if exists
     std::set<VlProcess*> m_children;  // Active child processes
-    std::shared_ptr<VlForkSyncState> m_forkSyncOnKillp
-        = nullptr;  // Optional fork..join counter to decrement on kill
+    VlForkSyncOnKillRef m_forkSyncOnKillp;  // Optional fork..join counter to decrement on kill
     bool m_forkSyncOnKillDone = false;  // Ensure on-kill callback fires only once
     VlRNG m_rng;  // Per-process RNG (IEEE 1800-2023 18.14)
     VlClass* m_selfp = nullptr;  // std::process object of this process, not owned
