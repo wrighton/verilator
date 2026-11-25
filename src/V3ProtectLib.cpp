@@ -393,8 +393,11 @@ class ProtectVisitor final : public VNVisitor {
 
         // Delete
         txtp->add("void " + m_libName + "_protectlib_delete(void* vhandlep__V) {\n");
-        txtp->add(/**/ "VL_DO_DANGLING(delete static_cast<" + m_topName
-                  + "_container*>(vhandlep__V), vhandlep__V);\n");
+        castPtr(fl, txtp);
+        // A library model created by another simulator is then not deleted with its context
+        txtp->add(/**/ "handlep__V->contextp()->removeEndContextCb(" + m_libName
+                  + "_protectlib_delete, vhandlep__V);\n");
+        txtp->add(/**/ "VL_DO_DANGLING(delete handlep__V, handlep__V);\n");
         txtp->add("}\n\n");
 
         // Initial
