@@ -1,0 +1,10 @@
+%Warning-UNOPTFLAT: t/t_func_default_enum_orig.v:12:7: Signal unoptimizable: Circular combinational logic: 't.flip'
+                                                     : ... note: In instance 't'
+   12 |   bit flip;
+      |       ^~~~
+                    ... For warning description see https://verilator.org/warn/UNOPTFLAT?v=latest
+                    ... Use "/* verilator lint_off UNOPTFLAT */" and lint_on around source to disable this message.
+                    t/t_func_default_enum_orig.v:12:7:      Example path: t.flip
+                    t/t_func_default_enum_orig.v:35:20:      Example path: ASSIGNW
+                    t/t_func_default_enum_orig.v:12:7:      Example path: t.flip
+%Error: Exiting due to
