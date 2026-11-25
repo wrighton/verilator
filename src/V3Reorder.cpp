@@ -239,7 +239,8 @@ class ReorderVisitor final : public VNVisitor {
     // AstVarScope::user1p  -> ReorderVarStdVertex*.  Usage var, 0=not set yet
     // AstVarScope::user2p  -> ReorderVarPostVertex*.  Delayed assignment var, 0=not set yet
     // Ast*::user3p         -> ReorderLogicVertex*.  Statement (temporary only)
-    // Ast*::user4          -> int.  Current ordering number (reorderBlock usage)
+    // Ast*::user4          -> uint64_t.  Order of the statement in its block (cleanupBlockGraph,
+    //                                     reorderBlock)
 
     // STATE
     V3Graph* m_graphp = nullptr;  // Scoreboard of var usages/dependencies
@@ -247,6 +248,7 @@ class ReorderVisitor final : public VNVisitor {
     bool m_inDly = false;  // Inside ASSIGNDLY
     const char* m_noReorderWhy = nullptr;  // Reason we can't reorder
     std::vector<ReorderLogicVertex*> m_stmtStackps;  // Current statements being tracked
+    VDouble0 m_statIgnoredEdges;  // Edges into writers ahead of the last reader ignored
 
     // METHODS
     void cleanupBlockGraph(AstNode* nodep) {
@@ -287,6 +289,46 @@ class ReorderVisitor final : public VNVisitor {
         // Weak coloring to determine what needs to remain in order
         // This follows all step-relevant edges excluding PostEdges, which are done later
         m_graphp->weaklyConnected(&ReorderEdge::followScoreboard);
+
+        // The statements of one color keep their order (see below), and statements of different
+        // colors share no variable they must be ordered by, so any order of the statements that
+        // keeps that of each color is legal. An edge from a variable, or from its delayed
+        // assignment, into a writer ahead of a statement of the same color reading the variable
+        // can only close a cycle with that order, which acyclic() would cut one at a time,
+        // taking time quadratic in the number of such writers. Ignore these edges instead; this
+        // changes only how statements of different colors interleave.
+        uint64_t order = 0;
+        for (AstNode* const currp : VNList<AstNode>{nodep}) currp->user4(++order);
+        // Only statements of this block are reached, whose nodes reordering lower blocks keeps
+        const auto orderOf = [](const V3GraphVertex* vtxp) {
+            return vtxp->as<ReorderLogicVertex>()->nodep()->user4();
+        };
+        for (V3GraphVertex& vtx : m_graphp->vertices()) {
+            // The variable, whose readers all have its color
+            const V3GraphVertex* varp = nullptr;
+            if (vtx.is<ReorderVarStdVertex>()) {
+                varp = &vtx;
+            } else if (vtx.is<ReorderVarPostVertex>()) {
+                // Its only in-edge, never ignored, is from the variable it is the delayed
+                // assignment of
+                UASSERT(vtx.inSize1(), "Delayed assignment vertex without one variable");
+                varp = vtx.inEdges().frontp()->fromp();
+            }
+            if (!varp) continue;
+            uint64_t lastRead = 0;
+            for (const V3GraphEdge& edge : varp->inEdges()) {
+                if (edge.as<ReorderEdge>()->ignoreThisStep()) continue;
+                lastRead = std::max(lastRead, orderOf(edge.fromp()));
+            }
+            for (V3GraphEdge& edge : vtx.outEdges()) {
+                ReorderEdge* const edgep = edge.as<ReorderEdge>();
+                if (edgep->ignoreThisStep() || !edge.top()->is<ReorderLogicVertex>()) continue;
+                if (edge.top()->color() != varp->color()) continue;
+                if (orderOf(edge.top()) >= lastRead) continue;
+                edgep->setIgnoreThisStep();
+                ++m_statIgnoredEdges;
+            }
+        }
 
         // Add hard orderings between all nodes of same color, in the order they appeared
         std::unordered_map<uint32_t, ReorderLogicVertex*> lastOfColor;
@@ -537,7 +579,10 @@ class ReorderVisitor final : public VNVisitor {
     // CONSTRUCTORS
 public:
     explicit ReorderVisitor(AstNetlist* nodep) { iterate(nodep); }
-    ~ReorderVisitor() override = default;
+    ~ReorderVisitor() override {
+        V3Stats::addStat("Optimizations, Reorder, edges into writers ahead of readers",
+                         m_statIgnoredEdges);
+    }
 };
 
 }  // namespace
