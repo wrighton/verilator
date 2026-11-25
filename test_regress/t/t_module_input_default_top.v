@@ -25,6 +25,7 @@ module t (
   logic [5:0] sub_no;
   logic [0:-3] sub_po;
   logic [255:0] sub_ro;
+  logic [3:0] sub_zo;
   sub #(.P(2)) u_sub (
       .o(sub_o),
       .wo(sub_wo),
@@ -32,14 +33,19 @@ module t (
       .so(sub_so),
       .no(sub_no),
       .po(sub_po),
-      .ro(sub_ro)
+      .ro(sub_ro),
+      .zo(sub_zo)
   );
 
   logic [6:0] var_i = 7'd4;
   logic [6:0] var_o;
+  logic [3:0] var_zd = 4'd4;
+  logic [3:0] var_zo;
   sub #(.P(2)) u_sub_var (
       .i(var_i),
+      .zd(var_zd),
       .o(var_o),
+      .zo(var_zo),
       .wo(),
       .ao(),
       .so(),
@@ -52,6 +58,7 @@ module t (
   sub #(.P(2)) u_sub_const (
       .i(7'd4),
       .o(const_o),
+      .zo(),
       .wo(),
       .ao(),
       .so(),
@@ -69,6 +76,8 @@ module t (
     `checkh(sub_so, 4);
     `checkh(sub_no, 6'b01_10_10);
     `checkh(sub_po, 4'd5);
+    `checkh(sub_zo, 4'h8);
+    `checkh(var_zo, 4'd4);
     `checkh(sub_ro, {$realtobits(1.0e30), $realtobits(-0.0), $realtobits(1e-300),
                      $realtobits(2.5)});
     `checkh(var_o, 7'd13);
@@ -95,13 +104,15 @@ module sub #(
     input real r2 = -0.0,
     input real r3 = 1e-300,
     input real r4 = 1.25 * P,
+    input logic [3:0] zd = 4'b1x0z,
     output logic [6:0] o,
     output logic [76:0] wo,
     output logic [3:0] ao,
     output int so,
     output logic [5:0] no,
     output logic [0:-3] po,
-    output logic [255:0] ro
+    output logic [255:0] ro,
+    output logic [3:0] zo
 );
   /*verilator hier_block*/
   assign o = i + j + 7'(P);
@@ -110,5 +121,6 @@ module sub #(
   assign so = str.len() + 1;
   assign no = {n[-2], n[-1], n[0]};
   assign po = p;
+  assign zo = zd;
   assign ro = {$realtobits(r1), $realtobits(r2), $realtobits(r3), $realtobits(r4)};
 endmodule
