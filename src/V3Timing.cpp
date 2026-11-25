@@ -64,8 +64,10 @@
 //       as a whole with a pure value only if it changed it). No wait is listed this way if
 //       evaluating a trigger may start or end a process, fire an event, or call a DPI import not
 //       declared pure, or if the design has user C++ code ('$c' not declared pure, '`systemc_*')
-//       or DPI export tasks that may suspend. In a model with a wait listed this way, the waits
-//       awaiting trigger evaluation are ordered among the listed ones (evaluationKeyed).
+//       or DPI export tasks that may suspend. In a model with a wait listed this way, or with a
+//       'wait fork', which awaits trigger evaluation on the wait list of the fork-done event of
+//       its process, the waits awaiting trigger evaluation are ordered among the listed ones
+//       (evaluationKeyed).
 // - for each wait(cond) statement:
 //     - replace it with a loop like: while (!cond) @(<vars from cond>)
 // - for each fork:
@@ -987,6 +989,9 @@ class TimingControlVisitor final : public VNVisitor {
     const std::unique_ptr<const TimingHandleVisitor> m_handlesp;
     std::unordered_set<const AstVar*> m_waitedHandles;  // Tracked handles waited through
     SenExprBuilder* m_senExprBuilderp = nullptr;  // Sens expression builder for current m_scope
+    // Sentrees of the 'wait fork' controls not lowered yet, which wait on the fork-done event of
+    // their process instead of polling
+    std::unordered_set<const AstSenTree*> m_forkWaitSenTreeps;
 
     // Stats
     size_t m_statZeroDelays = 0;  // Number of statically known #0 delays
@@ -995,6 +1000,7 @@ class TimingControlVisitor final : public VNVisitor {
     size_t m_statSuspendableProcs = 0;  // Number of suspendable processes
     size_t m_statEventListWaits = 0;  // Number of event controls on an event's wait list
     size_t m_statQueueWaits = 0;  // Number of event controls on a wait queue
+    size_t m_statForkWaits = 0;  // Number of 'wait fork' on the fork-done event of the process
     size_t m_statHandleEventWaits = 0;  // Number of event controls on an interface event's list
     size_t m_statHandleWrites = 0;  // Number of writes of tracked handles notifying the scheduler
     size_t m_statHandleChangedWrites = 0;  // Number of those notifying only if the value changed
@@ -1892,6 +1898,12 @@ class TimingControlVisitor final : public VNVisitor {
             AstCAwait* const awaitResumep = awaitEvalp->cloneTree(false);
             VN_AS(awaitResumep->exprp(), CMethodHard)->method(VCMethod::SCHED_RESUMPTION);
             AstNode::addNext<AstNodeStmt, AstNodeStmt>(loopp, awaitResumep);
+            // A 'wait fork' only evaluates its trigger after a child of its process completes
+            if (m_forkWaitSenTreeps.erase(sentreep)) {
+                evalMethodp->method(VCMethod::SCHED_FORK_EVALUATION);
+                evalMethodp->pinsp()->addHereThisAsNext(
+                    new AstCExpr{flp, "vlProcess->forkDoneEvent()"});
+            }
             // Replace the event control with one explicit stmt chain:
             //   init -> [inits] -> [optional destructive pre-clears] -> loop -> awaitResumption
             AstNodeStmt* chainp = nullptr;
@@ -2120,11 +2132,16 @@ class TimingControlVisitor final : public VNVisitor {
     }
     void visit(AstWaitFork* nodep) override {
         if (m_hasProcess) {
+            // Waits as for 'wait (vlProcess->completedFork())', if not completed already
             FileLine* const flp = nodep->fileline();
-            AstCExpr* const exprp = new AstCExpr{flp, "vlProcess->completedFork()", 1};
-            AstWait* const waitp
-                = new AstWait{flp, exprp, takeDeferredAssertFlush(nodep->nextp())};
-            nodep->replaceWith(waitp);
+            AstCExpr* const condp = new AstCExpr{flp, "vlProcess->completedFork()", 1};
+            AstSenTree* const sentreep = new AstSenTree{
+                flp, new AstSenItem{flp, VEdgeType::ET_TRUE, condp->cloneTree(false)}};
+            m_forkWaitSenTreeps.emplace(sentreep);
+            ++m_statForkWaits;
+            nodep->replaceWith(new AstIf{
+                flp, new AstLogNot{flp, condp},
+                new AstEventControl{flp, sentreep, takeDeferredAssertFlush(nodep->nextp())}});
         } else {
             // never reached by any process; remove to avoid compilation error
             nodep->unlinkFrBack();
@@ -2239,7 +2256,7 @@ public:
         notifyHandleWrites();
         // Order the waits awaiting trigger evaluation among the waits woken on wait lists only if
         // any wait is listed, so a design listing none pays nothing for it
-        if (m_statHandleEventWaits) {
+        if (m_statHandleEventWaits || m_statForkWaits) {
             nodep->foreach([](AstCMethodHard* const methodp) {
                 if (methodp->method() == VCMethod::SCHED_EVALUATION) {
                     methodp->method(VCMethod::SCHED_EVALUATION_KEYED);
@@ -2270,6 +2287,8 @@ public:
         V3Stats::addStat("Timing, suspendable processes", m_statSuspendableProcs);
         V3Stats::addStat("Timing, event controls on event wait lists", m_statEventListWaits);
         V3Stats::addStat("Timing, event controls on wait queues", m_statQueueWaits);
+        V3Stats::addStat("Timing, wait fork without polling", m_statForkWaits);
+        UASSERT(m_forkWaitSenTreeps.empty(), "'wait fork' control not lowered");
         V3Stats::addStat("Timing, event controls on interface events through handles",
                          m_statHandleEventWaits);
         V3Stats::addStat("Timing, writes of handles notifying event controls", m_statHandleWrites);
