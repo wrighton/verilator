@@ -1279,7 +1279,7 @@ class ParamProcessor final {
             if (!tagp) return;
 
             AstNodeModule* const correctModp
-                = V3LinkDotIfaceCapture::followCellPath(newModp, tagp->m_cellPath);
+                = V3LinkDotIfaceCapture::followCellPathAt(refp, tagp->m_cellPath);
             UINFO(9, "  path fixup: " << refp << " cellPath='" << tagp->m_cellPath << "' -> "
                                       << (correctModp ? correctModp->name() : "<null>"));
             if (!correctModp || correctModp->dead()) return;
@@ -3299,12 +3299,11 @@ public:
             flp->v3error("In defparam, the path names no instance");
         }
     }
-    // Visitor retargeting the references of one module captured through one cell path. Only
-    // links of the references change, not the tree, so it iterates as a const visitor.
+    // Visitor retargeting the references of one module captured through a path to one cell.
+    // Only links of the references change, not the tree, so it iterates as a const visitor.
     class ParamIfaceRefRetargetVisitor final : public VNVisitorConst {
         const AstNodeModule* const m_modp;  // Module whose references are retargeted
-        const string& m_cellName;  // Cell path of the references
-        AstNodeModule* const m_targetModp;  // Specialized interface at the end of the path
+        const string m_cellKey;  // V3LinkDotIfaceCapture::cellPathKey of the cell
 
         void visit(AstNodeModule* nodep) override {
             // A nested class owns its references
@@ -3312,21 +3311,25 @@ public:
         }
         void visit(AstRefDType* nodep) override {
             const VIfaceCaptureTag* const tagp = nodep->captureTagp();
-            if (tagp && tagp->m_cellPath == m_cellName
-                && tagp->m_capturedInName == m_modp->origName()
-                && V3LinkDotIfaceCapture::retargetRefToModule(nodep, m_targetModp)) {
-                UINFO(9, "retargetIfaceRefs: " << nodep << " -> " << m_targetModp->prettyNameQ());
+            if (tagp && V3LinkDotIfaceCapture::cellPathKey(tagp->m_cellPath) == m_cellKey
+                && tagp->m_capturedInName == m_modp->origName()) {
+                // Per reference, as a generate block may have its own instance of that name
+                AstNodeModule* const targetModp
+                    = V3LinkDotIfaceCapture::followCellPathAt(nodep, tagp->m_cellPath);
+                if (targetModp && !targetModp->dead() && !targetModp->parameterizedTemplate()
+                    && V3LinkDotIfaceCapture::retargetRefToModule(nodep, targetModp)) {
+                    UINFO(9,
+                          "retargetIfaceRefs: " << nodep << " -> " << targetModp->prettyNameQ());
+                }
             }
             iterateChildrenConst(nodep);
         }
         void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
 
     public:
-        ParamIfaceRefRetargetVisitor(AstNodeModule* modp, const string& cellName,
-                                     AstNodeModule* targetModp)
+        ParamIfaceRefRetargetVisitor(AstNodeModule* modp, const string& cellName)
             : m_modp{modp}
-            , m_cellName{cellName}
-            , m_targetModp{targetModp} {
+            , m_cellKey{V3LinkDotIfaceCapture::cellPathKey(cellName)} {
             iterateConst(modp);
         }
     };
@@ -3341,10 +3344,7 @@ public:
         // interface instance's types through the instance are a rare extension.
         if (!V3LinkDotIfaceCapture::hasCapture(parentModp, cellName)) return;
         ++m_statRetargetWalks;
-        AstNodeModule* const correctModp
-            = V3LinkDotIfaceCapture::followCellPath(parentModp, cellName);
-        if (!correctModp || correctModp->dead() || correctModp->parameterizedTemplate()) return;
-        ParamIfaceRefRetargetVisitor{parentModp, cellName, correctModp};
+        ParamIfaceRefRetargetVisitor{parentModp, cellName};
     }
 
     // Resolve deferred class-scoped values and types reachable from rootp. In
