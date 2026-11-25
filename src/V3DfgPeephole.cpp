@@ -196,6 +196,9 @@ class V3DfgPeephole final : public DfgVisitor {
         size_t m_generation = 0;  // Generation number of this vertex - for uniqueness check
         size_t m_id = 0;  // Unique vertex ID (0 means unassigned) - for sorting
         bool m_isCachedVertex = false;  // This vertex is the vertex cached for its operation
+        bool m_sinksQueued = false;  // 'replace' put all sinks of this vertex on the work list
+        size_t m_nPoppedSinks = 0;  // Number of sinks taken off the work list since then
+        DfgVertex* m_poppedSinkp = nullptr;  // The first of those, if it is still a sink
     };
 
     // STATE
@@ -342,6 +345,13 @@ class V3DfgPeephole final : public DfgVisitor {
         removeFromIterList(vtxp);
         if (m_iterList.size() > 2 * m_dfg.size()) compactIterList();
 
+        // It might be recorded as a sink taken off the work list, see 'replace'
+        vtxp->foreachSource([&](DfgVertex& src) {
+            VertexInfo& srcInfo = m_vInfo[src];
+            if (srcInfo.m_poppedSinkp == vtxp) srcInfo.m_poppedSinkp = nullptr;
+            return false;
+        });
+
         // Gather source vertices - they might be duplicates, make unique using generation number
         incrementGeneration();
         std::vector<DfgVertex*> srcps;
@@ -431,12 +441,31 @@ class V3DfgPeephole final : public DfgVisitor {
 
         // Add new vertex to iter list to consider neighborhood
         addToIterList(resp);
-        // Add new vertex and sinks to work list as likely to match
+        // Add new vertex and sinks to work list as likely to match. If all other sinks are still
+        // on the work list, add only the moved sinks, as going through all sinks each time
+        // would be quadratic when many vertices are replaced with the same one, e.g. along a
+        // chain.
         addToWorkList(resp);
-        resp->foreachSink([&](DfgVertex& dst) {
-            addToWorkList(&dst);
-            return false;
-        });
+        VertexInfo& respInfo = m_vInfo[resp];
+        if (respInfo.m_sinksQueued && respInfo.m_nPoppedSinks <= 1) {
+            // In the order of 'resp->foreachSink', which has the moved sinks first, reversed
+            for (DfgVertex* const vtxp : vlstd::reverse_view(m_movedSinks)) addToWorkList(vtxp);
+            // Then the other sink taken off the work list since, if any. This gives the same
+            // work list as going through all sinks.
+            if (DfgVertex* const sinkp = respInfo.m_poppedSinkp) {
+                if (sinkp->foreachSource([&](const DfgVertex& src) { return &src == resp; })) {
+                    addToWorkList(sinkp);
+                }
+            }
+        } else {
+            respInfo.m_sinksQueued = true;
+            resp->foreachSink([&](DfgVertex& dst) {
+                addToWorkList(&dst);
+                return false;
+            });
+        }
+        respInfo.m_nPoppedSinks = 0;
+        respInfo.m_poppedSinkp = nullptr;
     }
 
     // Create a 32-bit DfgConst vertex
@@ -578,6 +607,18 @@ class V3DfgPeephole final : public DfgVisitor {
         return true;
     }
 
+    // Whether 'vtxp' is 'a OP (a OP b)', 'a OP (b OP a)', '(a OP b) OP a' or '(b OP a) OP a',
+    // which REMOVE_ACI_BINARY_* replace with the inner operation
+    template <typename Vertex>
+    static bool isAciRedundant(const Vertex* vtxp) {
+        const DfgVertex* const lhsp = vtxp->lhsp();
+        const DfgVertex* const rhsp = vtxp->rhsp();
+        const Vertex* const lSamep = lhsp->template cast<Vertex>();
+        const Vertex* const rSamep = rhsp->template cast<Vertex>();
+        return (lSamep && (isSame(lSamep->lhsp(), rhsp) || isSame(lSamep->rhsp(), rhsp)))
+               || (rSamep && (isSame(lhsp, rSamep->lhsp()) || isSame(lhsp, rSamep->rhsp())));
+    }
+
     // Generic transformations that apply to binary vertices. Returns true if vtxp was replaced,
     // or was put back on the work list to be processed later.
     template <typename Vertex>
@@ -621,12 +662,24 @@ class V3DfgPeephole final : public DfgVisitor {
             // Also commutative and idempotent
             if VL_CONSTEXPR_CXX17 (IsCommutative<Vertex>::value && IsIdempotent<Vertex>::value) {
                 if (lSamep && (isSame(lSamep->lhsp(), rhsp) || isSame(lSamep->rhsp(), rhsp))) {
+                    // Replace after 'lSamep' if it is replaced the same way, along a chain
+                    if (isAciRedundant(lSamep)
+                        && deferToOperand(vtxp, lSamep,
+                                          VDfgPeepholePattern::REMOVE_ACI_BINARY_LHS)) {
+                        return true;
+                    }
                     APPLYING(REMOVE_ACI_BINARY_LHS) {
                         replace(lSamep);
                         return true;
                     }
                 }
                 if (rSamep && (isSame(lhsp, rSamep->lhsp()) || isSame(lhsp, rSamep->rhsp()))) {
+                    // Replace after 'rSamep' if it is replaced the same way, along a chain
+                    if (isAciRedundant(rSamep)
+                        && deferToOperand(vtxp, rSamep,
+                                          VDfgPeepholePattern::REMOVE_ACI_BINARY_RHS)) {
+                        return true;
+                    }
                     APPLYING(REMOVE_ACI_BINARY_RHS) {
                         replace(rSamep);
                         return true;
@@ -3570,6 +3623,14 @@ class V3DfgPeephole final : public DfgVisitor {
                 m_workList.pop_back();
                 if (!m_vtxp) continue;  // If removed from worklist (deleted), move on
                 m_vInfo[m_vtxp].m_workListIndex = 0;  // No longer on work list
+                // Record it for sources with all their sinks queued, see 'replace'
+                m_vtxp->foreachSource([&](DfgVertex& src) {
+                    VertexInfo& srcInfo = m_vInfo[src];
+                    if (srcInfo.m_sinksQueued && ++srcInfo.m_nPoppedSinks == 1) {
+                        srcInfo.m_poppedSinkp = m_vtxp;
+                    }
+                    return false;
+                });
 
                 // Variables are special, just visit them, the visit might delete them
                 if (DfgVertexVar* const varp = m_vtxp->cast<DfgVertexVar>()) {
