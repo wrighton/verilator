@@ -249,6 +249,12 @@ module pattern_drv (
 );
   assign a = 2'b11;
 endmodule
+// Keep the constant-field value connection independent of the other port shapes.
+module pattern_value_drv (
+    input wire packed_pair_t a
+);
+  assign a = 2'b11;
+endmodule
 module cast_drv (
     input wire [1:0] a
 );
@@ -392,8 +398,11 @@ module t (
   cat2_drv u_cat2 (.a({ncw2, 1'b0}));
   rep_drv u_rep (.a({2{ncw3}}));
   wire npw1, npw2;
-  // An assignment pattern is a read expression, not an inout destination.
+  // A member-keyed assignment pattern is a value, not a net destination.
   pattern_drv u_pattern (.a('{hi: npw1, lo: npw2}));
+  wire nvaluepw;
+  // Check another value pattern independently, including its constant member.
+  pattern_value_drv u_pattern_value (.a('{hi: nvaluepw, lo: 1'b0}));
   wire ncastw1, ncastw2;
   cast_drv u_cast (.a(pair_t'({ncastw1, ncastw2})));
   unpacked_drv u_unpacked (.a(uw), .v(cv));
@@ -516,6 +525,7 @@ module t (
     `checkh(pw, 2'b10);
     `checkh(npw1, 1'bz);
     `checkh(npw2, 1'bz);
+    `checkh(nvaluepw, 1'bz);
     `checkh(ncastw1, 1'bz);
     `checkh(ncastw2, 1'bz);
     `checkh(u_unc.a, 2'b10);
