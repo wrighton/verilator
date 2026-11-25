@@ -559,6 +559,15 @@ public:
         ++s().m_hierGeneration;
     }
     static uint64_t hierarchyGeneration() VL_MT_SAFE { return s().m_hierGeneration; }
+    // Return a copy of the child scopes of a scope, nullptr for the top level, as models of
+    // other threads may change the hierarchy
+    static std::vector<const VerilatedScope*>
+    hierarchyChildren(const VerilatedScope* parentp) VL_MT_SAFE {
+        const VerilatedLockGuard lock{s().m_hierMapMutex};
+        const auto it = s().m_hierMap.find(parentp);
+        if (it == s().m_hierMap.end()) return {};
+        return it->second;
+    }
     // Return the number of the scope's insertion in the hierarchy, or 0 if it is not in it
     static uint64_t hierarchySerial(const VerilatedScope* scopep) VL_MT_SAFE {
         const VerilatedLockGuard lock{s().m_hierMapMutex};
