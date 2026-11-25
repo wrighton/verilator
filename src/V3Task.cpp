@@ -1931,6 +1931,7 @@ class TaskVisitor final : public VNVisitor {
         funcp->isStatic(false);
         funcp->isVirtual(true);
         funcp->entryPoint(true);
+        funcp->verilogFunction(tmplp->verilogFunction());
         funcp->argTypes(tmplp->argTypes());
         AstCCall* const callp = calleep ? new AstCCall{flp, calleep} : nullptr;
         if (callp && !tmplp->argTypes().empty()) callp->argTypes("vlSymsp");

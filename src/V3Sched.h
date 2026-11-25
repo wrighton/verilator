@@ -401,6 +401,8 @@ public:
     // Prepended to the trigger computation function.
     void addExtraTriggerAssignment(AstVarScope* vscp, uint32_t index) const;
 
+    // Whether a variable of the given type can have a value-change trigger
+    static bool supportsValueChange(const AstNodeDType* dtypep);
     // Set trigger bit at 'index' when vscp's value changes from previous evaluation.
     // Creates a prev variable: trigger[bit] = (vscp != prev); prev = vscp
     void addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc* initFuncp,
@@ -443,7 +445,8 @@ public:
 class VirtIfaceTriggers final {
 public:
     // One entry per VarScope of an interface member that may be written through a virtual
-    // interface. Each gets its own extra trigger bit with value-change detection.
+    // interface, or read through one by combinational logic. Each gets its own extra trigger
+    // bit with value-change detection.
     struct TriggerEntry final {
         const AstIface* m_ifacep;  // Interface type
         const AstVar* m_memberp;  // Member variable in the interface definition
@@ -451,6 +454,11 @@ public:
     };
 
     std::vector<TriggerEntry> m_triggers;
+    // Variables in the expressions by which combinational logic selects a virtual interface it
+    // reads through, other than virtual interface variables -- such as arrays of them, class
+    // handles holding them, and the arguments of functions reading through their formals --
+    // with the interfaces read. They are sensitive to the triggers of those interfaces.
+    std::unordered_map<const AstVarScope*, std::set<const AstIface*>> m_combReadRoots;
 
     void addTrigger(const AstIface* ifacep, const AstVar* memberp, AstVarScope* vscp) {
         m_triggers.push_back(TriggerEntry{ifacep, memberp, vscp});
@@ -461,6 +469,10 @@ public:
     // all entries of the same interface type for virtual interface reads.
     using VscpTrigMap = std::map<const AstVarScope*, uint32_t>;
     VscpTrigMap makeVscpToTrigMap(const TriggerKit& trigKit, uint32_t firstIndex) const;
+    // Maps each interface type to the trigger indices of its members, for virtual interface
+    // reads to look up in constant time
+    using IfaceTrigMap = std::unordered_map<const AstIface*, std::vector<uint32_t>>;
+    IfaceTrigMap makeIfaceToTrigMap(const TriggerKit& trigKit, uint32_t firstIndex) const;
 
     VL_UNCOPYABLE(VirtIfaceTriggers);
     VirtIfaceTriggers() = default;

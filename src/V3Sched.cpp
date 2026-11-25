@@ -80,24 +80,30 @@ void addTriggerIndices(ProcessList& procList, const TriggerKit& trigKit, bool pr
     }
 }
 
-// Add the VIF triggers that a given VarScope should be sensitive to.
+// Add the VIF triggers that a given VarScope should be sensitive to, if any.
 // Case 2 (non-virtual interface read): sensitive to that specific VarScope's trigger only
 // Case 3 (virtual interface read): sensitive to all member triggers of the same interface type
 void addTriggeredIface(const AstVarScope* vscp, const VirtIfaceTriggers::VscpTrigMap& vscpToTrig,
+                       const VirtIfaceTriggers::IfaceTrigMap& ifaceToTrig,
                        const VirtIfaceTriggers& virtIfaceTriggers, std::set<uint32_t>& triggers) {
+    // Add all member triggers of the given interface type
+    const auto addIface = [&](const AstIface* ifacep) {
+        const auto it = ifaceToTrig.find(ifacep);
+        if (it != ifaceToTrig.end()) triggers.insert(it->second.begin(), it->second.end());
+    };
     if (vscp->varp()->isVirtIface()) {
         // Virtual interface variable -- sensitive to all member triggers of this interface type
-        const AstIface* const ifacep = VN_AS(vscp->varp()->dtypep(), IfaceRefDType)->ifacep();
-        for (const auto& entry : virtIfaceTriggers.m_triggers) {
-            if (entry.m_ifacep == ifacep) {
-                const auto it = vscpToTrig.find(entry.m_vscp);
-                if (it != vscpToTrig.end()) triggers.insert(it->second);
-            }
-        }
+        addIface(VN_AS(vscp->varp()->dtypep(), IfaceRefDType)->ifacep());
     } else {
         // Non-virtual interface member -- sensitive to this VarScope's trigger only
         const auto it = vscpToTrig.find(vscp);
         if (it != vscpToTrig.end()) triggers.insert(it->second);
+    }
+    // Selects virtual interfaces read by combinational logic -- sensitive to all member
+    // triggers of their interface types
+    const auto rootIt = virtIfaceTriggers.m_combReadRoots.find(vscp);
+    if (rootIt != virtIfaceTriggers.m_combReadRoots.end()) {
+        for (const AstIface* const ifacep : rootIt->second) addIface(ifacep);
     }
     // May add none if sensIfacep() is set but no VIF write targets this member
 }
@@ -498,6 +504,8 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
 
     const auto& vifVscpToTrigIco
         = virtIfaceTriggers.makeVscpToTrigMap(trigKit, firstVifTriggerIndex);
+    const auto& vifIfaceToTrigIco
+        = virtIfaceTriggers.makeIfaceToTrigMap(trigKit, firstVifTriggerIndex);
 
     // Create and Order the body function
     AstCFunc* const icoFuncp = V3Order::order(
@@ -515,9 +523,8 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
             // Add other triggers
             if (varp->isWrittenByDpi())
                 triggers.insert(trigKit.extraTriggerIndex(dpiExportTriggerIndex));
-            if (vscp->varp()->sensIfacep() || vscp->varp()->isVirtIface()) {
-                addTriggeredIface(vscp, vifVscpToTrigIco, virtIfaceTriggers, triggers);
-            }
+            addTriggeredIface(vscp, vifVscpToTrigIco, vifIfaceToTrigIco, virtIfaceTriggers,
+                              triggers);
         });
     util::splitCheck(icoFuncp);
 
@@ -738,6 +745,17 @@ VirtIfaceTriggers::VscpTrigMap VirtIfaceTriggers::makeVscpToTrigMap(const Trigge
     return map;
 }
 
+VirtIfaceTriggers::IfaceTrigMap VirtIfaceTriggers::makeIfaceToTrigMap(const TriggerKit& trigKit,
+                                                                      uint32_t firstIndex) const {
+    IfaceTrigMap map;
+    uint32_t index = firstIndex;
+    for (const auto& entry : m_triggers) {
+        map[entry.m_ifacep].push_back(trigKit.extraTriggerIndex(index));
+        ++index;
+    }
+    return map;
+}
+
 //============================================================================
 // Top level entry-point to scheduling
 
@@ -877,6 +895,8 @@ void schedule(AstNetlist* netlistp) {
     const std::map<const AstVarScope*, std::vector<uint32_t>> timingTriggers
         = timingKit.externalTriggerIndices(trigKit);
     const auto& vifVscpToTrig = virtIfaceTriggers.makeVscpToTrigMap(trigKit, firstVifTriggerIndex);
+    const auto& vifIfaceToTrig
+        = virtIfaceTriggers.makeIfaceToTrigMap(trigKit, firstVifTriggerIndex);
     const V3Order::ExternalTriggersProvider externalTriggers
         = [&](const AstVarScope* vscp, std::set<uint32_t>& triggers) {
               auto it = timingTriggers.find(vscp);
@@ -885,9 +905,7 @@ void schedule(AstNetlist* netlistp) {
               if (vscp->varp()->isWrittenByDpi()) {
                   triggers.insert(trigKit.extraTriggerIndex(dpiExportTriggerIndex));
               }
-              if (vscp->varp()->sensIfacep() || vscp->varp()->isVirtIface()) {
-                  addTriggeredIface(vscp, vifVscpToTrig, virtIfaceTriggers, triggers);
-              }
+              addTriggeredIface(vscp, vifVscpToTrig, vifIfaceToTrig, virtIfaceTriggers, triggers);
           };
 
     AstCFunc* const actFuncp
