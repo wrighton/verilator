@@ -162,6 +162,10 @@ module t;
     end
     if (ok != 2'b11) $stop;
 
+    // The mode read as an operand of logical operators and a cast
+    if (!bit'(qux.cons_x.constraint_mode())) $stop;
+    if (bit'(qux.cons_z.constraint_mode()) || !bit'(qux.cons_x.constraint_mode())) $stop;
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
