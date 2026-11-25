@@ -2857,3 +2857,91 @@ void V3Timing::timingAll(AstNetlist* nodep) {
     }
     V3Global::dumpCheckGlobalTree("timing", 0, dumpTreeEitherLevel() >= 3);
 }
+
+//######################################################################
+// Delays the model may reach
+
+bool V3Timing::delaysReachable(AstNetlist* nodep) {
+    const AstVar* const schedVarp = nodep->delaySchedulerp();
+    if (!schedVarp) return false;
+    // A function of a class or its package runs only if called; all else may run: logic,
+    // initializers, functions of the model, and what C++ may call. A call of a virtual method may
+    // run its overrides, the virtual methods of that name in the classes extending or
+    // implementing its class, transitively.
+    std::unordered_map<const AstCFunc*, const AstClass*> classOf;
+    std::unordered_map<const AstClass*, std::vector<const AstClass*>> extending;
+    // Class -> name -> its virtual methods of that name
+    std::unordered_map<const AstClass*, std::unordered_map<std::string, std::vector<AstCFunc*>>>
+        virtuals;
+    std::vector<AstCFunc*> queue;
+    std::unordered_set<const AstCFunc*> reached;
+    // Called virtual methods whose overrides are reached
+    std::unordered_set<const AstCFunc*> overridden;
+    size_t classVisits = 0;
+    const auto reach = [&](AstCFunc* funcp) {
+        if (reached.emplace(funcp).second) queue.push_back(funcp);
+    };
+    for (AstNodeModule* modp = nodep->modulesp(); modp; modp = VN_AS(modp->nextp(), NodeModule)) {
+        const AstClass* const classp = VN_CAST(modp, Class);
+        if (classp) {
+            for (const AstClassExtends* extp = classp->extendsp(); extp;
+                 extp = VN_AS(extp->nextp(), ClassExtends)) {
+                if (const AstClass* const basep = extp->classOrNullp()) {
+                    extending[basep].push_back(classp);
+                }
+            }
+        }
+        const bool inClass = classp || VN_IS(modp, ClassPackage);
+        modp->foreach([&](AstCFunc* funcp) {
+            if (classp) {
+                classOf.emplace(funcp, classp);
+                if (funcp->isVirtual()) virtuals[classp][funcp->name()].push_back(funcp);
+            }
+            if (!inClass || funcp->funcPublic() || funcp->dpiExportImpl()) reach(funcp);
+        });
+    }
+    const auto reachOverrides = [&](const AstClass* classp, const std::string& name) {
+        std::vector<const AstClass*> classes{classp};
+        std::unordered_set<const AstClass*> visited{classp};
+        while (!classes.empty()) {
+            const AstClass* const basep = classes.back();
+            classes.pop_back();
+            const auto extIt = extending.find(basep);
+            if (extIt == extending.end()) continue;
+            for (const AstClass* const subp : extIt->second) {
+                if (!visited.emplace(subp).second) continue;
+                ++classVisits;
+                classes.push_back(subp);
+                const auto virtIt = virtuals.find(subp);
+                if (virtIt == virtuals.end()) continue;
+                const auto nameIt = virtIt->second.find(name);
+                if (nameIt == virtIt->second.end()) continue;
+                for (AstCFunc* const overridep : nameIt->second) reach(overridep);
+            }
+        }
+    };
+    bool found = false;
+    while (!found && !queue.empty()) {
+        AstCFunc* const funcp = queue.back();
+        queue.pop_back();
+        funcp->foreach([&](const AstNode* subp) {
+            if (const AstCMethodHard* const methodp = VN_CAST(subp, CMethodHard)) {
+                const AstVarRef* const refp = VN_CAST(methodp->fromp(), VarRef);
+                if (refp && refp->varp() == schedVarp
+                    && (methodp->method() == VCMethod::SCHED_DELAY
+                        || methodp->method() == VCMethod::SCHED_FORK_START)) {
+                    found = true;
+                }
+            } else if (const AstNodeCCall* const callp = VN_CAST(subp, NodeCCall)) {
+                AstCFunc* const calleep = callp->funcp();
+                reach(calleep);
+                if (!calleep->isVirtual() || !overridden.emplace(calleep).second) return;
+                const auto it = classOf.find(calleep);
+                if (it != classOf.end()) reachOverrides(it->second, calleep->name());
+            }
+        });
+        if (found) UINFO(4, "Delay reachable in " << funcp);
+    }
+    V3Stats::addStat("Timing, lib-create delay check, override class visits", classVisits);
+    return found;
+}
