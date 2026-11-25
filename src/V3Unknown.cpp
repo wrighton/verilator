@@ -128,7 +128,14 @@ class UnknownVisitor final : public VNVisitor {
                 elseStmtp = origStmtp->cloneTree(false);
                 AstVar* const varp = new AstVar{fl, VVarType::MODULETEMP, m_lvboundNames.get(prep),
                                                 prep->dtypep()};
-                addVar(varp);
+                // A nonblocking assignment cannot write an automatic variable
+                // (IEEE 1800-2023 10.4.2). Static, so also a static method can write it.
+                if (VN_IS(origStmtp, AssignDly)) {
+                    varp->lifetime(VLifetime::STATIC_EXPLICIT);
+                    m_modp->prependStmtsp(varp);
+                } else {
+                    addVar(varp);
+                }
                 AstNode* const prepCopyp = prep->clonep();
                 // As written by the original, e.g. read-write as a library call's inout argument
                 prepCopyp->replaceWith(new AstVarRef{fl, varp, prep->getVAccessRecurse()});
