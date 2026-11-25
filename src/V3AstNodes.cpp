@@ -2450,6 +2450,8 @@ void AstNetlist::deleteContents() {
     m_constPoolPkgp = nullptr;
     m_dollarUnitPkgp = nullptr;
     m_stdPackagep = nullptr;
+    m_ctorInitp = nullptr;
+    m_primaryDefaults.clear();
     m_dpiExportTriggerp = nullptr;
     m_delaySchedulerp = nullptr;
     m_nbaQueuep = nullptr;
