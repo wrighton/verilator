@@ -305,6 +305,101 @@ void orderSequentially(AstCFunc* funcp, ProcessList& procList) {
 }
 
 //============================================================================
+// Copies of the continuous drivers of kept ports (see V3Inst), and of the variables computed
+// from kept ports, where the driver is the sole one and can be read at any time
+
+class KeptPortDriversVisitor final : public VNVisitorConst {
+    // STATE
+    std::unordered_map<const AstVarScope*, size_t> m_writes;  // Number of writes of variables
+    // Continuous assignments of a whole variable from a plain value, in netlist order
+    std::vector<std::pair<const AstVarScope*, AstNodeExpr*>> m_assigns;
+    std::unordered_map<const AstVarScope*, AstNodeExpr*> m_drivers;  // Owned copies of drivers
+
+    // METHODS
+    // Whether the expression can be read before initial blocks have run: a pure function of
+    // variables and constants of integral or packed types, so dereferences no object. This
+    // includes selecting an element of an unpacked array, which is static storage.
+    static bool isPlainValue(AstNodeExpr* exprp) {
+        return !exprp->exists([](AstNode* nodep) {
+            if (!nodep->isPure()) return true;
+            if (!VN_IS(nodep, Const) && !VN_IS(nodep, VarRef) && !VN_IS(nodep, NodeUniop)
+                && !VN_IS(nodep, NodeBiop) && !VN_IS(nodep, NodeTriop)) {
+                return true;
+            }
+            return !nodep->dtypep()->skipRefp()->isIntegralOrPacked();
+        });
+    }
+
+    // VISITORS
+    void visit(AstAlways* nodep) override {
+        if (nodep->keyword() == VAlwaysKwd::CONT_ASSIGN) {
+            for (AstNodeStmt* const stmtp : nodep->stmtspList()) {
+                AstAssignW* const assignp = VN_CAST(stmtp, AssignW);
+                if (!assignp) continue;
+                const AstVarRef* const lhsp = VN_CAST(assignp->lhsp(), VarRef);
+                if (!lhsp || !isPlainValue(assignp->rhsp())) continue;
+                m_assigns.emplace_back(lhsp->varScopep(), assignp->rhsp());
+            }
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        if (nodep->access().isWriteOrRW()) ++m_writes[nodep->varScopep()];
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit KeptPortDriversVisitor(AstNetlist* netlistp) {
+        iterateConst(netlistp);
+        // The variables with a sole driver, and the ones reading each of them
+        std::unordered_set<const AstVarScope*> sole;
+        for (const std::pair<const AstVarScope*, AstNodeExpr*>& assign : m_assigns) {
+            const auto it = m_writes.find(assign.first);
+            if (it != m_writes.end() && it->second == 1) sole.emplace(assign.first);
+        }
+        std::unordered_map<const AstVarScope*, std::vector<const AstVarScope*>> readers;
+        std::vector<const AstVarScope*> pending;  // Used, readers not yet visited
+        for (const std::pair<const AstVarScope*, AstNodeExpr*>& assign : m_assigns) {
+            if (!sole.count(assign.first)) continue;
+            assign.second->foreach([&](const AstVarRef* refp) {
+                if (sole.count(refp->varScopep())) {
+                    readers[refp->varScopep()].push_back(assign.first);
+                }
+            });
+            if (assign.first->varp()->keepPort()) pending.push_back(assign.first);
+        }
+        // Used are the kept ports and what is computed from them
+        std::unordered_set<const AstVarScope*> used{pending.begin(), pending.end()};
+        while (!pending.empty()) {
+            const AstVarScope* const vscp = pending.back();
+            pending.pop_back();
+            const auto it = readers.find(vscp);
+            if (it == readers.end()) continue;
+            for (const AstVarScope* const readerp : it->second) {
+                if (used.emplace(readerp).second) pending.push_back(readerp);
+            }
+        }
+        // Copied, as scheduling then moves and transforms the logic
+        for (const std::pair<const AstVarScope*, AstNodeExpr*>& assign : m_assigns) {
+            if (!used.count(assign.first)) continue;
+            m_drivers.emplace(assign.first, assign.second->cloneTree(false));
+        }
+    }
+    ~KeptPortDriversVisitor() override { clear(); }
+    // Delete the copies, before the tree is checked for leaked nodes
+    void clear() {
+        for (std::pair<const AstVarScope* const, AstNodeExpr*>& driver : m_drivers) {
+            VL_DO_DANGLING(driver.second->deleteTree(), driver.second);
+        }
+        m_drivers.clear();
+    }
+    const std::unordered_map<const AstVarScope*, AstNodeExpr*>& drivers() const {
+        return m_drivers;
+    }
+};
+
+//============================================================================
 // Create simply ordered functions
 
 AstCFunc* createStatic(AstNetlist* netlistp, LogicClasses& logicClasses) {
@@ -758,6 +853,9 @@ void schedule(AstNetlist* netlistp) {
     // Prepare timing-related logic and external domains
     TimingKit timingKit = prepareTiming(netlistp);
 
+    // Find the kept port connections while all logic is still in the netlist
+    KeptPortDriversVisitor keptPortDrivers{netlistp};
+
     // Step 3: Gather and classify all logic in the design
     LogicClasses logicClasses = gatherLogicClasses(netlistp);
 
@@ -791,7 +889,7 @@ void schedule(AstNetlist* netlistp) {
     // for edge/change detection in sensitivity expressions, which this keeps track of.
     AstTopScope* const topScopep = netlistp->topScopep();
     AstScope* const scopeTopp = topScopep->scopep();
-    SenExprBuilder senExprBuilder{scopeTopp};
+    SenExprBuilder senExprBuilder{scopeTopp, &keptPortDrivers.drivers()};
 
     // Step 6: Create 'settle' region that restores the combinational invariant
     createSettle(netlistp, staticp, senExprBuilder, logicClasses, cgRefBindings);
@@ -945,6 +1043,12 @@ void schedule(AstNetlist* netlistp) {
 
     // Step 17: Add neccessary evaluation before awaits
     beforeTrigVisitor(netlistp, senExprBuilder, trigKit);
+    if (v3Global.opt.stats()) {
+        V3Stats::addStat("Scheduling, trigger initializers from kept port connections",
+                         senExprBuilder.keptPortInits());
+    }
+    // All trigger initializers are built, so the copies of the drivers are no longer needed
+    keptPortDrivers.clear();
 
     // Step 18: Clean up
     netlistp->clearStlFirstIterationp();
