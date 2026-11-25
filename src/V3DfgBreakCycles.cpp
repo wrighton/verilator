@@ -209,6 +209,14 @@ class TraceDriver final : public DfgVisitor {
     DfgVertex* m_splicep = nullptr;  // The splice vertex being traced, just for assertions
     // Result cache for reusing already traced vertices
     std::unordered_map<CacheKey, DfgVertex*, CacheKey::Hash, CacheKey::Equal> m_cache;
+    // A Concat whose only sink is a Concat in the same component is inside a tree of Concats.
+    // Map from a Concat in such a tree to the root of the tree and its offset in it, and from
+    // the root to the leaves, with their offsets, by increasing offset. Built when first
+    // needed, and invalidated by 'invalidateConcatTrees' after graph edits.
+    std::unordered_map<const DfgVertex*, std::pair<const DfgVertex*, uint32_t>> m_concatRoots;
+    std::unordered_map<const DfgVertex*, std::vector<std::pair<uint32_t, DfgVertex*>>>
+        m_concatLeaves;
+    size_t m_nVisited = 0;  // Number of vertices visited while tracing, for statistics
     // Cache for boundary vertices (where m_sccInfo.get(*vtxp) != m_component)
     std::unordered_map<CacheKey, DfgVertex*, CacheKey::Hash, CacheKey::Equal> m_boundaryCache;
     // A packed value traced in chunks (see 'traceChunked'): a packed variable, with index
@@ -297,6 +305,7 @@ class TraceDriver final : public DfgVisitor {
         DfgVertex* resp = nullptr;
 
         while (true) {
+            ++m_nVisited;
             UASSERT_OBJ(vtxp->isPacked(), vtxp, "Can only trace packed type vertices");
             UASSERT_OBJ(vtxp->size() > msb, vtxp, "Traced Vertex too narrow");
             UASSERT_OBJ(!m_defaultp || vtxp == m_splicep, vtxp, "Tracing wrong vertex");
@@ -712,14 +721,70 @@ class TraceDriver final : public DfgVisitor {
         RETURN_RESULT(tracePopIdx(vtxp->srcp()));
     }
 
+    // Whether 'vtx' is a Concat inside a tree of Concats, see 'm_concatRoots'
+    bool isInnerConcat(const DfgVertex& vtx) const {
+        if (!vtx.is<DfgConcat>() || m_sccInfo.get(vtx) != m_component) return false;
+        const DfgVertex* const sinkp = vtx.singleSink();
+        return sinkp && sinkp->is<DfgConcat>() && m_sccInfo.get(*sinkp) == m_component;
+    }
+
+    // Root of the tree of Concats containing 'vtx', and the offset of 'vtx' in it
+    std::pair<const DfgVertex*, uint32_t> concatRoot(DfgConcat& vtx) {
+        const auto it = m_concatRoots.find(&vtx);
+        if (it != m_concatRoots.end()) return it->second;
+        DfgVertex* rootp = &vtx;
+        while (isInnerConcat(*rootp)) {
+            ++m_nVisited;
+            rootp = rootp->singleSink();
+        }
+        // Enumerate the tree
+        std::vector<std::pair<uint32_t, DfgVertex*>>& leaves = m_concatLeaves[rootp];
+        std::vector<std::pair<uint32_t, DfgConcat*>> stack{{0, rootp->as<DfgConcat>()}};
+        while (!stack.empty()) {
+            const uint32_t offset = stack.back().first;
+            DfgConcat* const catp = stack.back().second;
+            stack.pop_back();
+            ++m_nVisited;
+            m_concatRoots.emplace(catp, std::make_pair(rootp, offset));
+            const std::pair<uint32_t, DfgVertex*> children[]
+                = {{offset, catp->rhsp()}, {offset + catp->rhsp()->width(), catp->lhsp()}};
+            for (const std::pair<uint32_t, DfgVertex*>& child : children) {
+                if (isInnerConcat(*child.second)) {
+                    stack.emplace_back(child.first, child.second->as<DfgConcat>());
+                } else {
+                    leaves.push_back(child);
+                }
+            }
+        }
+        std::sort(leaves.begin(), leaves.end());
+        return m_concatRoots.at(&vtx);
+    }
+
     void visit(DfgConcat* vtxp) override {
+        // If the traced bits are wholly in one leaf of the tree of Concats, continue with that
+        // leaf. There is nothing to reuse inside the tree, but a long chain of Concats, e.g.
+        // a wide value assembled bit by bit, is otherwise traced along its length for every bit.
+        const std::pair<const DfgVertex*, uint32_t> root = concatRoot(*vtxp);
+        const uint32_t lsb = m_lsb + root.second;
+        const uint32_t msb = m_msb + root.second;
+        const std::vector<std::pair<uint32_t, DfgVertex*>>& leaves = m_concatLeaves.at(root.first);
+        const auto it = std::prev(
+            std::upper_bound(leaves.begin(), leaves.end(), lsb,
+                             [](uint32_t bit, const std::pair<uint32_t, DfgVertex*>& leaf) {
+                                 return bit < leaf.first;
+                             }));
+        if (msb < it->first + it->second->width()) {
+            RETURN_RESULT_TAIL(it->second, msb - it->first, lsb - it->first);
+        }
         DfgVertex* const rhsp = vtxp->rhsp();
         DfgVertex* const lhsp = vtxp->lhsp();
         const uint32_t rWidth = rhsp->width();
-        // If the traced bits are wholly in the RHS
-        if (rWidth > m_msb) RETURN_RESULT_TAIL(rhsp, m_msb, m_lsb);
-        // If the traced bits are wholly in the LHS
-        if (m_lsb >= rWidth) RETURN_RESULT_TAIL(lhsp, m_msb - rWidth, m_lsb - rWidth);
+        // If the traced bits are wholly in one side, continue with that side
+        if (rWidth > m_msb || m_lsb >= rWidth) {
+            const bool inLhs = m_lsb >= rWidth;
+            const uint32_t offset = inLhs ? rWidth : 0;
+            RETURN_RESULT_TAIL(inLhs ? lhsp : rhsp, m_msb - offset, m_lsb - offset);
+        }
         // The traced bit spans both sides, trace both
         DfgConcat* const resp = make<DfgConcat>(vtxp, m_msb - m_lsb + 1);
         resp->rhsp(trace(rhsp, rWidth - 1, m_lsb));
@@ -939,6 +1004,15 @@ public:
         }
 #endif
     }
+    ~TraceDriver() {
+        V3Stats::addStatSum("Optimizations, DFG, BreakCycles, vertices traced", m_nVisited);
+    }
+
+    // Forget the trees of Concats, after the graph or its components changed
+    void invalidateConcatTrees() {
+        m_concatRoots.clear();
+        m_concatLeaves.clear();
+    }
 
     // Given a Vertex that is part of an SCC, return a vertex that is equivalent
     // to 'vtxp[lsb +: width]', but is not part of the same SCC. This should only
@@ -1096,6 +1170,10 @@ class IndependentBits final : public DfgVisitor {
     struct VertexState final {
         size_t m_rpoNumber = 0;  // Reverse Postorder Number of vertex
         bool m_isOnWorkList = false;  // Whether the vertex is on the work list
+        // Bits of a packed bit-local vertex (see 'isBitLocal') to recompute when visited, as
+        // only these can change. Empty if 'm_dirtyLsb > m_dirtyMsb'.
+        uint32_t m_dirtyLsb = 1;  // LSB of bits to recompute
+        uint32_t m_dirtyMsb = 0;  // MSB of bits to recompute
     };
 
     // STATE
@@ -1105,6 +1183,31 @@ class IndependentBits final : public DfgVisitor {
     // Work list for the traversal (min-queue of vertex RPO numbers)
     std::priority_queue<size_t, std::vector<size_t>, std::greater<size_t>> m_workQueue;
     std::unordered_map<const DfgVertex*, VertexState> m_vtxp2State;  // State of each vertex
+    // A Concat in an SCC whose only sink is another Concat in the SCC is inside a tree of
+    // Concats. Such inner Concats are not visited, the root of the tree computes its mask
+    // directly from the leaves of the tree, so a long chain of Concats is not visited along its
+    // length whenever a leaf changes. Map from inner Concat to its root, and its offset in it.
+    std::unordered_map<const DfgVertex*, std::pair<DfgVertex*, uint32_t>> m_innerConcats;
+    // Map from root of a tree of Concats to its leaves, with their offsets, by increasing offset
+    std::unordered_map<const DfgVertex*, std::vector<std::pair<uint32_t, const DfgVertex*>>>
+        m_concatLeaves;
+    // The sinks of a vertex in an SCC. The selects are ordered by LSB, with an implicit binary
+    // tree over them holding the maximum MSB in each subtree, to find those overlapping a
+    // range in time logarithmic in their number, whatever their widths.
+    struct SinkIndex final {
+        std::vector<DfgSel*> m_sels;  // Selects, by increasing LSB
+        // Node 'i' has children '2i' and '2i+1'; leaf 'm_nLeaves + j' is select 'j'. Each node
+        // holds 1 + the maximum MSB of the selects below it, or 0 if there are none.
+        std::vector<uint32_t> m_maxMsbP1s;
+        size_t m_nLeaves = 1;  // Number of leaves in the tree, a power of 2
+        std::vector<DfgVertex*> m_others;  // The other sinks
+    };
+    size_t m_nExamined = 0;  // Number of sinks examined when enqueueing sinks, for statistics
+    std::unordered_map<const DfgVertex*, SinkIndex> m_sinkIndex;  // Built when first needed
+    // The bits of the visited vertex to compute. Visitors of bit-local vertices compute only
+    // these, the others compute all bits.
+    uint32_t m_lsb = 0;  // LSB of bits to compute
+    uint32_t m_msb = 0;  // MSB of bits to compute
 
 #ifdef VL_DEBUG
     std::ofstream m_lineCoverageFile;  // Line coverage file, just for testing
@@ -1114,7 +1217,9 @@ class IndependentBits final : public DfgVisitor {
 
     // Retrieve the mask for the given vertex (create it with value 0 if needed)
     BitMask& mask(const DfgVertex& vtx) {
-        // Look up (or create) mask for 'vtx'
+        const auto it = m_vtxp2Mask.find(&vtx);
+        if (it != m_vtxp2Mask.end()) return it->second;
+        // Create mask for 'vtx'
         return m_vtxp2Mask
             .emplace(std::piecewise_construct,  //
                      std::forward_as_tuple(&vtx), std::forward_as_tuple(vtx))
@@ -1152,13 +1257,37 @@ class IndependentBits final : public DfgVisitor {
         }
     }
 
+    // Set 'dst[msb:lsb]' to 'src[msb-offset:lsb-offset]'
+    static void copyRange(V3Number& dst, const V3Number& src, uint32_t msb, uint32_t lsb,
+                          uint32_t offset) {
+        V3Number tmp{dst.fileline(), static_cast<int>(msb - lsb + 1), 0};
+        tmp.opSel(src, msb - offset, lsb - offset);
+        dst.opSelInto(tmp, static_cast<int>(lsb), static_cast<int>(msb - lsb + 1));
+    }
+
+    // Set 'm_msb:m_lsb' of the mask of the visited vertex 'dst' to the same bits of 'lhs AND rhs'
+    void andRange(V3Number& dst, const V3Number& lhs, const V3Number& rhs) {
+        const int width = static_cast<int>(m_msb - m_lsb + 1);
+        V3Number lTmp{dst.fileline(), width, 0};
+        V3Number rTmp{dst.fileline(), width, 0};
+        lTmp.opSel(lhs, m_msb, m_lsb);
+        rTmp.opSel(rhs, m_msb, m_lsb);
+        V3Number tmp{dst.fileline(), width, 0};
+        tmp.opAnd(lTmp, rTmp);
+        dst.opSelInto(tmp, static_cast<int>(m_lsb), width);
+    }
+
+    // Copy 'm_msb:m_lsb' of the mask of the driver 'srcp' into the same bits of 'm', which is
+    // packed, or all of it if not packed
     void propagateFromDriver(BitMask& m, const DfgVertex* srcp) {
         // If there is no driver, we are done
         if (!srcp) return;
         // If it is driven by a splice, we need to combine the masks of the drivers
         if (const DfgSplicePacked* const splicep = srcp->cast<DfgSplicePacked>()) {
             splicep->foreachDriver([&](const DfgVertex& src, uint32_t lo) {
-                m.num().opSelInto(MASK(&src).num(), lo, src.width());
+                const uint32_t hi = lo + src.width() - 1;
+                if (hi < m_lsb || lo > m_msb) return false;
+                copyRange(m.num(), MASK(&src).num(), std::min(hi, m_msb), std::max(lo, m_lsb), lo);
                 return false;
             });
             return;
@@ -1175,7 +1304,17 @@ class IndependentBits final : public DfgVisitor {
             return;
         }
         // Otherwise, we just use the mask of the single driver
-        m = MASK(srcp);
+        copyFrom(m, srcp);
+    }
+
+    // Copy 'm_msb:m_lsb' of the mask of 'srcp' into the same bits of 'm', which is packed, or
+    // all of it if not packed
+    void copyFrom(BitMask& m, const DfgVertex* srcp) {
+        if (srcp->isPacked()) {
+            copyRange(m.num(), MASK(srcp).num(), m_msb, m_lsb, 0);
+        } else {
+            m = MASK(srcp);
+        }
     }
 
     // VISITORS
@@ -1192,7 +1331,7 @@ class IndependentBits final : public DfgVisitor {
         DfgVertex* const srcp = vtxp->srcp();
         DfgVertex* const defaultp = vtxp->defaultp();
         // If there is a default driver, we start from that
-        if (defaultp) m = MASK(defaultp);
+        if (defaultp) copyFrom(m, defaultp);
         // Then propagate mask from the driver
         propagateFromDriver(m, srcp);
     }
@@ -1218,11 +1357,31 @@ class IndependentBits final : public DfgVisitor {
     }
 
     void visit(DfgConcat* vtxp) override {
+        V3Number& m = MASK(vtxp).num();
+        const auto leavesIt = m_concatLeaves.find(vtxp);
+        if (leavesIt != m_concatLeaves.end()) {
+            // Root of a tree of Concats, copy from the leaves overlapping the computed bits
+            const std::vector<std::pair<uint32_t, const DfgVertex*>>& leaves = leavesIt->second;
+            auto it = std::upper_bound(
+                leaves.begin(), leaves.end(), m_lsb,
+                [](uint32_t lsb, const std::pair<uint32_t, const DfgVertex*>& leaf) {
+                    return lsb < leaf.first;
+                });
+            for (--it; it != leaves.end() && it->first <= m_msb; ++it) {
+                const uint32_t offset = it->first;
+                const uint32_t lsb = std::max(m_lsb, offset);
+                const uint32_t msb = std::min(m_msb, offset + it->second->width() - 1);
+                copyRange(m, MASK(it->second).num(), msb, lsb, offset);
+            }
+            return;
+        }
         const DfgVertex* const rhsp = vtxp->rhsp();
         const DfgVertex* const lhsp = vtxp->lhsp();
-        V3Number& m = MASK(vtxp).num();
-        m.opSelInto(MASK(rhsp).num(), 0, rhsp->width());
-        m.opSelInto(MASK(lhsp).num(), rhsp->width(), lhsp->width());
+        const uint32_t rWidth = rhsp->width();
+        if (m_lsb < rWidth) copyRange(m, MASK(rhsp).num(), std::min(m_msb, rWidth - 1), m_lsb, 0);
+        if (m_msb >= rWidth) {
+            copyRange(m, MASK(lhsp).num(), m_msb, std::max(m_lsb, rWidth), rWidth);
+        }
     }
 
     void visit(DfgRep* vtxp) override {
@@ -1235,18 +1394,23 @@ class IndependentBits final : public DfgVisitor {
     }
 
     void visit(DfgSel* vtxp) override {
+        // Bits 'm_msb:m_lsb' are bits 'm_msb+lsb:m_lsb+lsb' of 'vtxp->fromp()'
         const uint32_t lsb = vtxp->lsb();
-        const uint32_t msb = lsb + vtxp->width() - 1;
-        MASK(vtxp).num().opSel(MASK(vtxp->fromp()).num(), msb, lsb);
+        V3Number& m = MASK(vtxp).num();
+        V3Number tmp{m.fileline(), static_cast<int>(m_msb - m_lsb + 1), 0};
+        tmp.opSel(MASK(vtxp->fromp()).num(), m_msb + lsb, m_lsb + lsb);
+        m.opSelInto(tmp, static_cast<int>(m_lsb), static_cast<int>(m_msb - m_lsb + 1));
     }
 
     void visit(DfgExtend* vtxp) override {
         const DfgVertex* const srcp = vtxp->srcp();
         const uint32_t sWidth = srcp->width();
-        V3Number& s = MASK(srcp).num();
         V3Number& m = MASK(vtxp).num();
-        m.opSelInto(s, 0, sWidth);
-        m.opSetRange(sWidth, vtxp->width() - sWidth, '1');
+        if (m_lsb < sWidth) copyRange(m, MASK(srcp).num(), std::min(m_msb, sWidth - 1), m_lsb, 0);
+        if (m_msb >= sWidth) {
+            const uint32_t lsb = std::max(m_lsb, sWidth);
+            m.opSetRange(lsb, m_msb - lsb + 1, '1');
+        }
     }
     void visit(DfgExtendS* vtxp) override {
         const DfgVertex* const srcp = vtxp->srcp();
@@ -1258,17 +1422,17 @@ class IndependentBits final : public DfgVisitor {
     }
 
     void visit(DfgNot* vtxp) override {  //
-        MASK(vtxp) = MASK(vtxp->srcp());
+        copyRange(MASK(vtxp).num(), MASK(vtxp->srcp()).num(), m_msb, m_lsb, 0);
     }
 
     void visit(DfgAnd* vtxp) override {  //
-        MASK(vtxp).num().opAnd(MASK(vtxp->lhsp()).num(), MASK(vtxp->rhsp()).num());
+        andRange(MASK(vtxp).num(), MASK(vtxp->lhsp()).num(), MASK(vtxp->rhsp()).num());
     }
     void visit(DfgOr* vtxp) override {  //
-        MASK(vtxp).num().opAnd(MASK(vtxp->lhsp()).num(), MASK(vtxp->rhsp()).num());
+        andRange(MASK(vtxp).num(), MASK(vtxp->lhsp()).num(), MASK(vtxp->rhsp()).num());
     }
     void visit(DfgXor* vtxp) override {  //
-        MASK(vtxp).num().opAnd(MASK(vtxp->lhsp()).num(), MASK(vtxp->rhsp()).num());
+        andRange(MASK(vtxp).num(), MASK(vtxp->lhsp()).num(), MASK(vtxp->rhsp()).num());
     }
 
     void visit(DfgAdd* vtxp) override {
@@ -1406,7 +1570,7 @@ class IndependentBits final : public DfgVisitor {
 
     void visit(DfgCond* vtxp) override {
         if (MASK(vtxp->condp()).isOnes()) {
-            MASK(vtxp).num().opAnd(MASK(vtxp->thenp()).num(), MASK(vtxp->elsep()).num());
+            andRange(MASK(vtxp).num(), MASK(vtxp->thenp()).num(), MASK(vtxp->elsep()).num());
         }
     }
 
@@ -1416,21 +1580,214 @@ class IndependentBits final : public DfgVisitor {
 
 #undef MASK
 
-    // Enqueue sinks of vertex to work list for traversal - only called from constructor
-    void enqueueSinks(DfgVertex& vtx) {
-        vtx.foreachSink([&](DfgVertex& sink) {
-            // Ignore if sink is not part of an SCC, already has all bits marked independent
-            if (!m_sccInfo.get(sink)) return false;
-            // Otherwise just enqueue it
-            VertexState& state = m_vtxp2State.at(&sink);
-            if (!state.m_isOnWorkList) {
-                UINFO(9, "Enqueuing vertex " << &sink << " " << sink.typeName());
-                m_workQueue.push(state.m_rpoNumber);
+    // Whether each bit of the vertex depends only on bits of its sources at fixed positions,
+    // so after a source changed, only the corresponding bits of the vertex can change
+    static bool isBitLocal(const DfgVertex& vtx) {
+        if (!vtx.isPacked()) return false;
+        switch (vtx.type()) {
+        case VDfgType::And:
+        case VDfgType::Concat:
+        case VDfgType::Cond:
+        case VDfgType::Extend:
+        case VDfgType::Not:
+        case VDfgType::Or:
+        case VDfgType::Sel:
+        case VDfgType::SplicePacked:
+        case VDfgType::VarPacked:
+        case VDfgType::Xor: return true;
+        default: return false;
+        }
+    }
+
+    // Add 'msb:lsb' to the bits of 'vtx' to recompute
+    static void addDirty(VertexState& state, uint32_t msb, uint32_t lsb) {
+        if (state.m_dirtyLsb > state.m_dirtyMsb) {
+            state.m_dirtyLsb = lsb;
+            state.m_dirtyMsb = msb;
+        } else {
+            state.m_dirtyLsb = std::min(state.m_dirtyLsb, lsb);
+            state.m_dirtyMsb = std::max(state.m_dirtyMsb, msb);
+        }
+    }
+
+    // Enqueue sinks of vertex to work list for traversal, after bits 'msb:lsb' of it changed.
+    // Bit-local sinks are only enqueued if they read the changed bits, to recompute those.
+    void enqueueSinks(DfgVertex& vtx, uint32_t msb, uint32_t lsb) {
+        const SinkIndex& index = sinkIndex(vtx);
+        // Selects of the changed bits, as a wide vertex can have many: those with an LSB of at
+        // most 'msb', found by binary search, and an MSB of at least 'lsb', found by descending
+        // the tree into the subtrees reaching 'lsb'
+        const size_t end
+            = std::upper_bound(index.m_sels.begin(), index.m_sels.end(), msb,
+                               [](uint32_t bit, const DfgSel* selp) { return bit < selp->lsb(); })
+              - index.m_sels.begin();
+        // Entries are a node, its first select, and its number of selects
+        std::vector<std::tuple<size_t, size_t, size_t>> stack{{1, 0, index.m_nLeaves}};
+        while (!stack.empty()) {
+            size_t node;
+            size_t first;
+            size_t count;
+            std::tie(node, first, count) = stack.back();
+            stack.pop_back();
+            ++m_nExamined;
+            if (first >= end || index.m_maxMsbP1s[node] <= lsb) continue;
+            if (count == 1) {
+                enqueueSink(vtx, *index.m_sels[first], msb, lsb);
+                continue;
             }
-            state.m_isOnWorkList = true;
+            stack.emplace_back(2 * node + 1, first + count / 2, count / 2);
+            stack.emplace_back(2 * node, first, count / 2);
+        }
+        for (DfgVertex* const sinkp : index.m_others) {
+            ++m_nExamined;
+            enqueueSink(vtx, *sinkp, msb, lsb);
+        }
+    }
+
+    // The sinks of 'vtx' in an SCC (the others already have all bits marked independent)
+    const SinkIndex& sinkIndex(DfgVertex& vtx) {
+        const auto pair = m_sinkIndex.emplace(&vtx, SinkIndex{});
+        SinkIndex& index = pair.first->second;
+        if (!pair.second) return index;
+        vtx.foreachSink([&](DfgVertex& sink) {
+            if (!m_sccInfo.get(sink)) return false;
+            if (DfgSel* const selp = sink.cast<DfgSel>()) {
+                index.m_sels.push_back(selp);
+            } else {
+                index.m_others.push_back(&sink);
+            }
             return false;
         });
-    };
+        std::stable_sort(index.m_sels.begin(), index.m_sels.end(),
+                         [](const DfgSel* ap, const DfgSel* bp) { return ap->lsb() < bp->lsb(); });
+        while (index.m_nLeaves < index.m_sels.size()) index.m_nLeaves *= 2;
+        index.m_maxMsbP1s.resize(2 * index.m_nLeaves, 0);
+        for (size_t i = 0; i < index.m_sels.size(); ++i) {
+            const DfgSel* const selp = index.m_sels[i];
+            index.m_maxMsbP1s[index.m_nLeaves + i] = selp->lsb() + selp->width();
+        }
+        for (size_t node = index.m_nLeaves - 1; node > 0; --node) {
+            index.m_maxMsbP1s[node]
+                = std::max(index.m_maxMsbP1s[2 * node], index.m_maxMsbP1s[2 * node + 1]);
+        }
+        return index;
+    }
+
+    // Enqueue 'sinkr', a sink of 'vtx' in an SCC, after bits 'msb:lsb' of 'vtx' changed
+    void enqueueSink(DfgVertex& vtx, DfgVertex& sinkr, uint32_t msb, uint32_t lsb) {
+        const DfgSel* const selp = sinkr.cast<DfgSel>();
+        // An inner Concat is computed by the root of its tree, at the inner Concat's offset
+        DfgVertex* sinkp = &sinkr;
+        uint32_t offset = 0;
+        const auto innerIt = m_innerConcats.find(sinkp);
+        if (innerIt != m_innerConcats.end()) std::tie(sinkp, offset) = innerIt->second;
+        DfgVertex& sink = *sinkp;
+        VertexState& state = m_vtxp2State.at(&sink);
+        if (isBitLocal(sink)) {
+            if (selp) {
+                const uint32_t selLsb = selp->lsb();
+                const uint32_t selMsb = selLsb + selp->width() - 1;
+                addDirty(state, std::min(msb, selMsb) - selLsb, std::max(lsb, selLsb) - selLsb);
+            } else if (const DfgConcat* const catp = sinkr.cast<DfgConcat>()) {
+                const uint32_t rWidth = catp->rhsp()->width();
+                if (catp->rhsp() == &vtx) addDirty(state, msb + offset, lsb + offset);
+                if (catp->lhsp() == &vtx) {
+                    addDirty(state, msb + rWidth + offset, lsb + rWidth + offset);
+                }
+            } else if (const DfgSplicePacked* const splicep = sink.cast<DfgSplicePacked>()) {
+                splicep->foreachDriver([&](const DfgVertex& src, uint32_t lo) {
+                    if (&src == &vtx) addDirty(state, msb + lo, lsb + lo);
+                    return false;
+                });
+            } else if (const DfgCond* const condp = sink.cast<DfgCond>()) {
+                if (condp->condp() == &vtx) {
+                    addDirty(state, sink.width() - 1, 0);
+                } else {
+                    addDirty(state, msb, lsb);
+                }
+            } else {
+                // Same bits, or for Extend, the bits of the source
+                addDirty(state, msb, lsb);
+            }
+        }
+        // Enqueue it
+        if (!state.m_isOnWorkList) {
+            UINFO(9, "Enqueuing vertex " << &sink << " " << sink.typeName());
+            m_workQueue.push(state.m_rpoNumber);
+        }
+        state.m_isOnWorkList = true;
+    }
+
+    // Whether 'vtxp' is a Concat inside a tree of Concats in an SCC, see 'm_innerConcats'
+    bool isInnerConcat(const DfgVertex* vtxp) const {
+        if (!vtxp->is<DfgConcat>() || !m_sccInfo.get(*vtxp)) return false;
+        const DfgVertex* const sinkp = vtxp->singleSink();
+        return sinkp && sinkp->is<DfgConcat>() && m_sccInfo.get(*sinkp);
+    }
+
+    // Set up 'm_innerConcats' and 'm_concatLeaves'
+    void findConcatTrees(const std::vector<DfgVertex*>& vtxps) {
+        for (DfgVertex* const rootp : vtxps) {
+            if (!rootp->is<DfgConcat>() || !m_sccInfo.get(*rootp) || isInnerConcat(rootp)) {
+                continue;
+            }
+            std::vector<std::pair<uint32_t, const DfgVertex*>> leaves;
+            std::vector<std::pair<uint32_t, DfgVertex*>> stack{{0, rootp}};
+            while (!stack.empty()) {
+                const uint32_t offset = stack.back().first;
+                DfgConcat* const catp = stack.back().second->as<DfgConcat>();
+                stack.pop_back();
+                const uint32_t rWidth = catp->rhsp()->width();
+                const std::pair<uint32_t, DfgVertex*> children[]
+                    = {{offset, catp->rhsp()}, {offset + rWidth, catp->lhsp()}};
+                for (const std::pair<uint32_t, DfgVertex*>& child : children) {
+                    if (isInnerConcat(child.second)) {
+                        m_innerConcats.emplace(child.second, std::make_pair(rootp, child.first));
+                        stack.push_back(child);
+                    } else {
+                        leaves.push_back(child);
+                    }
+                }
+            }
+            if (leaves.size() == 2) continue;  // No inner Concats
+            std::sort(leaves.begin(), leaves.end());
+            m_concatLeaves.emplace(rootp, std::move(leaves));
+        }
+    }
+
+    // Visit 'vtx' to compute its mask, all of it, or bits 'm_msb:m_lsb' if bit-local. Returns
+    // true if the mask changed, and sets 'm_msb:m_lsb' to the bits that changed if packed.
+    bool updateMask(DfgVertex& vtx) {
+        BitMask& currMask = mask(vtx);
+        if (!vtx.isPacked()) {
+            const BitMask prevMask = currMask;
+            iterate(&vtx);
+            if (prevMask == currMask) return false;
+            // Check the mask only ever expands (no bit goes 1 -> 0)
+            if (VL_UNLIKELY(v3Global.opt.debugCheck())) {
+                UASSERT_OBJ(!currMask.isContractionOf(prevMask), &vtx, "Mask should only expand");
+            }
+            return true;
+        }
+        V3Number& num = currMask.num();
+        const int width = static_cast<int>(m_msb - m_lsb + 1);
+        V3Number prev{num.fileline(), width, 0};
+        prev.opSel(num, m_msb, m_lsb);
+        iterate(&vtx);
+        V3Number curr{num.fileline(), width, 0};
+        curr.opSel(num, m_msb, m_lsb);
+        V3Number changed{num.fileline(), width, 0};
+        changed.opXor(prev, curr);
+        if (changed.isEqZero()) return false;
+        // Check the mask only ever expands (no bit goes 1 -> 0)
+        if (VL_UNLIKELY(v3Global.opt.debugCheck())) {
+            V3Number cleared{num.fileline(), width, 0};
+            UASSERT_OBJ(cleared.opAnd(changed, prev).isEqZero(), &vtx, "Mask should only expand");
+        }
+        m_msb = m_lsb + changed.mostSetBitP1() - 1;
+        m_lsb = m_lsb + changed.leastSetBitP1() - 1;
+        return true;
+    }
 
     void dfsPostOrder(std::unordered_set<DfgVertex*>& visited,  //
                       std::vector<DfgVertex*>& postOrderEnumeration,  //
@@ -1500,12 +1857,16 @@ class IndependentBits final : public DfgVisitor {
             if (m_sccInfo.get(*vtxp)) continue;
             mask(*vtxp).setOnes();
         }
+        findConcatTrees(rpoEnumeration);
         for (DfgVertex* const vtxp : rpoEnumeration) {
             if (!m_sccInfo.get(*vtxp)) continue;
+            if (m_innerConcats.count(vtxp)) continue;
+            m_lsb = 0;
+            m_msb = vtxp->isPacked() ? vtxp->width() - 1 : 0;
             iterate(vtxp);
             UINFO(9, "Initial independent bits of " << vtxp << " " << vtxp->typeName()
                                                     << " are: " << mask(*vtxp).toString());
-            if (!mask(*vtxp).isZero()) enqueueSinks(*vtxp);
+            if (!mask(*vtxp).isZero()) enqueueSinks(*vtxp, m_msb, m_lsb);
         }
 
         // Propagate independent bits until no more changes are made
@@ -1517,28 +1878,25 @@ class IndependentBits final : public DfgVisitor {
             // Should not enqueue vertices that are not in an SCC
             UASSERT_OBJ(m_sccInfo.get(*currp), currp, "Vertex should be in an SCC");
 
-            // Grab current mask of item
-            const BitMask& currMask = mask(*currp);
-            // Remember current mask so we can check if it changed
-            const BitMask prevMask = currMask;
+            // The bits to compute
+            VertexState& state = m_vtxp2State.at(currp);
+            if (isBitLocal(*currp)) {
+                m_lsb = state.m_dirtyLsb;
+                m_msb = state.m_dirtyMsb;
+            } else {
+                m_lsb = 0;
+                m_msb = currp->isPacked() ? currp->width() - 1 : 0;
+            }
+            state.m_dirtyLsb = 1;
+            state.m_dirtyMsb = 0;
 
             UINFO(9, "Analyzing independent bits of " << currp << " " << currp->typeName());
 
-            // Dispatch it to update the mask in the visit methods
-            iterate(currp);
-
-            // If mask changed, enqueue sinks
-            if (prevMask != currMask) {
-                UINFO(9, "Independent bits of "  //
-                             << currp << " " << currp->typeName() << " changed"  //
-                             << "\n    form: " << prevMask.toString()
-                             << "\n      to: " << currMask.toString());
-                enqueueSinks(*currp);
-                // Check the mask only ever expands (no bit goes 1 -> 0)
-                if (VL_UNLIKELY(v3Global.opt.debugCheck())) {
-                    UASSERT_OBJ(!currMask.isContractionOf(prevMask), currp,
-                                "Mask should only expand");
-                }
+            // Dispatch it to update the mask in the visit methods, if changed, enqueue sinks
+            if (updateMask(*currp)) {
+                UINFO(9, "Independent bits of " << currp << " " << currp->typeName()
+                                                << " changed to: " << mask(*currp).toString());
+                enqueueSinks(*currp, m_msb, m_lsb);
             }
         }
     }
@@ -1550,7 +1908,10 @@ public:
     // of the values of vertices in the same SCC as the vertex resides in.
     static std::unordered_map<const DfgVertex*, BitMask> apply(DfgGraph& dfg,
                                                                const SccInfo& sccInfo) {
-        return std::move(IndependentBits{dfg, sccInfo}.m_vtxp2Mask);
+        IndependentBits independentBits{dfg, sccInfo};
+        V3Stats::addStatSum("Optimizations, DFG, BreakCycles, sinks examined",
+                            independentBits.m_nExamined);
+        return std::move(independentBits.m_vtxp2Mask);
     }
 };
 
@@ -1700,6 +2061,8 @@ class FixUp final {
 
         // If we broke the cycle through this vertex, update the SccInfo
         if (!vtx.hasSinks()) m_sccInfo.updateReplacement(vtx, *replacementp);
+        // The trees of Concats may have changed
+        m_traceDriver.invalidateConcatTrees();
     }
 
     void main(DfgVertexVar& var) {
