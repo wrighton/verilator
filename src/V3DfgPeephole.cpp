@@ -221,8 +221,12 @@ class V3DfgPeephole final : public DfgVisitor {
 #define APPLYING(id) if (checkApplying(VDfgPeepholePattern::id))
 
     // METHODS
+    bool isEnabled(VDfgPeepholePattern id) const {
+        return m_ctx.m_enabled[id] && !s_debugBisect.isStopped();
+    }
+
     bool checkApplying(VDfgPeepholePattern id) {
-        if (VL_UNLIKELY(!m_ctx.m_enabled[id] || s_debugBisect.isStopped())) return false;
+        if (VL_UNLIKELY(!isEnabled(id))) return false;
         UINFO(9, "Applying DFG pattern " << id.ascii());
         ++m_ctx.m_count[id];
         return true;
@@ -561,7 +565,21 @@ class V3DfgPeephole final : public DfgVisitor {
         return false;
     }
 
-    // Generic transformations that apply to binary vertices. Returns true if vtxp was replaced.
+    // If pattern 'id' is enabled and 'operandp' is still on the work list, put 'vtxp' back on the
+    // work list to be processed after it, and return true. Used before folding the constant of
+    // an operand of the same type into 'vtxp', when the chain of these continues below the
+    // operand: folding before the operand is final would repeat the fold for every vertex
+    // below, quadratic in the length of the chain.
+    bool deferToOperand(DfgVertex* vtxp, DfgVertex* operandp, VDfgPeepholePattern id) {
+        if (!isEnabled(id) || !m_vInfo[operandp].m_workListIndex) return false;
+        removeFromWorkList(operandp);
+        addToWorkList(vtxp);
+        addToWorkList(operandp);
+        return true;
+    }
+
+    // Generic transformations that apply to binary vertices. Returns true if vtxp was replaced,
+    // or was put back on the work list to be processed later.
     template <typename Vertex>
     VL_ATTR_WARN_UNUSED_RESULT bool binary(Vertex* const vtxp) {
         static_assert(std::is_base_of<DfgVertexBinary, Vertex>::value, "Must invoke on binary");
@@ -618,6 +636,13 @@ class V3DfgPeephole final : public DfgVisitor {
 
             if (lConstp && rSamep) {
                 if (DfgConst* const rlConstp = rSamep->lhsp()->template cast<DfgConst>()) {
+                    // Fold after 'rSamep' if the chain continues below it
+                    const Vertex* const rrSamep = rSamep->rhsp()->template cast<Vertex>();
+                    if (rrSamep && rrSamep->lhsp()->template is<DfgConst>()
+                        && deferToOperand(vtxp, rSamep,
+                                          VDfgPeepholePattern::FOLD_ASSOC_BINARY_LHS_OF_RHS)) {
+                        return true;
+                    }
                     // TODO: Maybe only if !rSamep->hasMultipleSinks()
                     APPLYING(FOLD_ASSOC_BINARY_LHS_OF_RHS) {
                         DfgConst* const cp = makeZero(flp, resultDType<Vertex>(lConstp, rlConstp));
@@ -630,6 +655,13 @@ class V3DfgPeephole final : public DfgVisitor {
 
             if (lSamep && rConstp) {
                 if (DfgConst* const lrConstp = lSamep->rhsp()->template cast<DfgConst>()) {
+                    // Fold after 'lSamep' if the chain continues below it
+                    const Vertex* const llSamep = lSamep->lhsp()->template cast<Vertex>();
+                    if (llSamep && llSamep->rhsp()->template is<DfgConst>()
+                        && deferToOperand(vtxp, lSamep,
+                                          VDfgPeepholePattern::FOLD_ASSOC_BINARY_RHS_OF_LHS)) {
+                        return true;
+                    }
                     // TODO: Maybe only if !lSameps->hasMultipleSinks()
                     APPLYING(FOLD_ASSOC_BINARY_RHS_OF_LHS) {
                         DfgConst* const cp = makeZero(flp, resultDType<Vertex>(lrConstp, rConstp));
