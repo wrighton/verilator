@@ -141,6 +141,13 @@ public:
         m_fileline = moved.m_fileline;
         return *this;
     }
+    // Destroy the coroutine, if any, as one suspended forever, keeping its process state
+    void destroyForever() {
+        if (!m_coro) return;
+        m_coro.promise().m_forever = true;
+        destroy();
+        m_coro = nullptr;
+    }
     // Resume the coroutine if the handle isn't null and the process isn't killed
     void resume();
 #ifdef VL_DEBUG
@@ -404,17 +411,39 @@ public:
     size_t m_pendingDones = 0;  // done() calls seen before init() (e.g. early killed branch)
     bool m_inDone = false;  // Guard against re-entrant resume recursion from nested kills
     bool m_resumePending = false;  // Join reached zero again while inside done()
+    size_t m_resumers = 0;  // Forked process frames and kill callbacks that may call done()
 
     VlForkSyncState()  // Construct with a null coroutine handle
         : m_susp{VlProcessRef{}} {}
     void done(const char* filename = VL_UNKNOWN_FILENAME, int lineno = 0);
+    // Called when a resumer is gone; if none is left, the joining coroutine can never resume
+    void releaseResumer();
 };
 
 class VlForkSync final {
     // State shared between copies of this object
     std::shared_ptr<VlForkSyncState> m_state{std::make_shared<VlForkSyncState>()};
+    // Copies are passed to the forked processes, the original stays with the joining process
+    const bool m_isCopy = false;
 
 public:
+    // CONSTRUCTORS
+    VlForkSync() = default;
+    VlForkSync(const VlForkSync& other)
+        : m_state{other.m_state}
+        , m_isCopy{true} {
+        ++m_state->m_resumers;
+    }
+    // Moved into the frame of a forked process, keeping its resumer count
+    VlForkSync(VlForkSync&& other) noexcept
+        : m_state{std::move(other.m_state)}
+        , m_isCopy{other.m_isCopy} {}
+    VlForkSync& operator=(const VlForkSync&) = delete;
+    ~VlForkSync() {
+        if (m_isCopy && m_state) m_state->releaseResumer();
+    }
+
+    // METHODS
     // Create the join object and set the counter to the specified number
     void init(size_t count, VlProcessRef process) {
         const size_t pendingDones = m_state->m_pendingDones;
