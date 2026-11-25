@@ -118,6 +118,9 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
         std::set<const AstVar*> m_memberWrites;  // Class members written
         bool m_zeroDelay = false;  // Has a delay that may be zero
         bool m_wakeAny = false;  // Awaits something other than a delay or a sentree
+        bool m_sideEffect = false;  // Has an output or DPI effect
+        bool m_contextDpi = false;  // Calls a context DPI import
+        bool m_foreign = false;  // Runs user C code or a DPI import
         explicit Vertex(V3Graph* graphp)
             : V3GraphVertex{graphp} {}
     };
@@ -133,6 +136,8 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
     std::unique_ptr<V3CallTargets> m_callTargetsp;
     V3Graph m_graph;  // The call graph used for analysis
     Vertex* m_vtxp = nullptr;  // Vertex of the current body, if suspendable code
+    bool m_inSchedAwait = false;  // Under the await of a scheduler's method
+    const AstNodeExpr* m_loopCondp = nullptr;  // Condition of the current loop test
     std::vector<AstCFunc*> m_funcps;  // Functions not yet recorded when visited
     // External domains of the variables written by suspendables
     std::map<const AstVarScope*, std::set<AstSenTree*>> m_externalDomains;
@@ -185,6 +190,9 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
             keepp->m_waits.insert(mergep->m_waits.begin(), mergep->m_waits.end());
             keepp->m_zeroDelay |= mergep->m_zeroDelay;
             keepp->m_wakeAny |= mergep->m_wakeAny;
+            keepp->m_sideEffect |= mergep->m_sideEffect;
+            keepp->m_contextDpi |= mergep->m_contextDpi;
+            keepp->m_foreign |= mergep->m_foreign;
             for (V3GraphEdge* const ep : mergep->outEdges().unlinkable()) ep->relinkFromp(keepp);
             for (V3GraphEdge* const ep : mergep->inEdges().unlinkable()) ep->relinkTop(keepp);
             VL_DO_DANGLING(mergep->unlinkDelete(&m_graph), mergep);
@@ -248,6 +256,9 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
             }
             code.m_zeroDelay = vtxp->m_zeroDelay;
             code.m_wakeAny = vtxp->m_wakeAny;
+            code.m_sideEffect = vtxp->m_sideEffect;
+            code.m_contextDpi = vtxp->m_contextDpi;
+            code.m_foreign = vtxp->m_foreign;
             m_suspendables.push_back(std::move(code));
         }
 
@@ -263,6 +274,19 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
             V3Stats::addStat("Scheduling, Timing, external sensitivities, total", nDomains);
             V3Stats::addStat("Scheduling, Timing, unique external sentrees", sentreeps.size());
         }
+    }
+
+    // Record that suspendable code accesses runtime state
+    void noteEffect(AstNode* nodep) {
+        if (!m_vtxp || !util::accessesRuntimeState(nodep)) return;
+        // C code made for scheduling: the arguments of a scheduler's method describing the
+        // process, and the test for $finish of a loop, which $finish is ordered against anyway
+        if ((VN_IS(nodep, CExpr) || VN_IS(nodep, CStmt))
+            && (m_inSchedAwait || nodep == m_loopCondp)) {
+            return;
+        }
+        m_vtxp->m_sideEffect = true;
+        if (VN_IS(nodep, CExprUser) || VN_IS(nodep, CStmtUser)) m_vtxp->m_foreign = true;
     }
 
     // VISITORS
@@ -310,6 +334,8 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
             // A call is a coroutine, recorded with its own awaits
             m_vtxp->m_wakeAny = true;
         }
+        VL_RESTORER(m_inSchedAwait);
+        if (methodp) m_inSchedAwait = true;
         iterateChildrenConst(nodep);
     }
     void visit(AstNodeCCall* const nodep) override {
@@ -317,6 +343,11 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
         if (!m_vtxp) return;  // Not in suspendable code
         // Add edges to all functions that may be called, including through virtual calls
         for (AstCFunc* const cfuncp : m_callTargetsp->getTargets(nodep)) {
+            if (cfuncp->dpiImportWrapper()) {
+                m_vtxp->m_sideEffect = true;
+                m_vtxp->m_foreign = true;
+                if (cfuncp->dpiContext()) m_vtxp->m_contextDpi = true;
+            }
             addEdge(recordBody(cfuncp));
         }
     }
@@ -337,7 +368,15 @@ class ExternalDomainsVisitor final : public VNVisitorConst {
     void visit(AstConst*) override {}  // Accelerate
     void visit(AstVar*) override {}  // Accelerate
     void visit(AstVarScope*) override {}  // Accelerate
-    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+    void visit(AstLoopTest* nodep) override {
+        VL_RESTORER(m_loopCondp);
+        m_loopCondp = nodep->condp();
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override {
+        noteEffect(nodep);
+        iterateChildrenConst(nodep);
+    }
 
     // CONSTRUCTORS
     explicit ExternalDomainsVisitor(AstNetlist* nodep)

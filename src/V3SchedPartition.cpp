@@ -42,6 +42,7 @@
 #include "V3Sched.h"
 #include "V3Stats.h"
 
+#include <array>
 #include <memory>
 #include <tuple>
 #include <unordered_map>
@@ -276,9 +277,23 @@ public:
 // Computes the logic that must run in 'act' for this, and the variables it reads, whose
 // combinational drivers must then run in 'act' as well.
 class ZeroDelayPinning final {
+public:
+    // Why logic is pinned, the first that applies
+    enum Reason : uint8_t {
+        TRIGGERED,
+        SIDE_EFFECT,
+        READS,
+        WRITES_READ,
+        WRITES,
+        MEMBER,
+        _ENUM_END
+    };
+
+private:
     // TYPES
     // What a body of code accesses. A class or interface member accessed through a reference
-    // (including a virtual interface) is a member of every object, or every instance.
+    // (including a virtual interface) may be that member of any object, or of any instance a
+    // reference can be made to.
     struct Body final {
         std::unordered_set<const AstVarScope*> m_reads;  // Variables read
         std::unordered_set<const AstVarScope*> m_writes;  // Variables written
@@ -286,7 +301,10 @@ class ZeroDelayPinning final {
         std::unordered_set<const AstVar*> m_memberWrites;  // Members written through one
         std::unordered_set<const AstVarScope*> m_triggers;  // Variables triggering it
         SchedLogicVertex* m_logicp = nullptr;  // The logic, if not suspendable code
-        bool m_sideEffect = false;  // Has an effect ordered against other processes
+        bool m_sideEffect = false;  // Accesses runtime state shared with other processes
+        bool m_endsTimeStep = false;  // May end the time step: $finish, $stop or $fatal
+        bool m_contextDpi = false;  // Calls a context DPI import, which may call DPI exports
+        bool m_foreign = false;  // Runs user C code or a DPI import, which may access via VPI
         bool m_after = false;  // Runs after a #0
     };
 
@@ -295,12 +313,25 @@ class ZeroDelayPinning final {
     std::vector<Body> m_bodies;  // Logic, then suspendable code
     std::unordered_set<const AstVarScope*> m_written;  // Written after a #0
     std::unordered_set<const AstVarScope*> m_read;  // Read after a #0
-    std::unordered_set<const AstVar*> m_writtenVars;  // Variables of what is written after it
-    std::unordered_set<const AstVar*> m_readVars;  // Variables of what is read after it
+    std::unordered_set<const AstVar*> m_memberWritten;  // Members written through a reference
+    std::unordered_set<const AstVar*> m_memberRead;  // Members read through a reference
+    // Variables of what is written or read after a #0 that a reference can reach
+    std::unordered_set<const AstVar*> m_writtenVars;
+    std::unordered_set<const AstVar*> m_readVars;
     std::vector<const AstVarScope*> m_pendingWrites;  // Written, readers not yet woken
     std::vector<const AstVar*> m_pendingMembers;  // Members written, readers not yet woken
+    std::vector<const AstVarScope*> m_dpiWritten;  // Variables a DPI export may write
+    bool m_afterSideEffect = false;  // Code after a #0 has an output or DPI effect
+    bool m_afterContextDpi = false;  // Code after a #0 calls a context DPI import
+    bool m_anyMember = false;  // Whether any body accesses a member through a reference
+    bool m_afterForeign = false;  // Code after a #0 runs user C code or a DPI import
+    bool m_afterPublic = false;  // Code after a #0 accesses a variable public to VPI
+    // Interface instances, and interfaces of all instances, a reference may be made to
+    bool m_referencesFound = false;
+    std::unordered_set<const AstCell*> m_referencedCells;
+    std::unordered_set<const AstNodeModule*> m_referencedIfaces;
     std::vector<V3GraphVertex*> m_seeds;  // Pinned logic, and the variables it reads
-    size_t m_nPinned = 0;  // Number of pinned logic vertices
+    std::array<size_t, _ENUM_END> m_nPinned{};  // Number of pinned logic vertices, by reason
     size_t m_nVisits = 0;  // Number of bodies visited for being woken, for complexity
 
     // METHODS
@@ -320,13 +351,54 @@ class ZeroDelayPinning final {
             } else if (const AstNodeCCall* const callp = VN_CAST(np, NodeCCall)) {
                 // Including the overriding functions a virtual call may run
                 for (AstCFunc* const funcp : m_callTargetsp->getTargets(callp)) {
-                    if (funcp->dpiImportWrapper()) body.m_sideEffect = true;
+                    if (funcp->dpiImportWrapper()) {
+                        body.m_sideEffect = true;
+                        body.m_foreign = true;
+                        if (funcp->dpiContext()) body.m_contextDpi = true;
+                    }
                     if (visited.emplace(funcp).second) collect(funcp, body, visited);
                 }
-            } else if (np->isOutputter()) {
+            } else if (util::accessesRuntimeState(np)) {
                 body.m_sideEffect = true;
+                if (VN_IS(np, Finish) || VN_IS(np, Stop)) body.m_endsTimeStep = true;
+                if (VN_IS(np, CExprUser) || VN_IS(np, CStmtUser)) body.m_foreign = true;
             }
         });
+    }
+    // Find the interface instances a reference may be made to: those whose handle is read
+    void findReferences() {
+        m_referencesFound = true;
+        v3Global.rootp()->foreach([&](const AstNodeExpr* exprp) {
+            if (!exprp->dtypep()) return;
+            const AstNodeDType* dtypep = exprp->dtypep()->skipRefp();
+            bool array = false;
+            while (const AstNodeArrayDType* const adtypep = VN_CAST(dtypep, NodeArrayDType)) {
+                dtypep = adtypep->subDTypep()->skipRefp();
+                array = true;
+            }
+            const AstIfaceRefDType* const idtypep = VN_CAST(dtypep, IfaceRefDType);
+            if (!idtypep || idtypep->isVirtual()) return;
+            const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
+            if (refp && !refp->access().isReadOrRW()) return;
+            if (refp && !array && idtypep->cellp()) {
+                m_referencedCells.emplace(idtypep->cellp());
+            } else {
+                // Any instance of the interface
+                m_referencedIfaces.emplace(idtypep->ifaceViaCellp());
+            }
+        });
+    }
+    // Whether an access through a reference may access the variable: a class member, or a
+    // member of an interface instance a reference may be made to
+    bool reachable(const AstVarScope* vscp) {
+        const AstScope* const scopep = vscp->scopep();
+        if (!VN_IS(scopep->modp(), Iface)) return true;
+        if (!m_referencesFound) findReferences();
+        return m_referencedIfaces.count(scopep->modp())
+               || m_referencedCells.count(scopep->aboveCellp());
+    }
+    static bool isPublic(const AstVarScope* vscp) {
+        return vscp->varp()->isSigUserRdPublic() || vscp->varp()->isSigUserRWPublic();
     }
     template <typename T>
     static bool intersects(const std::unordered_set<T>& as, const std::unordered_set<T>& bs) {
@@ -335,29 +407,99 @@ class ZeroDelayPinning final {
         }
         return false;
     }
-    static bool varsIntersect(const std::unordered_set<const AstVarScope*>& vscps,
-                              const std::unordered_set<const AstVar*>& varps) {
+    // Whether any of the variables may be accessed as one of the members
+    bool reachableIntersects(const std::unordered_set<const AstVarScope*>& vscps,
+                             const std::unordered_set<const AstVar*>& varps) {
+        if (varps.empty()) return false;
         for (const AstVarScope* const vscp : vscps) {
-            if (varps.count(vscp->varp())) return true;
+            if (varps.count(vscp->varp()) && reachable(vscp)) return true;
         }
         return false;
     }
     void addWritten(const AstVarScope* vscp) {
         if (!m_written.emplace(vscp).second) return;
-        m_writtenVars.emplace(vscp->varp());
+        if (m_anyMember && reachable(vscp)) m_writtenVars.emplace(vscp->varp());
         m_pendingWrites.push_back(vscp);
     }
     // Record that the body runs after a #0, so what it writes wakes others
-    void markAfter(Body& body) {
+    void markAfter(size_t index) {
+        Body& body = m_bodies[index];
         if (body.m_after) return;
         body.m_after = true;
         m_read.insert(body.m_reads.begin(), body.m_reads.end());
-        for (const AstVarScope* const vscp : body.m_reads) m_readVars.emplace(vscp->varp());
+        if (m_anyMember) {
+            for (const AstVarScope* const vscp : body.m_reads) {
+                if (reachable(vscp)) m_readVars.emplace(vscp->varp());
+            }
+        }
+        m_memberRead.insert(body.m_memberReads.begin(), body.m_memberReads.end());
         m_readVars.insert(body.m_memberReads.begin(), body.m_memberReads.end());
         for (const AstVarScope* const vscp : body.m_writes) addWritten(vscp);
         for (const AstVar* const varp : body.m_memberWrites) {
-            if (m_writtenVars.emplace(varp).second) m_pendingMembers.push_back(varp);
+            m_writtenVars.emplace(varp);
+            if (m_memberWritten.emplace(varp).second) m_pendingMembers.push_back(varp);
         }
+        if (body.m_sideEffect) m_afterSideEffect = true;
+        if (!m_afterPublic) {
+            for (const AstVarScope* const vscp : body.m_reads) {
+                if (isPublic(vscp)) m_afterPublic = true;
+            }
+            for (const AstVarScope* const vscp : body.m_writes) {
+                if (isPublic(vscp)) m_afterPublic = true;
+            }
+        }
+        if (body.m_foreign && !m_afterForeign) {
+            // Through VPI it may access any public variable
+            m_afterForeign = true;
+            for (const Body& other : m_bodies) {
+                for (const std::unordered_set<const AstVarScope*>* const vscpsp :
+                     {&other.m_reads, &other.m_writes}) {
+                    for (const AstVarScope* const vscp : *vscpsp) {
+                        if (!isPublic(vscp)) continue;
+                        m_afterPublic = true;
+                        m_read.emplace(vscp);
+                        if (m_anyMember && reachable(vscp)) m_readVars.emplace(vscp->varp());
+                        if (vscp->varp()->isSigUserRWPublic()) addWritten(vscp);
+                    }
+                }
+            }
+        }
+        if (body.m_contextDpi && !m_afterContextDpi) {
+            // A DPI export it calls may write these
+            m_afterContextDpi = true;
+            for (const AstVarScope* const vscp : m_dpiWritten) addWritten(vscp);
+        }
+    }
+    // Why the logic must run in 'act', if it must
+    bool pinReason(const Body& body, Reason& reason) {
+        if (body.m_after) {
+            reason = TRIGGERED;
+        } else if (body.m_endsTimeStep || body.m_contextDpi
+                   || (body.m_sideEffect && m_afterSideEffect)
+                   || (body.m_foreign && m_afterPublic)) {
+            // Accessing runtime state other than variables is only ordered against code after a
+            // #0 that accesses such state too, except for ending the time step, calling DPI
+            // exports that may access anything, and accessing variables public to VPI that code
+            // after a #0 accesses
+            reason = SIDE_EFFECT;
+        } else if (intersects(body.m_reads, m_written)) {
+            reason = READS;
+        } else if (intersects(body.m_writes, m_read)) {
+            reason = WRITES_READ;
+        } else if (intersects(body.m_writes, m_written)) {
+            reason = WRITES;
+        } else if (m_anyMember
+                   && (intersects(body.m_memberReads, m_writtenVars)
+                       || intersects(body.m_memberWrites, m_readVars)
+                       || intersects(body.m_memberWrites, m_writtenVars)
+                       || reachableIntersects(body.m_reads, m_memberWritten)
+                       || reachableIntersects(body.m_writes, m_memberRead)
+                       || reachableIntersects(body.m_writes, m_memberWritten))) {
+            reason = MEMBER;
+        } else {
+            return false;
+        }
+        return true;
     }
 
 public:
@@ -385,6 +527,7 @@ public:
                 }
             }
         }
+        const size_t nLogic = m_bodies.size();
         for (const SuspendableCode& code : suspendables) {
             m_bodies.emplace_back();
             Body& body = m_bodies.back();
@@ -393,6 +536,22 @@ public:
             body.m_memberReads = code.m_memberReads;
             body.m_memberWrites = code.m_memberWrites;
             body.m_triggers = code.m_triggers;
+            body.m_sideEffect = code.m_sideEffect;
+            body.m_contextDpi = code.m_contextDpi;
+            body.m_foreign = code.m_foreign;
+        }
+        // The variables a DPI export may write, of those any logic accesses
+        std::unordered_set<const AstVarScope*> dpiWritten;
+        for (const Body& body : m_bodies) {
+            if (!body.m_memberReads.empty() || !body.m_memberWrites.empty()) m_anyMember = true;
+            for (const std::unordered_set<const AstVarScope*>* const vscpsp :
+                 {&body.m_reads, &body.m_writes}) {
+                for (const AstVarScope* const vscp : *vscpsp) {
+                    if (vscp->varp()->isWrittenByDpi() && dpiWritten.emplace(vscp).second) {
+                        m_dpiWritten.push_back(vscp);
+                    }
+                }
+            }
         }
         // The bodies each variable triggers, by variable scope, and by variable for members
         std::unordered_map<const AstVarScope*, std::vector<size_t>> triggered;
@@ -400,19 +559,15 @@ public:
         for (size_t i = 0; i < m_bodies.size(); ++i) {
             for (const AstVarScope* const vscp : m_bodies[i].m_triggers) {
                 triggered[vscp].push_back(i);
-                triggeredByVar[vscp->varp()].push_back(i);
+                if (m_anyMember && reachable(vscp)) triggeredByVar[vscp->varp()].push_back(i);
             }
         }
         // What runs after a #0, as a work list over what it writes, so each body is visited
-        // once for each variable triggering it. A DPI export can be called from such code,
-        // and a body awaiting something other than variables, e.g. a join, may be woken by it.
-        for (const std::pair<const AstVarScope* const, V3GraphVertex*>& item : varVtxps) {
-            if (item.first->varp()->isWrittenByDpi()) addWritten(item.first);
-        }
-        const size_t nLogic = m_bodies.size() - suspendables.size();
+        // once for each variable triggering it. A body awaiting something other than
+        // variables, e.g. a join, may be woken by such code.
         for (size_t i = 0; i < suspendables.size(); ++i) {
             const SuspendableCode& code = suspendables[i];
-            if (code.m_zeroDelay || code.m_wakeAny) markAfter(m_bodies[nLogic + i]);
+            if (code.m_zeroDelay || code.m_wakeAny) markAfter(nLogic + i);
         }
         while (!m_pendingWrites.empty() || !m_pendingMembers.empty()) {
             const std::vector<size_t>* indicesp = nullptr;
@@ -428,25 +583,18 @@ public:
             if (!indicesp) continue;
             for (const size_t i : *indicesp) {
                 ++m_nVisits;
-                markAfter(m_bodies[i]);
+                markAfter(i);
             }
         }
         // Pinned is what would otherwise observe, be observed or be overwritten in the wrong
-        // order. Code after a #0 may have side effects too.
+        // order
         for (size_t i = 0; i < nLogic; ++i) {
             const Body& body = m_bodies[i];
-            if (!body.m_after && !body.m_sideEffect && !intersects(body.m_reads, m_written)
-                && !intersects(body.m_writes, m_read) && !intersects(body.m_writes, m_written)
-                && !intersects(body.m_memberWrites, m_writtenVars)
-                && !varsIntersect(body.m_writes, m_writtenVars)
-                && !intersects(body.m_memberReads, m_writtenVars)
-                && !intersects(body.m_memberWrites, m_readVars)
-                && !varsIntersect(body.m_reads, m_writtenVars)
-                && !varsIntersect(body.m_writes, m_readVars)) {
-                continue;
-            }
-            UINFO(4, "Pinned to 'act' for #0: " << body.m_logicp->procp());
-            ++m_nPinned;
+            Reason reason;
+            if (!pinReason(body, reason)) continue;
+            UINFO(4, "Pinned to 'act' for #0, reason " << static_cast<int>(reason) << ": "
+                                                       << body.m_logicp->procp());
+            ++m_nPinned[reason];
             m_seeds.push_back(body.m_logicp);
             for (const AstVarScope* const vscp : body.m_reads) {
                 const auto it = varVtxps.find(vscp);
@@ -455,21 +603,18 @@ public:
         }
     }
     const std::vector<V3GraphVertex*>& seeds() const { return m_seeds; }
-    size_t nPinned() const { return m_nPinned; }
+    size_t nPinned() const {
+        size_t n = 0;
+        for (const size_t count : m_nPinned) n += count;
+        return n;
+    }
+    size_t nPinned(Reason reason) const { return m_nPinned[reason]; }
     size_t nVisits() const { return m_nVisits; }
 };
 
-void colorActiveRegion(V3Graph& graph, const std::vector<V3GraphVertex*>& seeds) {
-    // Work queue for depth first traversal
-    std::vector<V3GraphVertex*> queue{seeds};
-
-    // Trace from all SchedSenVertex
-    for (V3GraphVertex& vtx : graph.vertices()) {
-        if (const auto activeEventVtxp = vtx.cast<SchedSenVertex>()) {
-            queue.push_back(activeEventVtxp);
-        }
-    }
-
+// Color the vertices reached backwards from the queued ones as in the 'act' region, marking
+// the primary inputs reached as clocks if so asked
+void traceActiveRegion(std::vector<V3GraphVertex*>& queue, bool markClocks) {
     // Depth first traversal
     while (!queue.empty()) {
         // Pop next work item
@@ -487,7 +632,7 @@ void colorActiveRegion(V3Graph& graph, const std::vector<V3GraphVertex*>& seeds)
         // Mark top level ports that drive a sensitivity list
         if (SchedVarVertex* const vvtxp = vtx.cast<SchedVarVertex>()) {
             AstVar* const varp = vvtxp->varp();
-            if (varp->isPrimaryIO()) varp->setPrimaryClock();
+            if (markClocks && varp->isPrimaryIO()) varp->setPrimaryClock();
         }
 
         // If this is a logic vertex, also enqueue all variable vertices that are driven from this
@@ -500,6 +645,39 @@ void colorActiveRegion(V3Graph& graph, const std::vector<V3GraphVertex*>& seeds)
             }
         }
     }
+}
+
+size_t countActiveLogic(const V3Graph& graph) {
+    size_t count = 0;
+    for (const V3GraphVertex& vtx : graph.vertices()) {
+        if (vtx.is<SchedLogicVertex>() && vtx.color()) ++count;
+    }
+    return count;
+}
+
+// Returns the number of logic vertices the seeds moved to 'act' that are not seeds themselves
+size_t colorActiveRegion(V3Graph& graph, const std::vector<V3GraphVertex*>& seeds) {
+    // Work queue for depth first traversal
+    std::vector<V3GraphVertex*> queue;
+
+    // Trace from all SchedSenVertex
+    for (V3GraphVertex& vtx : graph.vertices()) {
+        if (const auto activeEventVtxp = vtx.cast<SchedSenVertex>()) {
+            queue.push_back(activeEventVtxp);
+        }
+    }
+    traceActiveRegion(queue, true);
+    if (seeds.empty()) return 0;
+
+    // Then from the logic pinned for #0 delays, which drives no clock
+    const size_t nBefore = countActiveLogic(graph);
+    size_t nSeeds = 0;
+    for (V3GraphVertex* const vtxp : seeds) {
+        if (vtxp->is<SchedLogicVertex>() && !vtxp->color()) ++nSeeds;
+    }
+    queue = seeds;
+    traceActiveRegion(queue, false);
+    return countActiveLogic(graph) - nBefore - nSeeds;
 }
 
 }  // namespace
@@ -525,10 +703,26 @@ LogicRegions partition(LogicClasses& logicClasses,
         seeds = pinning.seeds();
         if (v3Global.opt.stats()) {
             V3Stats::addStat("Scheduling, zero delay, logic pinned to 'act'", pinning.nPinned());
+            const std::array<std::pair<ZeroDelayPinning::Reason, const char*>,
+                             ZeroDelayPinning::_ENUM_END>
+                reasons{{{ZeroDelayPinning::TRIGGERED, "triggered after #0"},
+                         {ZeroDelayPinning::SIDE_EFFECT, "side effect"},
+                         {ZeroDelayPinning::READS, "reads written after #0"},
+                         {ZeroDelayPinning::WRITES_READ, "writes read after #0"},
+                         {ZeroDelayPinning::WRITES, "writes written after #0"},
+                         {ZeroDelayPinning::MEMBER, "member access"}}};
+            for (const std::pair<ZeroDelayPinning::Reason, const char*>& reason : reasons) {
+                V3Stats::addStat(std::string{"Scheduling, zero delay, logic pinned, "}
+                                     + reason.second,
+                                 pinning.nPinned(reason.first));
+            }
             V3Stats::addStat("Scheduling, zero delay, woken body visits", pinning.nVisits());
         }
     }
-    colorActiveRegion(*(graphp.get()), seeds);
+    const size_t nClosure = colorActiveRegion(*(graphp.get()), seeds);
+    if (v3Global.opt.stats() && v3Global.usesZeroDelay()) {
+        V3Stats::addStat("Scheduling, zero delay, logic moved for pinned logic reads", nClosure);
+    }
     if (dumpGraphLevel() >= 6) graphp->dumpDotFilePrefixed("sched-partitioned", true);
 
     LogicRegions result;
