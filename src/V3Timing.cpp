@@ -1501,9 +1501,6 @@ class TimingControlVisitor final : public VNVisitor {
     }
 
     AstNodeExpr* delayToIntegral(AstDelay* nodep, AstNodeExpr* valuep) {
-        const AstConst* const constp = VN_CAST(valuep, Const);
-        // The fork start sentinel is already in ticks
-        if (constp && constp->toUQuad() == std::numeric_limits<uint64_t>::max()) return valuep;
         return V3Timing::delayToTicks(valuep, nodep->timeunit());
     }
 
@@ -1710,12 +1707,9 @@ class TimingControlVisitor final : public VNVisitor {
         }
         iterateChildren(nodep);
     }
-    void visit(AstDelay* nodep) override {
-        UASSERT_OBJ(!nodep->isCycleDelay(), nodep,
-                    "Cycle delays should have been handled in V3AssertPre");
-        FileLine* const flp = nodep->fileline();
-
-        AstNodeExpr* valuep = delayToIntegral(nodep, nodep->lhsp()->unlinkFrBack());
+    // Return the delay value of 'nodep' in ticks, deciding scheduling support for #0
+    AstNodeExpr* scheduledDelayp(AstDelay* nodep) {
+        AstNodeExpr* const valuep = delayToIntegral(nodep, nodep->lhsp()->unlinkFrBack());
 
         // Statistics
         if (valuep->isZero()) {
@@ -1744,7 +1738,7 @@ class TimingControlVisitor final : public VNVisitor {
             if (valuep->isZero()) {
                 // Statically known #0 delay exists, schedule for #0 support
                 v3Global.setUsesZeroDelay();
-                if (!v3Global.zeroDelayFlp()) v3Global.zeroDelayFlp(flp);
+                if (!v3Global.zeroDelayFlp()) v3Global.zeroDelayFlp(nodep->fileline());
                 m_hasStaticZeroDelay = true;
                 // Don't warn on variable delays, as no point
                 m_unknownDelayFlps.clear();
@@ -1758,11 +1752,20 @@ class TimingControlVisitor final : public VNVisitor {
                 if (!m_hasStaticZeroDelay) m_unknownDelayFlps.push_back(nodep->fileline());
             }
         }
+        return valuep;
+    }
+    void visit(AstDelay* nodep) override {
+        UASSERT_OBJ(!nodep->isCycleDelay(), nodep,
+                    "Cycle delays should have been handled in V3AssertPre");
+        FileLine* const flp = nodep->fileline();
 
-        // Replace self with a 'co_await dlySched.delay(<valuep>)'
-        AstCMethodHard* const delayMethodp = new AstCMethodHard{
-            flp, new AstVarRef{flp, getCreateDelayScheduler(), VAccess::WRITE},
-            VCMethod::SCHED_DELAY, valuep};
+        // Replace self with a 'co_await dlySched.delay(<value>)', or 'forkStart()'
+        AstVarRef* const schedRefp = new AstVarRef{flp, getCreateDelayScheduler(), VAccess::WRITE};
+        AstCMethodHard* const delayMethodp
+            = nodep->isForkBranchStart()
+                  ? new AstCMethodHard{flp, schedRefp, VCMethod::SCHED_FORK_START}
+                  : new AstCMethodHard{flp, schedRefp, VCMethod::SCHED_DELAY,
+                                       scheduledDelayp(nodep)};
         delayMethodp->dtypeSetVoid();
         addProcessInfo(delayMethodp);
         addDebugInfo(delayMethodp);
@@ -2565,7 +2568,7 @@ class TimingReactiveVisitor final : public VNVisitor {
         const AstConst* const delayp = methodp && methodp->method() == VCMethod::SCHED_DELAY
                                            ? VN_CAST(methodp->pinsp(), Const)
                                            : nullptr;
-        if (delayp && delayp->toUQuad() == std::numeric_limits<uint64_t>::max()) {
+        if (methodp && methodp->method() == VCMethod::SCHED_FORK_START) {
             // The start of a forked process (see V3Fork), which starts in the Reactive region
             VNRelinker handle;
             awaitp->unlinkFrBack(&handle);
@@ -2704,9 +2707,9 @@ class TimingReactiveVisitor final : public VNVisitor {
             // must stay in the dynamic scheduler's own steps. Queue waits stay there through
             // release of the selected turn; get/peek restore the region before writing the ref.
             const VCMethod method = methodp->method();
-            if (method != VCMethod::SCHED_DELAY && method != VCMethod::SCHED_TRIGGER
-                && method != VCMethod::SCHED_RESUMPTION && method != VCMethod::SCHED_EVENT_TRIGGER
-                && method != VCMethod::FORK_JOIN) {
+            if (method != VCMethod::SCHED_DELAY && method != VCMethod::SCHED_FORK_START
+                && method != VCMethod::SCHED_TRIGGER && method != VCMethod::SCHED_RESUMPTION
+                && method != VCMethod::SCHED_EVENT_TRIGGER && method != VCMethod::FORK_JOIN) {
                 return;
             }
         }
