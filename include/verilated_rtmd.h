@@ -54,6 +54,7 @@ public:
     const VerilatedModel* m_modelp;  // The model *instance* this belongs to
     const void* m_symsp = nullptr;  // Model symbol table base pointer
     const CData* m_activityFlagsp = nullptr;  // Pointer to activity flags array
+    const QData* m_evalStampp = nullptr;  // Stamp of the current evaluation, see VlEvent
     struct {  // The options the model was Verilated with
         bool m_trace = false;  // --trace
         bool m_traceParallel = false;  // Dump VCD in parallel (--threads, or hierarchical)
@@ -187,6 +188,8 @@ public:
         return false;
     }
 
+    // The descriptor of the model this set belongs to
+    const VlRtmd& rtmd() const { return *m_rtmdp; }
     // Same set of the same model
     bool operator==(const VlRtmdActSet& other) const {
         return m_rtmdp == other.m_rtmdp && m_index == other.m_index;
