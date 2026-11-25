@@ -26,6 +26,8 @@
 #include <deque>
 #include <functional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 class VSymEnt;
 
@@ -44,10 +46,16 @@ public:
 
 class V3LinkDotIfaceCapture final {
     static std::deque<VIfaceCaptureTag> s_tags;  // Owns every tag; a deque keeps addresses stable
+    // Original module name -> cellPathKey of the paths of the references captured in it. Static
+    // like s_tags, grown by tag() and cleared with s_tags by reset().
+    static std::unordered_map<string, std::unordered_set<string>> s_cellPaths;
     static bool s_enabled;
 
     // --- Internal-only methods (not called outside V3LinkDotIfaceCapture.cpp) ---
     static void enable(bool flag);  // LCOV_EXCL_LINE
+    // Last cell of a cell path without its array index, so paths through generate blocks or
+    // instance arrays to a cell of a name share it
+    static string cellPathKey(const string& cellPath);
     static void reset();
     static void clearModuleCache();
     static AstIfaceRefDType* ifaceRefFromVarDType(AstNodeDType* dtypep);
@@ -66,6 +74,9 @@ public:
     static bool enabled() { return s_enabled; }
     // Tag of a reference, or nullptr if untagged or copied into another module
     static const VIfaceCaptureTag* captureTag(AstRefDType* refp);
+    // Whether a reference captured in modp's original module may have a cell path to cellName,
+    // ignoring the generate blocks and array indices on the way
+    static bool hasCapture(const AstNodeModule* modp, const string& cellName);
     static AstNodeModule* findOwnerModule(AstNode* nodep);
     // Find a Typedef by name in a module's top-level statements
     static AstTypedef* findTypedefInModule(AstNodeModule* modp, const string& name);
