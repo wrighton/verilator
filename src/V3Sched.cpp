@@ -1748,8 +1748,16 @@ void markPrimaryRegOuts(const LogicRegions& logicRegions,
           };
     spread(readers, tainted);
     spread(combReaders, stateful);
+    // What a clock input reaches through combinational logic, which the wrapper passes to its
+    // clock update alone
+    std::unordered_set<const AstVar*> clocked;
+    v3Global.rootp()->foreach([&](const AstVar* varp) {
+        if (varp->isPrimaryInish() && varp->isPrimaryClock()) clocked.emplace(varp);
+    });
+    spread(combReaders, clocked);
     size_t regOuts = 0;
     size_t combOuts = 0;
+    size_t dataOuts = 0;
     v3Global.rootp()->foreach([&](AstVar* varp) {
         if (!varp->isPrimaryIO() || !varp->isWritable()) return;
         if (!tainted.count(varp)) {
@@ -1759,10 +1767,15 @@ void markPrimaryRegOuts(const LogicRegions& logicRegions,
         if (!stateful.count(varp)) {
             varp->setPrimaryCombOut();
             ++combOuts;
+            if (!clocked.count(varp)) {
+                varp->setPrimaryDataOut();
+                ++dataOuts;
+            }
         }
     });
     V3Stats::addStat("Scheduling, library outputs from the clock update alone", regOuts);
     V3Stats::addStat("Scheduling, library outputs of the inputs alone", combOuts);
+    V3Stats::addStat("Scheduling, library outputs of the data inputs alone", dataOuts);
 }
 
 }  // namespace
