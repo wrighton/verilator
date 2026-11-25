@@ -282,7 +282,10 @@ public:
     // Why logic is pinned, the first that applies
     enum Reason : uint8_t {
         TRIGGERED,
+        ENDS_TIME_STEP,
+        CONTEXT_DPI,
         SIDE_EFFECT,
+        PUBLIC,
         READS,
         WRITES_READ,
         WRITES,
@@ -323,6 +326,7 @@ private:
     std::vector<const AstVar*> m_pendingMembers;  // Members written, readers not yet woken
     std::vector<const AstVarScope*> m_dpiWritten;  // Variables a DPI export may write
     bool m_afterSideEffect = false;  // Code after a #0 has an output or DPI effect
+    size_t m_nAfterSideEffect = 0;  // Number of bodies after a #0 accessing runtime state
     bool m_afterContextDpi = false;  // Code after a #0 calls a context DPI import
     bool m_anyMember = false;  // Whether any body accesses a member through a reference
     bool m_afterForeign = false;  // Code after a #0 runs user C code or a DPI import
@@ -440,7 +444,10 @@ private:
             m_writtenVars.emplace(varp);
             if (m_memberWritten.emplace(varp).second) m_pendingMembers.push_back(varp);
         }
-        if (body.m_sideEffect) m_afterSideEffect = true;
+        if (body.m_sideEffect) {
+            m_afterSideEffect = true;
+            ++m_nAfterSideEffect;
+        }
         if (!m_afterPublic) {
             for (const AstVarScope* const vscp : body.m_reads) {
                 if (isPublic(vscp)) m_afterPublic = true;
@@ -475,14 +482,19 @@ private:
     bool pinReason(const Body& body, Reason& reason) {
         if (body.m_after) {
             reason = TRIGGERED;
-        } else if (body.m_endsTimeStep || body.m_contextDpi
-                   || (body.m_sideEffect && m_afterSideEffect)
-                   || (body.m_foreign && m_afterPublic)) {
+        } else if (body.m_endsTimeStep) {
+            // Ending the time step drops the processes waiting after a #0, so must come first
+            reason = ENDS_TIME_STEP;
+        } else if (body.m_contextDpi) {
+            // A DPI export it calls may access anything
+            reason = CONTEXT_DPI;
+        } else if (body.m_sideEffect && m_afterSideEffect) {
             // Accessing runtime state other than variables is only ordered against code after a
-            // #0 that accesses such state too, except for ending the time step, calling DPI
-            // exports that may access anything, and accessing variables public to VPI that code
-            // after a #0 accesses
+            // #0 that accesses such state too
             reason = SIDE_EFFECT;
+        } else if (body.m_foreign && m_afterPublic) {
+            // It may access through VPI the variables public to it that code after a #0 accesses
+            reason = PUBLIC;
         } else if (intersects(body.m_reads, m_written)) {
             reason = READS;
         } else if (intersects(body.m_writes, m_read)) {
@@ -610,6 +622,7 @@ public:
         return n;
     }
     size_t nPinned(Reason reason) const { return m_nPinned[reason]; }
+    size_t nAfterSideEffect() const { return m_nAfterSideEffect; }
     size_t nVisits() const { return m_nVisits; }
 };
 
@@ -709,7 +722,10 @@ LogicRegions partition(LogicClasses& logicClasses,
             const std::array<std::pair<ZeroDelayPinning::Reason, const char*>,
                              ZeroDelayPinning::_ENUM_END>
                 reasons{{{ZeroDelayPinning::TRIGGERED, "triggered after #0"},
+                         {ZeroDelayPinning::ENDS_TIME_STEP, "ends time step"},
+                         {ZeroDelayPinning::CONTEXT_DPI, "context DPI"},
                          {ZeroDelayPinning::SIDE_EFFECT, "side effect"},
+                         {ZeroDelayPinning::PUBLIC, "VPI-public access"},
                          {ZeroDelayPinning::READS, "reads written after #0"},
                          {ZeroDelayPinning::WRITES_READ, "writes read after #0"},
                          {ZeroDelayPinning::WRITES, "writes written after #0"},
@@ -719,6 +735,8 @@ LogicRegions partition(LogicClasses& logicClasses,
                                      + reason.second,
                                  pinning.nPinned(reason.first));
             }
+            V3Stats::addStat("Scheduling, zero delay, code after #0 with side effect",
+                             pinning.nAfterSideEffect());
             V3Stats::addStat("Scheduling, zero delay, woken body visits", pinning.nVisits());
         }
     }
