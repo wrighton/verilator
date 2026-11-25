@@ -1219,6 +1219,7 @@ private:
     // registration, which does not register the variable for its own class)
     std::set<const AstVar*>* const m_newWrittenVarsp;
     std::set<std::string> m_inlineWrittenVars;  // Per-instance tracking for inline constraints
+    std::set<std::string> m_setupWrittenVars;  // Paths registered by this constraint's setup
     VInsertionSet<AstVar*>* m_sizeConstrainedArraysp = nullptr;  // Arrays with size constraints
     // Disjunction "(or ...)" that a random index selects one of the objects of a rand handle
     // array read by the comparison being formatted, which conjoins it (see
@@ -2867,7 +2868,7 @@ private:
             fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
             VCMethod::RANDOMIZER_CLEAR_ELEM_VARS,
             new AstCExpr{fl, AstCExpr::Pure{}, "\"" + smtName + "\""}};
-        clearp->dtypeSetVoid();
+        clearp->dtypeSetBit();
         AstNodeStmt* stmtsp
             = new AstAssign{fl, new AstVarRef{fl, iterVarp, VAccess::WRITE}, new AstConst{fl, 0}};
 
@@ -2937,8 +2938,8 @@ private:
             stmtsp = AstNode::addNext(firstStmtp, stmtsp);
             loopp->addStmtsp(nextp->makeStmt());
         }
-        initp->addStmtsp(clearp->makeStmt());
-        initp->addStmtsp(nonNullp ? new AstIf{fl, nonNullp, stmtsp} : stmtsp);
+        initp->addStmtsp(
+            new AstIf{fl, clearp, nonNullp ? new AstIf{fl, nonNullp, stmtsp} : stmtsp});
     }
 
     void createSolverVarHandle(AstVar* const varp, const bool structSelOrCMeth,
@@ -3209,16 +3210,22 @@ private:
             const AstCMethodHard* const atp = VN_CAST(selp, CMethodHard);
             return atp && !VN_IS(atp->pinsp(), Const);
         });
+        // A select or handle array is registered in the setup of each constraint naming it, as a
+        // derived class overriding one of them does not run its setup
+        const bool inSetup = memberRefp || structSelOrCMeth || isClassRefArray;
         const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
+                                    : inSetup          ? m_setupWrittenVars.count(smtName) > 0
                                     : perClass         ? m_writtenVars.count(smtName) > 0
                                                        : !m_newWrittenVarsp->insert(varp).second;
         const bool shouldWriteVar = runtimeIndexPath || !alreadyWritten;
         if (shouldWriteVar) {
             // Track this variable path as written
-            if (m_inlineInitBlockp)
+            if (m_inlineInitBlockp) {
                 m_inlineWrittenVars.insert(smtName);
-            else if (perClass)
-                m_writtenVars.insert(smtName);
+            } else {
+                if (perClass) m_writtenVars.insert(smtName);
+                if (inSetup) m_setupWrittenVars.insert(smtName);
+            }
             // For global constraints, delete nodep after processing
             if (isGlobalConstrained && !nodep->backp()) VL_DO_DANGLING(pushDeletep(nodep), nodep);
 

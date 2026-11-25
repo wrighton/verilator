@@ -287,6 +287,8 @@ class VlRandomizer VL_NOT_FINAL {
     std::map<uint32_t, std::unordered_set<std::string>> m_uniqueArrays;
     // Variable name and constraint of each pin_frozen()
     std::vector<std::pair<std::string, std::string>> m_frozenPins;
+    // Arrays clear_elem_vars() unregistered since clearConstraints()
+    std::set<std::string> m_elemVarsCleared;
     const VlQueue<CData>* m_randmodep = nullptr;  // rand_mode state;
     const VlQueue<CData>* m_static_randmodep = nullptr;  // Static rand_mode state (shared)
     std::unordered_set<std::string> m_staticVars;  // Names of static rand vars
@@ -1205,8 +1207,9 @@ public:
     }
     void clearConstraints();
     void clearAll();  // Clear both constraints and variables
-    // Unregister the fields of the objects in a class handle array
-    void clear_elem_vars(const std::string& arrayName);
+    // Unregister the fields of the objects in a class handle array to register them again, once
+    // after clearConstraints(): returns whether it did
+    bool clear_elem_vars(const std::string& arrayName);
     // Unregister a variable
     void clear_var(const std::string& name) { m_vars.erase(name); }
     // Start solving in rounds, fixing each function argument variable after its round
