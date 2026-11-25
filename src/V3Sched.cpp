@@ -800,7 +800,7 @@ void schedule(AstNetlist* netlistp) {
     // Step 7: Partition the clocked and combinational (including hybrid) logic into pre/act/nba.
     // All clocks (signals referenced in an AstSenTree) generated via a blocking assignment
     // (including combinationally generated signals) are computed within the act region.
-    LogicRegions logicRegions = partition(logicClasses);
+    LogicRegions logicRegions = partition(logicClasses, timingKit.m_suspendables);
     if (v3Global.opt.stats()) {
         addSizeStat("size of region: Active Pre", logicRegions.m_pre);
         addSizeStat("size of region: Active", logicRegions.m_act);

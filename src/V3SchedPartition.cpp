@@ -36,12 +36,16 @@
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
 
+#include "V3CallTargets.h"
 #include "V3EmitV.h"
 #include "V3Graph.h"
 #include "V3Sched.h"
+#include "V3Stats.h"
 
+#include <memory>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -99,6 +103,7 @@ public:
         , m_vscp{vscp} {}
 
     AstVar* varp() const { return m_vscp->varp(); }
+    const AstVarScope* vscp() const { return m_vscp; }
 
     // LCOV_EXCL_START // Debug code
     string name() const override VL_MT_STABLE { return m_vscp->name(); }
@@ -262,9 +267,201 @@ public:
     }
 };
 
-void colorActiveRegion(V3Graph& graph) {
+// With a #0 delay, the 'inact' region runs suspendable code between the 'act' and 'nba'
+// sections. Inactive region events run only once the Active region is empty (IEEE 1800-2023
+// 4.4.2.3, 4.5), so a clocked process triggered in the time step must have run before them.
+// Running it in 'nba' instead is unobservable only if it does not interact with what can run
+// after a #0 delay in the time step: suspendable code with a delay that may be zero, and code
+// woken by what that writes, including combinational logic and re-triggered processes.
+// Computes the logic that must run in 'act' for this, and the variables it reads, whose
+// combinational drivers must then run in 'act' as well.
+class ZeroDelayPinning final {
+    // TYPES
+    // What a body of code accesses. A class or interface member accessed through a reference
+    // (including a virtual interface) is a member of every object, or every instance.
+    struct Body final {
+        std::unordered_set<const AstVarScope*> m_reads;  // Variables read
+        std::unordered_set<const AstVarScope*> m_writes;  // Variables written
+        std::unordered_set<const AstVar*> m_memberReads;  // Members read through a reference
+        std::unordered_set<const AstVar*> m_memberWrites;  // Members written through one
+        std::unordered_set<const AstVarScope*> m_triggers;  // Variables triggering it
+        SchedLogicVertex* m_logicp = nullptr;  // The logic, if not suspendable code
+        bool m_sideEffect = false;  // Has an effect ordered against other processes
+        bool m_after = false;  // Runs after a #0
+    };
+
+    // STATE
+    const std::unique_ptr<V3CallTargets> m_callTargetsp;  // To get the functions a call may call
+    std::vector<Body> m_bodies;  // Logic, then suspendable code
+    std::unordered_set<const AstVarScope*> m_written;  // Written after a #0
+    std::unordered_set<const AstVarScope*> m_read;  // Read after a #0
+    std::unordered_set<const AstVar*> m_writtenVars;  // Variables of what is written after it
+    std::unordered_set<const AstVar*> m_readVars;  // Variables of what is read after it
+    std::vector<const AstVarScope*> m_pendingWrites;  // Written, readers not yet woken
+    std::vector<const AstVar*> m_pendingMembers;  // Members written, readers not yet woken
+    std::vector<V3GraphVertex*> m_seeds;  // Pinned logic, and the variables it reads
+    size_t m_nPinned = 0;  // Number of pinned logic vertices
+    size_t m_nVisits = 0;  // Number of bodies visited for being woken, for complexity
+
+    // METHODS
+    // Accesses of the given code, including the functions it calls
+    void collect(AstNode* nodep, Body& body, std::unordered_set<const AstCFunc*>& visited) {
+        nodep->foreach([&](AstNode* np) {
+            if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
+                if (refp->access().isReadOrRW()) body.m_reads.emplace(refp->varScopep());
+                if (refp->access().isWriteOrRW() && !refp->varp()->ignoreSchedWrite()) {
+                    body.m_writes.emplace(refp->varScopep());
+                }
+            } else if (const AstMemberRef* const memberp = VN_CAST(np, MemberRef)) {
+                if (memberp->access().isReadOrRW()) body.m_memberReads.emplace(memberp->varp());
+                if (memberp->access().isWriteOrRW()) {
+                    body.m_memberWrites.emplace(memberp->varp());
+                }
+            } else if (const AstNodeCCall* const callp = VN_CAST(np, NodeCCall)) {
+                // Including the overriding functions a virtual call may run
+                for (AstCFunc* const funcp : m_callTargetsp->getTargets(callp)) {
+                    if (funcp->dpiImportWrapper()) body.m_sideEffect = true;
+                    if (visited.emplace(funcp).second) collect(funcp, body, visited);
+                }
+            } else if (np->isOutputter()) {
+                body.m_sideEffect = true;
+            }
+        });
+    }
+    template <typename T>
+    static bool intersects(const std::unordered_set<T>& as, const std::unordered_set<T>& bs) {
+        for (const T& item : as) {
+            if (bs.count(item)) return true;
+        }
+        return false;
+    }
+    static bool varsIntersect(const std::unordered_set<const AstVarScope*>& vscps,
+                              const std::unordered_set<const AstVar*>& varps) {
+        for (const AstVarScope* const vscp : vscps) {
+            if (varps.count(vscp->varp())) return true;
+        }
+        return false;
+    }
+    void addWritten(const AstVarScope* vscp) {
+        if (!m_written.emplace(vscp).second) return;
+        m_writtenVars.emplace(vscp->varp());
+        m_pendingWrites.push_back(vscp);
+    }
+    // Record that the body runs after a #0, so what it writes wakes others
+    void markAfter(Body& body) {
+        if (body.m_after) return;
+        body.m_after = true;
+        m_read.insert(body.m_reads.begin(), body.m_reads.end());
+        for (const AstVarScope* const vscp : body.m_reads) m_readVars.emplace(vscp->varp());
+        m_readVars.insert(body.m_memberReads.begin(), body.m_memberReads.end());
+        for (const AstVarScope* const vscp : body.m_writes) addWritten(vscp);
+        for (const AstVar* const varp : body.m_memberWrites) {
+            if (m_writtenVars.emplace(varp).second) m_pendingMembers.push_back(varp);
+        }
+    }
+
+public:
+    // CONSTRUCTORS
+    ZeroDelayPinning(V3Graph& graph, const std::vector<SuspendableCode>& suspendables)
+        : m_callTargetsp{V3CallTargets::build()} {
+        std::unordered_map<const AstVarScope*, V3GraphVertex*> varVtxps;
+        for (V3GraphVertex& vtx : graph.vertices()) {
+            if (SchedVarVertex* const vvtxp = vtx.cast<SchedVarVertex>()) {
+                varVtxps.emplace(vvtxp->vscp(), vvtxp);
+            } else if (SchedLogicVertex* const lvtxp = vtx.cast<SchedLogicVertex>()) {
+                m_bodies.emplace_back();
+                Body& body = m_bodies.back();
+                body.m_logicp = lvtxp;
+                std::unordered_set<const AstCFunc*> visited;
+                collect(lvtxp->procp(), body, visited);
+                AstSenTree* const senTreep = lvtxp->process().m_senTreep;
+                if (senTreep->hasClocked()) {
+                    senTreep->foreach([&](const AstVarRef* refp) {
+                        body.m_triggers.emplace(refp->varScopep());
+                    });
+                } else {
+                    // Combinational logic is evaluated whenever what it reads changes
+                    body.m_triggers = body.m_reads;
+                }
+            }
+        }
+        for (const SuspendableCode& code : suspendables) {
+            m_bodies.emplace_back();
+            Body& body = m_bodies.back();
+            body.m_reads = code.m_reads;
+            body.m_writes = code.m_writes;
+            body.m_memberReads = code.m_memberReads;
+            body.m_memberWrites = code.m_memberWrites;
+            body.m_triggers = code.m_triggers;
+        }
+        // The bodies each variable triggers, by variable scope, and by variable for members
+        std::unordered_map<const AstVarScope*, std::vector<size_t>> triggered;
+        std::unordered_map<const AstVar*, std::vector<size_t>> triggeredByVar;
+        for (size_t i = 0; i < m_bodies.size(); ++i) {
+            for (const AstVarScope* const vscp : m_bodies[i].m_triggers) {
+                triggered[vscp].push_back(i);
+                triggeredByVar[vscp->varp()].push_back(i);
+            }
+        }
+        // What runs after a #0, as a work list over what it writes, so each body is visited
+        // once for each variable triggering it. A DPI export can be called from such code,
+        // and a body awaiting something other than variables, e.g. a join, may be woken by it.
+        for (const std::pair<const AstVarScope* const, V3GraphVertex*>& item : varVtxps) {
+            if (item.first->varp()->isWrittenByDpi()) addWritten(item.first);
+        }
+        const size_t nLogic = m_bodies.size() - suspendables.size();
+        for (size_t i = 0; i < suspendables.size(); ++i) {
+            const SuspendableCode& code = suspendables[i];
+            if (code.m_zeroDelay || code.m_wakeAny) markAfter(m_bodies[nLogic + i]);
+        }
+        while (!m_pendingWrites.empty() || !m_pendingMembers.empty()) {
+            const std::vector<size_t>* indicesp = nullptr;
+            if (!m_pendingWrites.empty()) {
+                const auto it = triggered.find(m_pendingWrites.back());
+                m_pendingWrites.pop_back();
+                if (it != triggered.end()) indicesp = &it->second;
+            } else {
+                const auto it = triggeredByVar.find(m_pendingMembers.back());
+                m_pendingMembers.pop_back();
+                if (it != triggeredByVar.end()) indicesp = &it->second;
+            }
+            if (!indicesp) continue;
+            for (const size_t i : *indicesp) {
+                ++m_nVisits;
+                markAfter(m_bodies[i]);
+            }
+        }
+        // Pinned is what would otherwise observe, be observed or be overwritten in the wrong
+        // order. Code after a #0 may have side effects too.
+        for (size_t i = 0; i < nLogic; ++i) {
+            const Body& body = m_bodies[i];
+            if (!body.m_after && !body.m_sideEffect && !intersects(body.m_reads, m_written)
+                && !intersects(body.m_writes, m_read) && !intersects(body.m_writes, m_written)
+                && !intersects(body.m_memberWrites, m_writtenVars)
+                && !varsIntersect(body.m_writes, m_writtenVars)
+                && !intersects(body.m_memberReads, m_writtenVars)
+                && !intersects(body.m_memberWrites, m_readVars)
+                && !varsIntersect(body.m_reads, m_writtenVars)
+                && !varsIntersect(body.m_writes, m_readVars)) {
+                continue;
+            }
+            UINFO(4, "Pinned to 'act' for #0: " << body.m_logicp->procp());
+            ++m_nPinned;
+            m_seeds.push_back(body.m_logicp);
+            for (const AstVarScope* const vscp : body.m_reads) {
+                const auto it = varVtxps.find(vscp);
+                if (it != varVtxps.end()) m_seeds.push_back(it->second);
+            }
+        }
+    }
+    const std::vector<V3GraphVertex*>& seeds() const { return m_seeds; }
+    size_t nPinned() const { return m_nPinned; }
+    size_t nVisits() const { return m_nVisits; }
+};
+
+void colorActiveRegion(V3Graph& graph, const std::vector<V3GraphVertex*>& seeds) {
     // Work queue for depth first traversal
-    std::vector<V3GraphVertex*> queue{};
+    std::vector<V3GraphVertex*> queue{seeds};
 
     // Trace from all SchedSenVertex
     for (V3GraphVertex& vtx : graph.vertices()) {
@@ -307,7 +504,8 @@ void colorActiveRegion(V3Graph& graph) {
 
 }  // namespace
 
-LogicRegions partition(LogicClasses& logicClasses) {
+LogicRegions partition(LogicClasses& logicClasses,
+                       const std::vector<SuspendableCode>& suspendables) {
     UINFO(2, __FUNCTION__ << ":");
 
     // All of these classes are moved to the result
@@ -321,7 +519,16 @@ LogicRegions partition(LogicClasses& logicClasses) {
     if (dumpGraphLevel() >= 6) graphp->dumpDotFilePrefixed("sched");
 
     // Partition into Active and NBA regions
-    colorActiveRegion(*(graphp.get()));
+    std::vector<V3GraphVertex*> seeds;
+    if (v3Global.usesZeroDelay()) {
+        const ZeroDelayPinning pinning{*graphp, suspendables};
+        seeds = pinning.seeds();
+        if (v3Global.opt.stats()) {
+            V3Stats::addStat("Scheduling, zero delay, logic pinned to 'act'", pinning.nPinned());
+            V3Stats::addStat("Scheduling, zero delay, woken body visits", pinning.nVisits());
+        }
+    }
+    colorActiveRegion(*(graphp.get()), seeds);
     if (dumpGraphLevel() >= 6) graphp->dumpDotFilePrefixed("sched-partitioned", true);
 
     LogicRegions result;
@@ -330,14 +537,8 @@ LogicRegions partition(LogicClasses& logicClasses) {
 
     for (V3GraphVertex& vtx : graphp->vertices()) {
         if (const auto lvtxp = vtx.cast<SchedLogicVertex>()) {
-            // Move to 'act'/'nba' based on coloring by default ...
-            bool toAct = lvtxp->color();
-            // ... however, if a #0 delay is possible, then the 'inact' region is required,
-            // in which case **EVERYTHING** that is not a Post block needs to go to 'act'.
-            // This severely limits downstream optimizations (e.g. V3LifePost), and severely
-            // reduces available parallelism in 'nba' for multi-threaded execution.
-            if (v3Global.usesZeroDelay() && !VN_IS(lvtxp->procp(), AlwaysPost)) toAct = true;
-            ProcessList& procList = toAct ? result.m_act : result.m_nba;
+            // Move to 'act'/'nba' based on coloring
+            ProcessList& procList = lvtxp->color() ? result.m_act : result.m_nba;
             procList.add(lvtxp->process());
         }
     }
