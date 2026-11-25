@@ -12670,8 +12670,9 @@ class WidthVisitor final : public VNVisitor {
                 underp->fileline(newFl);
                 expDTypep = parentp->findBitDType(64, 64, VSigning::UNSIGNED);
             }
+            // A negative delay is its two's complement as a time value (IEEE 1800-2023 9.4.1)
             underp
-                = iterateCheck(parentp, side, underp, SELF, FINAL, expDTypep, EXTEND_EXP, false);
+                = iterateCheck(parentp, side, underp, SELF, FINAL, expDTypep, EXTEND_LHS, false);
         }
         (void)underp;  // cppcheck
     }
