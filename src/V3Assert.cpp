@@ -1746,10 +1746,17 @@ class AssertVisitor final : public VNVisitor {
             return;
         }
         // The process of a concurrent assertion, not a procedural context. The assertion clocks
-        // it, or it goes with the assertion.
+        // it, or it goes with the assertion. Its action blocks have no flush point (IEEE
+        // 1800-2023 16.4.2), so the flushes of deferred assertions in them are not added.
         VL_RESTORER(m_assertCoverp);
+        VL_RESTORER(m_obsFlushp);
+        VL_RESTORER(m_obsDoneVarp);
+        VL_RESTORER_CLEAR(m_obsWaitsp);
         m_assertCoverp = nodep;
+        m_obsFlushp = nullptr;
+        m_obsDoneVarp = nullptr;
         iterateChildren(nodep);
+        if (m_obsFlushp) VL_DO_DANGLING(m_obsFlushp->deleteTree(), m_obsFlushp);
         if (nodep->keyword() == VAlwaysKwd::ASSERT_COVER) {
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
         }
