@@ -674,6 +674,13 @@ class GateInline final {
         return true;
     }
 
+    static bool writesKeptPort(const GateLogicVertex* lVtxp) {
+        for (const V3GraphEdge& edge : lVtxp->outEdges()) {
+            if (edge.top()->as<GateVarVertex>()->varScp()->varp()->keepPort()) return true;
+        }
+        return false;
+    }
+
     void recordSubstitution(AstVarScope* vscp, AstNodeExpr* substp, AstNode* logicp) {
         m_hasPending.emplace(logicp, ++m_ord);  // It's OK if already present
         const auto pair = m_substitutions(logicp).emplace(vscp, nullptr);
@@ -810,6 +817,14 @@ class GateInline final {
                     AstNode* nodep = substp;
                     if (AstNot* const notp = VN_CAST(nodep, Not)) nodep = notp->lhsp();
                     if (!VN_IS(nodep, VarRef)) continue;
+                }
+                // Likewise for a constant set by an initial block into the connection of a
+                // kept port (see V3Inst), which the instance reads in place of the variable.
+                // Only a constant moves the connection into the initial region, after the
+                // previous values of triggers are taken; other substitutions keep it
+                // combinational.
+                if (VN_IS(substp, Const) && VN_IS(logicp, Initial) && writesKeptPort(dstVtxp)) {
+                    continue;
                 }
 
                 // If the consumer logic writes one of the variables that the substitution
