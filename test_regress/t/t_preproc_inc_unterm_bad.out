@@ -1,0 +1,9 @@
+%Error: t/t_preproc_inc_unterm_bad.v:7:11: Unterminated include filename
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_preproc_inc_unterm_bad.v:9:1: Expecting include filename. Found: SYMBOL
+    9 | module t;
+      | ^~~~~~
+%Error: t/t_preproc_inc_unterm_bad.v:9:2: syntax error, unexpected IDENTIFIER
+    9 |  t;
+      |  ^
+%Error: Exiting due to
