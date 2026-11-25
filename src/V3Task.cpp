@@ -640,6 +640,40 @@ class TaskVisitor final : public VNVisitor {
         return assp;
     }
 
+    void changeAtWriteRecurse(AstNodeExpr* const exprp) {
+        // Change nested at methods to writable variant
+        if (AstCMethodHard* const cMethodp = VN_CAST(exprp, CMethodHard)) {
+            if (cMethodp->method() == VCMethod::ARRAY_AT) {
+                cMethodp->method(VCMethod::ARRAY_AT_WRITE);
+            }
+            changeAtWriteRecurse(cMethodp->fromp());
+        }
+    }
+
+    // Make an access to an element of a queue or dynamic array, passed to a ref argument,
+    // return a pin, which keeps a removed element alive while the call runs
+    // (IEEE 1800-2023 13.5.2); return whether it does
+    bool pinElement(AstCMethodHard* cMethodp) {
+        if (VN_IS(cMethodp->fromp()->dtypep()->skipRefp(), QueueDType)) {
+            if (cMethodp->method() == VCMethod::DYN_AT_WRITE_APPEND) {
+                cMethodp->method(VCMethod::DYN_AT_WRITE_APPEND_REF);
+                return true;
+            }
+            if (cMethodp->method() == VCMethod::DYN_AT_WRITE_APPEND_BACK) {
+                cMethodp->method(VCMethod::DYN_AT_WRITE_APPEND_BACK_REF);
+                return true;
+            }
+            return false;
+        }
+        changeAtWriteRecurse(cMethodp);
+        if (cMethodp->method() != VCMethod::ARRAY_AT_WRITE
+            || !VN_IS(cMethodp->fromp()->dtypep()->skipRefp(), DynArrayDType)) {
+            return false;
+        }
+        cMethodp->method(VCMethod::ARRAY_AT_WRITE_REF);
+        return true;
+    }
+
     void connectPort(const AstNodeFTaskRef* refp, AstVar* portp, AstArg* argp, AstNode* beginp,
                      bool inlineTask) {
         AstNodeExpr* pinp = argp->exprp();
@@ -674,9 +708,37 @@ class TaskVisitor final : public VNVisitor {
                 VL_DO_DANGLING(argp->unlinkFrBack()->deleteTree(), argp);  // Args no longer needed
             }
             if (portp->isRef() || portp->isConstRef()) {
-                const bool refArgOk = VN_IS(pinp, VarRef) || VN_IS(pinp, MemberRef)
-                                      || VN_IS(pinp, StructSel) || VN_IS(pinp, ArraySel)
-                                      || VN_IS(pinp, DynArraySel) || VN_IS(pinp, QueueSel);
+                bool refArgOk = false;
+                if (VN_IS(pinp, VarRef) || VN_IS(pinp, MemberRef)) {
+                    refArgOk = true;
+                } else if (VN_IS(pinp, StructSel) || VN_IS(pinp, ArraySel)) {
+                    refArgOk = true;
+                    // Selected within an element of a container, e.g. 'q[0].member'
+                    AstNodeExpr* basep = pinp;
+                    while (true) {
+                        if (AstArraySel* const selp = VN_CAST(basep, ArraySel)) {
+                            basep = selp->fromp();
+                        } else if (AstStructSel* const selp = VN_CAST(basep, StructSel)) {
+                            basep = selp->fromp();
+                        } else {
+                            break;
+                        }
+                    }
+                    if (AstCMethodHard* const cMethodp = VN_CAST(basep, CMethodHard)) {
+                        if (pinElement(cMethodp)) {
+                            VNRelinker relinker;
+                            cMethodp->unlinkFrBack(&relinker);
+                            AstCMethodHard* const elemp = new AstCMethodHard{
+                                cMethodp->fileline(), cMethodp, VCMethod::ARRAY_ELEM_REF};
+                            elemp->dtypeFrom(cMethodp);
+                            relinker.relink(elemp);
+                        }
+                    }
+                } else if (AstCMethodHard* const cMethodp = VN_CAST(pinp, CMethodHard)) {
+                    refArgOk = pinElement(cMethodp)
+                               || (!VN_IS(cMethodp->fromp()->dtypep()->skipRefp(), QueueDType)
+                                   && cMethodp->method() == VCMethod::ARRAY_AT_WRITE);
+                }
                 if (refArgOk) {
                     if (AstVarRef* const varrefp = VN_CAST(pinp, VarRef)) {
                         varrefp->access(VAccess::READWRITE);

@@ -374,6 +374,8 @@ class PremitVisitor final : public VNVisitor {
     }
     void visit(AstCMethodHard* nodep) override {
         iterateChildren(nodep);
+        // An element passed by reference must not be copied
+        if (nodep->method().isRefElementAccess()) return;
         checkNode(nodep);
     }
     void visit(AstCvtArrayToPacked* nodep) override {
