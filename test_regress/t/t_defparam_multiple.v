@@ -130,6 +130,7 @@ module t;
   other o ();
 
   up_parent up ();
+  up_parent up2 ();
   up_holder1 uh1 ();
   up_holder2 uh2 ();
 
@@ -177,6 +178,8 @@ module t;
     `checkd(m.s.P, 50);
     `checkd(up.s2.P, 30);
     `checkd(up.s3.P, 40);
+    `checkd(up2.s2.P, 30);
+    `checkd(up2.s3.P, 40);
     `checkd(uh1.up_same.s4.P, 45);
     `checkd(uh2.up_same.s4.P, 45);
     `checkd(lp.m.s.P, 12);
