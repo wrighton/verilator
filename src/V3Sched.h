@@ -95,6 +95,32 @@ void foreachLogicAccess(AstNode* nodep, const LogicAccessFunc& f);
 void foreachCallAccess(const AstCCall* callp, const LogicAccessFunc& f);
 // Compute the implicit sensitivities of the given combinational process
 std::unordered_set<const AstVarScope*> computeImplicitSensitivities(AstNodeProcedure* procp);
+// Whether the node accesses state of the runtime that processes share, other than variables:
+// output streams and files ($display, $fopen, $fgets, ...), the time format ($timeformat, and
+// '%t' formatting reading it), random number generators, the command line arguments (C code
+// may add to them), or anything through C code. A node reading or writing such state that is
+// not an outputter must be added here, or the partitioning around #0 delays misses it.
+inline bool accessesRuntimeState(AstNode* nodep) {
+    if (nodep->isOutputter()) return true;
+    if (VN_IS(nodep, SFormatF)) return true;
+    if (VN_IS(nodep, TestPlusArgs) || VN_IS(nodep, ValuePlusArgs)) return true;
+    if (VN_IS(nodep, Rand) || VN_IS(nodep, RandRNG) || VN_IS(nodep, URandomRange)
+        || VN_IS(nodep, NodeDistBiop) || VN_IS(nodep, NodeDistTriop)) {
+        return true;
+    }
+    if (VN_IS(nodep, FError) || VN_IS(nodep, FGetS) || VN_IS(nodep, FUngetC) || VN_IS(nodep, FEof)
+        || VN_IS(nodep, FGetC)) {
+        return true;
+    }
+    if (const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard)) {
+        const AstBasicDType* const basicp = methodp->fromp()->dtypep()->basicp();
+        if (basicp && (basicp->isRandomGenerator() || basicp->isStdRandomGenerator())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace util
 
 //============================================================================
@@ -423,6 +449,9 @@ struct SuspendableCode final {
     std::unordered_set<const AstVarScope*> m_triggers;  // Variables in awaited sensitivities
     bool m_zeroDelay = false;  // Runs, calls or is called with a delay that may be zero
     bool m_wakeAny = false;  // Awaits something else, e.g. a join, that anything may complete
+    bool m_sideEffect = false;  // Has an output or DPI effect ordered against other processes
+    bool m_contextDpi = false;  // Calls a context DPI import, which may call DPI exports
+    bool m_foreign = false;  // Runs user C code or a DPI import, which may access through VPI
 };
 
 class TimingKit final {
