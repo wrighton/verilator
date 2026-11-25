@@ -398,6 +398,19 @@ public:
 };
 
 // Everything needed for combining timing with static scheduling.
+// Body of suspendable code (a process, coroutine, fork or function called from these, or a
+// group of them calling each other), with what decides whether it can run after a #0 delay
+// in the 'inact' region of a time step: before the clocked processes run in 'nba'
+struct SuspendableCode final {
+    std::unordered_set<const AstVarScope*> m_reads;  // Variables read
+    std::unordered_set<const AstVarScope*> m_writes;  // Variables written
+    std::unordered_set<const AstVar*> m_memberReads;  // Class members read
+    std::unordered_set<const AstVar*> m_memberWrites;  // Class members written
+    std::unordered_set<const AstVarScope*> m_triggers;  // Variables in awaited sensitivities
+    bool m_zeroDelay = false;  // Runs, calls or is called with a delay that may be zero
+    bool m_wakeAny = false;  // Awaits something else, e.g. a join, that anything may complete
+};
+
 class TimingKit final {
     AstCFunc* m_resumeFuncp = nullptr;  // Global timing resume function
     AstCFunc* m_readyFuncp = nullptr;  // Global timing ready function
@@ -406,6 +419,7 @@ class TimingKit final {
     std::map<const AstVarScope*, std::set<AstSenTree*>> m_externalDomains;
 
 public:
+    std::vector<SuspendableCode> m_suspendables;  // Bodies of suspendable code
     ProcessList m_procList;  // Processes that resume timing schedulers
     AstNodeStmt* m_postUpdatesp = nullptr;  // Post updates for the trigger eval function
     // Flag set by writes after a zero delay that logic reads, see createEval
@@ -431,8 +445,9 @@ public:
     TimingKit() = default;
     TimingKit(ProcessList&& procList, AstNodeStmt* postUpdatesp,
               std::map<const AstVarScope*, std::set<AstSenTree*>>&& externalDomains,
-              AstVarScope* zeroDelayDirtyp)
+              AstVarScope* zeroDelayDirtyp, std::vector<SuspendableCode>&& suspendables)
         : m_externalDomains{externalDomains}
+        , m_suspendables{std::move(suspendables)}
         , m_procList{std::move(procList)}
         , m_postUpdatesp{postUpdatesp}
         , m_zeroDelayDirtyp{zeroDelayDirtyp} {}
@@ -538,7 +553,8 @@ void schedule(AstNetlist*) VL_MT_DISABLED;
 
 // Sub-steps
 void breakCycles(AstNetlist* netlistp, LogicClasses& logicClasses) VL_MT_DISABLED;
-LogicRegions partition(LogicClasses& logicClasses) VL_MT_DISABLED;
+LogicRegions partition(LogicClasses& logicClasses,
+                       const std::vector<SuspendableCode>& suspendables) VL_MT_DISABLED;
 LogicReplicas replicateLogic(LogicRegions&) VL_MT_DISABLED;
 
 // Utility functions used by various steps in scheduling
