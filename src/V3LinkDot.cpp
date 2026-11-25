@@ -2529,10 +2529,12 @@ class LinkDotParamVisitor final : public VNVisitor {
         AstPin* pinp;  // Pin made for the last defparam
         const VSymEnt* cellSymp;  // Symbol of the instance its path resolved to
         AstDefParam* defParamp;  // That defparam, if kept for V3Param to give the pin's value
+        AstDefParam* ownValuep;  // Else that defparam, kept in case a later one drops it
     };
     // Defparam pins made, by cell, parameter and recorded path
     std::map<std::tuple<const AstCell*, std::string, const AstVar*, std::string>, DefParamPin>
         m_defParamPins;
+    std::vector<AstDefParam*> m_ownValueDefParams;  // Defparams kept as ownValuep
 
     void pinImplicitExprRecurse(AstNode* nodep) {
         // Under a pin, Check interconnect expression for a pin reference or a concat.
@@ -2695,9 +2697,9 @@ class LinkDotParamVisitor final : public VNVisitor {
                 if (prevr.pinp) {
                     VL_DO_DANGLING(prevr.pinp->unlinkFrBack()->deleteTree(), prevr.pinp);
                 }
-                if (prevr.defParamp) {
-                    VL_DO_DANGLING(pushDeletep(prevr.defParamp->unlinkFrBack()), prevr.defParamp);
-                }
+                // Its value must still be constant, which V3Param checks
+                if (prevr.defParamp) prevr.defParamp->valueCheck(true);
+                if (prevr.ownValuep) prevr.ownValuep->valueCheck(true);
                 // Path from the defparam's scope, if the instance is under it
                 string belowPath;
                 size_t belowDepth = 0;
@@ -2716,7 +2718,7 @@ class LinkDotParamVisitor final : public VNVisitor {
                 const bool below = symp
                                    && belowDepth >= static_cast<size_t>(
                                           std::count(cellPath.begin(), cellPath.end(), '.'));
-                AstNodeExpr* const exprp = below ? nullptr : nodep->rhsp()->unlinkFrBack();
+                AstNodeExpr* const exprp = below ? nullptr : nodep->rhsp()->cloneTree(false);
                 UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
                                           << "  <= " << exprp);
                 // Don't need to check the name of the defparam exists.  V3Param does.
@@ -2727,16 +2729,17 @@ class LinkDotParamVisitor final : public VNVisitor {
                 pinp->paramPath(anchoredPath);
                 pinp->modVarp(scopedVarp);
                 cellp->addParamsp(pinp);
-                prevr = DefParamPin{pinp, cellSymp, exprp ? nullptr : nodep};
-                if (!exprp) {
-                    pushDeletep(nodep->pathp()->unlinkFrBack());
-                    targetp->replaceWith(new AstVarXRef{targetp->fileline(), name,
-                                                        VString::dot(belowPath, ".", scopePath),
-                                                        VAccess::WRITE});
-                    VL_DO_DANGLING(pushDeletep(targetp), targetp);
-                    return;
-                }
+                prevr = DefParamPin{pinp, cellSymp, exprp ? nullptr : nodep,
+                                    exprp ? nodep : nullptr};
+                pushDeletep(nodep->pathp()->unlinkFrBack());
+                targetp->replaceWith(new AstVarXRef{
+                    targetp->fileline(), name,
+                    exprp ? path : VString::dot(belowPath, ".", scopePath), VAccess::WRITE});
+                VL_DO_DANGLING(pushDeletep(targetp), targetp);
+                if (!exprp) return;
                 pinp->user1p(defSymp);  // For the value, see ResolveVisitor::visit(AstPin)
+                m_ownValueDefParams.push_back(nodep);
+                return;
             }
         }
         VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
@@ -2846,6 +2849,9 @@ public:
         : m_statep{statep} {
         UINFO(4, __FUNCTION__ << ": ");
         iterate(rootp);
+        for (AstDefParam* const nodep : m_ownValueDefParams) {
+            if (!nodep->valueCheck()) VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+        }
     }
     ~LinkDotParamVisitor() override = default;
 };

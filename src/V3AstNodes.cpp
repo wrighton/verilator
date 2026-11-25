@@ -1784,6 +1784,14 @@ void AstCvtArrayToPacked::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, packedWidth);
     dumpJsonGen(str);
 }
+void AstDefParam::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (valueCheck()) str << " [VALUECHECK]";
+}
+void AstDefParam::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, valueCheck);
+    dumpJsonGen(str);
+}
 void AstDelay::dump(std::ostream& str) const {
     Super::dump(str);
     if (isCycleDelay()) str << " [CYCLE]";

@@ -3983,6 +3983,19 @@ class ParamVisitor final : public VNVisitor {
         nodep->v3fatalSrc("GENFOR should have been wrapped in BEGIN");
     }
     void visit(AstDefParam* nodep) override {
+        if (nodep->valueCheck()) {  // Superseded by a later defparam, see V3LinkDot
+            checkParamNotHierRecurse(nodep->rhsp());
+            V3Const::constifyParamsEdit(nodep->rhsp());  // rhsp may change
+            if (!VN_IS(nodep->rhsp(), Const)) {
+                const AstVarXRef* const targetp = VN_AS(nodep->targetp(), VarXRef);
+                const string& dotted = targetp->dotted();
+                nodep->v3error("Can't convert defparam value to constant: Param "
+                               << targetp->prettyNameQ() << " of "
+                               << AstNode::prettyNameQ(dotted.substr(dotted.rfind('.') + 1)));
+            }
+            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+            return;
+        }
         // The parameters of this instance of the module are known, and the generate blocks
         // above expanded, so nodeDeparam can give the value (IEEE 1800-2023 23.10.1)
         checkParamNotHierRecurse(nodep->rhsp());
