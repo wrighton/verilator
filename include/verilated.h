@@ -1093,6 +1093,10 @@ public:  // But for internal use only
     // Keep first so is at zero offset for fastest code
     VerilatedContext* const _vm_contextp__;  // Context for current model
     VerilatedEvalMsgQueue* __Vm_evalMsgQp;
+    // Called with this model when its first scope is destroyed, if set, which it is while VPI
+    // callbacks or delayed puts refer to the model, to remove them
+    void (*__Vm_vpiEraseCbp)(VerilatedSyms*) = nullptr;
+    uint32_t __Vm_vpiRefs = 0;  // Number of VPI callbacks and delayed puts referring to the model
     // Next __Vm_generation; 0 means no model
     static std::atomic<uint64_t> s_nextGeneration;
     // Identifies this model, as no other model of the process has it, unlike its address

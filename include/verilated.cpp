@@ -4727,6 +4727,7 @@ VerilatedScope::VerilatedScope(VerilatedSyms* symsp, const char* prefixp, const 
 VerilatedScope::~VerilatedScope() {
     // Memory cleanup - not called during normal operation
     contextp()->impp()->scopeErase(this);
+    if (VL_UNLIKELY(m_symsp->__Vm_vpiEraseCbp)) m_symsp->__Vm_vpiEraseCbp(m_symsp);
     VL_DO_DANGLING(delete[] m_namep, m_namep);
     VL_DO_DANGLING(delete[] m_callbacksp, m_callbacksp);
     VL_DO_DANGLING(delete m_varsp, m_varsp);
