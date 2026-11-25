@@ -775,6 +775,22 @@ List Of Warnings
    :option:`STMTDLY` warning. If these were suppressed, due to the absence
    of the delay, the design might oscillate.
 
+   DIDNOTCONVERGE may also occur in the Active region in a design that is
+   still making progress, when processes keep waking each other within one
+   time slot, for example a producer and a consumer exchanging many items
+   through a bounded mailbox with no delay. Each wakeup takes an
+   iteration:
+
+   .. include:: ../../docs/gen/ex_DIDNOTCONVERGE_active_msg.rst
+
+   If the design is meant to do that much work in zero time, raise the limit
+   with :vlopt:`--converge-limit`, or without Verilating again with
+   :vlopt:`+verilator+converge+limit+\<value\>`. Otherwise, look for the
+   processes that wake each other. When the model is compiled with
+   ``-CFLAGS -DVL_DEBUG``, the error is preceded by the triggers that were
+   active and by where the process resumed last was waiting. Recording
+   that location adds a small cost to every evaluation of such a model.
+
    Finally, rare, more difficult cases can be debugged like a C++ program;
    either enter :command:`gdb` and use its tracing facilities, or edit the
    generated C++ code to add appropriate prints to see what is going on.

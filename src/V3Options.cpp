@@ -1371,7 +1371,17 @@ void V3Options::parseOptsList(FileLine* fl, const string& optdir, int argc,
         }
     });
     DECL_OPTION("-compiler-include", CbVal, callStrSetter(&V3Options::addCompilerIncludes));
-    DECL_OPTION("-converge-limit", Set, &m_convergeLimit);
+    DECL_OPTION("-converge-limit", CbVal, [this, fl](const char* valp) {
+        // Check the whole argument before narrowing it
+        char* endp = nullptr;
+        errno = 0;
+        const long long val = std::strtoll(valp, &endp, 10);
+        if (errno || endp == valp || *endp || val < 1 || val > std::numeric_limits<int>::max()) {
+            fl->v3error("--converge-limit must be between 1 and 2147483647: " << valp);
+        } else {
+            m_convergeLimit = static_cast<int>(val);
+        }
+    });
     DECL_OPTION("-coverage", CbOnOff, [this](bool flag) { coverage(flag); });
     DECL_OPTION("-coverage-branch", OnOff, &m_coverageBranch);
     DECL_OPTION("-coverage-expr", OnOff, &m_coverageExpr);
