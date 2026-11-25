@@ -20,6 +20,7 @@
 
 #include "V3InstrCount.h"
 #include "V3Os.h"
+#include "V3Stats.h"
 #include "V3String.h"
 
 #include <algorithm>
@@ -43,33 +44,19 @@ class V3ControlWildcardResolver final {
     std::map<const std::string, T> m_mapPatterns VL_GUARDED_BY(m_mutex);
     // Resolved strings to converged entities - nullptr, iff none of the patterns applies
     std::map<const std::string, std::unique_ptr<T>> m_mapResolved VL_GUARDED_BY(m_mutex);
+    // The last entity resolveKeyed() returned, and its key, or -1 if none
+    int m_lastKey VL_GUARDED_BY(m_mutex) = -1;
+    T* m_lastp VL_GUARDED_BY(m_mutex) = nullptr;
+    size_t m_resolveCount VL_GUARDED_BY(m_mutex) = 0;  // Lookups by name, for statistics
 
-public:
-    V3ControlWildcardResolver() = default;
-    ~V3ControlWildcardResolver() = default;
-
-    // Update this resolved file's item map by inserting other's (wildcarded filename's) items
-    void update(const V3ControlWildcardResolver& other) VL_MT_SAFE_EXCLUDES(m_mutex)
-        VL_EXCLUDES(other.m_mutex) {
-        const V3LockGuard lock{m_mutex};
-        const V3LockGuard otherLock{other.m_mutex};
-        // Clear the resolved cache, as 'other' might add new patterns that need to be applied as
-        // well.
+    // Clear the resolved cache, as there might be new patterns to apply
+    void clearResolved() VL_REQUIRES(m_mutex) {
         m_mapResolved.clear();
-        for (const auto& itr : other.m_mapPatterns) m_mapPatterns[itr.first].update(itr.second);
+        m_lastKey = -1;
+        m_lastp = nullptr;
     }
-
-    // Access and create a pattern entry
-    T& at(const string& name) VL_MT_SAFE_EXCLUDES(m_mutex) {
-        const V3LockGuard lock{m_mutex};
-        // We might be adding a new entry under this, so clear the cache.
-        m_mapResolved.clear();
-        // Patterns use '/' as separator; normalize Windows backslashes
-        return m_mapPatterns[V3Os::filenameSlashPath(name)];
-    }
-    // Access an entity and resolve patterns that match it
-    T* resolve(const string& name) VL_MT_SAFE_EXCLUDES(m_mutex) {
-        const V3LockGuard lock{m_mutex};
+    T* resolveLocked(const string& name) VL_REQUIRES(m_mutex) {
+        ++m_resolveCount;
         // Lookup if it was resolved before, typically not
         const auto pair = m_mapResolved.emplace(name, nullptr);
         std::unique_ptr<T>& entryr = pair.first->second;
@@ -89,6 +76,48 @@ public:
             if (entryr) entryr->updateFinalize();
         }
         return entryr.get();
+    }
+
+public:
+    V3ControlWildcardResolver() = default;
+    ~V3ControlWildcardResolver() = default;
+
+    // Update this resolved file's item map by inserting other's (wildcarded filename's) items
+    void update(const V3ControlWildcardResolver& other) VL_MT_SAFE_EXCLUDES(m_mutex)
+        VL_EXCLUDES(other.m_mutex) {
+        const V3LockGuard lock{m_mutex};
+        const V3LockGuard otherLock{other.m_mutex};
+        // Clear the resolved cache, as 'other' might add new patterns that need to be applied as
+        // well.
+        clearResolved();
+        for (const auto& itr : other.m_mapPatterns) m_mapPatterns[itr.first].update(itr.second);
+    }
+
+    // Access and create a pattern entry
+    T& at(const string& name) VL_MT_SAFE_EXCLUDES(m_mutex) {
+        const V3LockGuard lock{m_mutex};
+        // We might be adding a new entry under this, so clear the cache.
+        clearResolved();
+        // Patterns use '/' as separator; normalize Windows backslashes
+        return m_mapPatterns[V3Os::filenameSlashPath(name)];
+    }
+    // Access an entity and resolve patterns that match it
+    T* resolve(const string& name) VL_MT_SAFE_EXCLUDES(m_mutex) {
+        const V3LockGuard lock{m_mutex};
+        return resolveLocked(name);
+    }
+    // Like resolve(), for a name with a non-negative key unique to it, called many times in a row
+    // with the same name, as the same key returns the same entity without a lookup by name
+    T* resolveKeyed(int key, const string& name) VL_MT_SAFE_EXCLUDES(m_mutex) {
+        const V3LockGuard lock{m_mutex};
+        if (key == m_lastKey) return m_lastp;
+        m_lastp = resolveLocked(name);
+        m_lastKey = key;
+        return m_lastp;
+    }
+    size_t resolveCount() const VL_MT_SAFE_EXCLUDES(m_mutex) {
+        const V3LockGuard lock{m_mutex};
+        return m_resolveCount;
     }
 };
 
@@ -1139,9 +1168,16 @@ void V3Control::applyCoverageBlock(AstNodeModule* modulep, AstGenBlock* nodep) {
 }
 
 void V3Control::applyIgnores(FileLine* filelinep) {
-    const string& filename = filelinep->filename();
-    V3ControlFile* const filep = V3ControlResolver::s().files().resolve(filename);
+    // HOT routine, called for each parsed token, so resolve the file by its number, which
+    // changes only when the file does
+    V3ControlFile* const filep = V3ControlResolver::s().files().resolveKeyed(
+        filelinep->filenameno(), filelinep->filename());
     if (filep) filep->applyIgnores(filelinep);
+}
+
+void V3Control::addStats() {
+    V3Stats::addStat("Control, file rule lookups by name",
+                     V3ControlResolver::s().files().resolveCount());
 }
 
 void V3Control::applyModule(AstNodeModule* modulep) {
