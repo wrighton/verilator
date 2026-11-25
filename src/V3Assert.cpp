@@ -3301,6 +3301,12 @@ class AssertVisitor final : public VNVisitor {
             m_inSampled = true;
             iterateChildren(nodep);
         }
+        if (nodep->timed()) {
+            // Kept for V3ActiveTop and V3Sampled
+            nodep->user1(1);
+            v3Global.setHasSampled();
+            return;
+        }
         if (nodep->exprp()) {
             nodep->replaceWith(nodep->exprp()->unlinkFrBack());
         } else {
