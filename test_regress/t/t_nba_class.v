@@ -35,6 +35,24 @@ class Cls #(
       y <= v;
     join_none
   endtask
+  T z[5];
+  task set_z_later(int i, T v);
+    z[i] <= #1 v;
+  endtask
+endclass
+
+class StaticCls;
+  static int z[5];
+  static task set_z_later(int i, int v);
+    z[i] <= #1 v;
+  endtask
+endclass
+
+class Holder;
+  Cls #(int) obj;
+  task set_obj_z_later(int i, int v);
+    obj.z[i] <= #1 v;
+  endtask
 endclass
 
 module t;
@@ -87,6 +105,30 @@ module t;
     // Still not in the active region of the time step it is due
     #1 `checkd(d.y, 2);
     #1 `checkd(d.y, 3);
+  end
+
+  // With an intra-assignment delay, to an element a method argument selects, also out of range
+  Cls #(int) e = new;
+  initial begin
+    for (int i = 0; i < 6; i++) e.set_z_later(i, i + 1);
+    #2;
+    for (int i = 0; i < 5; i++) `checkd(e.z[i], i + 1);
+  end
+
+  // Same from a static method
+  initial begin
+    for (int i = 0; i < 6; i++) StaticCls::set_z_later(i, i + 1);
+    #2;
+    for (int i = 0; i < 5; i++) `checkd(StaticCls::z[i], i + 1);
+  end
+
+  // Same through a handle that is a property of the class
+  Holder h = new;
+  initial begin
+    h.obj = new;
+    for (int i = 0; i < 6; i++) h.set_obj_z_later(i, i + 2);
+    #2;
+    for (int i = 0; i < 5; i++) `checkd(h.obj.z[i], i + 2);
   end
 
   initial begin
