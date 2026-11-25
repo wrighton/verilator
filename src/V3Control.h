@@ -72,6 +72,8 @@ public:
     static void applyCoverageBlock(AstNodeModule* modulep, AstGenBlock* nodep);
     static void applyFTask(AstNodeModule* modulep, AstNodeFTask* ftaskp);
     static void applyIgnores(FileLine* filelinep);
+    // Add the statistics of the lookups of the rules
+    static void addStats();
     static void applyModule(AstNodeModule* modulep);
     static void applyVarAttr(const AstNodeModule* modulep, const AstNodeFTask* ftaskp,
                              AstVar* varp);
