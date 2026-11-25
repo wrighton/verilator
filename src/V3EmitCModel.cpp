@@ -531,7 +531,6 @@ class EmitCModel final : public EmitCFunc {
         }
 
         if (v3Global.hasEvents()) puts("vlSymsp->clearTriggeredEvents();\n");
-        if (v3Global.hasClasses()) puts("vlSymsp->__Vm_deleter.deleteAll();\n");
 
         puts("}\n");
 
@@ -555,6 +554,11 @@ class EmitCModel final : public EmitCFunc {
             puts(EmitCUtil::topClassName() + "::" + eval.evalMethod() + "(");
             if (eval.firstIteration()) puts("bool firstIteration");
             puts(") {\n");
+            // Every iteration of the scheduling loops evaluates 'act', and no code holds a
+            // dropped class object between iterations, so free them here.
+            if (eval == VEval::ACT && v3Global.hasClasses()) {
+                puts("vlSymsp->__Vm_deleter.deleteAll();\n");
+            }
             if (eval.isIterated()) puts("return ");
             puts(funcNameProtect(funcp, m_modp) + "(&(vlSymsp->vlInst.TOP)");
             if (eval.firstIteration()) puts(", firstIteration");
