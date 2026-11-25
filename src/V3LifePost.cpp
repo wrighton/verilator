@@ -39,7 +39,8 @@
 //  1) No reads of 'd' anywhere except for the ASSIGNPOST itself
 //  2) No write of 'q' anywhere except for the ASSIGNPOST itself
 //  3) The first write of 'd' is complete (writes all bits)
-//  4) Every read  of 'q' either falls before the second write of 'd', or after only read of 'd'
+//  4) Every read  of 'q' either falls before the second write of 'd', or after only read of 'd'.
+//     A read and a write inside the same loop do not fall in a fixed order.
 //
 // Notes:
 //
@@ -91,17 +92,26 @@ class LifePostDlyVisitor final : public VNVisitorConst {
         T_Node* m_nodep;  // The AstNode being recorded
         const AstExecGraph* m_egraphp;  // AstExecTraph location is under, if any
         const ExecMTask* m_mtaskp;  // The ExecMTask location is under, if any
+        const AstLoop* m_loopp;  // The outermost AstLoop location is under, if any
         uint32_t m_seqNum;  // Location counter
 
     public:
-        Location(T_Node* nodep, const AstExecGraph* egp, const ExecMTask* mtaskp, uint32_t seqNum)
+        Location(T_Node* nodep, const AstExecGraph* egp, const ExecMTask* mtaskp,
+                 const AstLoop* loopp, uint32_t seqNum)
             : m_nodep{nodep}
             , m_egraphp{egp}
             , m_mtaskp{mtaskp}
+            , m_loopp{loopp}
             , m_seqNum{seqNum} {}
         Location() = delete;
 
         T_Node* const& nodep() const { return m_nodep; }
+
+        // Whether this might also execute after 'that', through a loop enclosing both
+        template <typename U_Node>
+        bool inLoopWith(const Location<U_Node>& that) const {
+            return m_loopp && m_loopp == that.m_loopp;
+        }
 
         // "is before" - Note: Equality (concurrency) is possible iff they are independent mtasks!
         template <typename U_Node>
@@ -127,6 +137,7 @@ class LifePostDlyVisitor final : public VNVisitorConst {
     uint32_t m_sequence = 0;  // Sequence number of assigns/varrefs,
     const AstExecGraph* m_execGraphp = nullptr;  // Current AstExecGraph being processed (or null)
     const ExecMTask* m_execMTaskp = nullptr;  // Current ExecMTask being processed (or null)
+    const AstLoop* m_loopp = nullptr;  // Outermost AstLoop being processed (or null)
     VDouble0 m_statAssnDel;  // Statistic tracking
     VDouble0 m_statWordsSaved;  // Words removed from NBA shadow copies
     // Maps from Varscope to all their reads and writes
@@ -205,7 +216,7 @@ class LifePostDlyVisitor final : public VNVisitorConst {
                         if (assign < qRead) continue;
                         // Check from 2nd write of 'd'
                         for (size_t i = 1; i < dWrites.size(); ++i) {
-                            if (qRead < dWrites[i]) continue;
+                            if (qRead < dWrites[i] && !qRead.inLoopWith(dWrites[i])) continue;
                             return false;
                         }
                     }
@@ -286,10 +297,10 @@ class LifePostDlyVisitor final : public VNVisitorConst {
 
         ++m_sequence;
         if (nodep->access().isWriteOrRW()) {
-            m_writes[vscp].emplace_back(nodep, m_execGraphp, m_execMTaskp, m_sequence);
+            m_writes[vscp].emplace_back(nodep, m_execGraphp, m_execMTaskp, m_loopp, m_sequence);
         }
         if (nodep->access().isReadOrRW()) {
-            m_reads[vscp].emplace_back(nodep, m_execGraphp, m_execMTaskp, m_sequence);
+            m_reads[vscp].emplace_back(nodep, m_execGraphp, m_execMTaskp, m_loopp, m_sequence);
         }
     }
     void visit(AstNodeAssign* nodep) override {
@@ -300,12 +311,18 @@ class LifePostDlyVisitor final : public VNVisitorConst {
             if (const AstVarRef* const rhsp = VN_CAST(nodep->rhsp(), VarRef)) {
                 if (lhsp->varScopep()->optimizeLifePost()  //
                     && rhsp->varScopep()->optimizeLifePost()) {
-                    m_assigns.emplace_back(nodep, m_execGraphp, m_execMTaskp, ++m_sequence);
+                    m_assigns.emplace_back(nodep, m_execGraphp, m_execMTaskp, m_loopp,
+                                           ++m_sequence);
                 }
             }
         }
         // Record LHS after assignment
         iterateConst(nodep->lhsp());
+    }
+    void visit(AstLoop* nodep) override {
+        VL_RESTORER(m_loopp);
+        if (!m_loopp) m_loopp = nodep;
+        iterateChildrenConst(nodep);
     }
     void visit(AstNodeCCall* nodep) override {
         iterateChildrenConst(nodep);
