@@ -10,6 +10,7 @@
 
 #include VM_PREFIX_INCLUDE
 
+#include <cinttypes>
 #include <cstdio>
 #include <memory>
 
@@ -20,6 +21,15 @@ static void endContextCb(void*) {
     std::printf("End of the default context\n");
     std::fflush(stdout);
 }
+
+// Destroyed after the default context ends, and may still use it
+struct LateUser final {
+    ~LateUser() {
+        std::printf("Default context after its end at time %" PRIu64 "\n",
+                    Verilated::defaultContextp()->time());
+        std::fflush(stdout);
+    }
+} g_lateUser;
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
