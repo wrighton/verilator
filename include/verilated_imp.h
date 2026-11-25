@@ -226,6 +226,7 @@ protected:
 
     // $timeformat argument warnings already given, one bit per kind
     std::atomic<uint8_t> m_timeFormatWarned{0};
+    std::atomic<uint32_t> m_modelsRemoved{0};  // Count of models removed, checked by traces
 };
 
 //======================================================================
