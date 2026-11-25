@@ -1,7 +1,8 @@
 // DESCRIPTION: Verilator: Verilog Test module
 //
-// The status results of randomize() and the rand_mode() query are truth
-// values in logical operators and conditions, with no width warning.
+// The status results of randomize() and the rand_mode() and constraint_mode()
+// queries are truth values in logical operators and conditions, with no width
+// warning.
 //
 // This file ONLY is placed under the Creative Commons Public Domain.
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
@@ -17,6 +18,7 @@ endclass
 
 class Cls extends Base;
   rand bit [6:0] v;
+  constraint c_v {v != 7'h7e;}
   function int self_check();
     if (!randomize()) return 0;
     if (!this.randomize() with {v != 7'h7f;}) return 0;
@@ -38,6 +40,7 @@ module t;
     if (!c.randomize() with {v != 0;}) `stop;
     if (!std::randomize(x)) `stop;
     if (!c.v.rand_mode()) `stop;
+    if (!c.c_v.constraint_mode()) `stop;
     if (!$cast(d, b)) `stop;
     ok = c.randomize() && $cast(d, b);
     `checkd(ok, 1'b1);
