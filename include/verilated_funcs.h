@@ -3140,6 +3140,33 @@ inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int lbit
     }
 }
 
+// Convert a queue into a queue, either of them bounded
+template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
+inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
+VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
+          int srcElementBits, int dstElementBits) {
+    // Convert unbounded copies, then assign, which discards elements beyond the destination's
+    // bound with a warning (IEEE 1800-2023 7.10.5)
+    VlQueue<T_Src> src;
+    src = from;
+    VlQueue<T_Dst> dst;
+    VL_COPY_Q(dst, src, lbits, srcElementBits, dstElementBits);
+    q = dst;
+}
+
+// Convert a queue into a queue, reversed, either of them bounded
+template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
+inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
+VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
+             int srcElementBits, int dstElementBits) {
+    // As VL_COPY_Q above
+    VlQueue<T_Src> src;
+    src = from;
+    VlQueue<T_Dst> dst;
+    VL_REVCOPY_Q(dst, src, lbits, srcElementBits, dstElementBits);
+    q = dst;
+}
+
 // Reverse element order of an unpacked array in-place.
 // Used by emitter for descending-range arrays after VL_UNPACK_*.
 template <typename T_Value, std::size_t N_Depth>
