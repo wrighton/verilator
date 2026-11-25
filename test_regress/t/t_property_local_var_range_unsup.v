@@ -274,19 +274,434 @@ module t (
   endfunction
   property p_overwritten;
     int snap;
-    @(posedge clk) (valid, snap = bump(), snap = cyc) |=> (cyc > snap);
+    @(posedge clk) (1, snap = bump(), snap = cyc) |=> (cyc > snap);
   endproperty
   assert property (p_overwritten);
+  property p_impure_unread;
+    int snap;
+    @(posedge clk) (1, snap = bump()) |=> 1;
+  endproperty
+  assert property (p_impure_unread);
   property p_impure_read;
     int t;
-    @(posedge clk) (valid, t = bump()) |=> (t != 0);
+    @(posedge clk) (1, t = bump()) |=> (t != 0);
   endproperty
   assert property (p_impure_read);
   property p_urandom_range;
     int t;
-    @(posedge clk) (valid, t = $urandom_range(9, 1)) |=> (t != 0);
+    @(posedge clk) (1, t = $urandom_range(9, 1)) |=> (t != 0);
   endproperty
   assert property (p_urandom_range);
+
+  // An impure value read more than once, conditionally, or through 'inside'
+  property p_impure_twice;
+    int t;
+    @(posedge clk) (1, t = bump()) ##0 (t + t != 0);
+  endproperty
+  assert property (p_impure_twice);
+  property p_impure_cond;
+    int t;
+    @(posedge clk) (1, t = bump()) ##0 (valid ? t != 0 : 1'b1);
+  endproperty
+  assert property (p_impure_cond);
+  property p_impure_implies;
+    int t;
+    @(posedge clk) (1, t = bump()) ##0 (valid -> t != 0);
+  endproperty
+  assert property (p_impure_implies);
+  property p_impure_inside;
+    int t;
+    @(posedge clk) (1, t = bump()) ##0 (t inside {[1 : 3], 6});
+  endproperty
+  assert property (p_impure_inside);
+
+  // A value drawing a random value in a called function, read more than once, or later
+  function automatic int draw();
+    return $urandom_range(1000);
+  endfunction
+  property p_draw_twice;
+    int t;
+    @(posedge clk) 1 |=> (1, t = draw()) ##0 (t + 1 == t * 2 - t + 1);
+  endproperty
+  assert property (p_draw_twice);
+  property p_draw_later;
+    int t, u;
+    @(posedge clk) (1, t = draw(), u = draw()) |=> (t != u);
+  endproperty
+  assert property (p_draw_later);
+
+  // A value reading an impure value, not read
+  property p_impure_copy;
+    int t, u;
+    @(posedge clk) (1, t = bump(), u = t) ##0 1;
+  endproperty
+  assert property (p_impure_copy);
+
+  // A value calling a function drawing a random value and reading its argument, read twice
+  function automatic int draw_arg(int k);
+    return int'($urandom()) + k;
+  endfunction
+  property p_draw_arg;
+    int t;
+    @(posedge clk) (1, t = draw_arg(cyc)) ##0 (t + 1 == t * 2 - t + 1);
+  endproperty
+  assert property (p_draw_arg);
+
+  // Impure values in one cycle, which reads may evaluate out of their order
+  int mark;
+  function automatic bit first();
+    mark = 1;
+    return 1'b1;
+  endfunction
+  function automatic bit second();
+    mark = 2;
+    return 1'b1;
+  endfunction
+  function automatic bit identity(bit v);
+    return v;
+  endfunction
+  function automatic void third();
+    mark = 3;
+  endfunction
+  property p_order;
+    bit a, b;
+    @(posedge clk) 1 |=> (1, a = first(), b = second()) ##0 (b & a);
+  endproperty
+  assert property (p_order);
+  property p_order_relay;
+    bit a, b, c;
+    @(posedge clk) 1 |=> (1, a = first(), b = second(), c = identity(b)) ##0 (c & a);
+  endproperty
+  assert property (p_order_relay);
+  // A pure value reading what an impure value of the same cycle writes, or reading it
+  bit flag;
+  function automatic bit set_flag();
+    flag = 1'b1;
+    return 1'b1;
+  endfunction
+  function automatic bit read_flag();
+    return flag;
+  endfunction
+  property p_order_read;
+    bit x, y;
+    @(posedge clk) 1 |=> (1, x = set_flag(), y = read_flag()) ##0 (x & y);
+  endproperty
+  assert property (p_order_read);
+  property p_impure_derived;
+    int v, w;
+    @(posedge clk) (1, v = bump(), w = v + 1) ##0 (w != 0);
+  endproperty
+  assert property (p_impure_derived);
+  // An impure value in a property with a composite sequence operator, which the order of its
+  // match items may not follow
+  int st;
+  function automatic bit setter();
+    st = cyc + 100;
+    return 1'b1;
+  endfunction
+  function automatic int getter();
+    return st;
+  endfunction
+  property p_impure_and;
+    bit x;
+    int y;
+    @(posedge clk) (1, x = setter()) ##0 x
+        ##0 ((cyc >= 0 ##3 1) and ((1, y = getter()) ##0 (y == cyc + 100) ##0 1 ##0 1));
+  endproperty
+  assert property (p_impure_and);
+  property p_impure_intersect;
+    bit x;
+    int y;
+    @(posedge clk) (1, x = setter()) ##0 x
+        ##0 ((cyc >= 0 ##2 1) intersect ((1, y = getter()) ##0 (y == cyc + 100) ##0 1 ##0 1));
+  endproperty
+  assert property (p_impure_intersect);
+  property p_impure_and_swapped;
+    bit x;
+    int y;
+    @(posedge clk) (1, x = setter()) ##0 x
+        ##0 (((1, y = getter()) ##0 (y == cyc + 100) ##0 1 ##0 1) and (cyc >= 0 ##3 1));
+  endproperty
+  assert property (p_impure_and_swapped);
+
+  // An impure value after a condition that may be false
+  bit wrote;
+  function automatic bit set_wrote();
+    wrote = 1'b1;
+    return 1'b1;
+  endfunction
+  property p_impure_guarded;
+    bit x;
+    @(posedge clk) valid |=> (1, x = set_wrote()) ##0 x;
+  endproperty
+  assert property (p_impure_guarded);
+  // In a single cycle, a value with side effects on a variable after a condition that may be
+  // false
+  int unsigned increments;
+  function automatic int increment(int n);
+    ++increments;
+    return n + 1;
+  endfunction
+  property p_impure_single_guarded;
+    int v;
+    @(posedge clk) (cyc[0], v = increment(cyc)) |-> (v == cyc + 1);
+  endproperty
+  assert property (p_impure_single_guarded);
+  // Also through a dynamically dispatched call
+  int unsigned tallies;
+  class tally_base;
+    virtual function int tally(int n);
+      ++tallies;
+      return n;
+    endfunction
+  endclass
+  tally_base tb = new;
+  function automatic int through_tally(int n);
+    return tb.tally(n);
+  endfunction
+  property p_impure_single_dispatch;
+    int v;
+    @(posedge clk) (cyc[0], v = through_tally(cyc)) |-> (v == cyc);
+  endproperty
+  assert property (p_impure_single_dispatch);
+  // Also through a variable of a function kept between calls
+  function int next_id();
+    int id;
+    id = id + 1;
+    return id;
+  endfunction
+  property p_impure_single_static;
+    int v;
+    @(posedge clk) (cyc[0], v = next_id()) |-> (v > 0);
+  endproperty
+  assert property (p_impure_single_static);
+  function automatic int next_auto_id();
+    static int id;
+    id = id + 1;
+    return id;
+  endfunction
+  property p_impure_single_static_local;
+    int v;
+    @(posedge clk) (cyc[0], v = next_auto_id()) |-> (v > 0);
+  endproperty
+  assert property (p_impure_single_static_local);
+  // Also with the write and the read in one value
+  int kept;
+  function automatic int set_kept(int n);
+    kept = n;
+    return n;
+  endfunction
+  function automatic int get_kept();
+    return kept;
+  endfunction
+  property p_impure_single_both;
+    int v;
+    @(posedge clk) (cyc[0], v = set_kept(cyc) + get_kept()) |-> (v >= 0);
+  endproperty
+  assert property (p_impure_single_both);
+  // Also through a variable of a function kept between calls, assigned after a jump out of a
+  // block
+  function int skip_reset(int n);
+    int state;
+    begin : reset_block
+      if (n != -1) disable reset_block;
+      state = 0;
+    end
+    state += 1;
+    return n;
+  endfunction
+  property p_impure_single_jump;
+    int v;
+    @(posedge clk) (cyc[0], v = skip_reset(cyc)) |-> (v >= 0);
+  endproperty
+  assert property (p_impure_single_jump);
+  // Also through a call in the assignment of the variable reading it
+  function int hidden_read(int n);
+    static int s;
+    s = hidden_helper(n);
+    return n + s;
+  endfunction
+  function int hidden_helper(int n);
+    return hidden_read.s + 1;
+  endfunction
+  property p_impure_single_hidden;
+    int v;
+    @(posedge clk) (cyc[0], v = hidden_read(cyc)) |-> (v >= 0);
+  endproperty
+  assert property (p_impure_single_hidden);
+  // Also with values each reading what the other writes
+  int ping, pong;
+  function automatic int set_ping(int n);
+    ping = pong + 1;
+    return n;
+  endfunction
+  function automatic int set_pong(int n);
+    pong = ping + 1;
+    return n;
+  endfunction
+  property p_impure_single_cycle;
+    int v, w;
+    @(posedge clk) (cyc[0], v = set_ping(cyc), w = set_pong(cyc)) |-> (v == w);
+  endproperty
+  assert property (p_impure_single_cycle);
+  property p_impure_xz;
+    bit x;
+    @(posedge clk) 1'bx ##0 (1, x = set_wrote()) ##0 x;
+  endproperty
+  assert property (p_impure_xz);
+  // A value calling a virtual method, an override of which draws a random value, also one
+  // overriding a virtual method of its base class
+  class source_base;
+    virtual function int value();
+      return 0;
+    endfunction
+  endclass
+  class source extends source_base;
+    function int value();
+      return 1;
+    endfunction
+  endclass
+  class random_source extends source;
+    function int value();
+      return $urandom();
+    endfunction
+  endclass
+  source src;
+  function automatic int through_handle();
+    return src.value();
+  endfunction
+  property p_impure_method;
+    int x;
+    @(posedge clk) (1, x = through_handle()) |=> (x == 0);
+  endproperty
+  assert property (p_impure_method);
+  // An interface class method, an implementation of which draws a random value
+  interface class value_if;
+    pure virtual function int value();
+  endclass
+  class pure_value implements value_if;
+    virtual function int value();
+      return 1;
+    endfunction
+  endclass
+  class random_value implements value_if;
+    virtual function int value();
+      return $urandom();
+    endfunction
+  endclass
+  value_if vif;
+  function automatic int through_interface();
+    return vif.value();
+  endfunction
+  property p_impure_interface;
+    int x;
+    @(posedge clk) (1, x = through_interface()) |=> (x == 0);
+  endproperty
+  assert property (p_impure_interface);
+  // A virtual method, an override of which has side effects
+  int overrides_called;
+  class pure_base;
+    virtual function int value(int n);
+      return n;
+    endfunction
+  endclass
+  class impure_child extends pure_base;
+    function int value(int n);
+      overrides_called++;
+      return n;
+    endfunction
+  endclass
+  pure_base pb;
+  function automatic int through_override(int n);
+    return pb.value(n);
+  endfunction
+  property p_impure_override;
+    int x;
+    @(posedge clk) (1, x = through_override(cyc)) |=> (x == cyc - 1);
+  endproperty
+  assert property (p_impure_override);
+  // A value calling a virtual method recursively through another function, conservatively
+  class recursive_base;
+    virtual function int recurse_value(int k);
+      return (k > 0) ? recurse(this, k - 1) : 0;
+    endfunction
+  endclass
+  function automatic int recurse(recursive_base r, int k);
+    return r.recurse_value(k);
+  endfunction
+  recursive_base rb;
+  function automatic int through_recursion(int k);
+    return rb.recurse_value(k);
+  endfunction
+  property p_impure_recursion;
+    int x;
+    @(posedge clk) (1, x = through_recursion(cyc)) |=> (x == 0);
+  endproperty
+  assert property (p_impure_recursion);
+  // Recursively through an override calling the method on another object
+  class depth_base;
+    virtual function int depth(int k);
+      return k;
+    endfunction
+  endclass
+  class depth_child extends depth_base;
+    depth_base other;
+    virtual function int depth(int k);
+      return (k > 0) ? other.depth(k - 1) : 0;
+    endfunction
+  endclass
+  depth_base db;
+  function automatic int through_depth(int k);
+    return db.depth(k);
+  endfunction
+  property p_impure_override_recursion;
+    int x;
+    @(posedge clk) (1, x = through_depth(cyc)) |=> (x == 0);
+  endproperty
+  assert property (p_impure_override_recursion);
+  // A method calling a method of the same name, drawing a random value, on another class
+  class random_delegate;
+    virtual function int value(int k);
+      return k + int'($urandom());
+    endfunction
+  endclass
+  class delegator;
+    random_delegate rd = new;
+    virtual function int value(int k);
+      return rd.value(k);
+    endfunction
+  endclass
+  delegator dl;
+  function automatic int through_delegator(int k);
+    return dl.value(k);
+  endfunction
+  property p_random_delegate;
+    int x;
+    @(posedge clk) (1, x = through_delegator(cyc)) |=> (x == 0);
+  endproperty
+  assert property (p_random_delegate);
+  // A value calling an imported function not declared pure
+  import "DPI-C" function int c_draw();
+  function automatic int through_dpi();
+    return c_draw();
+  endfunction
+  property p_impure_dpi;
+    int x;
+    @(posedge clk) (1, x = through_dpi()) |=> (x == 0);
+  endproperty
+  assert property (p_impure_dpi);
+  property p_order_call;
+    bit a;
+    @(posedge clk) 1 |=> (1, a = first()) ##0 (1, third()) ##0 a;
+  endproperty
+  assert property (p_order_call);
+
+  // An impure value in an operand of a composite sequence operator
+  property p_impure_or;
+    int t;
+    @(posedge clk) valid |=> (1'b1 or ((1, t = bump()) ##0 (t != 0)));
+  endproperty
+  assert property (p_impure_or);
 
   always @(posedge clk) begin
     cyc <= cyc + 1;

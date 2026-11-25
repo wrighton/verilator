@@ -4517,16 +4517,80 @@ public:
 //######################################################################
 // Match item lowering
 
+// What functions and tasks do, for the whole pass, which makes and deletes no function or task
+struct AssertNfaFTaskInfo final {
+    // What each does, also through those it calls, as AssertNfaMatchItemVisitor::FTASK_* bits
+    std::unordered_map<const AstNodeFTask*, uint8_t> uses;
+    // What the body of each does itself, not through those it calls, found once
+    struct Access final {
+        uint8_t uses = 0;  // FTASK_* bits of the body alone
+        std::vector<const AstNodeFTask*> calleeps;  // Called other than dynamically dispatched
+        std::vector<const AstNodeFTaskRef*> dispatchps;  // Dynamically dispatched calls
+        std::vector<const AstVar*> writtenps;  // Variables keeping their value written
+        std::vector<const AstVar*> readps;  // Variables keeping their value read
+    };
+    std::unordered_map<const AstNodeFTask*, Access> access;
+    // The variables keeping their value each writes and reads, also through those it calls
+    // other than dynamically dispatched, unknown if more than MAX_STATE_VARS of either, or if a
+    // dynamically dispatched call it makes may write one
+    struct StateVars final {
+        std::vector<const AstVar*> writtenps;
+        std::vector<const AstVar*> readps;
+        bool unknown = false;
+    };
+    std::unordered_map<const AstNodeFTask*, StateVars> stateVars;
+    size_t statStateVarsUnknown = 0;  // Summaries over the limit, for V3Stats
+    // Class methods by name with their classes, and the class of each, made on first use
+    std::unordered_map<std::string, std::vector<std::pair<AstNodeFTask*, const AstClass*>>>
+        methods;
+    std::unordered_map<const AstNodeFTask*, const AstClass*> methodClasses;
+    // The classes directly extending or implementing each class, made on first use
+    std::unordered_map<const AstClass*, std::vector<const AstClass*>> subclasses;
+    size_t dispatchDepth = 0;  // Dynamically dispatched calls whose uses are being found
+    // What the methods of a name in each class and in those deriving from it do, as uses, for the
+    // classes with such a method in or below them
+    struct NameUses final {
+        std::unordered_map<const AstClass*, uint8_t> classBits;
+        size_t done = 0;  // Methods of the name taken, in classBits unless pending
+        bool taking = false;  // Methods of the name being taken
+        // Methods taken whose uses are being found, of a recursion
+        std::unordered_set<const AstNodeFTask*> pending;
+        // Uses of the methods of the name in a class and in those deriving from it, found while
+        // methods of the name were being taken or pending
+        std::unordered_map<const AstClass*, uint8_t> subtreeBits;
+    };
+    std::unordered_map<std::string, NameUses> classUses;
+    // Methods taken while their uses were being found, added to their name on being found
+    struct Deferred final {
+        NameUses* nameUsesp;  // Stable, as rehashing classUses does not move its elements
+        AstNodeFTask* ftaskp;
+        const AstClass* classp;
+    };
+    std::unordered_map<const AstNodeFTask*, Deferred> deferred;
+    std::unordered_set<const AstNodeFTask*> inProgress;  // Uses being found, of a recursion
+    bool classesMade = false;
+    // Variables of functions and tasks accessed outside them, made on first use
+    std::unordered_set<const AstVar*> externalLocals;
+    bool externalLocalsMade = false;
+};
+
 // Lower the local variable assignments of match items (IEEE 1800-2023 16.10) before NFA
 // construction, as the NFA keeps no per-attempt storage. The property is walked forward in
 // time, keeping the latest value assigned to each local variable and the cycle it was assigned
 // in. Assignments of one match item take effect in list order at the end of its subsequence, so
 // a reassignment applies from there on. Each value read is computed every cycle into a module
 // temp, its own reads lowered the same way, and a read becomes $past of the temp delayed to the
-// cycle of the read; the assignment is removed. A value is so evaluated every cycle, so an
-// impure value is reported as unsupported. A random function call in a value is drawn by $past
-// of its own call, with a history of its own, so the temp has an input changing every cycle, and
-// each assignment draws its own value.
+// cycle of the read; the assignment is removed. The block of a value reading the time, also
+// through a function it calls, is marked to follow the time (see V3Sampled). As a value is so
+// computed every evaluation, an impure value, also one calling a function drawing a random
+// value, is instead evaluated at its read, which must be its only one, made unconditionally in
+// the cycle of its assignment, of which it must be the only match item assignment or
+// subroutine call to keep their order, after no condition that may be false, as the read may be
+// evaluated by an attempt not reaching it, and is otherwise reported as unsupported. As for an
+// impure boolean of a consequent, the read may still be evaluated at a clock tick no attempt
+// reaches it in, as the SIDEEFFECT warning reports. A random
+// function call in a value is drawn by $past of its own call, with a history of its own, so the
+// temp has an input changing every cycle, and each assignment draws its own value.
 // A value is only tracked along a single thread of fixed cycle delays, so its read is a
 // constant number of cycles after its assignment. Each operand of a composite sequence
 // operator is walked as a thread of its own, in an operand walk of its own: an operand of 'and',
@@ -4547,6 +4611,22 @@ public:
 // variables are tracked, so an assignment to any other variable, e.g. a temporary made by
 // V3Width, stays in place.
 class AssertNfaMatchItemVisitor final : public VNVisitor {
+    // What a function or task does, also through those it calls
+    static constexpr uint8_t FTASK_READS_TIME = 1;  // Reads the time
+    static constexpr uint8_t FTASK_DRAWS_RANDOM = 2;  // Draws a random value
+    // Has side effects through an override a dynamically dispatched call may call, which the
+    // purity of the call does not show
+    static constexpr uint8_t FTASK_IMPURE = 4;
+    using VarSet = std::unordered_set<const AstVar*>;
+    static constexpr uint8_t FTASK_WRITES_STATE = 8;  // Writes a variable kept between calls
+    static constexpr uint8_t FTASK_ALL
+        = FTASK_READS_TIME | FTASK_DRAWS_RANDOM | FTASK_IMPURE | FTASK_WRITES_STATE;
+    // Most dynamically dispatched calls nested in finding what they do, bounding the recursion
+    static constexpr size_t MAX_DISPATCH_DEPTH = 64;
+    // Most variables keeping their value written, or read, by one function or task and those it
+    // calls whose writes and reads are told apart, far above any written by hand
+    static constexpr size_t MAX_STATE_VARS = 1024;
+
     // TYPES
     struct Value final {
         AstNodeExpr* exprp;  // Assigned value, its reads already lowered
@@ -4554,6 +4634,9 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
         uint32_t cycle;  // Cycle of the walk it was assigned in
         bool inAntecedent;  // Assigned in the antecedent of an implication
         size_t ordinal;  // Number of its assignment in walk order
+        bool timed;  // Reads the time, also through a function it calls
+        bool impure;  // Has side effects, so is evaluated at its only read, not by a temp
+        const char* kindp;  // What makes it impure, for messages
     };
     struct Untimed final {
         AstNode* nodep;  // Range delay or composite operator the value was live at
@@ -4589,6 +4672,17 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
         const AstVar* varp;  // Variable changed
         Summary* summaryp;  // Summary holding its effect before, nullptr if none
     };
+    // Reads of an impure value
+    struct ImpureReads final {
+        uint32_t count;  // Number of reads
+        const AstExprStmt* itemp;  // Match item assigning the value
+        const char* kindp;  // What makes it impure, for messages
+    };
+    // Match items in a cycle
+    struct CycleItems final {
+        uint32_t count = 0;  // Number of assignments and subroutine calls
+        const char* impureKindp = nullptr;  // Kind of an impure value among them, if any
+    };
     // A temp computing a value every cycle
     struct Temp final {
         AstVar* varp;  // The temp, named after the walk
@@ -4614,11 +4708,27 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
     // as the operands of a parallel operator may be walked out of order
     std::map<size_t, Temp> m_temps;
     std::map<size_t, AstNodeExpr*> m_valueps;  // Removed values, by walk order
+    // Reads of each impure value, by walk order
+    std::map<size_t, ImpureReads> m_impureReads;
+    // Match items by cycle, as an impure value evaluated at its read may not keep their order
+    // (IEEE 1800-2023 16.10). By the cycle of the walk, that of an attempt as an impure value is
+    // only in a property of a single thread of fixed cycle delays.
+    std::unordered_map<uint32_t, CycleItems> m_cycleItems;
+    AssertNfaFTaskInfo& m_ftaskInfo;  // What functions and tasks do, for the whole pass
     std::vector<AstAlways*> m_alwaysps;  // Blocks computing the value temps
     // Match items left without statements, replaced by their subsequence after the walk, as
     // a replacement during the walk would be iterated again
     std::vector<AstExprStmt*> m_emptyItemps;
     std::vector<AstRand*>* m_randpsp = nullptr;  // Random function calls of the value walked
+    bool m_conditional = false;  // In an operand that may not be evaluated
+    bool m_readsImpure = false;  // The value walked reads an impure value
+    bool m_inItems = false;  // Lowering the statements of a match item
+    // The property has an operator walked other than as a single thread of fixed cycle delays,
+    // so the cycle of the walk is not that of an attempt
+    bool m_parallel = false;
+    // A condition walked before may be false, so a match item from here may not be reached by
+    // every attempt
+    bool m_guarded = false;
     uint32_t m_cycle = 0;  // Current cycle of the walk, only ever increasing
     uint32_t m_operand = 0;  // Operand walk walking: an operand of a composite operator
     uint32_t m_undoDepth = 0;  // Number of operands walked whose changes are undone
@@ -4626,11 +4736,13 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
     bool m_inConsequent = false;  // In the consequent of an implication
     bool m_inOperand = false;  // In an operand of a non-sequential operator
     bool m_failed = false;  // An error was found
+    const bool m_probe = false;  // Only finding whether the lowering is unsupported
     const AstNode* m_unsupportedp = nullptr;  // First unsupported construct found, reported after
     std::string m_unsupportedMsg;  // Its message
     size_t m_statValues = 0;  // Values lowered
     size_t m_statReads = 0;  // Reads of values lowered
     size_t m_statTemps = 0;  // Value temps made
+    size_t m_statTimedTemps = 0;  // Value temps following the time
     size_t m_statWork = 0;  // Nodes visited and references inspected
     size_t m_statFlow = 0;  // Nodes numbered, and effects looked up, set, merged and undone
 
@@ -4920,6 +5032,8 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
     }
     // Remove the local variable assignments of a match item, after its subsequence
     void lowerItems(AstExprStmt* const nodep) {
+        VL_RESTORER(m_inItems);
+        m_inItems = true;
         AstNode* nextp;
         for (AstNode* itemp = nodep->stmtsp(); itemp; itemp = nextp) {
             nextp = itemp->nextp();
@@ -4939,6 +5053,7 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
                     return;
                 }
                 // E.g. a subroutine call (IEEE 1800-2023 16.11) stays, reading values in order
+                if (!addItem(itemp, nullptr)) return;
                 iterateChildren(itemp);
                 if (m_failed) return;
                 continue;
@@ -4946,26 +5061,466 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
             AstAssign* const assignp = VN_AS(itemp, Assign);
             std::vector<AstRand*> randps;
             VL_RESTORER(m_randpsp);
+            VL_RESTORER(m_readsImpure);
             m_randpsp = &randps;
+            m_readsImpure = false;
+            // Its own side effects and uses, before its reads of impure values are lowered to
+            // them, as the walk lowering them also walks the impure values they evaluate
+            VIsCached::clearCacheTree();
+            const uint8_t uses = valueUses(assignp->rhsp());
+            const bool ownImpure = !assignp->rhsp()->isPure() || (uses & FTASK_IMPURE);
             iterateAndNextNull(assignp->rhsp());
             if (m_failed) return;
             AstNodeExpr* const valuep = assignp->rhsp();
             VIsCached::clearCacheTree();  // Reads lowered above change its purity
-            if (!valuep->isPure()) {
-                unsupported(valuep, "Unsupported: match item assigning an impure value"
-                                    " to a local variable.");
-                return;
-            }
-            drawRandoms(randps);
+            // A random value drawn in a called function is drawn wherever the value is
+            // computed, so only where the value is evaluated, at its read, as is an impure
+            // value it reads
+            const char* const kindp = ownImpure || m_readsImpure ? "an impure value"
+                                      : (uses & FTASK_DRAWS_RANDOM)
+                                          ? "a value calling a function drawing a random value"
+                                          : nullptr;
+            const bool impure = kindp != nullptr;
+            const bool timed = !impure && (uses & FTASK_READS_TIME);
             const size_t ordinal = sizeOf(assignp).ordinal;
-            m_values[lhsp->varp()]
-                = Value{assignp->rhsp(), nullptr, m_cycle, !m_inConsequent, ordinal};
+            if (impure) {
+                // Evaluated at its read, which an operand of a composite operator may skip, and
+                // ordered by the cycle of the walk, which a composite operator does not keep
+                if (m_operand) {
+                    unsupported(valuep, "Unsupported: match item assigning "s + kindp
+                                            + " to a local variable in an operand of a composite"
+                                              " sequence operator.");
+                    return;
+                }
+                if (m_parallel) {
+                    unsupported(valuep, "Unsupported: match item assigning "s + kindp
+                                            + " to a local variable in a property with a composite"
+                                              " sequence operator, a range delay or a"
+                                              " repetition.");
+                    return;
+                }
+                // Evaluated at its read, which an attempt not reaching the match item may also
+                // evaluate (IEEE 1800-2023 16.10)
+                if (m_guarded) {
+                    unsupported(valuep, "Unsupported: match item assigning "s + kindp
+                                            + " to a local variable, after a condition that may"
+                                              " be false.");
+                    return;
+                }
+                m_impureReads.emplace(ordinal, ImpureReads{0, nodep, kindp});
+            } else {
+                drawRandoms(randps);
+            }
+            if (!addItem(valuep, kindp)) return;
+            m_values[lhsp->varp()] = Value{assignp->rhsp(), nullptr, m_cycle, !m_inConsequent,
+                                           ordinal,         timed,   impure,  kindp};
             const bool inserted = m_valueps.emplace(ordinal, assignp->rhsp()).second;
             UASSERT_OBJ(inserted, assignp, "Assignment lowered twice");
             ++m_statValues;
             assignp->unlinkFrBack();
             pushDeletep(assignp);
         }
+    }
+    // Whether a call may call an override of the function or task referenced: a call of a virtual
+    // method, also one overriding a virtual method (see V3WidthCommit), other than through
+    // 'super' or a class scope, which bind statically (IEEE 1800-2023 8.15, 8.20)
+    static bool dynamicCall(const AstNodeFTaskRef* const refp) {
+        const AstNodeFTask* const ftaskp = refp->taskp();
+        return (ftaskp->isVirtual() || ftaskp->pureVirtual()) && !refp->superReference();
+    }
+    // What a dynamically dispatched call made in a function or task does: the method called, and
+    // the methods of its name in the static class of the object it is called on and in those
+    // deriving from it
+    uint8_t dispatchUses(const AstNodeFTaskRef* const refp, const AstNodeFTask* const callerp) {
+        if (!m_ftaskInfo.classesMade) {
+            m_ftaskInfo.classesMade = true;
+            v3Global.rootp()->foreach([this](const AstClass* classp) {
+                for (const AstClassExtends* const cextp : classp->extendspList()) {
+                    m_ftaskInfo.subclasses[cextp->classp()].push_back(classp);
+                }
+                for (AstNode* const memberp : VNList<AstNode>{classp->membersp()}) {
+                    AstNodeFTask* const ftaskp = VN_CAST(memberp, NodeFTask);
+                    if (!ftaskp) continue;
+                    m_ftaskInfo.methods[ftaskp->name()].emplace_back(ftaskp, classp);
+                    m_ftaskInfo.methodClasses.emplace(ftaskp, classp);
+                }
+            });
+        }
+        // Taken as doing everything when nested too deeply, bounding the recursion
+        if (m_ftaskInfo.dispatchDepth >= MAX_DISPATCH_DEPTH) return FTASK_ALL;
+        // The class of an object called on, else of the caller, a method calling one of its own
+        const AstClass* classp = nullptr;
+        if (const AstMethodCall* const callp = VN_CAST(refp, MethodCall)) {
+            const AstClassRefDType* const dtypep
+                = VN_CAST(callp->fromp()->dtypep()->skipRefp(), ClassRefDType);
+            if (dtypep) classp = dtypep->classp();
+        } else {
+            const auto callerIt = m_ftaskInfo.methodClasses.find(callerp);
+            if (callerIt != m_ftaskInfo.methodClasses.end()) classp = callerIt->second;
+        }
+        UASSERT_OBJ(classp, refp, "Virtual method call not on an object of a class");
+        ++m_ftaskInfo.dispatchDepth;
+        const uint8_t uses = methodUses(refp->taskp()) | classUses(classp, refp->taskp()->name());
+        --m_ftaskInfo.dispatchDepth;
+        return uses;
+    }
+    // What the methods of a name in a class and in those deriving from it do. The uses of each
+    // method of the name are found once, and propagated up to the classes it derives from,
+    // stopping at a class already showing them, so each class changes once per use bit.
+    uint8_t classUses(const AstClass* const classp, const std::string& name) {
+        AssertNfaFTaskInfo::NameUses& nameUsesr = m_ftaskInfo.classUses[name];
+        const auto methodsIt = m_ftaskInfo.methods.find(name);
+        UASSERT_OBJ(methodsIt != m_ftaskInfo.methods.end(), classp,
+                    "Virtual method not in a class");
+        const std::vector<std::pair<AstNodeFTask*, const AstClass*>>& methods = methodsIt->second;
+        if (!nameUsesr.taking) {
+            nameUsesr.taking = true;
+            while (nameUsesr.done < methods.size()) {
+                addMethodUses(nameUsesr, methods[nameUsesr.done++]);
+            }
+            nameUsesr.taking = false;
+            if (nameUsesr.pending.empty()) {
+                const auto bitsIt = nameUsesr.classBits.find(classp);
+                return bitsIt == nameUsesr.classBits.end() ? 0 : bitsIt->second;
+            }
+        }
+        return subtreeUses(nameUsesr, classp, name);
+    }
+    // What the methods of a name in a class and in those deriving from it do, found from the
+    // methods directly while methods of the name are being taken or pending, each class once
+    uint8_t subtreeUses(AssertNfaFTaskInfo::NameUses& nameUsesr, const AstClass* const classp,
+                        const std::string& name) {
+        const auto bitsIt = nameUsesr.subtreeBits.find(classp);
+        if (bitsIt != nameUsesr.subtreeBits.end()) return bitsIt->second;
+        uint8_t uses = 0;
+        std::unordered_set<const AstClass*> visited{classp};
+        std::vector<const AstClass*> pending{classp};
+        while (!pending.empty()) {
+            const AstClass* const subclassp = pending.back();
+            pending.pop_back();
+            for (AstNode* const memberp : VNList<AstNode>{subclassp->membersp()}) {
+                ++m_statWork;
+                AstNodeFTask* const ftaskp = VN_CAST(memberp, NodeFTask);
+                if (!ftaskp || ftaskp->name() != name) continue;
+                // Taken as doing everything within a recursion through it
+                if (m_ftaskInfo.inProgress.count(ftaskp)) return FTASK_ALL;
+                uses |= methodUses(ftaskp);
+            }
+            const auto subIt = m_ftaskInfo.subclasses.find(subclassp);
+            if (subIt == m_ftaskInfo.subclasses.end()) continue;
+            for (const AstClass* const derivedp : subIt->second) {
+                if (visited.emplace(derivedp).second) pending.push_back(derivedp);
+            }
+        }
+        nameUsesr.subtreeBits.emplace(classp, uses);
+        return uses;
+    }
+    // Add what a method does to the classes it derives from, unless its uses are being found
+    void addMethodUses(AssertNfaFTaskInfo::NameUses& nameUsesr,
+                       const std::pair<AstNodeFTask*, const AstClass*>& method) {
+        nameUsesr.pending.emplace(method.first);
+        if (m_ftaskInfo.inProgress.count(method.first)) {
+            m_ftaskInfo.deferred.emplace(
+                method.first,
+                AssertNfaFTaskInfo::Deferred{&nameUsesr, method.first, method.second});
+            return;
+        }
+        const uint8_t uses = methodUses(method.first);
+        nameUsesr.pending.erase(method.first);
+        propagateUses(nameUsesr, method.second, uses);
+    }
+    // Add uses of a method of a name to its class and those it derives from, stopping at a class
+    // already showing them
+    void propagateUses(AssertNfaFTaskInfo::NameUses& nameUsesr, const AstClass* const classp,
+                       const uint8_t uses) {
+        std::vector<const AstClass*> pending{classp};
+        while (!pending.empty()) {
+            const AstClass* const upp = pending.back();
+            pending.pop_back();
+            ++m_statWork;
+            uint8_t& bitsr = nameUsesr.classBits[upp];
+            if ((bitsr | uses) == bitsr) continue;
+            bitsr |= uses;
+            for (const AstClassExtends* const cextp : upp->extendspList()) {
+                pending.push_back(cextp->classp());
+            }
+        }
+    }
+    // What a method a dynamically dispatched call may call does, including its side effects,
+    // which the purity of the call does not show
+    uint8_t methodUses(AstNodeFTask* const ftaskp) {
+        return ftaskUses(ftaskp) | (ftaskp->isPure() ? 0 : FTASK_IMPURE);
+    }
+    // Variables of a function or task whose first access in statements in sequence is an
+    // unconditional assignment of a value not reading them, and that no other function or task
+    // accesses, so no call reads a value kept. atEnd: no statement follows them in the function
+    // or task, so a jump out of a block of them skips no access.
+    void addCallTemps(const AstNode* const stmtsp, const bool atEnd, VarSet& tempps,
+                      VarSet& seenps) {
+        for (const AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+            const bool stmtAtEnd = atEnd && !stmtp->nextp();
+            // A static initialization is made once, not at each call
+            if (VN_IS(stmtp, InitialStaticStmt)) continue;
+            if (const AstJumpBlock* const blockp = VN_CAST(stmtp, JumpBlock)) {
+                if (stmtAtEnd) {
+                    addCallTemps(blockp->stmtsp(), true, tempps, seenps);
+                    continue;
+                }
+            } else if (const AstBegin* const beginp = VN_CAST(stmtp, Begin)) {
+                addCallTemps(beginp->stmtsp(), stmtAtEnd, tempps, seenps);
+                continue;
+            }
+            const AstAssign* const assignp = VN_CAST(stmtp, Assign);
+            const AstVarRef* const lhsp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+            if (lhsp && lhsp->varp()->isFuncLocal() && !seenps.count(lhsp->varp())
+                && !externalLocals().count(lhsp->varp())
+                && !assignp->rhsp()->exists(
+                    [&](const AstVarRef* refp) { return refp->varp() == lhsp->varp(); })) {
+                tempps.emplace(lhsp->varp());
+            }
+            stmtp->foreach([&](const AstVarRef* refp) { seenps.emplace(refp->varp()); });
+        }
+    }
+    VarSet callTemps(const AstNodeFTask* const ftaskp) {
+        VarSet tempps;
+        VarSet seenps;
+        addCallTemps(ftaskp->stmtsp(), true, tempps, seenps);
+        return tempps;
+    }
+    // The variables of functions and tasks accessed outside them, by a hierarchical reference
+    const std::unordered_set<const AstVar*>& externalLocals() {
+        if (!m_ftaskInfo.externalLocalsMade) {
+            m_ftaskInfo.externalLocalsMade = true;
+            std::unordered_map<const AstVar*, const AstNodeFTask*> ownerps;
+            v3Global.rootp()->foreach([&](const AstNodeFTask* ftaskp) {
+                ftaskp->foreach([&](const AstVar* varp) {
+                    ++m_statWork;
+                    ownerps.emplace(varp, ftaskp);
+                });
+            });
+            v3Global.rootp()->foreach([&](const AstNodeFTask* ftaskp) {
+                ftaskp->foreach([&](const AstNodeVarRef* refp) {
+                    ++m_statWork;
+                    const auto it = ownerps.find(refp->varp());
+                    if (it != ownerps.end() && it->second != ftaskp) {
+                        m_ftaskInfo.externalLocals.emplace(refp->varp());
+                    }
+                });
+            });
+        }
+        return m_ftaskInfo.externalLocals;
+    }
+    // The memoized summary of the variables of a function or task found by ftaskUses
+    const AssertNfaFTaskInfo::StateVars& stateVarsOf(const AstNodeFTask* const ftaskp) const {
+        const auto it = m_ftaskInfo.stateVars.find(ftaskp);
+        UASSERT_OBJ(it != m_ftaskInfo.stateVars.end(), ftaskp, "Uses not found");
+        return it->second;
+    }
+    // True if a variable keeps its value from one call to a read in the next, i.e. is not an
+    // automatic variable of a function or task, or one of its call temps
+    static bool isState(const AstVar* const varp, const VarSet& tempps) {
+        return (!varp->isFuncLocal() || !varp->lifetime().isAutomatic()) && !tempps.count(varp);
+    }
+    // FTASK_WRITES_STATE if a node writes a variable keeping its value
+    static uint8_t writesState(const AstNode* const np, const VarSet& tempps) {
+        const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef);
+        return refp && refp->access().isWriteOrRW() && isState(refp->varp(), tempps)
+                   ? FTASK_WRITES_STATE
+                   : 0;
+    }
+    // What a value does, also through the functions it calls
+    uint8_t valueUses(const AstNodeExpr* const valuep) {
+        uint8_t uses = 0;
+        valuep->foreach([&](const AstNode* np) {
+            if (VN_IS(np, Time) || VN_IS(np, TimeD)) uses |= FTASK_READS_TIME;
+            uses |= writesState(np, VarSet{});
+            const AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef);
+            // Not dynamically dispatched, as a concurrent assertion calls no non-static method
+            // (IEEE 1800-2023 16.6)
+            if (refp && refp->taskp()) uses |= ftaskUses(refp->taskp());
+        });
+        return uses;
+    }
+    // What the body of a function or task does itself, found once
+    const AssertNfaFTaskInfo::Access& ownAccess(const AstNodeFTask* const ftaskp) {
+        const auto pair = m_ftaskInfo.access.emplace(ftaskp, AssertNfaFTaskInfo::Access{});
+        AssertNfaFTaskInfo::Access& accessr = pair.first->second;
+        if (!pair.second) return accessr;
+        const VarSet tempps = callTemps(ftaskp);
+        VarSet writtenps;
+        VarSet readps;
+        std::unordered_set<const AstNodeFTask*> calleeps;
+        // An imported function has no body to scan, and is impure unless declared pure
+        ftaskp->foreach([&](const AstNode* np) {
+            ++m_statWork;
+            if (VN_IS(np, Time) || VN_IS(np, TimeD)) accessr.uses |= FTASK_READS_TIME;
+            if (VN_IS(np, Rand) || VN_IS(np, URandomRange)) accessr.uses |= FTASK_DRAWS_RANDOM;
+            if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
+                if (!isState(refp->varp(), tempps)) return;
+                if (refp->access().isWriteOrRW()) {
+                    accessr.uses |= FTASK_WRITES_STATE;
+                    if (writtenps.emplace(refp->varp()).second) {
+                        accessr.writtenps.push_back(refp->varp());
+                    }
+                }
+                if (refp->access().isReadOrRW() && readps.emplace(refp->varp()).second) {
+                    accessr.readps.push_back(refp->varp());
+                }
+                return;
+            }
+            const AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef);
+            if (!refp || !refp->taskp()) return;
+            if (dynamicCall(refp)) {
+                accessr.dispatchps.push_back(refp);
+            } else if (calleeps.emplace(refp->taskp()).second) {
+                accessr.calleeps.push_back(refp->taskp());
+            }
+        });
+        return accessr;
+    }
+    // Add the variables of one summary to another, up to MAX_STATE_VARS of each
+    void mergeStateVars(AssertNfaFTaskInfo::StateVars& tor,
+                        const AssertNfaFTaskInfo::StateVars& fromr) {
+        if (tor.unknown) return;
+        if (fromr.unknown) {
+            tor = AssertNfaFTaskInfo::StateVars{};
+            tor.unknown = true;
+            return;
+        }
+        const auto addAll
+            = [&](std::vector<const AstVar*>& top, const std::vector<const AstVar*>& fromp) {
+                  if (fromp.empty()) return;
+                  m_statWork += top.size() + fromp.size();
+                  std::unordered_set<const AstVar*> seenps{top.begin(), top.end()};
+                  for (const AstVar* const varp : fromp) {
+                      if (seenps.emplace(varp).second) top.push_back(varp);
+                  }
+              };
+        addAll(tor.writtenps, fromr.writtenps);
+        addAll(tor.readps, fromr.readps);
+        if (tor.writtenps.size() > MAX_STATE_VARS || tor.readps.size() > MAX_STATE_VARS) {
+            tor = AssertNfaFTaskInfo::StateVars{};
+            tor.unknown = true;
+        }
+    }
+    // What a function or task does, also through those it calls. Each strongly connected
+    // component of the calls other than dynamically dispatched is found once (Tarjan), so the
+    // work is linear in the functions and calls.
+    uint8_t ftaskUses(const AstNodeFTask* const rootp) {
+        const auto it = m_ftaskInfo.uses.find(rootp);
+        if (it != m_ftaskInfo.uses.end()) return it->second;
+        // Taken as doing everything within a recursion through a dynamically dispatched call
+        if (!m_ftaskInfo.inProgress.emplace(rootp).second) return FTASK_ALL;
+        struct Node final {
+            size_t index;  // Order found
+            size_t low;  // Lowest index of the component reached
+            uint8_t uses;  // What it does, and those it calls found so far
+            AssertNfaFTaskInfo::StateVars vars;  // Of it and those it calls found so far
+            size_t next = 0;  // Calls taken
+        };
+        std::unordered_map<const AstNodeFTask*, Node> nodes;
+        std::vector<const AstNodeFTask*> componentps;  // Found, component not complete
+        std::vector<const AstNodeFTask*> callps;  // Being searched, outermost first
+        const auto open = [&](const AstNodeFTask* const ftaskp) {
+            const AssertNfaFTaskInfo::Access& accessr = ownAccess(ftaskp);
+            uint8_t uses = accessr.uses;
+            AssertNfaFTaskInfo::StateVars vars;
+            for (const AstNodeFTaskRef* const refp : accessr.dispatchps) {
+                const uint8_t dispatchUses_ = dispatchUses(refp, ftaskp);
+                uses |= dispatchUses_;
+                if (dispatchUses_ & FTASK_WRITES_STATE) vars.unknown = true;
+            }
+            if (!vars.unknown) {
+                vars.writtenps = accessr.writtenps;
+                vars.readps = accessr.readps;
+            }
+            nodes.emplace(ftaskp, Node{nodes.size(), nodes.size(), uses, std::move(vars)});
+            componentps.push_back(ftaskp);
+            callps.push_back(ftaskp);
+        };
+        open(rootp);
+        while (!callps.empty()) {
+            const AstNodeFTask* const ftaskp = callps.back();
+            Node& noder = nodes.at(ftaskp);  // Stable, as rehashing does not move elements
+            const std::vector<const AstNodeFTask*>& calleeps = ownAccess(ftaskp).calleeps;
+            if (noder.next < calleeps.size()) {
+                const AstNodeFTask* const calleep = calleeps[noder.next++];
+                ++m_statWork;
+                const auto memoIt = m_ftaskInfo.uses.find(calleep);
+                if (memoIt != m_ftaskInfo.uses.end()) {
+                    noder.uses |= memoIt->second;
+                    mergeStateVars(noder.vars, stateVarsOf(calleep));
+                    continue;
+                }
+                // One found is in an incomplete component, as a complete one is remembered
+                const auto nodeIt = nodes.find(calleep);
+                if (nodeIt == nodes.end()) {
+                    open(calleep);
+                } else {
+                    noder.low = std::min(noder.low, nodeIt->second.index);
+                }
+                continue;
+            }
+            callps.pop_back();
+            if (noder.low == noder.index) {
+                // Each in a complete component does what any in it does
+                size_t first = componentps.size();
+                uint8_t uses = 0;
+                AssertNfaFTaskInfo::StateVars vars;
+                do {
+                    --first;
+                    uses |= nodes.at(componentps[first]).uses;
+                    mergeStateVars(vars, nodes.at(componentps[first]).vars);
+                } while (componentps[first] != ftaskp);
+                if (vars.unknown) ++m_ftaskInfo.statStateVarsUnknown;
+                for (size_t i = first; i < componentps.size(); ++i) {
+                    Node& memberr = nodes.at(componentps[i]);
+                    memberr.uses = uses;
+                    memberr.vars = vars;
+                    if (m_ftaskInfo.uses.emplace(componentps[i], uses).second) {
+                        m_ftaskInfo.stateVars.emplace(componentps[i], vars);
+                    }
+                }
+                componentps.resize(first);
+            }
+            if (!callps.empty()) {
+                Node& callerr = nodes.at(callps.back());
+                callerr.low = std::min(callerr.low, noder.low);
+                callerr.uses |= noder.uses;
+                mergeStateVars(callerr.vars, noder.vars);
+            }
+        }
+        const uint8_t uses = nodes.at(rootp).uses;
+        m_ftaskInfo.inProgress.erase(rootp);
+        const auto deferredIt = m_ftaskInfo.deferred.find(rootp);
+        if (deferredIt != m_ftaskInfo.deferred.end()) {
+            const AssertNfaFTaskInfo::Deferred deferred = deferredIt->second;
+            m_ftaskInfo.deferred.erase(deferredIt);
+            deferred.nameUsesp->pending.erase(rootp);
+            propagateUses(*deferred.nameUsesp, deferred.classp, methodUses(deferred.ftaskp));
+        }
+        return uses;
+    }
+    // Count a match item assignment or subroutine call in the current cycle, false if
+    // unsupported as an impure value evaluated at its read may not keep their order
+    bool addItem(const AstNode* nodep, const char* impureKindp) {
+        CycleItems& itemsr = m_cycleItems[m_cycle];
+        if (itemsr.count && impureKindp) {
+            unsupported(nodep, "Unsupported: match item assigning "s + impureKindp
+                                   + " to a local variable in a cycle with another match item"
+                                     " assignment or subroutine call (IEEE 1800-2023 16.10).");
+            return false;
+        }
+        if (itemsr.impureKindp) {
+            unsupported(nodep, "Unsupported: match item assignment or subroutine call in a cycle"
+                               " with a match item assigning "s
+                                   + itemsr.impureKindp
+                                   + " to a local variable (IEEE 1800-2023 16.10).");
+            return false;
+        }
+        ++itemsr.count;
+        if (impureKindp) itemsr.impureKindp = impureKindp;
+        return true;
     }
     // Replace each random function call in the value walked with $past of the call, drawn
     // every cycle into a history of its own
@@ -4989,8 +5544,11 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
         FileLine* const flp = exprp->fileline();
         // Named after the walk
         valuer.tempp = new AstVar{flp, VVarType::MODULETEMP, "", exprp->dtypep()};
-        AstAssign* const assignp = new AstAssign{
-            flp, new AstVarRef{flp, valuer.tempp, VAccess::WRITE}, sampled(exprp->unlinkFrBack())};
+        AstSampled* const sampledp = VN_AS(sampled(exprp->unlinkFrBack()), Sampled);
+        sampledp->timed(valuer.timed);
+        if (valuer.timed) ++m_statTimedTemps;
+        AstAssign* const assignp
+            = new AstAssign{flp, new AstVarRef{flp, valuer.tempp, VAccess::WRITE}, sampledp};
         const bool inserted
             = m_temps
                   .emplace(valuer.ordinal,
@@ -5028,13 +5586,6 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
         }
         iterateAndNextNull(nodep->exprp());
     }
-    // True if exprStmtp is a match item, not an ExprStmt that V3Width made assigning a
-    // temporary, e.g. for 'inside' with an impure left-hand side
-    static bool isMatchItem(const AstExprStmt* exprStmtp) {
-        const AstAssign* const assignp = VN_CAST(exprStmtp->stmtsp(), Assign);
-        const AstVarRef* const lhsRefp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
-        return !lhsRefp || lhsRefp->varp()->varType() != VVarType::XTEMP;
-    }
     void visit(AstExprStmt* nodep) override {
         ++m_statWork;
         if (!isMatchItem(nodep)) {
@@ -5061,6 +5612,7 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
             return;
         }
         if (m_failed || !nodep->access().isReadOnly()) return;
+        markCondition(nodep);
         const auto it = m_values.find(nodep->varp());
         if (it == m_values.end()) {
             const State state = normalized(stateOf(nodep->varp()));
@@ -5073,8 +5625,28 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
         }
         Value& valuer = it->second;
         FileLine* const flp = nodep->fileline();
-        AstNodeExpr* newp = new AstVarRef{flp, valueTempp(valuer), VAccess::READ};
-        if (const uint32_t ticks = m_cycle - valuer.cycle) {
+        const uint32_t ticks = m_cycle - valuer.cycle;
+        AstNodeExpr* newp = nullptr;
+        if (valuer.impure) {
+            // Evaluated at its only read, unconditionally in the cycle of its assignment
+            uint32_t& readsr = m_impureReads.at(valuer.ordinal).count;
+            const char* const whyp
+                = ticks           ? "in a later cycle than its assignment"
+                  : m_conditional ? "conditionally, e.g. by '?:', '&&', '||', '->' or 'inside'"
+                  : readsr        ? "more than once"
+                                  : nullptr;
+            ++readsr;
+            if (whyp) {
+                unsupported(nodep, "Unsupported: match item assigning "s + valuer.kindp
+                                       + " to a local variable read " + whyp + ".");
+                return;
+            }
+            newp = sampled(valuer.exprp->cloneTree(false));
+            m_readsImpure = true;
+        } else {
+            newp = new AstVarRef{flp, valueTempp(valuer), VAccess::READ};
+        }
+        if (ticks) {
             AstPast* const pastp
                 = new AstPast{flp, newp, new AstConst{flp, AstConst::WidthedValue{}, 32, ticks},
                               nullptr, /* propertyTiming */ true};
@@ -5084,6 +5656,12 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
         ++m_statReads;
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    // A boolean of the sequence, not of a match item value, that may be false guards what follows
+    void markCondition(const AstNodeExpr* nodep) {
+        if (m_inOperand || m_inItems) return;
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        if (!constp || !constp->num().isNeqZero() || constp->num().isAnyXZ()) m_guarded = true;
     }
     void visit(AstRand* nodep) override {
         if (m_randpsp) m_randpsp->push_back(nodep);
@@ -5099,10 +5677,28 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
             visitComposite(nodep);
             return;
         }
+        markCondition(nodep);
         // The operands of a non-sequential operator, e.g. a nested overlapped implication, are
         // walked in order, each sequence in them a thread of its own
         VL_RESTORER(m_inOperand);
         m_inOperand = true;
+        // The operands after the first of a short-circuiting operator may not be evaluated
+        if (AstCond* const condp = VN_CAST(nodep, Cond)) {
+            iterateAndNextNull(condp->condp());
+            VL_RESTORER(m_conditional);
+            m_conditional = true;
+            iterateAndNextNull(condp->thenp());
+            iterateAndNextNull(condp->elsep());
+            return;
+        }
+        AstNodeBiop* const biopp = VN_CAST(nodep, NodeBiop);
+        if (biopp && (VN_IS(biopp, LogAnd) || VN_IS(biopp, LogOr) || VN_IS(biopp, LogIf))) {
+            iterateAndNextNull(biopp->lhsp());
+            VL_RESTORER(m_conditional);
+            m_conditional = true;
+            iterateAndNextNull(biopp->rhsp());
+            return;
+        }
         iterateChildren(nodep);
     }
     void visit(AstNode* nodep) override {
@@ -5122,11 +5718,29 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
     }
 
     // CONSTRUCTORS
+    // For valueNeedsLowering only
     AssertNfaMatchItemVisitor(AstNodeModule* const modp, V3UniqueNames& tempNames,
-                              AstNodeExpr* const antecedentp, const bool isOverlapped,
-                              AstNodeExpr* const bodyp, AstNode* const propp)
+                              AssertNfaFTaskInfo& ftaskInfo)
         : m_modp{modp}
-        , m_tempNames{tempNames} {
+        , m_tempNames{tempNames}
+        , m_ftaskInfo{ftaskInfo} {}
+    AssertNfaMatchItemVisitor(AstNodeModule* const modp, V3UniqueNames& tempNames,
+                              AssertNfaFTaskInfo& ftaskInfo, AstNodeExpr* const antecedentp,
+                              const bool isOverlapped, AstNodeExpr* const bodyp,
+                              AstNode* const propp, const bool probe = false)
+        : m_modp{modp}
+        , m_tempNames{tempNames}
+        , m_ftaskInfo{ftaskInfo}
+        , m_probe{probe} {
+        const auto parallelFunc = [](const AstNodeExpr* exprp) {
+            if (const AstSExpr* const sexprp = VN_CAST(exprp, SExpr)) {
+                return VN_AS(sexprp->delayp(), Delay)->isRangeDelay();
+            }
+            return exprp->isMultiCycleSva() || VN_IS(exprp, Implication) || VN_IS(exprp, SConsRep)
+                   || VN_IS(exprp, SEventually) || VN_IS(exprp, SClocked);
+        };
+        m_parallel
+            = (antecedentp && antecedentp->exists(parallelFunc)) || bodyp->exists(parallelFunc);
         size_t ordinal = 0;
         if (antecedentp) { AssertNfaSizeVisitor{antecedentp, m_sizes, ordinal}; }
         { AssertNfaSizeVisitor{bodyp, m_sizes, ordinal}; }
@@ -5137,9 +5751,23 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
             m_inConsequent = true;
         }
         if (!m_failed) iterateAndNextNull(bodyp);
-        if (m_unsupportedp) m_unsupportedp->v3warn(E_UNSUPPORTED, m_unsupportedMsg);
+        // An impure value not read would never be evaluated
+        for (const auto& itr : m_impureReads) {
+            if (m_failed) break;
+            if (!itr.second.count) {
+                unsupported(itr.second.itemp, "Unsupported: match item assigning "s
+                                                  + itr.second.kindp
+                                                  + " to a local variable not read.");
+            }
+        }
+        if (m_unsupportedp && !m_probe) m_unsupportedp->v3warn(E_UNSUPPORTED, m_unsupportedMsg);
         for (const auto& itr : m_temps) {
             const Temp& tempr = itr.second;
+            if (m_probe) {
+                VL_DO_DANGLING(tempr.varp->deleteTree(), tempr.varp);
+                VL_DO_DANGLING(tempr.alwaysp->deleteTree(), tempr.alwaysp);
+                continue;
+            }
             const std::string name = m_tempNames.get(tempr.exprp);
             tempr.varp->name(name);
             tempr.varp->origName(name);
@@ -5149,10 +5777,10 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
         }
         const auto unassignedReadFunc
             = [this](const AstVarRef* refp) { return unassignedRead(refp); };
-        if (!m_failed) propp->exists(unassignedReadFunc);
+        if (!m_failed && !m_probe) propp->exists(unassignedReadFunc);
         for (const auto& itr : m_valueps) {
             const AstNodeExpr* const valuep = itr.second;
-            if (m_failed) break;
+            if (m_failed || m_probe) break;
             valuep->exists(unassignedReadFunc);
         }
         for (AstExprStmt* const stmtp : m_emptyItemps) {
@@ -5164,14 +5792,135 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
     }
 
 public:
+    // True if a match item assigns a local variable a value reading the time, impure or drawing
+    // a random value, also through the functions it calls, which V3AssertPre would compute
+    // continuously rather than at its match item
+    static bool valueNeedsLowering(AstNodeModule* const modp, V3UniqueNames& tempNames,
+                                   AssertNfaFTaskInfo& ftaskInfo, const AstNode* const nodep) {
+        return matchItemUses(modp, tempNames, ftaskInfo, nodep);
+    }
+    // True if a match item assigns a local variable a value reading the time, also through the
+    // functions it calls
+    static bool valueReadsTime(AstNodeModule* const modp, V3UniqueNames& tempNames,
+                               AssertNfaFTaskInfo& ftaskInfo, const AstNode* const nodep) {
+        return matchItemUses(modp, tempNames, ftaskInfo, nodep) & FTASK_READS_TIME;
+    }
+    // True if the values match items assign local variables, also through the functions they
+    // call, feed back: one writes a variable keeping its value that one reads, the same or
+    // another writing in turn, so computations not at their match items, re-run on the
+    // changes, may not settle. A dynamically dispatched call writing such a variable, or a
+    // value with more such variables than are told apart, is taken as feeding back.
+    static bool valueFeedsBack(AstNodeModule* const modp, V3UniqueNames& tempNames,
+                               AssertNfaFTaskInfo& ftaskInfo, const AstNode* const nodep) {
+        AssertNfaMatchItemVisitor visitor{modp, tempNames, ftaskInfo};
+        std::vector<const AstNodeExpr*> valueps;
+        nodep->foreach([&](const AstExprStmt* exprStmtp) {
+            if (!isMatchItem(exprStmtp)) return;
+            for (const AstNode* stmtp = exprStmtp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (const AstAssign* const assignp = VN_CAST(stmtp, Assign)) {
+                    valueps.push_back(assignp->rhsp());
+                }
+            }
+        });
+        const bool feedback = visitor.valuesFeedBack(valueps);
+        V3Stats::addStatSum("Assertions, local variable lowering work", visitor.m_statWork);
+        return feedback;
+    }
+    bool valuesFeedBack(const std::vector<const AstNodeExpr*>& valueps) {
+        // Only a value writing such a variable can be in a cycle, so only these are summarized
+        std::vector<AssertNfaFTaskInfo::StateVars> writerps;
+        for (const AstNodeExpr* const valuep : valueps) {
+            if (!(valueUses(valuep) & FTASK_WRITES_STATE)) continue;
+            AssertNfaFTaskInfo::StateVars vars;
+            valuep->foreach([&](const AstNode* np) {
+                ++m_statWork;
+                if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
+                    if (!isState(refp->varp(), VarSet{})) return;
+                    AssertNfaFTaskInfo::StateVars ownVars;
+                    if (refp->access().isWriteOrRW()) ownVars.writtenps.push_back(refp->varp());
+                    if (refp->access().isReadOrRW()) ownVars.readps.push_back(refp->varp());
+                    mergeStateVars(vars, ownVars);
+                } else if (const AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef)) {
+                    // Found by valueUses, as not dynamically dispatched (IEEE 1800-2023 16.6)
+                    if (refp->taskp()) { mergeStateVars(vars, stateVarsOf(refp->taskp())); }
+                }
+            });
+            if (vars.unknown) return true;
+            writerps.push_back(std::move(vars));
+        }
+        // A writer reaches those reading what it writes; feedback is a cycle of them
+        const size_t count = writerps.size();
+        std::vector<std::vector<size_t>> readersps(count);
+        for (size_t i = 0; i < count; ++i) {
+            const std::unordered_set<const AstVar*> writtenps{writerps[i].writtenps.begin(),
+                                                              writerps[i].writtenps.end()};
+            for (size_t j = 0; j < count; ++j) {
+                for (const AstVar* const varp : writerps[j].readps) {
+                    ++m_statWork;
+                    if (writtenps.count(varp)) {
+                        readersps[i].push_back(j);
+                        break;
+                    }
+                }
+            }
+        }
+        // 0: not visited, 1: on the search path, 2: done
+        std::vector<uint8_t> states(count, 0);
+        const std::function<bool(size_t)> cycleFrom = [&](size_t i) {
+            states[i] = 1;
+            for (const size_t j : readersps[i]) {
+                if (states[j] == 1 || (states[j] == 0 && cycleFrom(j))) return true;
+            }
+            states[i] = 2;
+            return false;
+        };
+        for (size_t i = 0; i < count; ++i) {
+            if (states[i] == 0 && cycleFrom(i)) return true;
+        }
+        return false;
+    }
+    // What the values of the match items do, FTASK_IMPURE also if impure
+    static uint8_t matchItemUses(AstNodeModule* const modp, V3UniqueNames& tempNames,
+                                 AssertNfaFTaskInfo& ftaskInfo, const AstNode* const nodep) {
+        AssertNfaMatchItemVisitor visitor{modp, tempNames, ftaskInfo};
+        uint8_t uses = 0;
+        nodep->foreach([&](const AstExprStmt* exprStmtp) {
+            if (!isMatchItem(exprStmtp)) return;
+            for (const AstNode* stmtp = exprStmtp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                const AstAssign* const assignp = VN_CAST(stmtp, Assign);
+                if (!assignp) continue;
+                uses |= visitor.valueUses(assignp->rhsp());
+                if (!assignp->rhsp()->isPure()) uses |= FTASK_IMPURE;
+            }
+        });
+        V3Stats::addStatSum("Assertions, local variable lowering work", visitor.m_statWork);
+        return uses;
+    }
+    // True if exprStmtp is a match item, not an ExprStmt that V3Width made assigning a
+    // temporary, e.g. for 'inside' with an impure left-hand side
+    static bool isMatchItem(const AstExprStmt* exprStmtp) {
+        const AstAssign* const assignp = VN_CAST(exprStmtp->stmtsp(), Assign);
+        const AstVarRef* const lhsRefp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+        return !lhsRefp || lhsRefp->varp()->varType() != VVarType::XTEMP;
+    }
     // Lower the match items of an implication, or of a property without one if antecedentp is
     // nullptr. Append the blocks computing value temps to alwaysps, unless an error was
     // reported, then return true.
+    // Whether lowering would report the match items of a property unsupported, lowering a copy
+    static bool loweringUnsupported(AstNodeModule* const modp, V3UniqueNames& tempNames,
+                                    AssertNfaFTaskInfo& ftaskInfo, AstNodeExpr* const antecedentp,
+                                    const bool isOverlapped, AstNodeExpr* const bodyp,
+                                    AstNode* const propp) {
+        const AssertNfaMatchItemVisitor visitor{modp,         tempNames, ftaskInfo, antecedentp,
+                                                isOverlapped, bodyp,     propp,     true};
+        V3Stats::addStatSum("Assertions, local variable lowering work", visitor.m_statWork);
+        return visitor.m_failed;
+    }
     static bool lowerFailed(AstNodeModule* const modp, V3UniqueNames& tempNames,
-                            AstNodeExpr* const antecedentp, const bool isOverlapped,
-                            AstNodeExpr* const bodyp, AstNode* const propp,
-                            std::vector<AstAlways*>& alwaysps) {
-        AssertNfaMatchItemVisitor visitor{modp,         tempNames, antecedentp,
+                            AssertNfaFTaskInfo& ftaskInfo, AstNodeExpr* const antecedentp,
+                            const bool isOverlapped, AstNodeExpr* const bodyp,
+                            AstNode* const propp, std::vector<AstAlways*>& alwaysps) {
+        AssertNfaMatchItemVisitor visitor{modp,         tempNames, ftaskInfo, antecedentp,
                                           isOverlapped, bodyp,     propp};
         if (visitor.m_failed) {
             for (AstAlways* const alwaysp : visitor.m_alwaysps) {
@@ -5182,6 +5931,8 @@ public:
         V3Stats::addStatSum("Assertions, local variable values", visitor.m_statValues);
         V3Stats::addStatSum("Assertions, local variable reads", visitor.m_statReads);
         V3Stats::addStatSum("Assertions, local variable value temps", visitor.m_statTemps);
+        V3Stats::addStatSum("Assertions, local variable value temps following the time",
+                            visitor.m_statTimedTemps);
         V3Stats::addStatSum("Assertions, local variable lowering work", visitor.m_statWork);
         V3Stats::addStatSum("Assertions, local variable flow entries", visitor.m_statFlow);
         alwaysps = visitor.m_alwaysps;
@@ -5205,6 +5956,7 @@ class AssertNfaVisitor final : public VNVisitor {
     AstSenItem* m_alwaysClockp = nullptr;  // Clock inferred from m_alwaysp
     V3UniqueNames m_propTempNames{"__VnfaSampled"};  // Hoisted $sampled(propp) temps
     V3UniqueNames m_localValueNames{"__VnfaLocalValue"};  // Local variable value temps
+    AssertNfaFTaskInfo m_ftaskInfo;  // What functions and tasks do
     V3UniqueNames m_failCountNames{"__VnfaRemainingFailCount"};  // Fail replay counter names
     V3UniqueNames m_actionNames{"__VnfaAction"};  // Automatics of cloned actions
 
@@ -5235,6 +5987,20 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     // First subroutine call match item of a multi-cycle sequence in a property, or nullptr
+    // Whether the match items of a single-cycle property would be reported unsupported here, so
+    // are left to V3AssertPre
+    bool singleCycleUnsupported(AstPropSpec* const propp) {
+        AstPropSpec* const clonep = propp->cloneTree(false);
+        const PropertyParts parts = decomposeProperty(clonep);
+        AstNodeExpr* bodyp = parts.seqExprp;
+        while (AstLogNot* const notp = VN_CAST(bodyp, LogNot)) bodyp = notp->lhsp();
+        const bool unsupported = AssertNfaMatchItemVisitor::loweringUnsupported(
+            m_modp, m_localValueNames, m_ftaskInfo,
+            parts.hasImplication ? parts.triggerExprp : nullptr, parts.isOverlapped, bodyp,
+            clonep->propp());
+        VL_DO_DANGLING(clonep->deleteTree(), clonep);
+        return unsupported;
+    }
     static const AstNode* matchItemCall(const AstNode* nodep) {
         // Calls are not executed at the end points of such a sequence (IEEE 1800-2023 16.11);
         // V3AssertNfa lowers those of a boolean. Any other match item is an assignment by
@@ -5572,6 +6338,18 @@ class AssertNfaVisitor final : public VNVisitor {
 
     // Reject unsupported shapes.
     // Returns the PropSpec to lower, or nullptr when fully handled here.
+    // True if the assertion is in a procedure whose clock the lowering cannot take (see
+    // processAssertion)
+    bool proceduralUnsupported(const AstNodeCoverOrAssert* const assertp,
+                               const AstPropSpec* const propp) const {
+        const AstCover* const coverp = VN_CAST(assertp, Cover);
+        if (propp->sensesp() || !m_alwaysp || (coverp && coverp->isSeqEvent())
+            || (m_defaultClockingp && !m_alwaysClockp)) {
+            return false;
+        }
+        return isUnderProceduralCondition(assertp)
+               || (m_alwaysp->sentreep() && m_alwaysp->sentreep()->sensesp()->nextp());
+    }
     AstPropSpec* prepareAssertionProp(AstNodeCoverOrAssert* assertp) {
         if (reportSequenceRepOperand(assertp->propp())) {
             VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
@@ -5610,7 +6388,20 @@ class AssertNfaVisitor final : public VNVisitor {
             return nullptr;
         }
 
-        if (!hasMultiCycleExpr(propp)) return nullptr;
+        // A single-cycle property stays with V3AssertPre, which computes the values continuously,
+        // unless its values feed back on themselves, or read the time where they are lowered
+        // here, so as they are sampled; one feeding back is lowered or reported unsupported here
+        if (!hasMultiCycleExpr(propp)
+            && (!AssertNfaMatchItemVisitor::valueNeedsLowering(m_modp, m_localValueNames,
+                                                               m_ftaskInfo, propp)
+                || (!AssertNfaMatchItemVisitor::valueFeedsBack(m_modp, m_localValueNames,
+                                                               m_ftaskInfo, propp)
+                    && (!AssertNfaMatchItemVisitor::valueReadsTime(m_modp, m_localValueNames,
+                                                                   m_ftaskInfo, propp)
+                        || proceduralUnsupported(assertp, propp)
+                        || singleCycleUnsupported(propp))))) {
+            return nullptr;
+        }
         if (const AstNode* const callp = matchItemCall(propp)) {
             callp->v3warn(E_UNSUPPORTED, "Unsupported: subroutine call match item in a multi-cycle"
                                          " property (IEEE 1800-2023 16.11)");
@@ -5738,8 +6529,9 @@ class AssertNfaVisitor final : public VNVisitor {
 
         std::vector<AstAlways*> localValueps;  // Blocks computing local variable values
         if (AssertNfaMatchItemVisitor::lowerFailed(
-                m_modp, m_localValueNames, parts.hasImplication ? parts.triggerExprp : nullptr,
-                parts.isOverlapped, seqBodyp, propp->propp(), localValueps)) {
+                m_modp, m_localValueNames, m_ftaskInfo,
+                parts.hasImplication ? parts.triggerExprp : nullptr, parts.isOverlapped, seqBodyp,
+                propp->propp(), localValueps)) {
             AstPropSpec* const psp = VN_CAST(assertp->propp(), PropSpec);
             UASSERT_OBJ(psp, assertp, "Concurrent assertion must have PropSpec");
             replaceBodyOnBuildError(assertp->fileline(), psp, /*errorEmitted=*/true);
@@ -5959,6 +6751,10 @@ class AssertNfaVisitor final : public VNVisitor {
 
 public:
     explicit AssertNfaVisitor(AstNetlist* nodep) { iterate(nodep); }
+    ~AssertNfaVisitor() override {
+        V3Stats::addStatSum("Assertions, local variable state summaries over limit",
+                            m_ftaskInfo.statStateVarsUnknown);
+    }
 };
 
 //######################################################################

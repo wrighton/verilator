@@ -670,6 +670,25 @@ module t;
     end
     else begin
     end
+    property p_local_time;
+    time stamp;
+    @(posedge clk) 
+    ???? // IMPLICATION
+    $_EXPRSTMT(
+        stamp = $time;
+        , in);
+    ##1 (stamp != $time)
+    endproperty
+    assert property (@(posedge clk) 
+        ???? // IMPLICATION
+        $_EXPRSTMT(
+            __Vpropvar_hb95cf39f__0 = $time;
+            , in);
+        ##1 (__Vpropvar_hb95cf39f__0 != $time)
+    ) begin
+    end
+    else begin
+    end
     assert property (@( clk) (! ##1 in)
     ) begin
     end
@@ -1704,6 +1723,7 @@ module t;
     Iface bound_iface ();
     int __Vpropvar_h34541112__0;
     int __Vpropvar_h7c329738__0;
+    time __Vpropvar_hb95cf39f__0;
 endmodule
 class Cls;
     bit cg_clk;

@@ -2786,10 +2786,12 @@ class AstSampled final : public AstNodeExpr {
     // Verilog $sampled
     // @astgen op1 := exprp : AstNode<AstNodeExpr|AstPropSpec>
     bool m_internal : 1;  // Internally created, not from a source $sampled
+    bool m_timed : 1;  // Value of a property local variable reading the time, see V3Sampled
 public:
     AstSampled(FileLine* fl, AstNode* exprp, AstNodeDType* dtypep, bool internal = false)
         : ASTGEN_SUPER_Sampled(fl)
-        , m_internal{internal} {
+        , m_internal{internal}
+        , m_timed{false} {
         this->exprp(exprp);
         this->dtypep(dtypep);
     }
@@ -2802,9 +2804,12 @@ public:
     bool cleanOut() const override { V3ERROR_NA_RETURN(""); }
     int instrCount() const override { return 0; }
     bool sameNode(const AstNode* samep) const override {
-        return m_internal == VN_DBG_AS(samep, Sampled)->m_internal;
+        const AstSampled* const sampledp = VN_DBG_AS(samep, Sampled);
+        return m_internal == sampledp->m_internal && m_timed == sampledp->m_timed;
     }
     bool internal() const { return m_internal; }
+    bool timed() const { return m_timed; }
+    void timed(bool flag) { m_timed = flag; }
     bool isSystemFunc() const override { return true; }
 };
 class AstSchemaRef final : public AstNodeExpr {
