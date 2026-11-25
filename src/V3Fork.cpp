@@ -537,6 +537,7 @@ class ForkVisitor final : public VNVisitor {
         varp->direction(VDirection::INPUT);
         varp->funcLocal(true);
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        varp->isPastValue(refp->varp()->isPastValue());
         m_capturedVarsp = AstNode::addNext(m_capturedVarsp, varp);
         // Pass variable as argument
         AstArg* const argp = new AstArg{flp, refp->name(), refp->cloneTree(false)};
