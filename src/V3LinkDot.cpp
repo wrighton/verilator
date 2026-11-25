@@ -65,6 +65,7 @@
 
 #include "V3LinkDot.h"
 
+#include "V3ConstPool.h"
 #include "V3Global.h"
 #include "V3Graph.h"
 #include "V3LinkDotIfaceCapture.h"
@@ -832,9 +833,11 @@ private:
 
 public:
     VSymEnt* findDotted(FileLine* refLocationp, VSymEnt* lookupSymp, const string& dotname,
-                        string& baddot, VSymEnt*& okSymp, bool firstId) {
+                        string& baddot, VSymEnt*& okSymp, bool firstId, bool* upwardp = nullptr) {
         // Given a dotted hierarchy name, return where in scope it is
         // Note when dotname=="" we just fall through and return lookupSymp
+        // If upwardp is given, set true when found above the instance (IEEE 1800-2023 23.8)
+        if (upwardp) *upwardp = false;
         UINFO(8, "    dottedFind se" << cvtToHex(lookupSymp) << " '" << dotname << "'");
         string leftname = dotname;
         okSymp = lookupSymp;  // So can list bad scopes
@@ -893,8 +896,13 @@ public:
                 else {
                     bool crossedCell = false;  // Crossed a cell boundary
                     const AstCell* fromCellp = nullptr;  // Instance first resolved outside of
+                    bool leftCell = false;  // Left the instance, so an upwards reference
                     while (lookupSymp) {
                         if (!fromCellp) fromCellp = VN_CAST(lookupSymp->nodep(), Cell);
+                        if (VN_IS(lookupSymp->nodep(), Cell)
+                            || VN_IS(lookupSymp->nodep(), CellInline)) {
+                            leftCell = true;
+                        }
                         lookupSymp = lookupSymp->parentp();
                         cellp = lookupSymp ? VN_CAST(lookupSymp->nodep(), Cell)
                                            : nullptr;  // Replicated above
@@ -923,6 +931,7 @@ public:
                     if (fromCellp && !forScopeCreation()) {
                         markUpwardEscapes(fromCellp->modp(), ident, altIdent);
                     }
+                    if (upwardp) *upwardp = leftCell;
                 }
             } else {  // Searching for middle path component, must be a cell or interface port
                 VSymEnt* findSymp = findWithAltFlat(lookupSymp, ident, altIdent);
@@ -3484,6 +3493,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
     std::map<AstNode*, std::map<std::string, AstPin*>> m_usedDefParamPins;
     // Defparam pins used for a given formal, by hierarchical path
     std::map<std::string, AstNodeModule*> m_modulesToRevisit;  // Modules to revisit a second time
+    // Scoped: first parameter each upwards reference resolved to, by module and reference
+    std::unordered_map<std::string, const AstVar*> m_upwardParams;
     AstNode* m_lastDeferredp = nullptr;  // Last node which requested a revisit of its module
     AstNodeDType* m_packedArrayDtp = nullptr;  // Datatype reference for packed array
     bool m_inPackedArray = false;  // Currently traversing a packed array tree
@@ -3819,13 +3830,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
         return path;
     }
     VSymEnt* findDottedRefSymp(AstNode* nodep, VSymEnt* lookupSymp, const string& dotted,
-                               string& baddot, VSymEnt*& okSymp, bool* modportp = nullptr) {
+                               string& baddot, VSymEnt*& okSymp, bool* modportp = nullptr,
+                               bool* upwardp = nullptr) {
         // Return scope to search for a relinked hierarchical reference
         // (AstVarXRef or AstEnumItemRef), or nullptr after error if not found
         // If modportp is given, set true when the reference went through a modport
+        // If upwardp is given, set true when the reference is an upwards reference
         if (modportp) *modportp = false;
         VSymEnt* dotSymp = m_statep->findDotted(nodep->fileline(), lookupSymp, dotted, baddot,
-                                                okSymp, true);  // Maybe nullptr
+                                                okSymp, true, upwardp);  // Maybe nullptr
         if (!dotSymp) {
             nodep->v3error(
                 "Can't find definition of "
@@ -4106,6 +4119,59 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (nodep && nodep->isParam()) nodep->usedParam(true);
     }
 
+    // True if a reference typed with data type adtp also suits bdtp, of the same declaration
+    // in another specialization
+    static bool upwardDTypeCompatible(const AstNodeDType* adtp, const AstNodeDType* bdtp) {
+        if (adtp->matchingDType(bdtp)) return true;
+        // Each specialization has its own copy of an enum declared in the module,
+        // interchangeable if its items are the same, e.g. for '.name()'
+        const AstEnumDType* const aEnump = VN_CAST(adtp->skipRefToEnump(), EnumDType);
+        const AstEnumDType* const bEnump = VN_CAST(bdtp->skipRefToEnump(), EnumDType);
+        if (!aEnump || !bEnump || !aEnump->subDTypep()->matchingDType(bEnump->subDTypep())) {
+            return false;
+        }
+        const AstEnumItem* aItemp = aEnump->itemsp();
+        const AstEnumItem* bItemp = bEnump->itemsp();
+        while (aItemp && bItemp) {
+            const AstConst* const aValuep = VN_AS(aItemp->valuep(), Const);
+            const AstConst* const bValuep = VN_AS(bItemp->valuep(), Const);
+            if (aItemp->name() != bItemp->name() || !aValuep->num().isCaseEq(bValuep->num())) {
+                return false;
+            }
+            aItemp = VN_AS(aItemp->nextp(), EnumItem);
+            bItemp = VN_AS(bItemp->nextp(), EnumItem);
+        }
+        return !aItemp && !bItemp;
+    }
+    // Value of a constant at another width, sign extended or zero extended
+    static V3Number constAtWidth(const AstConst* constp, int width, bool signExtend) {
+        V3Number num{&constp->num(), width};
+        if (signExtend) {
+            num.opExtendS(constp->num(), constp->width());
+        } else {
+            num.opAssign(constp->num());
+        }
+        return num;
+    }
+    // True if refp, typed with parameter ap, also reads parameter bp of another instance
+    static bool upwardParamCompatible(const AstNode* refp, const AstVar* ap, const AstVar* bp) {
+        if (upwardDTypeCompatible(ap->dtypep(), bp->dtypep())) return true;
+        // Integral values of different widths read the same under a widening cast or
+        // extension, e.g. 'int'(mid.P)', if equal once extended as it does, unlike in a
+        // self-determined context, e.g. '{mid.P}'
+        const AstNode* const extp = refp->backp();
+        const bool signExtend = VN_IS(extp, ExtendS);
+        const AstConst* const aConstp = VN_CAST(ap->valuep(), Const);
+        const AstConst* const bConstp = VN_CAST(bp->valuep(), Const);
+        if (!(VN_IS(extp, Extend) || signExtend) || !aConstp || !bConstp
+            || aConstp->num().isOpaque() || bConstp->num().isOpaque()
+            || aConstp->isSigned() != bConstp->isSigned()
+            || extp->width() < std::max(aConstp->width(), bConstp->width())) {
+            return false;
+        }
+        return constAtWidth(aConstp, extp->width(), signExtend)
+            .isCaseEq(constAtWidth(bConstp, extp->width(), signExtend));
+    }
     static bool isTypeDecl(const AstNode* nodep) {
         return VN_IS(nodep, Typedef) || VN_IS(nodep, ParamTypeDType) || VN_IS(nodep, Class);
     }
@@ -5625,8 +5691,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string baddot;
             VSymEnt* okSymp;
             bool modport;
-            VSymEnt* const dotSymp
-                = findDottedRefSymp(nodep, lookupSymp, nodep->dotted(), baddot, okSymp, &modport);
+            bool upward;
+            VSymEnt* const dotSymp = findDottedRefSymp(nodep, lookupSymp, nodep->dotted(), baddot,
+                                                       okSymp, &modport, &upward);
             if (!dotSymp) return;
 
             if (!m_statep->forScopeCreation()) {
@@ -5663,6 +5730,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 AstVar* const varp
                     = foundp ? foundToVarp(foundp, nodep, nodep->access()) : nullptr;
                 nodep->varp(varp);
+                nodep->upward(upward);
                 updateVarUse(nodep->varp());
                 UINFO(7, indent() << "Resolved " << nodep);  // Also prints varp
                 // If found, check if it's ok to access in case it's in a hier_block
@@ -5692,6 +5760,46 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 } else {
                     if (vscp->user2p() && m_replaceWithAlias) {
                         vscp = LinkDotScopeVisitor::getAlias(vscp);
+                    }
+                    if (nodep->upward() && vscp->varp()->isParam()) {
+                        // An upwards reference (IEEE 1800-2023 23.8) resolves to the parameter
+                        // of this instance, but was typed with that of one instance, so the
+                        // parameters of all instances of the referencing module must match
+                        const AstNode* modp = m_modSymp->nodep();
+                        if (const AstCell* const cellp = VN_CAST(modp, Cell)) {
+                            modp = cellp->modp();
+                        }
+                        const string key = modp->name() + " " + nodep->inlinedDots() + " "
+                                           + nodep->dotted() + "." + nodep->name();
+                        const AstVar*& firstVarpr
+                            = m_upwardParams.emplace(key, vscp->varp()).first->second;
+                        if (firstVarpr
+                            && !upwardParamCompatible(nodep, firstVarpr, vscp->varp())) {
+                            nodep->v3warn(E_UNSUPPORTED,
+                                          "Unsupported: Upwards reference to parameter "
+                                              << nodep->prettyNameQ()
+                                              << " with a different data type in each instance\n"
+                                              << nodep->warnMore()
+                                              << "... Suggest declaring the parameter with an"
+                                                 " explicit data type");
+                            firstVarpr = nullptr;  // Report once
+                        }
+                        // Parameters are constants, replace as V3Const and V3Begin would have
+                        AstNodeExpr* const valuep = VN_AS(vscp->varp()->valuep(), NodeExpr);
+                        const AstConst* const constp = VN_CAST(valuep, Const);
+                        AstNodeExpr* const newp
+                            = !constp ? V3ConstPool::find(valuep)
+                              : constp->num().isOpaque()
+                                  ? valuep->cloneTree(false)
+                                  // At the width the reference was typed with, see above
+                                  : new AstConst{nodep->fileline(),
+                                                 constAtWidth(constp, nodep->width(),
+                                                              VN_IS(nodep->backp(), ExtendS))};
+                        newp->fileline(nodep->fileline());
+                        nodep->replaceWithKeepDType(newp);
+                        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                        UINFO(9, indent() << "new " << newp);
+                        return;
                     }
                     // Convert the VarXRef to a VarRef, so we don't need
                     // later optimizations to deal with VarXRef.

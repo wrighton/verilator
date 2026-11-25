@@ -1871,6 +1871,8 @@ module sub;
         end
     endfunction
     real r;
+    logic [2:0]  up_pm;
+    assign up_pm = pm.pout;
 endmodule
 module seq_event;
     input logic clk;

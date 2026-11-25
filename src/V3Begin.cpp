@@ -353,7 +353,8 @@ class BeginVisitor final : public VNVisitor {
     }
     void visit(AstVarXRef* nodep) override {
         if (nodep->user1SetOnce()) return;
-        if (nodep->varp()->isParam()) m_paramRefps.push_back(nodep);
+        // V3LinkDot replaces an upwards reference to a parameter once resolved per scope
+        if (nodep->varp()->isParam() && !nodep->upward()) m_paramRefps.push_back(nodep);
         const std::string& scope = m_ftaskp ? m_ftaskNamedScope : m_namedScope;
         if (scope != "" && nodep->inlinedDots() == "") nodep->inlinedDots(scope);
     }
