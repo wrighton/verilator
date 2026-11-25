@@ -468,6 +468,11 @@ DfgVertex::DfgVertex(DfgGraph& dfg, VDfgType type, FileLine* flp, const DfgDataT
 bool DfgVertex::unsafe() const {
     if (is<DfgMux>()) return true;
     if (is<DfgArraySel>()) return !as<DfgArraySel>()->bitp()->is<DfgConst>();
+    // A part of an unsafe value, or a concatenation with one, as an extension, evaluates it
+    if (const DfgSel* const selp = cast<DfgSel>()) return selp->fromp()->unsafe();
+    if (const DfgConcat* const concatp = cast<DfgConcat>()) {
+        return concatp->lhsp()->unsafe() || concatp->rhsp()->unsafe();
+    }
     return false;
 }
 

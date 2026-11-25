@@ -3483,8 +3483,34 @@ class ConstVisitor final : public VNVisitor {
             if (v3Global.fourstateResolved() && !nodep->partialWrite()) return true;
             return withinLower(nodep->lsbp(), VN_AS(nodep->fromp(), Sel), nodep);
         }
-        return withinLower(nodep->lsbp(), VN_AS(nodep->fromp(), Sel), nodep)
-               || readsPastLower(nodep);
+        const AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
+        return (withinLower(nodep->lsbp(), belowp, nodep) || readsPastLower(nodep))
+               && composedInStorage(nodep, belowp);
+    }
+    // Whether a read of select 'nodep' of lower select 'belowp' at a position that is not
+    // constant reads within the storage of the value once composed, as V3Expand shifts the value
+    // by the position or indexes its words: V3Unknown keeps the lower position there, but not
+    // the sum of both, for example where the guard of the lower select became a bitwise 'and'
+    static bool composedInStorage(const AstSel* nodep, const AstSel* belowp) {
+        if (VN_IS(belowp->lsbp(), Const)) return true;
+        const AstNodeExpr* const fromp = belowp->fromp();
+        // Bits past the last position read, as a shift by the position or by its word
+        const uint64_t storage = fromp->isWide() ? uint64_t{VL_EDATASIZE} * fromp->widthWords()
+                                                       - nodep->widthConst() + 1
+                                 : fromp->width() <= VL_IDATASIZE ? VL_IDATASIZE
+                                                                  : VL_QUADSIZE;
+        const uint64_t lower = positionBound(belowp->lsbp());
+        const uint64_t upper = positionBound(nodep->lsbp());
+        return lower < storage && upper < storage - lower;
+    }
+    // An upper bound of select position 'lsbp', also through its truncation to its low bits, as
+    // V3Width narrows an index
+    static uint64_t positionBound(const AstNodeExpr* lsbp) {
+        const AstSel* const selp = VN_CAST(lsbp, Sel);
+        if (selp && VN_IS(selp->lsbp(), Const) && selp->lsbConst() == 0) {
+            return std::min(V3Unknown::staticMax(selp), V3Unknown::staticMax(selp->fromp()));
+        }
+        return V3Unknown::staticMax(lsbp);
     }
     // Whether a read of a select of a select is at a constant position wholly outside the lower
     // select, so reads out-of-range bits, not bits beyond the lower select
