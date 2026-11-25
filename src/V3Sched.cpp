@@ -1464,7 +1464,8 @@ public:
 // random number, the time, user C code, or a function call, whatever the function does), or a
 // statement other than plain assignments and control flow (an event trigger, which wakes
 // processes without changing a value, a compound assignment, a force or release, a disable, a
-// wait, process control)
+// wait, process control), or a write into a class object, whose state outlives the evaluation
+// outside the variables of the library
 class LibEffectVisitor final : public VNVisitorConst {
     bool m_found = false;  // Found one
 
@@ -1476,11 +1477,18 @@ class LibEffectVisitor final : public VNVisitorConst {
                || VN_IS(nodep, StmtExpr) || VN_IS(nodep, Comment) || VN_IS(nodep, Return)
                || VN_IS(nodep, CReturn);
     }
+    // Whether an assignment writes a member of a class object, whose state is not in variables
+    static bool classWrite(const AstNode* nodep) {
+        const AstNodeAssign* const assignp = VN_CAST(nodep, NodeAssign);
+        return assignp && assignp->lhsp()->exists([](const AstMemberRef* selp) {
+            return VN_IS(selp->fromp()->dtypep()->skipRefp(), ClassRefDType);
+        });
+    }
     void visit(AstNode* nodep) override {
         if (m_found) return;
         const AstNodeExpr* const exprp = VN_CAST(nodep, NodeExpr);
         if (!nodep->isPure() || nodep->isOutputter() || (exprp && !exprp->isPredictOptimizable())
-            || (VN_IS(nodep, NodeStmt) && !plainStmt(nodep))) {
+            || (VN_IS(nodep, NodeStmt) && !plainStmt(nodep)) || classWrite(nodep)) {
             m_found = true;
             return;
         }

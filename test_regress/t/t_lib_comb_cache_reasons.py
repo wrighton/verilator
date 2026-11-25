@@ -104,6 +104,22 @@ CASES = (
   // verilator lint_on LATCH
   assign o = a + cnt;
 """),
+    # Nor through a class object, by any handle
+    ("every_eval_object", "logic run at every evaluation with effects", """
+  class C;
+    int cnt;
+  endclass
+  logic [7:0] pr  /*verilator public_flat_rw*/ = 8'd3;
+  C c = new;
+  C c2;
+  int snap;
+  always_comb begin
+    c2 = c;
+    c2.cnt = c2.cnt + int'(pr);
+    snap = c2.cnt;
+  end
+  assign o = a + 8'(snap);
+"""),
     # But it may write a temporary before reading it
     ("every_eval_temp", None, """
   logic [7:0] pr  /*verilator public_flat_rw*/ = 8'd3;
