@@ -987,12 +987,16 @@ template <typename T>
 std::string _vl_vsformat_time(std::string& tmp, T ld, int timeunit, bool left,
                               size_t width) VL_MT_SAFE {
     const VerilatedContextImp* const ctxImpp = Verilated::threadContextp()->impp();
+    const int userUnits = ctxImpp->timeFormatUnits();  // 2..-15
+    const int precision = ctxImpp->timeFormatPrecision();
     const std::string suffix = ctxImpp->timeFormatSuffix();
-    const int userUnits = ctxImpp->timeFormatUnits();  // 0..-15
-    const int fracDigits = ctxImpp->timeFormatPrecision();  // 0..N
-    const int shift = -userUnits + fracDigits + timeunit;  // 0..-15
     int digits = 0;
     if (std::numeric_limits<T>::is_integer) {
+        // Scale by at most 10**18 to stay within the conversion tables; an integral time has
+        // no further nonzero fractional digits, so append the rest of the precision as zeros
+        const int fracDigits = std::min(precision, 18 - std::max(0, timeunit - userUnits));
+        const int shift = -userUnits + fracDigits + timeunit;  // -17..18
+        const std::string zerosSuffix = std::string(precision - fracDigits, '0') + suffix;
         constexpr int b = 128;
         constexpr int w = VL_WORDS_I(b);
         VlWide<w> tmp0;
@@ -1032,30 +1036,27 @@ std::string _vl_vsformat_time(std::string& tmp, T ld, int timeunit, bool left,
                 VL_ASSIGN_W(b, v, divided);
             }
             if (!fracDigits) {
-                digits = _vl_snprintf_string(tmp, "%s%s", ptr, suffix.c_str());
+                digits = _vl_snprintf_string(tmp, "%s%s", ptr, zerosSuffix.c_str());
             } else {
                 digits = _vl_snprintf_string(tmp, "%s.%0*" PRIu64 "%s", ptr, fracDigits,
-                                             VL_SET_QW(frac), suffix.c_str());
+                                             VL_SET_QW(frac), zerosSuffix.c_str());
             }
         } else {
             const uint64_t integer64 = VL_SET_QW(integer);
             if (!fracDigits) {
-                digits = _vl_snprintf_string(tmp, "%" PRIu64 "%s", integer64, suffix.c_str());
+                digits = _vl_snprintf_string(tmp, "%" PRIu64 "%s", integer64, zerosSuffix.c_str());
             } else {
                 digits = _vl_snprintf_string(tmp, "%" PRIu64 ".%0*" PRIu64 "%s", integer64,
-                                             fracDigits, VL_SET_QW(frac), suffix.c_str());
+                                             fracDigits, VL_SET_QW(frac), zerosSuffix.c_str());
             }
         }
     } else {
-        const double shiftd = vl_time_multiplier(shift);
-        const double scaled = ld * shiftd;
-        const double fracDiv = vl_time_multiplier(fracDigits);
-        const double whole = scaled / fracDiv;
-        if (!fracDigits) {
-            digits = _vl_snprintf_string(tmp, "%.0f%s", whole, suffix.c_str());
-        } else {
-            digits = _vl_snprintf_string(tmp, "%.*f%s", fracDigits, whole, suffix.c_str());
-        }
+        // A real time carries its own fraction, so every requested digit comes from it.
+        // Powers of ten up to 10**17 are exact doubles, so scaling by one rounds only once.
+        const int shift = timeunit - userUnits;  // -17..17
+        const double scaled
+            = shift < 0 ? ld / vl_time_multiplier(-shift) : ld * vl_time_multiplier(shift);
+        digits = _vl_snprintf_string(tmp, "%.*f%s", precision, scaled, suffix.c_str());
     }
 
     const int needmore = static_cast<int>(width) - digits;
@@ -3160,11 +3161,32 @@ void VL_PRINTTIMESCALE(const char* namep, const char* timeunitp,
     VL_PRINTF_MT("Time scale of %s is %s / %s\n", namep, timeunitp,
                  contextp->timeprecisionString());
 }
+// Bounds the memory each %t uses
+static constexpr int MAX_TIMEFORMAT_PRECISION = 1 << 20;
 void VL_TIMEFORMAT_IINI(bool hasUnits, int units, bool hasPrecision, int precision, bool hasSuffix,
                         const std::string& suffix, bool hasWidth, int width,
                         VerilatedContext* contextp) VL_MT_SAFE {
-    if (hasUnits) contextp->impp()->timeFormatUnits(units);
-    if (hasPrecision) contextp->impp()->timeFormatPrecision(precision);
+    if (hasUnits) {
+        const int saturated = std::max(-15, std::min(2, units));
+        if (VL_UNLIKELY(saturated != units)) {
+            contextp->impp()->timeFormatWarnOnce(1, "$timeformat units '" + std::to_string(units)
+                                                        + "' outside range 2 to -15, using '"
+                                                        + std::to_string(saturated)
+                                                        + "' (IEEE 1800-2023 20.4.3)");
+        }
+        contextp->impp()->timeFormatUnits(saturated);
+    }
+    if (hasPrecision) {
+        // Precision is a count of fractional digits; a negative precision prints none
+        if (VL_UNLIKELY(precision > MAX_TIMEFORMAT_PRECISION)) {
+            contextp->impp()->timeFormatWarnOnce(
+                2, "$timeformat precision '" + std::to_string(precision)
+                       + "' above maximum, using '" + std::to_string(MAX_TIMEFORMAT_PRECISION)
+                       + "'");
+        }
+        contextp->impp()->timeFormatPrecision(
+            std::max(0, std::min(MAX_TIMEFORMAT_PRECISION, precision)));
+    }
     if (hasSuffix) contextp->impp()->timeFormatSuffix(suffix);
     if (hasWidth) contextp->impp()->timeFormatWidth(width);
 }
