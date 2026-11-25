@@ -1008,6 +1008,9 @@ class ConstVisitor final : public VNVisitor {
         return !numv.isNumber() ? numv : V3Number{nodep, nodep->width(), numv};
     }
 
+    static bool isDynamicArray(const AstNodeDType* const dtypep) {
+        return VN_IS(dtypep->skipRefp(), QueueDType) || VN_IS(dtypep->skipRefp(), DynArrayDType);
+    }
     static bool lowerAsFixedAggregate(const AstNodeDType* const dtypep) {
         return dtypep->isStreamableFixedAggregate() && dtypep->containsUnpackedStruct();
     }
@@ -2693,7 +2696,8 @@ class ConstVisitor final : public VNVisitor {
             replaceAssignToFixedAggregate(nodep, nodep->lhsp()->unlinkFrBack(), srcp);
             return true;
         } else if (m_doV && VN_IS(nodep->rhsp(), StreamR)
-                   && !VN_IS(nodep->lhsp()->dtypep()->skipRefp(), QueueDType)) {
+                   && (!VN_IS(nodep->lhsp()->dtypep()->skipRefp(), QueueDType)
+                       || isDynamicArray(VN_AS(nodep->rhsp(), StreamR)->lhsp()->dtypep()))) {
             // The right-streaming operator on rhs of assignment does not
             // change the order of bits. Eliminate stream but keep its lhsp.
             // Add a cast if needed.
