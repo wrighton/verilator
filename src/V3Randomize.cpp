@@ -302,6 +302,19 @@ class RandomizeMarkVisitor final : public VNVisitor {
         }
         return false;
     }
+    // True if classp reaches declClassp's members through rand class handles, not arrays of
+    // them, whose objects are randomized apart
+    static bool reachesThroughHandle(const AstClass* classp, const AstClass* declClassp,
+                                     ActiveSet& visited) {
+        return classp->existsMember([&](const AstClass*, const AstVar* varp) {
+            const AstClassRefDType* const refp
+                = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
+            if (!varp->rand().isRandomizable() || !refp) return false;
+            if (AstClass::isClassExtendedFrom(refp->classp(), declClassp)) return true;
+            return visited.insert(refp->classp()).second
+                   && reachesThroughHandle(refp->classp(), declClassp, visited);
+        });
+    }
     // True if classp, or a class derived from it, reaches declClassp through rand handles
     bool hierarchyReaches(const AstClass* classp, const AstClass* declClassp,
                           ActiveSet& visited) const {
@@ -829,13 +842,16 @@ class RandomizeMarkVisitor final : public VNVisitor {
         if (nodep->varp()->lifetime().isStatic()) m_staticRefs.emplace(nodep);
 
         // In obj.randomize() with, linking made obj's members MemberRefs of the LambdaArgRef,
-        // and V3Width turned the static ones into VarRefs of obj's class. Any other reference
-        // names a variable in the caller's scope (IEEE 1800-2023 18.7), which is a state value
-        // even if declared rand.
-        const bool callerVar = m_withClassp
-                               && !(nodep->varp()->lifetime().isStatic()
-                                    && AstClass::isClassExtendedFrom(
-                                        m_withClassp, VN_CAST(nodep->classOrPackagep(), Class)));
+        // and V3Width turned the static ones, also those of objects obj reaches through rand
+        // class handles, into VarRefs of their class. Any other reference names a variable in
+        // the caller's scope (IEEE 1800-2023 18.7), which is a state value even if declared rand.
+        bool callerVar = m_withClassp != nullptr;
+        if (callerVar && nodep->varp()->lifetime().isStatic()) {
+            const AstClass* const varClassp = VN_CAST(nodep->classOrPackagep(), Class);
+            ActiveSet visited;
+            callerVar = !AstClass::isClassExtendedFrom(m_withClassp, varClassp)
+                        && !(varClassp && reachesThroughHandle(m_withClassp, varClassp, visited));
+        }
         // Mark as randomizable if: rand-declared, or listed in std::randomize() args
         if (nodep->varp()->rand().isRandomizable() && !(m_inStdWith && m_stdRandCallp)
             && !isStateStatic(nodep->varp()) && !callerVar) {
