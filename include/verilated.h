@@ -1008,10 +1008,13 @@ public:
 
     /// Add callback to run once when the context is destroyed, after final blocks and any
     /// coverage write. Adding or removing one while another thread destroys the context is
-    /// a user error.
+    /// a user error. The default context is never destroyed, but runs its callbacks at exit
+    /// where it would have been destroyed.
     void addEndContextCb(void (*cb)(void*), void* datap) VL_MT_SAFE_EXCLUDES(m_endContextMutex);
     /// Remove a callback added by addEndContextCb, if it has not run
     void removeEndContextCb(void (*cb)(void*), void* datap) VL_MT_SAFE_EXCLUDES(m_endContextMutex);
+    // Internal: Run the end callbacks and restore output, as when destroyed
+    void endContext() VL_MT_SAFE_EXCLUDES(m_endContextMutex);
 
     // Internal: Model and thread setup
     void addModel(VerilatedModel* modelp);
@@ -1080,6 +1083,7 @@ public:
 
     // Internal: Check magic number
     static void checkMagic(const VerilatedContext* contextp);
+    bool magicOk() const VL_MT_SAFE { return m_magic == MAGIC; }
     void selfTestClearMagic() { m_magic = 0x2; }
 };
 
@@ -1337,11 +1341,9 @@ public:
         if (VL_UNLIKELY(!t_s.t_contextp)) t_s.t_contextp = lastContextp();
         return t_s.t_contextp;
     }
-    /// Return the global VerilatedContext, used if none created by user
-    static VerilatedContext* defaultContextp() VL_MT_SAFE {
-        static VerilatedContext s_s;
-        return &s_s;
-    }
+    /// Return the global VerilatedContext, used if none created by user.
+    /// It is never destroyed, as models using it may be destroyed by any static destructor.
+    static VerilatedContext* defaultContextp() VL_MT_SAFE;
 
 #ifndef VL_NO_LEGACY
     /// Return VerilatedContext::assertOn() using current thread's VerilatedContext
