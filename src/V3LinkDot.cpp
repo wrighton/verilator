@@ -4938,8 +4938,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 if (ifaceRefp->modportp()) {
                     dotSymp = m_statep->getNodeSym(ifaceRefp->modportp());
                     if (modportp) *modportp = true;
-                } else {
+                } else if (m_statep->existsNodeSym(ifaceRefp->ifacep())) {
                     dotSymp = m_statep->getNodeSym(ifaceRefp->ifacep());
+                } else {
+                    // Dead interface, so the port was already reported as not connected
+                    return nullptr;
                 }
             }
         } else if (const AstModportClockingRef* const clockingRefp
