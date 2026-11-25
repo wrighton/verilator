@@ -3478,6 +3478,19 @@ void VerilatedContext::calcUnusedSigs(bool flag) VL_MT_SAFE {
     const VerilatedLockGuard lock{m_mutex};
     m_s.m_calcUnusedSigs = flag;
 }
+uint32_t VerilatedContext::convergeLimit() const VL_MT_SAFE {
+    const VerilatedLockGuard lock{m_mutex};
+    return m_ns.m_convergeLimit;
+}
+void VerilatedContext::convergeLimit(uint32_t val) VL_MT_SAFE {
+    // Bounded like --converge-limit, so iteration counts cannot wrap past it
+    if (VL_UNLIKELY(val > static_cast<uint32_t>(std::numeric_limits<int>::max()))) {
+        VL_FATAL_MT("", 0, "",
+                    "Convergence limit must be between 1 and 2147483647, or 0 for no override");
+    }
+    const VerilatedLockGuard lock{m_mutex};
+    m_ns.m_convergeLimit = val;
+}
 void VerilatedContext::coverageFilename(const std::string& flag) VL_MT_SAFE {
     const VerilatedLockGuard lock{m_mutex};
     m_ns.m_coverageFilename = flag;
@@ -3904,6 +3917,9 @@ void VerilatedContextImp::commandArgVl(const std::string& arg) {
         uint64_t u64;
         if (arg == "+verilator+assert+lock") {
             m_ns.m_assertCtlsLocked = true;
+        } else if (commandArgVlUint64(arg, "+verilator+converge+limit+", u64, 1,
+                                      std::numeric_limits<int>::max())) {
+            convergeLimit(static_cast<uint32_t>(u64));
         } else if (commandArgVlString(arg, "+verilator+coverage+file+", str)) {
             coverageFilename(str);
         } else if (arg == "+verilator+debug") {
@@ -4005,6 +4021,7 @@ bool VerilatedContextImp::commandArgVlUint64(const std::string& arg, const std::
 
         if (std::any_of(str.cbegin(), str.cend(), [](int c) { return !std::isdigit(c); })) fail();
         char* end;
+        errno = 0;
         valuer = std::strtoull(str.c_str(), &end, 10);
         if (errno == ERANGE) fail("Value out of range of uint64_t");
         if (valuer < min || valuer > max) fail();
@@ -4447,12 +4464,32 @@ void VerilatedImp::versionDump() VL_MT_SAFE {
 //===========================================================================
 // VerilatedEvalLoop:: Methods
 
+#ifdef VL_DEBUG
+thread_local VlFileLine VerilatedEvalLoop::t_lastResumed;
+#endif
+
 void VerilatedEvalLoop::didNotConverge(const char* namep,
                                        void (VerilatedModel::*dumpTriggersp)()) {
     if (dumpTriggersp) (m_model.*dumpTriggersp)();
-    const std::string msg = "DIDNOTCONVERGE: "s + namep
-                            + " region did not converge after '--converge-limit' of "
-                            + std::to_string(m_convergeLimit) + " tries";
+    // Processes that keep waking each other in one time slot iterate the Active region
+    const bool active = 0 == std::strcmp(namep, "Active");
+#ifdef VL_DEBUG
+    if (active && t_lastResumed.filename()) {
+        VL_DBG_MSGF("         Last resumed process was waiting at %s:%d\n",
+                    t_lastResumed.filename(), t_lastResumed.lineno());
+    }
+#endif
+    std::string msg = "DIDNOTCONVERGE: "s + namep
+                      + " region did not converge after '--converge-limit' of "
+                      + std::to_string(m_convergeLimit) + " tries\n... note: ";
+    if (active) {
+        msg += "Processes that wake each other within one time slot take an iteration for each"
+               " wakeup; if";
+    } else {
+        msg += "If";
+    }
+    msg += " the design is still making progress, raise the limit with '--converge-limit' or"
+           " '+verilator+converge+limit+<value>'";
     VL_FATAL_MT("", 0, "", msg.c_str());
     VL_UNREACHABLE;  // VL_FATAL_MT does not return
 }
@@ -4478,16 +4515,29 @@ void VerilatedEvalLoop::evalImpl() {
     }
 
     m_model.evalBegin();
+#ifdef VL_DEBUG
+    t_lastResumed = VlFileLine{};
+#endif
 
-    // Initialization on first time step only
-    if (VL_UNLIKELY(!m_model.m_didInit)) {
-        VL_DEBUG_IF(VL_DBG_MSGF("+ Initial\n"););
-        // Static initializers
-        m_model.evalStatic();
-        // Initial blocks
-        m_model.evalInitial();
-        settle();
-        m_model.m_didInit = true;
+    // First eval since construction or restore
+    if (VL_UNLIKELY(!m_started)) {
+        m_started = true;
+        const uint32_t contextLimit = m_model.contextp()->convergeLimit();
+        m_convergeLimit = contextLimit ? contextLimit : m_defaultConvergeLimit;
+        // Initialization on first time step only, a restored model may have done it
+        if (!m_model.m_didInit) {
+            VL_DEBUG_IF(VL_DBG_MSGF("+ Initial\n"););
+            // Static initializers
+            m_model.evalStatic();
+            // Initial blocks
+            m_model.evalInitial();
+            // The 'Settle' region, iterated until it converges
+            uint32_t stlIterCount = 0;
+            do {
+                checkConvergence(++stlIterCount, "Settle", &VerilatedModel::dumpTriggersStl);
+            } while (m_model.evalStl(stlIterCount == 1));
+            m_model.m_didInit = true;
+        }
     }
 
     // Sampled values are collected before anything can read them

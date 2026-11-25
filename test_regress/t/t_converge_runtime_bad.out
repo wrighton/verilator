@@ -1,0 +1,3 @@
+%Error-DIDNOTCONVERGE: Settle region did not converge after '--converge-limit' of 10000 tries
+... note: If the design is still making progress, raise the limit with '--converge-limit' or '+verilator+converge+limit+<value>'
+Aborting...

@@ -1,0 +1,3 @@
+%Error-DIDNOTCONVERGE: Active region did not converge after '--converge-limit' of 10000 tries
+... note: Processes that wake each other within one time slot take an iteration for each wakeup; if the design is still making progress, raise the limit with '--converge-limit' or '+verilator+converge+limit+<value>'
+Aborting...
