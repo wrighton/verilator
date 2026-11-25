@@ -170,6 +170,14 @@ class CCtorsVisitor final : public VNVisitor {
         // cppcheck-suppress danglingLifetime
         m_varResetp = &var_reset;
         iterateChildren(nodep);
+        // After the resets, set primary inputs to their default values
+        AstCFunc* const initp = v3Global.rootp()->ctorInitp();
+        if (initp && nodep->isTop()) {
+            AstCCall* const callp = new AstCCall{nodep->fileline(), initp};
+            callp->dtypeSetVoid();
+            callp->selfPointer(VSelfPointerText{VSelfPointerText::This{}});
+            var_reset.add(callp->makeStmt());
+        }
 
         if (v3Global.opt.coverage()) {
             V3CCtorsBuilder configure_coverage{nodep, "_configure_coverage", VCtorType::COVERAGE};
