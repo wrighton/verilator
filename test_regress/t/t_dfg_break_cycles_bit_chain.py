@@ -24,7 +24,7 @@ SIZE_LARGE = SIZE_SMALL * SIZE_RATIO
 RATIO_MIN = 3
 RATIO_MAX = 8  # Linear scaling gives 4x, quadratic gives 16x
 # Vertices visited when tracing the drivers of the independent bits, linear in the width
-VERTICES_TRACED = {SIZE_SMALL: 1739, SIZE_LARGE: 6989}
+VERTICES_TRACED = {SIZE_SMALL: 1988, SIZE_LARGE: 7988}
 # Sinks examined when propagating independent bits, near linear in the width
 SINKS_EXAMINED = {SIZE_SMALL: 9702, SIZE_LARGE: 46908}
 
