@@ -161,7 +161,8 @@ Hierarchy blocks have some limitations, including:
 - Generated clocks may not work correctly if generated in the hierarchical
   model and passed into another hierarchical model or the top module.
 
-- Delays are not allowed in hierarchy blocks.
+- Delays are not allowed in hierarchy blocks, other than in classes and
+  packages whose tasks with delays the block never calls.
 
 - Setting type parameters of a hierarchy block is unsupported.
 
