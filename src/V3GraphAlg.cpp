@@ -570,23 +570,51 @@ void V3Graph::orderPreRanked() {
     sortEdges();
 }
 
-double V3Graph::orderDFSIterate(V3GraphVertex* vertexp) {
+double V3Graph::orderDFSIterate(V3GraphVertex* startp) {
     // Compute fanouts of each node
     // If forward edge, don't double count that fanout
-    if (vertexp->user() == 2) return vertexp->fanout();  // Already processed it
-    UASSERT_OBJ(vertexp->user() != 1, vertexp, "Loop found, backward edges should be dead");
-    vertexp->user(1);
-    double fanout = 0;
-    for (V3GraphEdge& edge : vertexp->outEdges()) {
-        if (edge.weight()) fanout += orderDFSIterate(edge.top());
+    if (startp->user() == 2) return startp->fanout();  // Already processed it
+    // Depth first with an explicit stack, as recursion overflows the stack on long paths
+    struct Frame final {
+        V3GraphVertex* vertexp;
+        V3GraphEdge::OList::const_iterator edgeIt;  // Next out edge of vertexp to follow
+        double fanout;  // Sum of fanouts of the destinations of the edges followed so far
+    };
+    std::vector<Frame> stack;
+    const auto enter = [&](V3GraphVertex* vertexp) {
+        UASSERT_OBJ(vertexp->user() != 1, vertexp, "Loop found, backward edges should be dead");
+        vertexp->user(1);
+        const V3GraphEdge::OList& edges = vertexp->outEdges();
+        stack.push_back({vertexp, edges.begin(), 0});
+    };
+    enter(startp);
+    while (true) {
+        Frame& frame = stack.back();
+        const V3GraphEdge::OList& edges = frame.vertexp->outEdges();
+        if (frame.edgeIt != edges.end()) {
+            const V3GraphEdge& edge = *frame.edgeIt;
+            ++frame.edgeIt;
+            if (!edge.weight()) continue;
+            V3GraphVertex* const topp = edge.top();
+            if (topp->user() == 2) {  // Already processed it
+                frame.fanout += topp->fanout();
+            } else {
+                enter(topp);
+            }
+            continue;
+        }
+        V3GraphVertex* const vertexp = frame.vertexp;
+        double fanout = frame.fanout;
+        // Just count inbound edges
+        for (V3GraphEdge& edge : vertexp->inEdges()) {
+            if (edge.weight()) ++fanout;
+        }
+        vertexp->fanout(fanout);
+        vertexp->user(2);
+        stack.pop_back();
+        if (stack.empty()) return vertexp->fanout();
+        stack.back().fanout += vertexp->fanout();
     }
-    // Just count inbound edges
-    for (V3GraphEdge& edge : vertexp->inEdges()) {
-        if (edge.weight()) ++fanout;
-    }
-    vertexp->fanout(fanout);
-    vertexp->user(2);
-    return vertexp->fanout();
 }
 
 //######################################################################
