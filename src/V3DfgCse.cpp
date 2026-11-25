@@ -182,6 +182,16 @@ class DfgCseEqual final {
     // STATE
     mutable V3HashMap<VertexPair, bool, VertexPairHash> m_cache;  // Cache for vertex equality
     mutable std::vector<uint32_t> m_driverLo;  // Low indices of drivers
+    // A pair of vertices with sources being compared by 'vertexEquivalent'
+    struct ComparisonFrame final {
+        const DfgVertex* ap;  // First vertex
+        const DfgVertex* bp;  // Second vertex
+        size_t nextInput;  // Index of next pair of sources to compare
+        bool memoize;  // Whether to memoize the result
+    };
+    // Pairs being compared, innermost last. Shared by all comparisons, as these do not nest: the
+    // comparison is not re-entered while one is in progress.
+    mutable std::vector<ComparisonFrame> m_frames;
     const size_t m_size;  // Size of the graph
 
 public:
@@ -300,22 +310,17 @@ private:
         VL_UNREACHABLE;
     }
 
-    // Compares the sources of 'a' and 'b' for equivalence
-    bool sourcesEquivalent(const DfgVertex& a, const DfgVertex& b) const {
-        for (size_t i = 0; i < a.nInputs(); ++i) {
-            const DfgVertex* const ap = a.inputp(i);
-            const DfgVertex* const bp = b.inputp(i);
-            if (!ap && !bp) continue;
-            if (!ap || !bp) return false;
-            if (!vertexEquivalent(*ap, *bp)) return false;  // Graph is acyclic, so this terminates
-        }
-        return true;
-    }
+    // Checks 'a' and 'b' for equivalence as far as possible without comparing their sources.
+    // If the sources need comparing, pushes a frame to compare them and returns true.
+    // Otherwise sets 'equal' to the result and returns false.
+    bool enterPair(const DfgVertex& a, const DfgVertex& b, bool& equal) const {
+        equal = false;
 
-    // Compares 'a' and 'b' for equivalence
-    bool vertexEquivalent(const DfgVertex& a, const DfgVertex& b) const {
         // If same vertex, then equal
-        if (&a == &b) return true;
+        if (&a == &b) {
+            equal = true;
+            return false;
+        }
 
         // If different type, then not equal
         if (a.type() != b.type()) return false;
@@ -333,20 +338,55 @@ private:
         // vertices has multiple sinks, or if there was a hash collision.
         // Collisions are rare, so only memoize the result if it can actually
         // be looked up again through multiple paths.
-        if (!a.hasMultipleSinks() && !b.hasMultipleSinks()) return sourcesEquivalent(a, b);
+        const bool memoize = a.hasMultipleSinks() || b.hasMultipleSinks();
 
         // Need to compare the source vertices, check memo
-        const VertexPair key = (&a < &b) ? std::make_pair(&a, &b) : std::make_pair(&b, &a);
-        const auto it = m_cache.find(key);
-        if (it != m_cache.end()) return it->second;
+        if (memoize) {
+            const auto it = m_cache.find(pairKey(a, b));
+            if (it != m_cache.end()) {
+                equal = it->second;
+                return false;
+            }
+        }
 
-        // Not memoized yet, so compute and memoize, reserve table on first insert
-        const bool equal = sourcesEquivalent(a, b);
-        if (VL_UNLIKELY(m_cache.empty())) m_cache.reserve(m_size / 4);
-        m_cache.insert({key, equal});
+        m_frames.push_back({&a, &b, 0, memoize});
+        equal = true;
+        return true;
+    }
 
-        // The predicate result
-        return equal;
+    // Key of the pair 'a' and 'b' in 'm_cache', independent of their order
+    static VertexPair pairKey(const DfgVertex& a, const DfgVertex& b) {
+        return (&a < &b) ? std::make_pair(&a, &b) : std::make_pair(&b, &a);
+    }
+
+    // Compares 'a' and 'b' for equivalence. Uses an explicit stack, as recursion would
+    // overflow the C++ stack on long paths.
+    bool vertexEquivalent(const DfgVertex& a, const DfgVertex& b) const {
+        bool equal;
+        if (!enterPair(a, b, equal)) return equal;
+        while (true) {
+            ComparisonFrame& frame = m_frames.back();
+            // Compare the next pair of sources, until one differs
+            if (equal && frame.nextInput < frame.ap->nInputs()) {
+                const DfgVertex* const ap = frame.ap->inputp(frame.nextInput);
+                const DfgVertex* const bp = frame.bp->inputp(frame.nextInput);
+                ++frame.nextInput;
+                if (!ap && !bp) continue;
+                if (!ap || !bp) {
+                    equal = false;
+                    continue;
+                }
+                enterPair(*ap, *bp, equal);  // Graph is acyclic, so this terminates
+                continue;
+            }
+            // Memoize result, reserve table on first insert
+            if (frame.memoize) {
+                if (VL_UNLIKELY(m_cache.empty())) m_cache.reserve(m_size / 4);
+                m_cache.insert({pairKey(*frame.ap, *frame.bp), equal});
+            }
+            m_frames.pop_back();
+            if (m_frames.empty()) return equal;
+        }
     }
 };
 
