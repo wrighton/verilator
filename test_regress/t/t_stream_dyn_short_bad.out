@@ -1,0 +1,2 @@
+[0] %Error: t_stream_dyn_short_bad.v:26: Assertion failed in top.t.unnamedblk1: Streaming concatenation value has fewer bits than its fixed-size operands (IEEE 1800-2023 11.4.14.3).
+*-* All Finished *-*
