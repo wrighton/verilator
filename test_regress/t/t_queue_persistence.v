@@ -110,6 +110,74 @@ class Holder;
     return r;
   endfunction
   int d2[];
+  int aa[int];
+  int wa[*];
+  int qa[$][int];
+  function void fill_aa();
+    aa.delete();
+    for (int j = 0; j < N; ++j) aa[j] = j;
+  endfunction
+  function bit aa_unchanged();
+    foreach (aa[j]) if (aa[j] != j) return 0;
+    return aa.size() == N;
+  endfunction
+  function int bump_aa_delete(ref int r, input int key);
+    aa.delete(key);
+    aa[key] = key;
+    r = r + 1;
+    return r;
+  endfunction
+  function void bump_aa_survivor(ref int removed, ref int survivor);
+    aa.delete(0);
+    removed = -7;
+    survivor = -42;
+  endfunction
+  pair_t ar[int];
+  function void fill_ar();
+    for (int j = 0; j < N; ++j) ar[j] = '{2, 0};
+  endfunction
+  task bump_ar_later(ref int r);
+    #1;
+    r = r + 1;
+    `checkd(r, 3);
+  endtask
+  task peek_later(const ref int r, output int seen);
+    #1;
+    seen = r;
+  endtask
+  function int bump_aa_refill(ref int r);
+    fill_aa();
+    r = r + 1;
+    return r;
+  endfunction
+  function int peek(const ref int r);
+    return r;
+  endfunction
+  function int peek_aa(const ref int src[int], input int key);
+    return peek(src[key]);
+  endfunction
+  function int bump_aa_copy(ref int r, const ref int src[int]);
+    aa = src;
+    r = -r;
+    return r;
+  endfunction
+  function int bump_wa(ref int r);
+    wa.delete(5);
+    wa[5] = 5;
+    r = r + 1;
+    return r;
+  endfunction
+  function int bump_qa_delete(ref int r);
+    qa.delete();
+    r = r + 1;
+    return r;
+  endfunction
+  function int bump_qa(ref int r);
+    qa.insert(2, aa);
+    qa.delete();
+    r = r + 1;
+    return r;
+  endfunction
   function int bump_dcopy(ref int r);
     d = d2;
     r = r + 1;
@@ -315,6 +383,91 @@ module t;
     `checkd(h.bump_pop_back(h.q[$]), N);
     `checkd(h.q.size(), N);
     `checkd(h.q[N - 1], -7);
+  end
+
+  initial begin  // Associative array element deleted, or another deleted
+    automatic Holder h = new;
+    h.fill_aa();
+    `checkd(h.bump_aa_delete(h.aa[3000], 3000), 3001);
+    `checkd(h.aa_unchanged(), 1);
+    `checkd(h.bump_aa_delete(h.aa[3000], 10), 3001);
+    `checkd(h.aa[3000], 3001);
+    h.fill_aa();
+    `checkd(h.bump_aa_refill(h.aa[3000]), 3001);
+    `checkd(h.aa_unchanged(), 1);
+    // A missing element of a read-only array is not created
+    `checkd(h.peek_aa(h.aa, N), 0);
+    `checkd(h.aa.exists(N), 0);
+  end
+
+  initial begin  // Associative array element deleted while another is passed by reference
+    automatic Holder h = new;
+    h.fill_aa();
+    h.bump_aa_survivor(h.aa[0], h.aa[3000]);
+    `checkd(h.aa.size(), N - 1);
+    `checkd(h.aa.exists(0), 0);
+    `checkd(h.aa[3000], -42);
+  end
+
+  initial begin  // Associative array elements selected within, or passed by const ref
+    automatic Holder h = new;
+    automatic int seen, seen_missing;
+    h.fill_ar();
+    fork
+      h.bump_ar_later(h.ar[3000].a);
+      h.ar.delete();
+    join
+    h.fill_aa();
+    fork
+      h.peek_later(h.aa[3000], seen);
+      h.peek_later(h.aa[N], seen_missing);
+      h.aa.delete();
+    join
+    `checkd(seen, 3000);
+    `checkd(seen_missing, 0);
+    `checkd(h.aa.exists(N), 0);
+  end
+
+  initial begin  // Associative array assigned, wildcard element deleted
+    automatic Holder h = new;
+    automatic Holder src = new;
+    h.fill_aa();
+    src.fill_aa();
+    `checkd(h.bump_aa_copy(h.aa[3000], src.aa), -3000);
+    `checkd(h.aa_unchanged(), 1);
+    h.wa[5] = 5;
+    `checkd(h.bump_wa(h.wa[5]), 6);
+    `checkd(h.wa[5], 5);
+  end
+
+  initial begin  // Associative arrays deleted, or moved, within a queue
+    automatic Holder h = new;
+    h.fill_aa();
+    h.qa = '{h.aa, h.aa};
+    `checkd(h.bump_qa_delete(h.qa[1][3000]), 3001);
+    h.qa = '{h.aa, h.aa, h.aa, h.aa};
+    `checkd(h.bump_qa(h.qa[2][3000]), 3001);
+    `checkd(h.qa.size(), 0);
+    h.qa = '{h.aa, h.aa, h.aa, h.aa};
+    `checkd(h.bump_qa(h.qa[3][3000]), 3001);
+    `checkd(h.qa.size(), 0);
+  end
+
+  initial begin  // Associative array element deleted while a mailbox get is waiting on it
+    automatic Holder h = new;
+    automatic mailbox #(int) mb = new;
+    h.fill_aa();
+    fork
+      mb.get(h.aa[3000]);
+      begin
+        #1;
+        h.fill_aa();
+        h.aa.delete(3000);
+        mb.put(-1);
+      end
+    join
+    `checkd(h.aa.exists(3000), 0);
+    `checkd(h.aa.size(), N - 1);
   end
 
   initial begin  // Wide elements

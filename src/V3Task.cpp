@@ -650,8 +650,8 @@ class TaskVisitor final : public VNVisitor {
         }
     }
 
-    // Make an access to an element of a queue or dynamic array, passed to a ref argument,
-    // return a pin, which keeps a removed element alive while the call runs
+    // Make an access to an element of a queue, dynamic or associative array, passed to a ref
+    // argument, return a pin, which keeps a removed element alive while the call runs
     // (IEEE 1800-2023 13.5.2); return whether it does
     bool pinElement(AstCMethodHard* cMethodp) {
         if (VN_IS(cMethodp->fromp()->dtypep()->skipRefp(), QueueDType)) {
@@ -666,12 +666,27 @@ class TaskVisitor final : public VNVisitor {
             return false;
         }
         changeAtWriteRecurse(cMethodp);
+        const AstNodeDType* const fromDtypep = cMethodp->fromp()->dtypep()->skipRefp();
         if (cMethodp->method() != VCMethod::ARRAY_AT_WRITE
-            || !VN_IS(cMethodp->fromp()->dtypep()->skipRefp(), DynArrayDType)) {
+            || !(VN_IS(fromDtypep, DynArrayDType) || VN_IS(fromDtypep, AssocArrayDType)
+                 || VN_IS(fromDtypep, WildcardArrayDType))) {
             return false;
         }
         cMethodp->method(VCMethod::ARRAY_AT_WRITE_REF);
         return true;
+    }
+
+    // Make an associative array element passed to a ref argument a pin, as pinElement does;
+    // for a const ref, without creating a missing element
+    AstCMethodHard* pinAssocElement(AstNodeSel* selp, bool constRef) {
+        AstCMethodHard* const newp
+            = new AstCMethodHard{selp->fileline(), selp->fromp()->unlinkFrBack(),
+                                 constRef ? VCMethod::ARRAY_AT_REF : VCMethod::ARRAY_AT_WRITE_REF,
+                                 selp->bitp()->unlinkFrBack()};
+        newp->dtypeFrom(selp);
+        selp->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(selp), selp);
+        return newp;
     }
 
     void connectPort(const AstNodeFTaskRef* refp, AstVar* portp, AstArg* argp, AstNode* beginp,
@@ -711,6 +726,9 @@ class TaskVisitor final : public VNVisitor {
                 bool refArgOk = false;
                 if (VN_IS(pinp, VarRef) || VN_IS(pinp, MemberRef)) {
                     refArgOk = true;
+                } else if (VN_IS(pinp, AssocSel) || VN_IS(pinp, WildcardSel)) {
+                    refArgOk = true;
+                    pinp = pinAssocElement(VN_AS(pinp, NodeSel), portp->isConstRef());
                 } else if (VN_IS(pinp, StructSel) || VN_IS(pinp, ArraySel)) {
                     refArgOk = true;
                     // Selected within an element of a container, e.g. 'q[0].member'
@@ -724,15 +742,19 @@ class TaskVisitor final : public VNVisitor {
                             break;
                         }
                     }
+                    AstCMethodHard* pinnedp = nullptr;
                     if (AstCMethodHard* const cMethodp = VN_CAST(basep, CMethodHard)) {
-                        if (pinElement(cMethodp)) {
-                            VNRelinker relinker;
-                            cMethodp->unlinkFrBack(&relinker);
-                            AstCMethodHard* const elemp = new AstCMethodHard{
-                                cMethodp->fileline(), cMethodp, VCMethod::ARRAY_ELEM_REF};
-                            elemp->dtypeFrom(cMethodp);
-                            relinker.relink(elemp);
-                        }
+                        if (pinElement(cMethodp)) pinnedp = cMethodp;
+                    } else if (VN_IS(basep, AssocSel) || VN_IS(basep, WildcardSel)) {
+                        pinnedp = pinAssocElement(VN_AS(basep, NodeSel), portp->isConstRef());
+                    }
+                    if (pinnedp) {
+                        VNRelinker relinker;
+                        pinnedp->unlinkFrBack(&relinker);
+                        AstCMethodHard* const elemp = new AstCMethodHard{
+                            pinnedp->fileline(), pinnedp, VCMethod::ARRAY_ELEM_REF};
+                        elemp->dtypeFrom(pinnedp);
+                        relinker.relink(elemp);
                     }
                 } else if (AstCMethodHard* const cMethodp = VN_CAST(pinp, CMethodHard)) {
                     refArgOk = pinElement(cMethodp)
