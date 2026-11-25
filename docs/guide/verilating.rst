@@ -346,7 +346,8 @@ must be constructed and called from the main thread.
 
 If using :vlopt:`--vpi`, since SystemVerilog VPI was not architected by
 IEEE to be multithreaded, Verilator requires all VPI calls are only made
-from the main thread.
+from the main thread. A model that VPI value change callbacks or delayed
+writes still refer to must also be deleted from the main thread.
 
 
 .. _gnu make:

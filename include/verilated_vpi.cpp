@@ -41,7 +41,6 @@
 #include <cstring>
 #include <list>
 #include <map>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -978,9 +977,15 @@ public:
 
 using VerilatedPliCb = PLI_INT32 (*)(struct t_cb_data*);
 
+// Release a model referred to by a VPI callback or delayed put, see VerilatedVpiImp::symsErase
+static void vl_vpi_syms_release(VerilatedSyms* symsp) {
+    if (!--symsp->__Vm_vpiRefs) symsp->__Vm_vpiEraseCbp = nullptr;
+}
+
 class VerilatedVpiCbHolder final {
     // Holds information needed to call a callback
     uint64_t m_id;  // Unique id/sequence number to find schedule's event, 0 = invalid
+    VerilatedSyms* m_symsp = nullptr;  // Model a cbValueChange refers to, until invalidated
     s_cb_data m_cbData;  // Callback registration data from the user
     s_vpi_value m_value;  // Value passed to the callback
     VerilatedVpioVar m_varo;  // If a cbValueChange callback, the object we will return
@@ -1003,9 +1008,14 @@ public:
     ~VerilatedVpiCbHolder() = default;
     VerilatedPliCb cb_rtnp() const { return m_cbData.cb_rtn; }
     s_cb_data* cb_datap() { return &m_cbData; }
+    VerilatedSyms* symsp() const { return m_symsp; }
+    void symsp(VerilatedSyms* symsp) { m_symsp = symsp; }
     uint64_t id() const { return m_id; }
     bool invalid() const { return !m_id; }
-    void invalidate() { m_id = 0; }
+    void invalidate() {
+        m_id = 0;
+        if (m_symsp) VL_DO_CLEAR(vl_vpi_syms_release(m_symsp), m_symsp = nullptr);
+    }
 };
 
 class VerilatedVpiPutHolder final {
@@ -1194,8 +1204,26 @@ class VerilatedVpiImp final {
     bool m_evalNeeded = false;  // Model has had signals updated via vpi_put_value()
 
     static VerilatedVpiImp& s() {  // Singleton
-        static VerilatedVpiImp s_s;
-        return s_s;
+        // Never destroyed, as models referred to by it may be destroyed by any static destructor
+        static VerilatedVpiImp* const s_sp = new VerilatedVpiImp;
+        return *s_sp;
+    }
+    // A callback or put now refers to a variable of the model, which must remove it when deleted
+    static VerilatedSyms* symsReferenced(const VerilatedVpioVar* varop) {
+        VerilatedSyms* const symsp = varop->scopep()->symsp();
+        ++symsp->__Vm_vpiRefs;
+        symsp->__Vm_vpiEraseCbp = symsErase;
+        return symsp;
+    }
+    static void symsErase(VerilatedSyms* symsp) {
+        // Called once, when the model's first scope is destroyed while callbacks or puts refer
+        // to it
+        for (VerilatedVpiCbHolder& ho : s().m_cbCurrentLists[cbValueChange]) {
+            if (ho.symsp() == symsp) ho.invalidate();
+        }
+        s().m_inertialPuts.remove_if(
+            [symsp](VerilatedVpiPutHolder& ho) { return ho.varp()->scopep()->symsp() == symsp; });
+        symsp->__Vm_vpiEraseCbp = nullptr;
     }
 
 public:
@@ -1211,7 +1239,9 @@ public:
                                     cb_data_p->reason, id, cb_data_p->obj););
         VerilatedVpioVar* varop = nullptr;
         if (cb_data_p->reason == cbValueChange) varop = VerilatedVpioVar::castp(cb_data_p->obj);
-        s().m_cbCurrentLists[cb_data_p->reason].emplace_back(id, cb_data_p, varop);
+        VpioCbList& cbList = s().m_cbCurrentLists[cb_data_p->reason];
+        cbList.emplace_back(id, cb_data_p, varop);
+        if (varop) cbList.back().symsp(symsReferenced(varop));
     }
     static void cbFutureAdd(uint64_t id, const s_cb_data* cb_data_p, QData time) {
         // The passed cb_data_p was property of the user, so need to recreate
@@ -1364,7 +1394,9 @@ public:
         assertOneCheck();
         VpioCbList& cbObjList = s().m_cbCurrentLists[cbValueChange];
         bool called = false;
-        std::set<VerilatedVpioVar*> update;  // set of objects to update after callbacks
+        // Callbacks whose objects to update after callbacks; a callback may delete the model of
+        // any of them, removing its callbacks
+        std::vector<VerilatedVpiCbHolder*> update;
         if (cbObjList.empty()) return called;
         const auto last = std::prev(cbObjList.end());  // prevent looping over newly added elements
         for (auto it = cbObjList.begin(); true;) {
@@ -1382,14 +1414,18 @@ public:
                 VL_DEBUG_IF_PLI(VL_DBG_MSGF("- vpi: value_callback %" PRId64 " %s v[0]=%d\n",
                                             ho.id(), varop->fullname(),
                                             *(static_cast<CData*>(varop->readDatap()))););
-                update.insert(varop);
+                update.push_back(&ho);
                 vpi_get_value(ho.cb_datap()->obj, ho.cb_datap()->value);
                 (ho.cb_rtnp())(ho.cb_datap());
                 called = true;
             }
             if (was_last) break;
         }
-        for (const VerilatedVpioVar* const varop : update) updatePrev(varop);
+        for (VerilatedVpiCbHolder* const hop : update) {
+            if (!hop->invalid()) {
+                updatePrev(reinterpret_cast<VerilatedVpioVar*>(hop->cb_datap()->obj));
+            }
+        }
         return called;
     }
     static void dumpCbs() VL_MT_UNSAFE_ONE;
@@ -1397,11 +1433,13 @@ public:
     static bool evalNeeded() { return s().m_evalNeeded; }
     static void evalNeeded(bool evalNeeded) { s().m_evalNeeded = evalNeeded; }
     static void inertialDelay(const VerilatedVpioVar* vop, p_vpi_value valuep) {
+        symsReferenced(vop);
         s().m_inertialPuts.emplace_back(vop, valuep);
     }
     static void doInertialPuts() {
         for (auto& it : s().m_inertialPuts) {
             vpi_put_value(it.varp()->castVpiHandle(), it.valuep(), nullptr, vpiNoDelay);
+            vl_vpi_syms_release(it.varp()->scopep()->symsp());
         }
         s().m_inertialPuts.clear();
     }
