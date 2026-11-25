@@ -188,18 +188,17 @@ std::unique_ptr<Graph> buildGraph(const LogicRegions& logicRegions) {
             const VNUser2InUse user2InUse;
             const VNUser3InUse user3InUse;
 
-            nodep->foreach([&](AstVarRef* refp) {
-                AstVarScope* const vscp = refp->varScopep();
+            util::foreachLogicAccess(nodep, [&](AstVarScope* vscp, VAccess access) {
                 SchedReplicateVarVertex* const vvtxp = getVarVertex(vscp);
                 // If written, add logic -> var edge
                 // Note: See V3Order for why AlwaysPostponed is safe to be ignored. We ignore
                 // it as otherwise we would end up with a false cycle.
-                if (refp->access().isWriteOrRW() && !refp->varp()->ignoreSchedWrite()
+                if (access.isWriteOrRW() && !vscp->varp()->ignoreSchedWrite()
                     && !vscp->user2SetOnce() && !VN_IS(nodep, AlwaysPostponed)) {  //
                     addEdge(lvtxp, vvtxp);
                 }
                 // If an implicit sensitivity, add var -> logic edge. Clocked logic has none.
-                if (refp->access().isReadOrRW() && !vscp->user3SetOnce()
+                if (access.isReadOrRW() && !vscp->user3SetOnce()
                     && process.m_implicitSen.count(vscp)) {  //
                     addEdge(vvtxp, lvtxp);
                 }

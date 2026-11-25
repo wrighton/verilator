@@ -1742,6 +1742,7 @@ class TaskVisitor final : public VNVisitor {
         cfuncp->dpiPure(nodep->dpiPure());
         if (nodep->name() == "new") cfuncp->isConstructor(true);
         if (nodep->isCovergroupSample()) cfuncp->isCovergroupSample(true);
+        cfuncp->verilogFunction(nodep->verilogFunction());
         if (cfuncp->dpiExportImpl()) cfuncp->cname(nodep->cname());
 
         if (cfuncp->dpiImportWrapper()) cfuncp->cname(nodep->cname());

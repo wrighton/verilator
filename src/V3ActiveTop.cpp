@@ -28,6 +28,7 @@
 #include "V3ActiveTop.h"
 
 #include "V3Const.h"
+#include "V3Sched.h"
 #include "V3SenTree.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -46,17 +47,18 @@ class ActiveTopVisitor final : public VNVisitor {
     static bool isInitial(AstNode* nodep) {
         const VNUser1InUse user1InUse;
         // Return true if no variables that read.
-        return nodep->forall([&](const AstVarRef* refp) -> bool {
-            AstVarScope* const vscp = refp->varScopep();
+        bool reads = false;
+        V3Sched::util::foreachLogicAccess(nodep, [&](AstVarScope* vscp, VAccess access) {
             // Note: Use same heuristic as ordering does to ignore written variables
             // TODO: Use live variable analysis.
-            if (refp->access().isWriteOnly()) {
+            if (access.isWriteOnly()) {
                 vscp->user1(true);
-                return true;
+                return;
             }
             // Read or ReadWrite: OK if written before
-            return vscp->user1();
+            if (!vscp->user1()) reads = true;
         });
+        return !reads;
     }
 
     // VISITORS
