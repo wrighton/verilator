@@ -1500,8 +1500,9 @@ class TimingControlVisitor final : public VNVisitor {
         }
     }
 
-    AstNodeExpr* delayToIntegral(AstDelay* nodep, AstNodeExpr* valuep) {
-        return V3Timing::delayToTicks(valuep, nodep->timeunit());
+    AstNodeExpr* delayToIntegral(AstDelay* nodep, AstNodeExpr* valuep,
+                                 uint64_t* ticksPerUnitp = nullptr) {
+        return V3Timing::delayToTicks(valuep, nodep->timeunit(), ticksPerUnitp);
     }
 
     // VISITORS
@@ -1707,9 +1708,13 @@ class TimingControlVisitor final : public VNVisitor {
         }
         iterateChildren(nodep);
     }
-    // Return the delay value of 'nodep' in ticks, deciding scheduling support for #0
+    // Return the arguments of the delay of 'nodep', its value and the ticks per unit of the value,
+    // deciding scheduling support for #0. The runtime scales the value, as the product may be
+    // past the maximum time (IEEE 1800-2023 9.4.1).
     AstNodeExpr* scheduledDelayp(AstDelay* nodep) {
-        AstNodeExpr* const valuep = delayToIntegral(nodep, nodep->lhsp()->unlinkFrBack());
+        uint64_t ticksPerUnit = 1;
+        AstNodeExpr* const valuep
+            = delayToIntegral(nodep, nodep->lhsp()->unlinkFrBack(), &ticksPerUnit);
 
         // Statistics
         if (valuep->isZero()) {
@@ -1752,6 +1757,7 @@ class TimingControlVisitor final : public VNVisitor {
                 if (!m_hasStaticZeroDelay) m_unknownDelayFlps.push_back(nodep->fileline());
             }
         }
+        valuep->addNext(new AstConst{nodep->fileline(), AstConst::Unsized64{}, ticksPerUnit});
         return valuep;
     }
     void visit(AstDelay* nodep) override {
@@ -2772,7 +2778,8 @@ AstNodeStmt* V3Timing::factorOutTimingControl(AstNodeAssign* nodep) {
     return stmtp == nodep ? nullptr : stmtp;
 }
 
-AstNodeExpr* V3Timing::delayToTicks(AstNodeExpr* valuep, VTimescale timeunit) {
+AstNodeExpr* V3Timing::delayToTicks(AstNodeExpr* valuep, VTimescale timeunit,
+                                    uint64_t* ticksPerUnitp) {
     FileLine* const flp = valuep->fileline();
     if (const AstConst* const constp = VN_CAST(valuep, Const)) {
         if (constp->num().is1Step()) {
@@ -2795,6 +2802,10 @@ AstNodeExpr* V3Timing::delayToTicks(AstNodeExpr* valuep, VTimescale timeunit) {
     } else {
         valuep->dtypeSetBitSized(64, VSigning::UNSIGNED);
         const uint64_t timescaleFactorU = static_cast<uint64_t>(timescaleFactorD);
+        if (ticksPerUnitp) {
+            *ticksPerUnitp = timescaleFactorU;
+            return valuep;
+        }
         AstConst* const tsfp = new AstConst{flp, AstConst::Unsized64{}, timescaleFactorU};
         valuep = new AstMul{flp, valuep, tsfp};
     }
