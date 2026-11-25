@@ -1276,7 +1276,7 @@ class ConstVisitor final : public VNVisitor {
         return true;
     }
 
-    bool matchCondCond(const AstCond* nodep) {
+    bool matchCondCond(AstCond* nodep) {
         // Same condition on either leg of a condition means that
         // expression is either always true or always false
         if (VN_IS(nodep->backp(), Cond)) return false;  // Was checked when visited parent
@@ -1287,38 +1287,44 @@ class ConstVisitor final : public VNVisitor {
         matchCondCondRecurse(nodep, truesp /*ref*/, falsesp /*ref*/);
         return false;  // Can optimize further
     }
-    void matchCondCondRecurse(const AstCond* nodep, std::vector<AstNodeExpr*>& truesp,
+    void matchCondCondRecurse(AstCond* nodep, std::vector<AstNodeExpr*>& truesp,
                               std::vector<AstNodeExpr*>& falsesp) {
         // Avoid O(n^2) compares
         // Could reduce cost with hash table, but seems unlikely to be worth cost
         if (truesp.size() > 4 || falsesp.size() > 4) return;
         if (!nodep->condp()->isPure()) return;
-        bool replaced = false;
+        // A sub-Cond whose condition is known is replaced by its selected branch at once, as
+        // the operands of a Cond made by ifSameAssign are not visited again, see visit(AstCond)
+        AstNodeExpr* keepp = nullptr;
         for (const AstNodeExpr* condp : truesp) {
-            if (replaced) break;
             if (!operandsSame(nodep->condp(), condp)) continue;
-            UINFO(9, "COND(c, CONDb(c, tt, tf), f) -> CONDb(1, tt, tf) " << nodep);
-            replaceNum(nodep->condp(), 1);
-            replaced = true;
-            ++m_statCondExprRedundant;
+            UINFO(9, "COND(c, CONDb(c, tt, tf), f) -> COND(c, tt, f) " << nodep);
+            keepp = nodep->thenp();
+            break;
         }
         for (const AstNodeExpr* condp : falsesp) {
-            if (replaced) break;
+            if (keepp) break;
             if (!operandsSame(nodep->condp(), condp)) continue;
-            UINFO(9, "COND(c, t, CONDb(c, ft, ff)) -> CONDb(0, ft, ff) " << nodep);
-            replaceZero(nodep->condp());
-            replaced = true;
+            UINFO(9, "COND(c, t, CONDb(c, ft, ff)) -> COND(c, t, ff) " << nodep);
+            keepp = nodep->elsep();
+        }
+        if (keepp) {
             ++m_statCondExprRedundant;
+            replaceWChild(nodep, keepp);
+            if (AstCond* const subCondp = VN_CAST(keepp, Cond)) {
+                matchCondCondRecurse(subCondp, truesp /*ref*/, falsesp /*ref*/);
+            }
+            return;
         }
-        if (const AstCond* subCondp = VN_CAST(nodep->thenp(), Cond)) {
-            if (!replaced) truesp.emplace_back(nodep->condp());
+        if (AstCond* const subCondp = VN_CAST(nodep->thenp(), Cond)) {
+            truesp.emplace_back(nodep->condp());
             matchCondCondRecurse(subCondp, truesp /*ref*/, falsesp /*ref*/);
-            if (!replaced) truesp.pop_back();
+            truesp.pop_back();
         }
-        if (const AstCond* subCondp = VN_CAST(nodep->elsep(), Cond)) {
-            if (!replaced) falsesp.emplace_back(nodep->condp());
+        if (AstCond* const subCondp = VN_CAST(nodep->elsep(), Cond)) {
+            falsesp.emplace_back(nodep->condp());
             matchCondCondRecurse(subCondp, truesp /*ref*/, falsesp /*ref*/);
-            if (!replaced) falsesp.pop_back();
+            falsesp.pop_back();
         }
     }
     void matchIfCondCond(const AstIf* nodep) {
