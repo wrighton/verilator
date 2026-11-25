@@ -366,9 +366,12 @@ constant bit, part, or element select of the net. This fallback requires no
 other driver. A net has another driver if anything other than force or
 release writes any bit of it, if it is declared tri0 or tri1 or connected
 to a pullup or pulldown, if it is an input port connected in any instance
-or set by ```unconnected_drive``, if it is a port of the top-level module,
-or if it is public writable. This fallback does not collapse two ports
-connected to overlapping bits of the same net.
+to a value other than a net, or to a net that has another driver, or set by
+```unconnected_drive``, if it is a port of the top-level module, or if it
+is public writable. An input port so driven in turn drives the nets it is
+connected to in the same way. This fallback does not collapse two ports
+connected to overlapping bits of the same net, at any level of the ports
+they so drive, nor any of these ports.
 
 A continuously written net input that any instance connects to a value,
 such as a variable, a hierarchical reference to a variable, a select by a
