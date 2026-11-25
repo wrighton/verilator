@@ -29,6 +29,7 @@ class AstPin;
 
 class V3Inst final {
 public:
+    static void portDefaultsAll(AstNetlist* nodep) VL_MT_DISABLED;
     static void instAll(AstNetlist* nodep) VL_MT_DISABLED;
     static AstAssignW* pinReconnectSimple(AstPin* pinp, AstCell* cellp, bool forTristate,
                                           bool alwaysCvt = false) VL_MT_DISABLED;

@@ -312,6 +312,9 @@ static void process() {
             V3Begin::debeginAll(v3Global.rootp());  // Flatten cell names, before inliner
             v3Global.staticsLifted(true);  // All static variables now live under a NodeModule
 
+            // Make the default values of input ports connections, before V3Tristate
+            V3Inst::portDefaultsAll(v3Global.rootp());
+
             // Expand inouts, stage 2
             // Also simplify pin connections to always be AssignWs in prep for V3Unknown
             V3Tristate::tristateAll(v3Global.rootp());
