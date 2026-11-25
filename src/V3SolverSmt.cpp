@@ -7590,7 +7590,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
     }
 
-    void addUpdateRandVarsBody(AstClass* const nodep, AstFunc* const randomizep) {
+    AstFunc* addUpdateRandVarsBody(AstClass* const nodep, AstFunc* const randomizep) {
         UASSERT_OBJ(!nodep->hasRandVarsUpdate(), nodep, "__VupdateRandVars already exists");
         AstFunc* const updatep = new AstFunc{nodep->fileline(), "__VupdateRandVars"};
         updatep->classMethod(true);
@@ -7605,6 +7605,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             AstNodeFTask* const newp = VN_AS(m_memberMap.findMember(classp, "new"), NodeFTask);
             addUpdateRandVarsStmts(updatep, newp->stmtsp());
         }
+        return updatep;
     }
 
     // Rewrite a LogIf-of-Dist chain into nested AstConstraintIf. The outermost
@@ -9017,7 +9018,9 @@ public:
             beginValp = new AstConst{fl, AstConst::WidthedValue{}, 32, 1};
         }
 
-        addUpdateRandVarsBody(nodep, randomizep);
+        AstFunc* const updatep = addUpdateRandVarsBody(nodep, randomizep);
+        // A copy of the object has its own rand_mode state
+        if (genp && randModeVarp) addSetRandMode(updatep, genp, randModeVarp);
         setStagedPhase(randomizep, staged, priorPhasep);
         // Before the solve, as the size phase has its own
         if (genp && keepSolution && !sizePhase) {
