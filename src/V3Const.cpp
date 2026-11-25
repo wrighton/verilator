@@ -976,6 +976,7 @@ class ConstVisitor final : public VNVisitor {
     VDouble0 m_statCondExprRedundant;  // Conditional repeated expressions
     VDouble0 m_statIfCondExprRedundant;  // Conditional repeated expressions
     VDouble0 m_statMemberAccessVisits;  // Nodes visited by containsMemberAccessRecurse
+    VDouble0 m_statSelSelPadded;  // Selects of selects reading the value padded above
     const bool m_globalPass;  // ConstVisitor invoked as a global pass
     static uint32_t s_globalPassNum;  // Counts number of times ConstVisitor invoked as global pass
     V3UniqueNames m_concswapNames;  // For generating unique temporary variable names
@@ -3480,7 +3481,7 @@ class ConstVisitor final : public VNVisitor {
             if (v3Global.fourstateResolved() && !nodep->partialWrite()) return true;
             return withinLower(nodep->lsbp(), VN_AS(nodep->fromp(), Sel), nodep);
         }
-        const AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
+        AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
         return (withinLower(nodep->lsbp(), belowp, nodep) || readsPastLower(nodep))
                && composedInStorage(nodep, belowp);
     }
@@ -3488,7 +3489,7 @@ class ConstVisitor final : public VNVisitor {
     // constant reads within the storage of the value once composed, as V3Expand shifts the value
     // by the position or indexes its words: V3Unknown keeps the lower position there, but not
     // the sum of both, for example where the guard of the lower select became a bitwise 'and'
-    static bool composedInStorage(const AstSel* nodep, const AstSel* belowp) {
+    static bool composedInStorage(AstSel* nodep, AstSel* belowp) {
         if (VN_IS(belowp->lsbp(), Const)) return true;
         const AstNodeExpr* const fromp = belowp->fromp();
         // Bits past the last position read, as a shift by the position or by its word
@@ -3500,21 +3501,24 @@ class ConstVisitor final : public VNVisitor {
         const uint64_t upper = positionBound(nodep->lsbp());
         return lower < storage && upper < storage - lower;
     }
-    // An upper bound of select position 'lsbp', also through its truncation to its low bits, as
-    // V3Width narrows an index
-    static uint64_t positionBound(const AstNodeExpr* lsbp) {
-        const AstSel* const selp = VN_CAST(lsbp, Sel);
-        if (selp && VN_IS(selp->lsbp(), Const) && selp->lsbConst() == 0) {
-            return std::min(V3Unknown::staticMax(selp), V3Unknown::staticMax(selp->fromp()));
-        }
-        return V3Unknown::staticMax(lsbp);
+    // An upper bound of unsigned select position 'lsbp'. Only through the conditions within a
+    // pure position, as an evaluation with a side effect may change what a condition checked.
+    static uint64_t positionBound(AstNodeExpr* lsbp) {
+        if (!lsbp->isPure()) return V3Unknown::staticMax(lsbp);
+        PositionFacts facts;
+        return positionBound(lsbp, facts);
     }
     // Whether a read of a select of a select is at a constant position wholly outside the lower
     // select, so reads out-of-range bits, not bits beyond the lower select
     static bool operandSelSelOutside(AstSel* nodep) {
         if (nodep->isLValue()) return false;
-        AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
-        const AstConst* const constp = VN_CAST(nodep->lsbp(), Const);
+        return constOutsideLower(nodep->lsbp(), nodep);
+    }
+    // Whether upper position 'lsbp' of read 'nodep' of a lower select is a constant wholly
+    // outside the lower select
+    static bool constOutsideLower(const AstNodeExpr* lsbp, const AstSel* nodep) {
+        const AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
+        const AstConst* const constp = VN_CAST(lsbp, Const);
         if (!constp || constp->num().isFourState()) return false;
         const V3Number& num = constp->num();
         if (num.isSigned() && num.isNegative()) {
@@ -3522,13 +3526,131 @@ class ConstVisitor final : public VNVisitor {
         }
         return !num.fitsInUInt() || num.toUInt() >= static_cast<uint32_t>(belowp->width());
     }
-    void replaceSelSelOutside(AstSel* nodep) {
+    // The bits read out of range by select 'nodep'
+    static V3Number outsideNum(AstSel* nodep) {
         V3Number num{nodep, nodep->width()};
         if (nodep->dtypep()->isFourstate()) {
             num.setAllBitsX();
         } else {
             num.setAllBits0();
         }
+        return num;
+    }
+    // Whether a read of a select of a select at a position 'c ? a : b', as V3WidthSel gives
+    // an element out of range, where 'b' is a constant wholly outside the lower select and 'a'
+    // within it whenever 'c' holds, is a selection within the lower select only if 'c' holds.
+    // A lower select at a constant position keeps the composed one within the value.
+    static bool operandSelSelCond(AstSel* nodep) {
+        if (nodep->isLValue()) return false;
+        AstCond* const condp = positionCond(nodep->lsbp());
+        AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
+        if (!condp || !VN_IS(belowp->lsbp(), Const) || !belowp->isPure()) return false;
+        // What the condition checks holds in the arm only if no evaluation changes it
+        if (!condp->isPure()) return false;
+        if (!constOutsideLower(condp->elsep(), nodep)) return false;
+        // Truncating the position to the bits V3Unknown keeps of it leaves 'a' and 'b'
+        // unchanged
+        const uint64_t posMax = V3Unknown::staticMax(nodep->lsbp());
+        if (V3Unknown::staticMax(condp->elsep()) > posMax) return false;
+        PositionFacts facts;
+        addFact(facts, condp->condp());
+        const uint64_t bound = positionBound(condp->thenp(), facts);
+        const uint64_t lowerWidth = belowp->width();
+        const uint64_t width = nodep->widthConst();
+        return bound <= posMax && width <= lowerWidth && bound <= lowerWidth - width;
+    }
+    // The condition of position 'lsbp', also through its truncation to its low bits, else
+    // nullptr
+    static AstCond* positionCond(AstNodeExpr* lsbp) {
+        const AstSel* const selp = VN_CAST(lsbp, Sel);
+        if (selp && VN_IS(selp->lsbp(), Const) && selp->lsbConst() == 0) lsbp = selp->fromp();
+        return VN_CAST(lsbp, Cond);
+    }
+    // Upper bounds of unsigned expressions known where a position is evaluated
+    using PositionFacts = std::vector<std::pair<const AstNodeExpr*, uint64_t>>;
+    // Add to 'facts' the bound that condition 'condp' gives, an unsigned 'max >= x', as the
+    // range checks of V3WidthSel and V3Unknown are. The caller ensures the whole position is
+    // pure, so that 'x' has the same value wherever it is evaluated.
+    static void addFact(PositionFacts& facts, AstNodeExpr* condp) {
+        AstGte* const gtep = VN_CAST(condp, Gte);
+        const AstConst* const maxp = gtep ? VN_CAST(gtep->lhsp(), Const) : nullptr;
+        if (!maxp || maxp->num().isFourState() || !maxp->num().fitsInUInt()) return;
+        facts.emplace_back(gtep->rhsp(), maxp->toUInt());
+    }
+    // An upper bound of unsigned position 'exprp', also where 'facts' hold, and through the
+    // conditions of the conditional positions V3WidthSel and V3Unknown give
+    static uint64_t positionBound(AstNodeExpr* exprp, PositionFacts& facts) {
+        uint64_t known = std::numeric_limits<uint64_t>::max();
+        for (const auto& fact : facts) {
+            if (exprp->sameTree(fact.first)) known = std::min(known, fact.second);
+        }
+        // Of the operators bounded here, bounded by its width, else as V3Unknown bounds it
+        const uint64_t widthMax = exprp->width() < VL_QUADSIZE
+                                      ? (uint64_t{1} << exprp->width()) - 1
+                                      : std::numeric_limits<uint64_t>::max();
+        uint64_t bound = widthMax;
+        uint64_t factor = 1;  // The position is a multiple of this
+        if (AstCond* const condp = VN_CAST(exprp, Cond)) {
+            // An arm that is a constant above what is known of the whole is never taken
+            const auto armBound = [&](AstNodeExpr* armp, bool given) -> uint64_t {
+                const AstConst* const constp = VN_CAST(armp, Const);
+                if (constp && V3Unknown::staticMax(constp) > known) return 0;
+                if (!given) return positionBound(armp, facts);
+                const size_t size = facts.size();
+                addFact(facts, condp->condp());
+                const uint64_t armMax = positionBound(armp, facts);
+                facts.resize(size);
+                return armMax;
+            };
+            bound = std::max(armBound(condp->thenp(), true), armBound(condp->elsep(), false));
+        } else if (AstSel* const selp = VN_CAST(exprp, Sel)) {
+            if (VN_IS(selp->lsbp(), Const) && selp->lsbConst() == 0) {
+                bound = std::min(widthMax, positionBound(selp->fromp(), facts));
+            }
+        } else if (AstExtend* const extendp = VN_CAST(exprp, Extend)) {
+            bound = std::min(widthMax, positionBound(extendp->lhsp(), facts));
+        } else if (AstMul* const mulp = VN_CAST(exprp, Mul)) {
+            const uint64_t lhs = positionBound(mulp->lhsp(), facts);
+            const uint64_t rhs = positionBound(mulp->rhsp(), facts);
+            if (lhs == 0 || rhs <= widthMax / lhs) {
+                bound = std::min(widthMax, lhs * rhs);
+                // Without wrapping, a product with a constant is a multiple of it
+                const AstConst* const constp = VN_IS(mulp->lhsp(), Const)
+                                                   ? VN_AS(mulp->lhsp(), Const)
+                                                   : VN_CAST(mulp->rhsp(), Const);
+                if (constp && !constp->num().isFourState() && constp->num().fitsInUInt()
+                    && constp->toUInt()) {
+                    factor = constp->toUInt();
+                }
+            }
+        } else if (AstAdd* const addp = VN_CAST(exprp, Add)) {
+            const uint64_t lhs = positionBound(addp->lhsp(), facts);
+            const uint64_t rhs = positionBound(addp->rhsp(), facts);
+            if (lhs <= widthMax && rhs <= widthMax - lhs) bound = lhs + rhs;
+        } else {
+            bound = V3Unknown::staticMax(exprp);
+        }
+        return std::min(bound, known) / factor * factor;
+    }
+    // Select 'c ? a : b' of a lower select as a select within the lower select at 'a' if 'c'
+    // holds, else as bits out of range
+    void replaceSelSelCond(AstSel* nodep) {
+        FileLine* const flp = nodep->fileline();
+        // The truncation of the position leaves 'a' unchanged too
+        AstCond* const condp = positionCond(nodep->lsbp());
+        AstNodeExpr* const thenp = condp->thenp()->unlinkFrBack();
+        AstSel* const withinp
+            = new AstSel{flp, nodep->fromp()->unlinkFrBack(), thenp, nodep->widthConst()};
+        withinp->dtypeFrom(nodep);
+        AstCond* const newp = new AstCond{flp, condp->condp()->unlinkFrBack(), withinp,
+                                          new AstConst{flp, outsideNum(nodep)}};
+        newp->dtypeFrom(nodep);
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        replaceSelSel(withinp, true);
+    }
+    void replaceSelSelOutside(AstSel* nodep) {
+        const V3Number num = outsideNum(nodep);
         AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
         if (belowp->isRepeatable()) {
             VL_DO_DANGLING(replaceNum(nodep, num), nodep);
@@ -3579,7 +3701,7 @@ class ConstVisitor final : public VNVisitor {
     }
     // Whether upper position 'lsbp' of select 'nodep' of lower select 'belowp' is known to
     // select within the lower select
-    static bool withinLower(const AstNodeExpr* lsbp, const AstSel* belowp, const AstSel* nodep) {
+    static bool withinLower(AstNodeExpr* lsbp, const AstSel* belowp, const AstSel* nodep) {
         if (nodep->widthConst() > belowp->width()) return false;
         const uint32_t maxLsb = belowp->width() - nodep->widthConst();
         if (const AstConst* const constp = VN_CAST(lsbp, Const)) {
@@ -3587,17 +3709,16 @@ class ConstVisitor final : public VNVisitor {
             return !num.isFourState() && !(num.isSigned() && num.isNegative()) && num.fitsInUInt()
                    && num.toUInt() <= maxLsb;
         }
-        // An unsigned position narrower than an integer is bounded by its width
-        return !lsbp->isSigned() && lsbp->width() < VL_IDATASIZE
-               && (uint64_t{1} << lsbp->width()) - 1 <= maxLsb;
+        return !lsbp->isSigned() && positionBound(lsbp) <= maxLsb;
     }
-    void replaceSelSel(AstSel* nodep) {
+    // 'knownWithin' if the upper position is known to select within the lower select
+    void replaceSelSel(AstSel* nodep, bool knownWithin = false) {
         // SEL(SEL({x},a,b),c,d) => SEL({x},a+c,d)
         // cppcheck-suppress constVariablePointer // children unlinked below
         AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
         const bool lvalue = nodep->isLValue();
         const bool readsPast = readsPastLower(nodep);
-        const bool within = withinLower(nodep->lsbp(), belowp, nodep);
+        const bool within = knownWithin || withinLower(nodep->lsbp(), belowp, nodep);
         const bool upperSigned = mayBeNegative(nodep->lsbp());
         const int valueWidth = valueWidthOf(belowp);
         const int64_t readTop = readsPast && !within ? readPastTop(belowp, nodep->lsbp()) : 0;
@@ -3610,6 +3731,7 @@ class ConstVisitor final : public VNVisitor {
         // V3Unknown reads one starting at or above it as out of range
         const int readEnd = static_cast<int>(std::min<int64_t>(readTop, valueWidth));
         if (readTop) {
+            ++m_statSelSelPadded;
             FileLine* const flp = fromp->fileline();
             if (readEnd < fromp->width()) fromp = new AstSel{flp, fromp, 0, readEnd};
             const bool fourstate = fromp->dtypep()->isFourstate();
@@ -3736,9 +3858,13 @@ class ConstVisitor final : public VNVisitor {
             };
             const bool narrow = (VN_IS(lsb1p, Const) || lsb1p->width() <= VL_IDATASIZE)
                                 && (VN_IS(lsb2p, Const) || lsb2p->width() <= VL_IDATASIZE);
-            const int sumWidth = narrow
-                                     ? V3Number::log2bQuad(maxValue(lsb1p) + maxValue(lsb2p)) + 1
-                                     : std::max(lsb1p->width(), lsb2p->width()) + 1;
+            // An upper position within the lower select is at most where its last selection
+            // starts there
+            const uint64_t max1
+                = within ? static_cast<uint64_t>(belowp->width() - nodep->widthConst())
+                         : maxValue(lsb1p);
+            const int sumWidth = narrow ? V3Number::log2bQuad(max1 + maxValue(lsb2p)) + 1
+                                        : std::max(lsb1p->width(), lsb2p->width()) + 1;
             const int width = std::max({lsb1p->width(), lsb2p->width(), sumWidth});
             const bool fourstate
                 = lsb1p->dtypep()->isFourstate() || lsb2p->dtypep()->isFourstate();
@@ -5289,6 +5415,7 @@ class ConstVisitor final : public VNVisitor {
     TREEOPV("AstSel{operandSelExtend(nodep)}",  "DONE");
     TREEOPV("AstSel{operandSelFull(nodep)}",    "replaceWChild(nodep, nodep->fromp())");
     TREEOPV("AstSel{$fromp.castSel, operandSelSelOutside(nodep)}", "replaceSelSelOutside(nodep)");
+    TREEOPV("AstSel{$fromp.castSel, operandSelSelCond(nodep)}", "replaceSelSelCond(nodep)");
     TREEOPV("AstSel{$fromp.castSel, operandSelSelComposable(nodep)}", "replaceSelSel(nodep)");
     TREEOPV("AstSel{$fromp.castAdd, operandSelBiLower(nodep)}", "DONE");
     TREEOPV("AstSel{$fromp.castAnd, operandSelBiLower(nodep)}", "DONE");
@@ -5411,6 +5538,7 @@ public:
         V3Stats::addStatSum("Optimizations, Concat merges", m_statConcatMerge);
         V3Stats::addStatSum("Optimizations, Member access predicate node visits",
                             m_statMemberAccessVisits);
+        V3Stats::addStatSum("Optimizations, Selects of selects padded", m_statSelSelPadded);
     }
 
     AstNode* mainAcceptEdit(AstNode* nodep) {
