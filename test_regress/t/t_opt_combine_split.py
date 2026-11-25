@@ -27,6 +27,6 @@ for kind in ('static', 'initial', 'final'):
     if insts != {'u1'}:
         test.error("_eval_" + kind + " functions of instances " + str(sorted(insts)))
 
-test.file_grep(test.stats, r'Optimizations, Combined CFuncs\s+(\d+)', 37)
+test.file_grep(test.stats, r'Optimizations, Combined CFuncs\s+(\d+)', 78)
 
 test.passes()

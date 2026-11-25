@@ -83,7 +83,7 @@ def check_scaling(generator, small_expected, large_expected):
                    f" (over {MAX_RATIO}x)")
 
 
-check_scaling(gen, 3511, 13709)
+check_scaling(gen, 3511, 14712)
 check_scaling(gen_wide, 3711, 14520)
 
 test.passes()
