@@ -144,6 +144,27 @@ module t;
     for (int i = 0; i < N; i++) `checkd(sampled_same[i], 2);
   end
 
+  // Test: each process keeps its own values of its intra-assignment delays
+  int intra[N];
+  int intra_task[N];
+  task automatic put_later(int k);
+    intra_task[k] = #2 k * 10 + 1;
+  endtask
+  initial begin
+    for (int i = 0; i < N; i++) begin
+      fork
+        automatic int k = i;
+        intra[k] = #1 k * 10;
+        put_later(k);
+      join_none
+    end
+    #3;
+    for (int i = 0; i < N; i++) begin
+      `checkd(intra[i], i * 10);
+      `checkd(intra_task[i], i * 10 + 1);
+    end
+  end
+
   // Test: calls in processes that do not wait
   int add_sum;
   task automatic add(int v);
