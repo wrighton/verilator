@@ -299,6 +299,8 @@ class OrderMTaskGraph final : public V3Graph {
 
     // Generation counter, e.g. for marking the MTasks visited by algorithms
     uint64_t m_currentGeneration = 0;
+    // MTasks whose critical paths were updated, a measure of the work in maintaining them
+    uint64_t m_cpUpdates = 0;
 
     // CONSTRUCTOR
     explicit OrderMTaskGraph(OrderMoveGraph& moveGraph);  // Used by build(), hence private
@@ -342,6 +344,7 @@ public:
     LogicMTask* entryp() const { return m_entryp; }
     LogicMTask* exitp() const { return m_exitp; }
     bool slowAsserts() const { return m_slowAsserts; }
+    uint64_t cpUpdates() const { return m_cpUpdates; }
 
     // METHODS
     uint64_t totalCost() const;  // O(V), called once
@@ -361,7 +364,8 @@ public:
     // added is quadratic, e.g. along a long chain built from its start.
     void addBuildEdge(LogicMTask* fromp, LogicMTask* top);
     // Compute all critical paths, once all edges are added by 'addBuildEdge', before any
-    // 'addEdge' or 'mergeMTasks'
+    // 'addEdge' or 'mergeMTasks', or update them after only adding edges by 'addBuildEdge' to a
+    // graph with up to date critical paths, as adding edges only lengthens them
     void initCriticalPaths() {
         initCriticalPaths<GraphWay::FORWARD>();
         initCriticalPaths<GraphWay::REVERSE>();

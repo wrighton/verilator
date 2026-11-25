@@ -101,6 +101,7 @@
 #include "V3Graph.h"
 #include "V3OrderGraph.h"
 #include "V3OrderMTaskGraph.h"
+#include "V3Stats.h"
 
 #include <algorithm>
 #include <set>
@@ -169,6 +170,7 @@ class FixDataHazards final {
     // MEMBERS
     OrderMTaskGraph& m_mTaskGraph;  // The Mtask graph
     std::vector<LogicMTask*> m_scratch;  // Scratch MTask list, reused to avoid reallocation
+    bool m_addedEdges = false;  // Added an edge, the critical paths need updating
 
     // METHODS
 
@@ -242,10 +244,14 @@ class FixDataHazards final {
         // Already directly ordered. This is an O(1) set lookup, and catches the common case of
         // a dependency the OrderGraph already provided.
         if (fromp->hasEdgeTo(top)) return;
-        // Otherwise check if already ordered
+        // Otherwise check if already ordered. The critical paths are not updated for the edges
+        // added here, until the end, so this may miss a path through them, and add an edge that
+        // is then transitive, which is only redundant.
         if (m_mTaskGraph.pathExists(fromp, top, nullptr)) return;
-        // Unordered. Add an edge between them.
-        m_mTaskGraph.addEdge(fromp, top);
+        // Unordered. Add an edge between them. Updating the critical paths for each edge added
+        // is quadratic, e.g. along a chain of writers of a variable, each preceding all readers.
+        m_mTaskGraph.addBuildEdge(fromp, top);
+        m_addedEdges = true;
     }
 
     // Add the edges required to make the accesses of one variable race free. 'beginp'/'endp'
@@ -364,6 +370,9 @@ class FixDataHazards final {
             }
             serializeMTasks(m_scratch);
         }
+
+        // Update the critical paths for all edges added at once
+        if (m_addedEdges) m_mTaskGraph.initCriticalPaths();
     }
 
 public:
@@ -371,7 +380,10 @@ public:
 };
 
 void OrderMTaskGraph::fixDataHazards(OrderMTaskGraph& mtaskGraph) {
+    const uint64_t cpUpdatesBefore = mtaskGraph.cpUpdates();
     FixDataHazards::apply(mtaskGraph);
+    V3Stats::addStatSum("MTask graph, critical path updates fixing data hazards",
+                        mtaskGraph.cpUpdates() - cpUpdatesBefore);
     // The critical paths are maintained as the graph is mutated, check them
     mtaskGraph.validate();
 }
