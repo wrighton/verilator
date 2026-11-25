@@ -211,6 +211,10 @@ class UnknownVisitor final : public VNVisitor {
                 exprp = selp->fromp();
             } else if (AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
                 exprp = selp->fromp();
+            } else if (AstCMethodHard* const callp = VN_CAST(exprp, CMethodHard)) {
+                // An element of a queue or dynamic array, by its index
+                if (callp->method().isDynElementAccess()) posp = callp->pinsp();
+                exprp = posp ? callp->fromp() : nullptr;
             } else {
                 exprp = nullptr;
             }
@@ -223,7 +227,10 @@ class UnknownVisitor final : public VNVisitor {
                 VNRelinker relinker;
                 posp->unlinkFrBack(&relinker);
                 relinker.relink(zerop);
-                stmtp->addHereThisAsNext(new AstStmtExpr{fl, posp});
+                // The value of the position is intentionally discarded
+                FileLine* const stmtFlp = new FileLine{fl};
+                stmtFlp->warnOff(V3ErrorCode::IGNOREDRETURN, true);
+                stmtp->addHereThisAsNext(new AstStmtExpr{stmtFlp, posp});
                 continue;
             }
             AstVar* const varp = createAddTemp(posp);
@@ -928,11 +935,25 @@ class UnknownVisitor final : public VNVisitor {
     // keep it in range, so it writes only its bits in range (IEEE 1800-2023 11.5.1), of the
     // matching bits of the value assigned. Return whether replaced, taking 'lsbp'; else the
     // write is only guarded by its position.
+    AstVarRef* newOutsideBitsp(AstSel* selp, int64_t width) {
+        // A write of 'width' bits of 'selp' outside its storage, to a new temporary variable
+        FileLine* const fl = selp->fileline();
+        AstNodeDType* const dtypep
+            = selp->findBitOrLogicDType(static_cast<int>(width), static_cast<int>(width),
+                                        VSigning::UNSIGNED, selp->dtypep()->isFourstate());
+        AstVar* const varp
+            = new AstVar{fl, VVarType::MODULETEMP, m_lvboundNames.get(selp), dtypep};
+        addVar(varp);
+        return new AstVarRef{fl, varp, VAccess::WRITE};
+    }
     bool replacePartWrite(AstSel* nodep, AstNodeExpr* lsbp, uint32_t maxmsb) {
         // A release of a constant part-select is narrowed as its force is
         AstRelease* const releasep = VN_CAST(nodep->backp(), Release);
         AstNodeAssign* const assignp = VN_CAST(nodep->backp(), NodeAssign);
-        if (releasep ? releasep->lhsp() != nodep : !assignp || assignp->lhsp() != nodep) {
+        // An output or inout argument of a call
+        AstArg* const argp = VN_CAST(nodep->backp(), Arg);
+        if (!argp
+            && (releasep ? releasep->lhsp() != nodep : !assignp || assignp->lhsp() != nodep)) {
             return false;
         }
         FileLine* const fl = nodep->fileline();
@@ -959,6 +980,21 @@ class UnknownVisitor final : public VNVisitor {
             AstSel* const newp
                 = new AstSel{fl, nodep->fromp()->unlinkFrBack(), static_cast<int>(low), count};
             newp->user1(true);
+            if (argp) {
+                // The call writes the bits outside the storage to temporaries, discarded
+                AstNodeExpr* targetp = newp;
+                if (low > lsb) {
+                    targetp = new AstConcat{fl, targetp, newOutsideBitsp(nodep, low - lsb)};
+                }
+                if (lsb + width > high) {
+                    targetp
+                        = new AstConcat{fl, newOutsideBitsp(nodep, lsb + width - high), targetp};
+                }
+                nodep->replaceWith(targetp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                VL_DO_DANGLING(lsbp->deleteTree(), lsbp);
+                return true;
+            }
             nodep->replaceWith(newp);
             if (assignp) {
                 AstNodeExpr* const rhsp = assignp->rhsp()->unlinkFrBack();
@@ -971,7 +1007,9 @@ class UnknownVisitor final : public VNVisitor {
         // A variable position, of a blocking, nonblocking or continuous assignment: marked, to
         // write only the bits in range at runtime (VL_ASSIGNSEL_PARTIAL_*). An intra-assignment
         // delay keeps the marked write, as V3Timing captures its position then.
-        if (!VN_IS(assignp, Assign) && !VN_IS(assignp, AssignDly) && !VN_IS(assignp, AssignW)) {
+        if (argp
+            || (!VN_IS(assignp, Assign) && !VN_IS(assignp, AssignDly)
+                && !VN_IS(assignp, AssignW))) {
             return false;
         }
         if (valueWidth + width >= AstSel::FAR_POSITION) return false;
