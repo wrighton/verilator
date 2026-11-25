@@ -62,22 +62,12 @@ class LocalizeVisitor final : public VNVisitor {
 
     // METHODS
     bool isOptimizable(AstVarScope* nodep) {
-        // Don't want to malloc/free the backing store all the time
-        if (nodep->varp()->basicp() && nodep->varp()->basicp()->isNbaGenericQueue()) return false;
-        if (VN_IS(nodep->dtypep()->skipRefp(), ClosurePoolDType)) return false;
-        // Do not localize strings. They result in unnecessary initialization
-        // and bloated code size due to destructor calls when unused.
-        // TODO: Local variables should be pushed into the narrowest scope rather
-        // than emitted at the top of the function. See discussion in #6969.
-        if (nodep->dtypep()->skipRefp()->isString()) return false;
         // Variables used in super constructor call can't be localized, because
         // in C++ there is no way to declare them before base class constructor call
-        return ((!nodep->user1()  // Not marked as not optimizable, or ...
-                                  // .. a block temp used in a single CFunc
-                 || (nodep->varp()->varType() == VVarType::BLOCKTEMP
-                     && m_accessors(nodep).size() == 1))
-                // and under size limit
-                && nodep->varp()->dtypep()->widthTotalBytes() <= v3Global.opt.localizeMaxSize());
+        return !nodep->user1()  // Not marked as not optimizable, or ...
+                                // .. a block temp used in a single CFunc
+               || (nodep->varp()->varType() == VVarType::BLOCKTEMP
+                   && m_accessors(nodep).size() == 1);
     }
 
     static bool existsNonLeaf(const std::unordered_set<AstCFunc*>& funcps) {
@@ -184,16 +174,7 @@ class LocalizeVisitor final : public VNVisitor {
     }
 
     void visit(AstVarScope* nodep) override {
-        if (!nodep->varp()->isPrimaryIO()  // Not an IO the user wants to interact with
-            && !nodep->varp()->isSigPublic()  // Not something the user wants to interact with
-            && !nodep->varp()->isFuncLocal()  // Not already a function local (e.g.: argument)
-            && !nodep->varp()->isClassMember()  // Statically exists in design hierarchy
-            && !nodep->varp()->sensIfacep()  // Not sensitive to an interface
-            && !nodep->varp()->isVirtIface()  // Not interface pointer
-            && !nodep->varp()->constPoolEntry()  // Not a const pool entry
-            && nodep->varp() != v3Global.rootp()->activityp()  // Not read by the runtime
-            && !nodep->varp()->valuep()  // Does not have an initializer
-        ) {
+        if (V3Localize::isCandidate(nodep)) {
             UINFO(4, "Consider for localization: " << nodep);
             m_varScopeps.push_back(nodep);
         }
@@ -245,6 +226,31 @@ public:
 
 //######################################################################
 // Localize class functions
+
+bool V3Localize::isCandidate(const AstVarScope* vscp) {
+    const AstVar* const varp = vscp->varp();
+    if (varp->isPrimaryIO()  // An IO the user wants to interact with
+        || varp->isSigPublic()  // Something the user wants to interact with
+        || varp->isFuncLocal()  // Already a function local (e.g.: argument)
+        || varp->isClassMember()  // Statically exists in design hierarchy
+        || varp->sensIfacep()  // Sensitive to an interface
+        || varp->isVirtIface()  // Interface pointer
+        || varp->constPoolEntry()  // A const pool entry
+        || varp == v3Global.rootp()->activityp()  // Read by the runtime
+        || varp->valuep()) {  // Has an initializer
+        return false;
+    }
+    // Don't want to malloc/free the backing store all the time
+    if (varp->basicp() && varp->basicp()->isNbaGenericQueue()) return false;
+    if (VN_IS(vscp->dtypep()->skipRefp(), ClosurePoolDType)) return false;
+    // Do not localize strings. They result in unnecessary initialization
+    // and bloated code size due to destructor calls when unused.
+    // TODO: Local variables should be pushed into the narrowest scope rather
+    // than emitted at the top of the function. See discussion in #6969.
+    if (vscp->dtypep()->skipRefp()->isString()) return false;
+    // Under size limit
+    return varp->dtypep()->widthTotalBytes() <= v3Global.opt.localizeMaxSize();
+}
 
 void V3Localize::localizeAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
