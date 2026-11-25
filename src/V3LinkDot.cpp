@@ -3675,12 +3675,11 @@ class LinkDotParamVisitor final : public VNVisitor {
                     = checkTarget && prevr.defParamp && prevr.defParamp->checkTarget();
                 if (prevr.pinp && (!bothSelect || prevr.defSymp == defSymp)) {
                     VL_DO_DANGLING(prevr.pinp->unlinkFrBack()->deleteTree(), prevr.pinp);
-                    // Its value must still be constant, which V3Param checks
+                    // Its value must still be constant, which V3Param checks; not its target
                     AstDefParam* const checkp
-                        = prevr.ownValuep                                      ? prevr.ownValuep
-                          : prevr.defParamp && !prevr.defParamp->checkTarget() ? prevr.defParamp
-                                                                               : nullptr;
+                        = prevr.ownValuep ? prevr.ownValuep : prevr.defParamp;
                     if (checkp && VN_IS(checkp->rhsp(), NodeExpr)) {
+                        checkp->checkTarget(false);
                         checkp->valueCheck(true);
                     } else if (prevr.defParamp) {
                         VL_DO_DANGLING(pushDeletep(prevr.defParamp->unlinkFrBack()),
