@@ -536,6 +536,9 @@ AstNodeStmt* setVar(AstVarScope* vscp, uint32_t val);
 AstNodeStmt* incrementVar(AstVarScope* vscp);
 // Create statement that calls the given 'void' returning function
 AstNodeStmt* callVoidFunc(AstCFunc* funcp);
+// Estimate, before V3Expand, of the emitted size of a node and its children, which
+// --output-split-cfuncs limits: the node count, with a wide node counting once per word
+size_t emittedSizeEstimate(const AstNode* nodep);
 // Split large function according to --output-split-cfuncs
 void splitCheck(AstCFunc* ofuncp);
 }  // namespace util

@@ -170,7 +170,7 @@ public:
             // Add the code to the current function
             m_funcp->addStmtsp(currp);
             // If splitting, add in the size of the code we just added
-            if (m_split) m_size += currp->nodeCount();
+            if (m_split) m_size += V3Sched::util::emittedSizeEstimate(currp);
         }
         // Put suspendable processes into individual functions on their own
         if (suspendable) forceNewFunction();
