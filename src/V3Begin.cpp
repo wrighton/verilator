@@ -263,6 +263,8 @@ class BeginVisitor final : public VNVisitor {
                 // variable
                 AstVar* const portp = nodep->cloneTreePure(false);
                 nodep->replaceWith(portp);
+                // A default value V3WidthCommit kept stays with the port
+                if (nodep->valuep()) pushDeletep(nodep->valuep()->unlinkFrBack());
                 // The clone has user1 set, as cloning copies it, so the port is skipped when
                 // visited next in place of this variable. So visit its children here.
                 iterateChildren(portp);

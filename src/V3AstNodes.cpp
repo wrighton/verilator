@@ -612,6 +612,14 @@ const char* AstAnd::widthMismatch() const VL_MT_STABLE {
     BROKEN_RTN(lhsp()->widthMin() != widthMin());
     return nullptr;
 }
+void AstArg::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (defaulted()) str << " [DEFAULTED]";
+}
+void AstArg::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, defaulted);
+    dumpJsonGen(str);
+}
 AstAssertCtl::AstAssertCtl(FileLine* fl, VAssertCtlType ctlType, uint32_t assertType,
                            uint32_t directiveType, AstNodeExpr* levelp, AstNodeExpr* itemsp)
     : ASTGEN_SUPER_AssertCtl(fl)

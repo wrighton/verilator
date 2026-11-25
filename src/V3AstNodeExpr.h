@@ -589,6 +589,7 @@ class AstArg final : public AstNode {
     // omitted argument.
     // @astgen op1 := exprp : Optional[AstNodeExpr] // nullptr if omitted
     std::string m_name;  // Argument name, or "" for number based interconnect
+    bool m_defaulted = false;  // V3Task supplied the port's default value, in a dotted call
 public:
     AstArg(FileLine* fl, const std::string& name, AstNodeExpr* exprp)
         : ASTGEN_SUPER_Arg(fl)
@@ -596,8 +597,15 @@ public:
         this->exprp(exprp);
     }
     ASTGEN_MEMBERS_AstArg;
+    void dump(std::ostream& str = std::cout) const override;
+    void dumpJson(std::ostream& str = std::cout) const override;
+    bool sameNode(const AstNode* samep) const override {
+        return defaulted() == VN_DBG_AS(samep, Arg)->defaulted();
+    }
     std::string name() const override VL_MT_STABLE { return m_name; }
     void name(const std::string& name) override { m_name = name; }
+    bool defaulted() const { return m_defaulted; }
+    void defaulted(bool flag) { m_defaulted = flag; }
     bool emptyConnectNoNext() const { return !exprp() && name() == "" && !nextp(); }
 };
 class AstDistItem final : public AstNode {
