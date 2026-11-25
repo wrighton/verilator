@@ -1,0 +1,14 @@
+%Error: t/t_defparam_last_in_source_bad.v:18:18: Expecting expression to be constant, but variable isn't const: 'rv'
+                                               : ... note: In instance 't.s'
+   18 |   defparam x.P = rv;   
+      |                  ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_last_in_source_bad.v:31:20: Expecting expression to be constant, but variable isn't const: 'tv'
+                                               : ... note: In instance 't.o'
+   31 |   defparam o.y.P = tv;   
+      |                    ^~
+%Error: t/t_defparam_last_in_source_bad.v:31:18: Can't convert defparam value to constant: Param 'P' of 'y'
+                                               : ... note: In instance 't.o'
+   31 |   defparam o.y.P = tv;   
+      |                  ^
+%Error: Exiting due to

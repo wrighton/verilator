@@ -455,6 +455,12 @@ public:
                 && m_lastColumn == rhs.m_lastColumn && m_filenameno == rhs.m_filenameno
                 && m_msgEnIdx == rhs.m_msgEnIdx);
     }
+    // Whether this is later in the source text than rhs, in the same file: read later by the
+    // parser, following included files and not `line directives. A file shares its content
+    // with the files it includes.
+    bool laterInSource(const FileLine& rhs) const {
+        return m_contentp == rhs.m_contentp && m_tokenNum > rhs.m_tokenNum;
+    }
     bool equalFirstLineCol(const FileLine& rhs) const {
         return (m_filenameno == rhs.m_filenameno && m_firstLineno == rhs.m_firstLineno
                 && m_firstColumn == rhs.m_firstColumn);

@@ -387,8 +387,9 @@ class ParamProcessor final {
     // Most copies hierPinIfacep specializes within each other. A sanitizer build overflows an
     // 8 MiB stack with a few hundred.
     static constexpr size_t COPY_DEPTH_MAX = 64;
-    // Defparam values copyDefparams found but could not register, until registered when visited
-    std::unordered_set<string> m_copyDefparamsUnknown;
+    // Defparam values copyDefparams found but could not register, until registered when visited:
+    // "instance.parameter" path -> the last of those defparams of it
+    std::unordered_map<string, FileLine*> m_copyDefparamsUnknown;
     // Cells specialized in their turn, with the module each was specialized to, see copyModp.
     // With the module, as a check that the cell still refers to it. Only looked up.
     std::set<std::pair<const AstCell*, const AstNodeModule*>> m_specializedCells;
@@ -432,9 +433,13 @@ class ParamProcessor final {
     std::map<const AstNodeModule*, const AstPin*> m_nestedDefparamps;
     // "instance.parameter" path -> value of a defparam, see ParamVisitor::visit(AstDefParam).
     // Ordered, to find the values for the instances below a path (see defparamValuesKey).
-    std::map<std::string, AstNode*> m_defparamValues;
-    // "instance.parameter" path -> path of the instance of the module of its defparam
-    std::unordered_map<std::string, std::string> m_defparamValueScopes;
+    struct DefparamSetting final {
+        AstNode* m_valuep;  // The value
+        FileLine* m_flp;  // The defparam giving it
+        string m_scope;  // Path of the instance of the module of the defparam
+        std::vector<AstNode*> m_loserps;  // Values of earlier defparams, to check
+    };
+    std::map<std::string, DefparamSetting> m_defparamValues;
     // Instance name -> original name of its module, for instances deparameterized so far
     std::unordered_map<string, string> m_instanceOrigNames;
     // Module name -> whether a class in it or below it refers to its instance (see
@@ -933,12 +938,11 @@ class ParamProcessor final {
              it != m_defparamValues.end() && VString::startsWith(it->first, prefix); ++it) {
             const string relPath = it->first.substr(prefix.size());
             if (relPath.find('.') == string::npos) continue;
-            // Registered by defparamValue with each value, so present
-            const string& scope = m_defparamValueScopes.at(it->first);
+            const string& scope = it->second.m_scope;
             // The scope of a defparam setting a path under the prefix is the prefix's instance,
             // one below it, or one of its ancestors, so a shorter scope is an ancestor's
             if (scope.size() + 1 >= prefix.size()) continue;  // Not from above
-            if (const AstConst* const constp = VN_CAST(it->second, Const)) {
+            if (const AstConst* const constp = VN_CAST(it->second.m_valuep, Const)) {
                 key += relPath + "=" + constp->name() + ";";
             } else {
                 key += it->first + ";";
@@ -3026,7 +3030,6 @@ class ParamProcessor final {
     }
 
 public:
-    // A defparam, in this instance of its module, gives the parameter at 'path' this value
     // Return the value registered for the defparam at path, or end() if none, or, for a copy (see
     // hierPinIfacep), if it may be replaced by one copyDefparams could not register
     decltype(m_defparamValues)::const_iterator registeredDefparam(const string& path) const {
@@ -3035,11 +3038,27 @@ public:
         }
         return m_defparamValues.find(path);
     }
-    void defparamValue(const string& path, AstNode* valuep, const string& scope) {
+    // A defparam at flp, in the instance at 'scope' of its module, gives the parameter at 'path'
+    // this value. Of defparams of one parameter, the one last in the source text wins (IEEE
+    // 1800-2023 23.10.1); of those in different files, the one registered last.
+    void defparamValue(const string& path, AstNode* valuep, FileLine* flp, const string& scope) {
         m_deleter.pushDeletep(valuep);
-        m_defparamValues[path] = valuep;
-        m_defparamValueScopes[path] = defparamPath(scope);
-        m_copyDefparamsUnknown.erase(path);
+        // Copies may use the value once no later defparam copyDefparams could not register
+        const auto unknownIt = m_copyDefparamsUnknown.find(path);
+        if (unknownIt != m_copyDefparamsUnknown.end() && !unknownIt->second->laterInSource(*flp)) {
+            m_copyDefparamsUnknown.erase(unknownIt);
+        }
+        DefparamSetting setting{valuep, flp, defparamPath(scope), {}};
+        const auto pair = m_defparamValues.emplace(path, setting);
+        if (pair.second) return;
+        DefparamSetting& settingr = pair.first->second;
+        if (settingr.m_flp->laterInSource(*flp)) {
+            settingr.m_loserps.push_back(valuep);
+            return;
+        }
+        setting.m_loserps = std::move(settingr.m_loserps);
+        setting.m_loserps.push_back(settingr.m_valuep);
+        settingr = std::move(setting);
     }
     // The defparam at flp gave the value at path, of an instance under it
     void defparamValueSite(const string& path, FileLine* flp) {
@@ -3605,11 +3624,15 @@ public:
             ParamDeps deps;
             if (!refersToTemplate({defParamp->rhsp()}, containerp, deps)) {
                 evaluateParams(deps);
-                // As when visited, replacing a value an enclosing module gives
-                defparamValue(path, defParamp->rhsp()->cloneTree(false), instanceName);
+                // As when visited, see defparamValue
+                defparamValue(path, defParamp->rhsp()->cloneTree(false), defParamp->fileline(),
+                              instanceName);
             } else {
-                // Replacing it too, so copies do not use that value
-                m_copyDefparamsUnknown.emplace(path);
+                // Maybe replacing it too, so copies do not use that value
+                FileLine*& unknownFlpr = m_copyDefparamsUnknown[path];
+                if (!unknownFlpr || !unknownFlpr->laterInSource(*defParamp->fileline())) {
+                    unknownFlpr = defParamp->fileline();
+                }
             }
         }
     }
@@ -3948,14 +3971,20 @@ public:
         return it == items.end() ? nullptr : it->second;
     }
 
-    // Of defparam pins of a cell setting one parameter, one selecting generate loop iterations,
-    // keep the last of each scope of their defparams, as the last in source text wins (IEEE
-    // 1800-2023 23.10.1), before they give the instance its parameters
-    void removeSupersededDefparamPins(AstCell* cellp) {
-        // By parameter, whether a pin selects, and the last pin of each scope
+    // Of defparam pins of a cell setting one parameter, keep the one of the defparam last in the
+    // source text (IEEE 1800-2023 23.10.1), or of those in different files, the last here, before
+    // they give the instance its parameters. If one selects generate loop iterations, keep the
+    // last of each scope of their defparams instead, see checkDefparamPins. Add the others to
+    // checkPinps, to remove once their values are checked to be constant.
+    void
+    removeSupersededDefparamPins(AstCell* cellp,
+                                 const std::unordered_map<const AstPin*, FileLine*>& defparamFlps,
+                                 std::vector<AstPin*>& checkPinps) {
+        // By parameter, whether a pin selects, the last pin of each scope, and the last pin
         struct ParamPins final {
             bool select = false;
             std::unordered_map<int, AstPin*> lastPins;
+            AstPin* lastPinp = nullptr;
         };
         std::unordered_map<const AstNode*, ParamPins> params;
         std::vector<AstPin*> pins;  // In order
@@ -3964,16 +3993,26 @@ public:
             ParamPins& paramPins = params[paramOf(pinp)];
             paramPins.select = paramPins.select || pinp->paramPath().find('[') != string::npos;
             paramPins.lastPins[pinp->defparamScope()] = pinp;
+            // Of pins with one registered value, keep that of its defparam, for errors
+            FileLine* const lastFlp
+                = paramPins.lastPinp ? defparamFlps.at(paramPins.lastPinp) : nullptr;
+            if (!lastFlp
+                || !(lastFlp->laterInSource(*defparamFlps.at(pinp))
+                     || (lastFlp == defparamFlps.at(pinp)
+                         && paramPins.lastPinp->fileline() == lastFlp))) {
+                paramPins.lastPinp = pinp;
+            }
             pins.push_back(pinp);
             m_defparamFolded.emplace(pinp->fileline(),
                                      std::make_pair(pinp->defparamScope(), nullptr));
         }
         for (AstPin* const pinp : pins) {
             const ParamPins& paramPins = params[paramOf(pinp)];
-            if (!paramPins.select || paramPins.lastPins.at(pinp->defparamScope()) == pinp) {
+            if (paramPins.select ? paramPins.lastPins.at(pinp->defparamScope()) == pinp
+                                 : paramPins.lastPinp == pinp) {
                 continue;
             }
-            VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
+            checkPinps.push_back(pinp);
         }
     }
     static const AstNode* paramOf(const AstPin* pinp) {
@@ -4061,6 +4100,12 @@ public:
 
         // Defparam pins of a cell giving a value of their own, not one registered
         std::unordered_set<const AstPin*> ownValuePins;
+        // Defparam pin of a cell -> the defparam giving its value
+        std::unordered_map<const AstPin*, FileLine*> defparamFlps;
+        // Pins with values of defparams superseded by later ones, to check
+        std::vector<AstPin*> checkPinps;
+        // Pin of a registered value, and the value of a defparam it superseded, to check
+        std::vector<std::pair<const AstPin*, AstNode*>> loserValues;
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             m_instanceOrigNames[instanceName] = srcModp->origName();
             // Parameters set by a defparam to this cell
@@ -4076,12 +4121,19 @@ public:
                         const string valuePath = defparamPath(instanceName) + "." + pinp->name();
                         const auto it = registeredDefparam(valuePath);
                         if (it != m_defparamValues.end()) {
-                            pinp->exprp(it->second->cloneTree(false));
+                            pinp->exprp(it->second.m_valuep->cloneTree(false));
+                            defparamFlps.emplace(pinp, it->second.m_flp);
+                            for (AstNode* const loserp : it->second.m_loserps) {
+                                loserValues.emplace_back(pinp, loserp);
+                            }
                         }
                     }
                     if (pinp->exprp()) {
                         defparamParams.emplace(paramOf(pinp));
-                        if (!registered) ownValuePins.emplace(pinp);
+                        if (!registered) {
+                            ownValuePins.emplace(pinp);
+                            defparamFlps.emplace(pinp, pinp->fileline());
+                        }
                         continue;
                     }
                     // No value: the defparam is in a generate block not built, or, for a copy
@@ -4106,12 +4158,30 @@ public:
         }
         // Create new module name with _'s between the constants
         UINFOTREE(10, nodep, "", "cell");
+        // Superseded values to check, resolved below as the others
+        if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
+            for (const auto& loser : loserValues) {
+                AstPin* const checkPinp
+                    = new AstPin{loser.second->fileline(), -1, loser.first->name(),
+                                 loser.second->cloneTree(false)};
+                checkPinp->param(true);
+                checkPinp->modVarp(loser.first->modVarp());
+                checkPinp->modPTypep(loser.first->modPTypep());
+                cellp->addParamsp(checkPinp);
+                checkPinps.push_back(checkPinp);
+            }
+        }
         // Resolve `class::member` Dots in pin values, and in any deferred
         // lparam reachable from the pin tree, so constify sees Consts.
         resolveDeferredDotsReachableFrom(nodep, modp);
-        if (AstCell* const cellp = VN_CAST(nodep, Cell)) removeSupersededDefparamPins(cellp);
+        if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
+            removeSupersededDefparamPins(cellp, defparamFlps, checkPinps);
+        }
         // Evaluate all module constants
         V3Const::constifyParamsEdit(nodep);
+        for (AstPin* const pinp : checkPinps) {
+            VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
+        }
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             checkDefparamPins(cellp, instanceName, ownValuePins);
         }
@@ -5833,7 +5903,7 @@ class ParamVisitor final : public VNVisitor {
         const string instanceName
             = m_modp->someInstanceName() + m_generateHierName + "." + targetp->dotted();
         const string valuePath = defparamPath(instanceName) + "." + targetp->name();
-        m_processor.defparamValue(valuePath, nodep->rhsp()->unlinkFrBack(),
+        m_processor.defparamValue(valuePath, nodep->rhsp()->unlinkFrBack(), nodep->fileline(),
                                   m_modp->someInstanceName());
         m_processor.defparamValueSite(valuePath, nodep->fileline());
         // A path selecting generate loop iterations is checked in each instance
