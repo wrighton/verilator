@@ -922,6 +922,11 @@ public:
     using const_iterator = typename Deque::const_iterator;
     template <typename T_Func>
     using WithFuncReturnType = decltype(std::declval<T_Func>()(0, std::declval<T_Value>()));
+    // Enables an overload for an element that converts to T_Value only explicitly
+    template <typename T_Arg>
+    using ConvertedElem =
+        typename std::enable_if<!std::is_convertible<const T_Arg&, T_Value>::value
+                                && std::is_constructible<T_Value, const T_Arg&>::value>::type;
 
 private:
     // MEMBERS
@@ -999,6 +1004,15 @@ public:
     template <typename T_Subclass>
     inline VlQueue(VlQueue<VlClassRef<T_Subclass>>&&);
 
+    // Conversion from a queue of another bound, e.g. a bounded queue pushed into a queue of
+    // queues; explicit, so that operators taking a queue do not convert and truncate operands
+    template <size_t N_RhsMaxSize>
+    explicit VlQueue(const VlQueue<T_Value, N_RhsMaxSize>& rhs)
+        : m_deque{rhs.privateDeque()}
+        , m_defaultValue{rhs.atDefault()} {
+        applyBound();
+    }
+
     // Verilog: '{a, b} or {a, q}
     template <typename... T_Args>
     explicit VlQueue(const T_Args&... args) {
@@ -1045,6 +1059,15 @@ public:
         m_deque = rhs.privateDeque();
         applyBound();
         return *this;
+    }
+    // Comparison with a queue of another bound (IEEE 1800-2023 6.22.2)
+    template <size_t N_RhsMaxSize>
+    bool operator==(const VlQueue<T_Value, N_RhsMaxSize>& rhs) const {
+        return m_deque == rhs.privateDeque();
+    }
+    template <size_t N_RhsMaxSize>
+    bool operator!=(const VlQueue<T_Value, N_RhsMaxSize>& rhs) const {
+        return m_deque != rhs.privateDeque();
     }
 
     // METHODS
@@ -1104,6 +1127,17 @@ public:
         m_deque.push_back(value);
         applyBound();
     }
+    // An element given as a queue of another bound, converted to the element type
+    template <typename T_Elem, size_t N_ElemMaxSize,
+              typename = ConvertedElem<VlQueue<T_Elem, N_ElemMaxSize>>>
+    void push_front(const VlQueue<T_Elem, N_ElemMaxSize>& value) {
+        push_front(T_Value{value});
+    }
+    template <typename T_Elem, size_t N_ElemMaxSize,
+              typename = ConvertedElem<VlQueue<T_Elem, N_ElemMaxSize>>>
+    void push_back(const VlQueue<T_Elem, N_ElemMaxSize>& value) {
+        push_back(T_Value{value});
+    }
     // function value_t q.pop_front();
     T_Value pop_front() {
         if (m_deque.empty()) return m_defaultValue;
@@ -1159,6 +1193,12 @@ public:
         if (VL_UNLIKELY(index < 0 || index > m_deque.size())) return;
         m_deque.insert(m_deque.begin() + index, value);
         applyBound();
+    }
+
+    template <typename T_Elem, size_t N_ElemMaxSize,
+              typename = ConvertedElem<VlQueue<T_Elem, N_ElemMaxSize>>>
+    void insert(int32_t index, const VlQueue<T_Elem, N_ElemMaxSize>& value) {
+        insert(index, T_Value{value});
     }
 
     // inside (set membership operator)
