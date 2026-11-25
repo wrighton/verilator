@@ -1194,7 +1194,7 @@ int32_t V3Number::toSInt() const VL_MT_SAFE {
 uint64_t V3Number::toUQuad() const VL_MT_SAFE {
     UASSERT(!isFourState(), "toUQuad with 4-state " << *this);
     // We allow wide numbers that represent values <= 64 bits
-    if (isDouble()) return static_cast<uint64_t>(toDouble());
+    if (isDouble()) return V3Number{this, 64}.setIntegralDouble(VL_TRUNC(toDouble())).toUQuad();
     for (int i = 2; i < words(); ++i) {
         if (m_data.num()[i].m_value) {
             v3error("Value too wide for 64-bits expected in this context " << *this);
@@ -1207,7 +1207,6 @@ uint64_t V3Number::toUQuad() const VL_MT_SAFE {
 }
 
 int64_t V3Number::toSQuad() const {
-    if (isDouble()) return static_cast<int64_t>(toDouble());
     const uint64_t v = toUQuad();
     const uint64_t signExtend = (-(v & (1ULL << (width() - 1))));
     const uint64_t extended = v | signExtend;
@@ -2800,16 +2799,17 @@ V3Number& V3Number::opIToRD(const V3Number& lhs, bool isSigned) {
     return setDouble(negate ? -d : d);
 }
 V3Number& V3Number::opRToIS(const V3Number& lhs) {
+    // As a cast, but truncating rather than rounding (IEEE 1800-2023 20.5)
     NUM_ASSERT_OP_ARGS1(lhs);
     NUM_ASSERT_DOUBLE_ARGS1(lhs);
-    const double v = VL_TRUNC(lhs.toDouble());
-    const int32_t i = static_cast<int32_t>(v);  // C converts from double to int32_t
-    return setLongS(i);
+    return setIntegralDouble(VL_TRUNC(lhs.toDouble()));
 }
 V3Number& V3Number::opRToIRoundS(const V3Number& lhs) {
     NUM_ASSERT_OP_ARGS1(lhs);
     NUM_ASSERT_DOUBLE_ARGS1(lhs);
-    const double v = VL_ROUND(lhs.toDouble());
+    return setIntegralDouble(VL_ROUND(lhs.toDouble()));
+}
+V3Number& V3Number::setIntegralDouble(double v) {
     setZero();
     union {
         double d;
