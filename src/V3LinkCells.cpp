@@ -653,6 +653,11 @@ class LinkCellsVisitor final : public VNVisitor {
             // Use findIdFallback instead of findIdFlat; it doesn't matter for now
             // but we might support modules-under-modules someday.
             AstNodeModule* cellmodp = resolveModule(nodep, nodep->modName(), m_modp->libname());
+            // The library model is not saved, and a restored handle to it would be stale
+            if (cellmodp && cellmodp->verilatorLib() && v3Global.opt.savable()) {
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: --savable with --lib-create library "
+                                                 + cellmodp->prettyNameQ());
+            }
             if (cellmodp) {
                 if (cellmodp == m_modp || cellmodp->user2p() == m_modp) {
                     UINFO(1, "Self-recursive module " << cellmodp);

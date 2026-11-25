@@ -578,7 +578,10 @@ later be restored.
 
 To enable this feature, use :vlopt:`--savable`. There are limitations in
 what language features are supported along with :vlopt:`--savable`; if you
-attempt to use an unsupported feature, Verilator will throw an error.
+attempt to use an unsupported feature, Verilator will throw an error. The
+state of a hierarchical block (see :ref:`Hierarchical Verilation`) or of an
+instance of a :vlopt:`--lib-create` library cannot be saved, so these are
+not supported with :vlopt:`--savable`.
 
 To use save/restore, the user wrapper code must create a VerilatedSerialize
 or VerilatedDeserialze object and then call the ``<<`` or ``>>`` operators
