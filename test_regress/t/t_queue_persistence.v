@@ -317,6 +317,16 @@ module t;
     `checkd(h.q[N - 1], -7);
   end
 
+  initial begin  // Wide elements received by a typeless mailbox
+    automatic Holder h = new;
+    automatic mailbox mb = new;
+    automatic logic [69:0] v = 70'h2_1234_5678_9abc_def0;
+    for (int j = 0; j < N; ++j) h.w.push_back(0);
+    mb.put(v);
+    mb.get(h.w[3000]);
+    `checkh(h.w[3000], v);
+  end
+
   initial begin  // Wide elements
     automatic Holder h = new;
     for (int j = 0; j < N; ++j) h.w.push_back(70'(j) << 40);
