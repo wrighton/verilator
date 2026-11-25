@@ -940,6 +940,8 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(ARRAY_AT,                           "at",                     PURE,   CLEAN,  false,      "r", "array or queue element selection") \
     macro(ARRAY_AT_BACK,                      "atBack",                 PURE,   CLEAN,  false,      "r", "array or queue element selection") \
     macro(ARRAY_AT_WRITE,                     "atWrite",                PURE,   CLEAN,  false,      "r", "array or queue element selection") \
+    macro(ARRAY_AT_WRITE_REF,                 "atWriteRef",             false,  CLEAN,  false,      "r", "array element passed by reference") \
+    macro(ARRAY_ELEM_REF,                     "elem",                   false,  CLEAN,  false,      "", "element of a pinned array element") \
     macro(ARRAY_FIND,                         "find",                   PURE,   CLEAN,  false,      "", "") \
     macro(ARRAY_FIND_FIRST,                   "find_first",             PURE,   CLEAN,  false,      "", "") \
     macro(ARRAY_FIND_FIRST_INDEX,             "find_first_index",       PURE,   CLEAN,  false,      "", "") \
@@ -1047,6 +1049,8 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_WITH_RUN_W,              "withRunW",               false,  CLEAN,  false,      "rr", "") \
     macro(DYN_AT_WRITE_APPEND,                "atWriteAppend",          false,  CLEAN,  false,      "r", "array or queue element selection") \
     macro(DYN_AT_WRITE_APPEND_BACK,           "atWriteAppendBack",      false,  CLEAN,  false,      "r", "array or queue element selection") \
+    macro(DYN_AT_WRITE_APPEND_BACK_REF,       "atWriteAppendBackRef",   false,  CLEAN,  false,      "r", "queue element passed by reference") \
+    macro(DYN_AT_WRITE_APPEND_REF,            "atWriteAppendRef",       false,  CLEAN,  false,      "r", "queue element passed by reference") \
     macro(DYN_CLEAR,                          "clear",                  false,  CLEAN,  false,      "", "") \
     macro(DYN_ERASE,                          "erase",                  false,  CLEAN,  false,      "r", "") \
     macro(DYN_INSERT,                         "insert",                 false,  CLEAN,  false,      "rr", "") \
@@ -1176,10 +1180,18 @@ public:
         case ARRAY_AT:
         case ARRAY_AT_BACK:
         case ARRAY_AT_WRITE:
+        case ARRAY_AT_WRITE_REF:
         case DYN_AT_WRITE_APPEND:
-        case DYN_AT_WRITE_APPEND_BACK: return true;
+        case DYN_AT_WRITE_APPEND_BACK:
+        case DYN_AT_WRITE_APPEND_BACK_REF:
+        case DYN_AT_WRITE_APPEND_REF: return true;
         default: return false;
         }
+    }
+    // Element access through a pin, for an element passed to a ref argument
+    bool isRefElementAccess() const VL_PURE {
+        return m_e == ARRAY_AT_WRITE_REF || m_e == ARRAY_ELEM_REF
+               || m_e == DYN_AT_WRITE_APPEND_BACK_REF || m_e == DYN_AT_WRITE_APPEND_REF;
     }
     const char* ascii() const VL_PURE {
         static constexpr const char* const values[] = {
