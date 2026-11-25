@@ -2568,7 +2568,7 @@ class TimingReactiveVisitor final : public VNVisitor {
         const AstConst* const delayp = methodp && methodp->method() == VCMethod::SCHED_DELAY
                                            ? VN_CAST(methodp->pinsp(), Const)
                                            : nullptr;
-        if (delayp && delayp->toUQuad() == std::numeric_limits<uint64_t>::max()) {
+        if (methodp && methodp->method() == VCMethod::SCHED_FORK_START) {
             // The start of a forked process (see V3Fork), which starts in the Reactive region
             VNRelinker handle;
             awaitp->unlinkFrBack(&handle);
@@ -2707,9 +2707,9 @@ class TimingReactiveVisitor final : public VNVisitor {
             // must stay in the dynamic scheduler's own steps. Queue waits stay there through
             // release of the selected turn; get/peek restore the region before writing the ref.
             const VCMethod method = methodp->method();
-            if (method != VCMethod::SCHED_DELAY && method != VCMethod::SCHED_TRIGGER
-                && method != VCMethod::SCHED_RESUMPTION && method != VCMethod::SCHED_EVENT_TRIGGER
-                && method != VCMethod::FORK_JOIN) {
+            if (method != VCMethod::SCHED_DELAY && method != VCMethod::SCHED_FORK_START
+                && method != VCMethod::SCHED_TRIGGER && method != VCMethod::SCHED_RESUMPTION
+                && method != VCMethod::SCHED_EVENT_TRIGGER && method != VCMethod::FORK_JOIN) {
                 return;
             }
         }
