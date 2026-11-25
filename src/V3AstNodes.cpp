@@ -2241,11 +2241,13 @@ void AstDefParam::dump(std::ostream& str) const {
     Super::dump(str);
     if (fromBind()) str << " [FROMBIND]";
     if (checkTarget()) str << " [CHECKTARGET]";
+    if (valueCheck()) str << " [VALUECHECK]";
     if (sharedName()) str << " [SHAREDNAME]";
 }
 void AstDefParam::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, fromBind);
     dumpJsonBoolFuncIf(str, checkTarget);
+    dumpJsonBoolFuncIf(str, valueCheck);
     dumpJsonBoolFuncIf(str, sharedName);
     dumpJsonGen(str);
 }
