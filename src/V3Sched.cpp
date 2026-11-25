@@ -476,7 +476,8 @@ void addVirtIfaceTriggerAssignments(AstNetlist* netlistp, AstCFunc* initFuncp,
 
 // Order the combinational logic to create the 'stl' region
 void createSettle(AstNetlist* netlistp, AstCFunc* const initFuncp, SenExprBuilder& senExprBulider,
-                  LogicClasses& logicClasses, const CovergroupRefBindings& cgRefBindings) {
+                  LogicClasses& logicClasses, const CovergroupRefBindings& cgRefBindings,
+                  const VirtIfaceClockedReads& vifReads) {
     // Clone, because ordering is destructive, but we still need them for the other regions
     ProcessList comb = logicClasses.m_comb.clone();
     ProcessList hybrid = logicClasses.m_hybrid.clone();
@@ -499,7 +500,7 @@ void createSettle(AstNetlist* netlistp, AstCFunc* const initFuncp, SenExprBuilde
 
     // Create and the body function
     AstCFunc* const stlFuncp = V3Order::order(
-        {&comb, &hybrid}, trigKit, trigKit.vscp(), cgRefBindings, "stl", false, true,
+        {&comb, &hybrid}, trigKit, trigKit.vscp(), cgRefBindings, vifReads, "stl", false, true,
         [=](const AstVarScope*, std::set<uint32_t>& triggers) { triggers.insert(inputChanged); });
     util::splitCheck(stlFuncp);
 
@@ -1045,8 +1046,8 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
 
     // Create and Order the body function
     AstCFunc* const icoFuncp = V3Order::order(
-        {&logic}, trigKit, trigKit.vscp(), cgRefBindings, "ico", false, false,
-        [&](const AstVarScope* vscp, std::set<uint32_t>& triggers) {
+        {&logic}, trigKit, trigKit.vscp(), cgRefBindings, virtIfaceTriggers.m_clockedReads, "ico",
+        false, false, [&](const AstVarScope* vscp, std::set<uint32_t>& triggers) {
             AstVar* const varp = vscp->varp();
             // If it has an explicit change detect trigger, use that,
             // otherwise fall back to using the 'first iteration' trigger
@@ -1733,7 +1734,8 @@ void schedule(AstNetlist* netlistp) {
     SenExprBuilder senExprBuilder{scopeTopp, &keptPortDrivers.drivers()};
 
     // Step 6: Create 'settle' region that restores the combinational invariant
-    createSettle(netlistp, staticp, senExprBuilder, logicClasses, cgRefBindings);
+    createSettle(netlistp, staticp, senExprBuilder, logicClasses, cgRefBindings,
+                 virtIfaceTriggers.m_clockedReads);
     if (v3Global.opt.stats()) V3Stats::statsStage("sched-settle");
 
     // Step 7: Partition the clocked and combinational (including hybrid) logic into pre/act/nba.
@@ -1833,9 +1835,9 @@ void schedule(AstNetlist* netlistp) {
               addTriggeredIface(vscp, vifVscpToTrig, vifIfaceToTrig, virtIfaceTriggers, triggers);
           };
 
-    AstCFunc* const actFuncp
-        = V3Order::order({&logicRegions.m_pre, &logicRegions.m_act, &logicReplicas.m_act}, trigKit,
-                         trigKit.vscp(), cgRefBindings, "act", false, false, externalTriggers);
+    AstCFunc* const actFuncp = V3Order::order(
+        {&logicRegions.m_pre, &logicRegions.m_act, &logicReplicas.m_act}, trigKit, trigKit.vscp(),
+        cgRefBindings, virtIfaceTriggers.m_clockedReads, "act", false, false, externalTriggers);
     util::splitCheck(actFuncp);
     if (v3Global.opt.stats()) V3Stats::statsStage("sched-create-act");
 
@@ -1849,9 +1851,9 @@ void schedule(AstNetlist* netlistp) {
         // Add the trigger indices of the input logic
         for (ProcessList* procListp : logic) addTriggerIndices(*procListp, trigKit, false);
 
-        AstCFunc* const funcp
-            = V3Order::order(logic, trigKit, trigVscp, cgRefBindings, name,
-                             name == "nba" && v3Global.opt.mtasks(), false, externalTriggers);
+        AstCFunc* const funcp = V3Order::order(
+            logic, trigKit, trigVscp, cgRefBindings, virtIfaceTriggers.m_clockedReads, name,
+            name == "nba" && v3Global.opt.mtasks(), false, externalTriggers);
 
         return {trigVscp, funcp};
     };

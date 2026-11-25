@@ -24,6 +24,7 @@
 #include "V3OrderGraph.h"
 #include "V3OrderInternal.h"
 #include "V3Sched.h"
+#include "V3Stats.h"
 #include "V3VNUserAllocator.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -61,6 +62,11 @@ public:
             }
             m_vertexps[idx] = vertexp;
         }
+        return vertexp;
+    }
+    // The vertex of the given type, nullptr if not created
+    OrderVarVertex* findVarVertex(VarVertexType type) const {
+        OrderVarVertex* const vertexp = m_vertexps[static_cast<unsigned>(type)];
         return vertexp;
     }
 
@@ -109,6 +115,14 @@ class OrderGraphBuilder final : public VNVisitorConst {
     const V3Sched::CovergroupRefBindings& m_cgRefBindings;
     // Bindings reachable from the covergroup sample() being walked, nullptr when not in one
     const V3Sched::CovergroupRefBindings::Bindings* m_cgRefBoundps = nullptr;
+    // What clocked logic may read through virtual interfaces
+    const V3Sched::VirtIfaceClockedReads& m_vifReads;
+    // The barrier vertex of each set of VarScopes reads through virtual interfaces may read
+    std::unordered_map<size_t, OrderVarVertex*> m_vifBarrierps;
+    // The same, in order of creation
+    std::vector<std::pair<size_t, OrderVarVertex*>> m_vifBarriers;
+    // Barrier vertices the current logic already points to
+    std::unordered_set<const OrderVarVertex*> m_logicVifBarrierps;
 
     // METHODS
 
@@ -117,6 +131,7 @@ class OrderGraphBuilder final : public VNVisitorConst {
         // Reset VarUsage and VarAccess
         AstNode::user2ClearTree();
         AstNode::user4ClearTree();
+        m_logicVifBarrierps.clear();
         // Create LogicVertex for this logic node
         m_logicVxp
             = new OrderLogicVertex{m_graphp, m_processp->m_scopep, m_domainp, m_hybridp, nodep};
@@ -161,6 +176,52 @@ class OrderGraphBuilder final : public VNVisitorConst {
         } else {
             accountVarAccess(varscp, nodep->access(), nodep);
         }
+    }
+
+    // A read through a virtual interface in clocked logic may read the member in any instance.
+    // Like a direct read, it is ordered before the commit of nonblocking assignments to them,
+    // through the barrier vertex of each member. A call points to the barriers of the members its
+    // callee may read, transitively, so to as many as its inlined body would read.
+    void accountVirtIfaceReads(const V3Sched::VirtIfaceClockedReads::Sets& sets) {
+        if (!m_inClocked || m_inPre || m_inPost) return;
+        for (const size_t index : sets) {
+            OrderVarVertex*& barrierp = m_vifBarrierps[index];
+            if (!barrierp) {
+                barrierp = new OrderVarBarrierVertex{m_graphp, m_vifReads.set(index).front()};
+                m_vifBarriers.emplace_back(index, barrierp);
+            }
+            if (!m_logicVifBarrierps.insert(barrierp).second) continue;
+            m_graphp->addHardEdge(m_logicVxp, barrierp, WEIGHT_POST);
+        }
+    }
+    // Point each barrier vertex to the logic the PRE and POST vertices of its members point to
+    void connectVirtIfaceBarriers() {
+        size_t nEdges = 0;
+        for (const auto& pair : m_vifBarriers) {
+            OrderVarVertex* const barrierp = pair.second;
+            for (AstVarScope* const vscp : m_vifReads.set(pair.first)) {
+                for (const VarVertexType type : {VarVertexType::PRE, VarVertexType::POST}) {
+                    const OrderVarVertex* const vtxp = m_orderUser(vscp).findVarVertex(type);
+                    if (!vtxp) continue;
+                    for (const V3GraphEdge& edge : vtxp->outEdges()) {
+                        OrderLogicVertex* const logicp = edge.top()->as<OrderLogicVertex>();
+                        if (edge.cutable()) {
+                            m_graphp->addSoftEdge(barrierp, logicp, edge.weight());
+                        } else {
+                            m_graphp->addHardEdge(barrierp, logicp, edge.weight());
+                        }
+                        ++nEdges;
+                    }
+                }
+            }
+            for (const V3GraphEdge& edge VL_ATTR_UNUSED : barrierp->inEdges()) ++nEdges;
+        }
+        V3Stats::addStatSum("Scheduling, virtual interface read barriers", m_vifBarriers.size());
+        V3Stats::addStatSum("Scheduling, virtual interface read barrier edges", nEdges);
+    }
+    void visit(AstMemberRef* nodep) override {
+        iterateChildrenConst(nodep);
+        if (nodep->access().isReadOrRW()) accountVirtIfaceReads(m_vifReads.forMemberRef(nodep));
     }
 
     // Record the raw access for the multi-threaded data hazard fixer
@@ -300,6 +361,8 @@ class OrderGraphBuilder final : public VNVisitorConst {
         V3Sched::util::foreachCallAccess(nodep, [&](AstVarScope* vscp, VAccess access) {
             accountVarAccess(vscp, access, nodep);
         });
+        // A function called directly may read through virtual interfaces
+        accountVirtIfaceReads(m_vifReads.forCall(nodep->funcp()));
     }
     // A covergroup sample() is not inlined and may read design signals through cross-scope
     // references held by the covergroup. This attributes those references to the calling block.
@@ -307,6 +370,7 @@ class OrderGraphBuilder final : public VNVisitorConst {
         iterateChildrenConst(nodep);
         accountEnqueuingCall(nodep);
         AstCFunc* const funcp = nodep->funcp();
+        accountVirtIfaceReads(m_vifReads.forMethodCall(funcp));
         if (!funcp->isCovergroupSample()) return;
         // Since sample is a built-in, we never expect recursion.
         UASSERT_OBJ(!m_cgRefBoundps, nodep, "Covergroup sample() calls another sample()");
@@ -390,10 +454,12 @@ class OrderGraphBuilder final : public VNVisitorConst {
     // CONSTRUCTOR
     OrderGraphBuilder(const std::vector<V3Sched::ProcessList*>& coll,
                       const V3Sched::TriggerKit& trigKit, AstVarScope* trigVscp,
-                      const V3Sched::CovergroupRefBindings& cgRefBindings, bool parallel)
+                      const V3Sched::CovergroupRefBindings& cgRefBindings,
+                      const V3Sched::VirtIfaceClockedReads& vifReads, bool parallel)
         : m_graphp{new OrderGraph{trigKit, trigVscp}}
         , m_parallel{parallel}
-        , m_cgRefBindings{cgRefBindings} {
+        , m_cgRefBindings{cgRefBindings}
+        , m_vifReads{vifReads} {
         // Build the graph
         for (const V3Sched::ProcessList* const procListp : coll) {
             for (const V3Sched::Process& process : *procListp) {
@@ -420,19 +486,20 @@ class OrderGraphBuilder final : public VNVisitorConst {
                 iterateConst(process.m_procp);
             }
         }
+        connectVirtIfaceBarriers();
     }
     ~OrderGraphBuilder() override = default;
 
 public:
     // Process the netlist and return the constructed ordering graph. It's 'process' because
     // this visitor does change the tree (removes some nodes related to DPI export trigger).
-    static std::unique_ptr<OrderGraph> apply(const std::vector<V3Sched::ProcessList*>& coll,
-                                             const V3Sched::TriggerKit& trigKit,
-                                             AstVarScope* trigVscp,
-                                             const V3Sched::CovergroupRefBindings& cgRefBindings,
-                                             bool parallel) {
+    static std::unique_ptr<OrderGraph>
+    apply(const std::vector<V3Sched::ProcessList*>& coll, const V3Sched::TriggerKit& trigKit,
+          AstVarScope* trigVscp, const V3Sched::CovergroupRefBindings& cgRefBindings,
+          const V3Sched::VirtIfaceClockedReads& vifReads, bool parallel) {
         return std::unique_ptr<OrderGraph>{
-            OrderGraphBuilder{coll, trigKit, trigVscp, cgRefBindings, parallel}.m_graphp};
+            OrderGraphBuilder{coll, trigKit, trigVscp, cgRefBindings, vifReads, parallel}
+                .m_graphp};
     }
 };
 
@@ -441,6 +508,7 @@ V3Order::buildOrderGraph(const V3Sched::TriggerKit& trigKit,  //
                          AstVarScope* trigVscp,  //
                          const std::vector<V3Sched::ProcessList*>& coll,  //
                          const V3Sched::CovergroupRefBindings& cgRefBindings,  //
+                         const V3Sched::VirtIfaceClockedReads& vifReads,  //
                          bool parallel) {
-    return OrderGraphBuilder::apply(coll, trigKit, trigVscp, cgRefBindings, parallel);
+    return OrderGraphBuilder::apply(coll, trigKit, trigVscp, cgRefBindings, vifReads, parallel);
 }
