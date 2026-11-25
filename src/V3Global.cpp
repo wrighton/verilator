@@ -19,6 +19,7 @@
 #include "V3Global.h"
 
 #include "V3ConstPool.h"
+#include "V3Control.h"
 #include "V3EmitV.h"
 #include "V3Error.h"
 #include "V3File.h"
@@ -145,6 +146,8 @@ void V3Global::readFiles() {
                              "Cannot open file containing hierarchical parameter declarations: ");
         }
     }
+
+    V3Control::addStats();
 
     // v3Global.rootp()->dumpTreeFile(v3Global.debugFilename("parse.tree"));
     V3Error::abortIfErrors();
