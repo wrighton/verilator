@@ -48,7 +48,9 @@ class VSymEnt final {
     // Most entries (variables, imported symbols) never get children, so only allocate on insert
     struct Names final {
         IdNameMap m_idName;  // Hash of variables by name
-        std::unordered_set<std::string> m_idNameSimilar;  // Variables by name with same case
+        // Case-folded hashes (see similarHash) of the names of checkSimilarname entries, to
+        // quickly rule out names with no similar entry
+        std::unordered_set<uint64_t> m_idNameSimilar;
     };
     std::unique_ptr<Names> m_namesp;
     // Packages imported with 'import pkg::*', in import order. Per IEEE 1800-2023 26.3 their
@@ -163,39 +165,40 @@ public:
     bool imported() const { return m_imported; }
     void imported(bool flag) { m_imported = flag; }
     VSymEnt* insert(const string& name, VSymEnt* entp) {
-        UINFO(9, "     SymInsert se" << cvtToHex(this) << " '" << name << "' se" << cvtToHex(entp)
-                                     << "  " << entp->nodep());
-        const IdNameMap& nameMapr = idNameMap();
-        if (name != "" && nameMapr.find(name) != nameMapr.end()) {
+        IdNameMap& nameMap = namesWritable().m_idName;
+        if (name.empty()) return insertAt(nameMap.end(), name, entp);
+        const auto it = nameMap.lower_bound(name);
+        if (it != nameMap.end() && it->first == name) {
+            UINFO(9, "     SymInsert se" << cvtToHex(this) << " '" << name << "' se"
+                                         << cvtToHex(entp) << "  " << entp->nodep());
             // If didn't already report warning
             if (!V3Error::errorCount()) {  // LCOV_EXCL_START
                 if (debug() >= 9 || V3Error::debugDefault())
                     dumpSelf(std::cout, "- err-dump: ", 1);
                 entp->nodep()->v3fatalSrc("Inserting two symbols with same name: " << name);
             }  // LCOV_EXCL_STOP
-        } else {
-            namesWritable().m_idName.emplace(name, entp);
+            if (name.find("__DOT__") == std::string::npos && checkSimilarname(entp->nodep())) {
+                m_namesp->m_idNameSimilar.insert(similarHash(name));
+            }
+            return entp;
         }
-        if (!name.empty() && name.find("__DOT__") == std::string::npos  // ignore hierarchical
-            && checkSimilarname(entp->nodep())) {
-            string lc = name;
-            for (auto& c : lc) c = (char)tolower(c);
-            namesWritable().m_idNameSimilar.insert(lc);
-        }
-
-        return entp;
+        return insertAt(it, name, entp);
     }
     VSymEnt* reinsert(const string& name, VSymEnt* entp) {  // Returns entry replaced, if any
         IdNameMap& nameMap = namesWritable().m_idName;
-        const auto it = nameMap.find(name);
-        if (name != "" && it != nameMap.end()) {
+        if (name.empty()) {
+            insertAt(nameMap.end(), name, entp);
+            return nullptr;
+        }
+        const auto it = nameMap.lower_bound(name);
+        if (it != nameMap.end() && it->first == name) {
             UINFO(9, "     SymReinsert se" << cvtToHex(this) << " '" << name << "' se"
                                            << cvtToHex(entp) << "  " << entp->nodep());
             VSymEnt* const replacedp = it->second;
             it->second = entp;  // Replace
             return replacedp;
         }
-        insert(name, entp);
+        insertAt(it, name, entp);
         return nullptr;
     }
     VSymEnt* findIdFlat(const string& name) {
@@ -246,9 +249,9 @@ public:
         // caring about case, but that are not the same name
         if (name.find("__DOT__") != std::string::npos)  // ignore hierarchical equivalents
             return nullptr;
+        if (!m_namesp || !m_namesp->m_idNameSimilar.count(similarHash(name))) return nullptr;
         string s = name;
         for (auto& c : s) c = (char)tolower(c);
-        if (!m_namesp || !m_namesp->m_idNameSimilar.count(s)) return nullptr;
         for (const auto& itr : idNameMap()) {
             // Only report a declaration that is itself checked, otherwise we
             // might point at e.g. a localparam that merely sorts first
@@ -292,6 +295,32 @@ public:
     }
 
 private:
+    // Insert name, not yet in the map unless empty, at the map position hint (emplace_hint)
+    VSymEnt* insertAt(IdNameMap::iterator hint, const string& name, VSymEnt* entp) {
+        UINFO(9, "     SymInsert se" << cvtToHex(this) << " '" << name << "' se" << cvtToHex(entp)
+                                     << "  " << entp->nodep());
+        Names& names = namesWritable();
+        if (name.empty()) {
+            // Several entries may have no name, each inserted after those already in the map
+            names.m_idName.emplace(name, entp);
+            return entp;
+        }
+        names.m_idName.emplace_hint(hint, name, entp);
+        if (name.find("__DOT__") == std::string::npos  // ignore hierarchical
+            && checkSimilarname(entp->nodep())) {
+            names.m_idNameSimilar.insert(similarHash(name));
+        }
+        return entp;
+    }
+    // Hash of name ignoring case, equal for names that only differ in case
+    static uint64_t similarHash(const string& name) {
+        uint64_t hash = 14695981039346656037ULL;  // FNV-1a
+        for (const char c : name) {
+            hash ^= static_cast<unsigned char>(tolower(c));
+            hash *= 1099511628211ULL;
+        }
+        return hash;
+    }
     static void candidateId(VSpellCheck* spellerp, const VNodeMatcher* matcherp, bool includeType,
                             const AstNode* itemp) {
         if (itemp && (!matcherp || matcherp->nodeMatch(itemp))) {
