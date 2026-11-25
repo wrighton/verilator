@@ -29,9 +29,54 @@ class withoutConstraint;
   rand enum_t f;
 endclass
 
+package format_constraint;
+  class formatTarget;
+    rand int unsigned sample;
+    constraint sample_range {sample inside {[0:127]};}
+  endclass
+
+  typedef enum bit [6:0] {IDLE = 7'd1, BUSY = 7'd65} state_t;
+
+  function automatic state_t choose_state(input bit selector);
+    return selector ? BUSY : IDLE;
+  endfunction
+
+  function automatic void exercise(formatTarget target);
+    bit selector;
+    string expected;
+    int result;
+    for (int iteration = 0; iteration < 8; ++iteration) begin
+      selector = iteration[0];
+      expected = selector ? "BUSY" : "IDLE";
+      result = target.randomize() with {
+        sample == (selector ? 32'd65 : 32'd1);
+        $sformatf("%p", choose_state(selector)) == expected;
+      };
+      `checkd(result, 1);
+      `checkd(target.sample, selector ? 32'd65 : 32'd1);
+
+      // The enum predicate must reject an otherwise satisfiable randomization.
+      expected = selector ? "IDLE" : "BUSY";
+      target.sample = 32'd97;
+      result = target.randomize() with {
+        sample == (selector ? 32'd65 : 32'd1);
+        $sformatf("%p", choose_state(selector)) == expected;
+      };
+      `checkd(result, 0);
+      `checkd(target.sample, 32'd97);
+    end
+  endfunction
+endpackage
+
 module t;
   withConstraint wc;
   withoutConstraint woc;
+
+  typedef enum bit [6:0] {IDLE = 7'd1, BUSY = 7'd65} state_t;
+
+  function automatic state_t choose_state(input bit selector);
+    return selector ? BUSY : IDLE;
+  endfunction
 
   initial begin
     int rand_result;
@@ -63,6 +108,41 @@ module t;
       `checkd(rand_result, 1);
       `checkinrange(int'(woc.e), int'(TWO), int'(FIVE));
       `checkinrange(int'(woc.f), int'(TWO), int'(FIVE));
+    end
+
+    begin
+      bit selector;
+      state_t wanted;
+      int unsigned sample;
+      int result;
+      for (int iteration = 0; iteration < 8; ++iteration) begin
+        selector = iteration[0];
+        wanted = choose_state(selector);
+        result = std::randomize(sample) with {
+          sample == (selector ? 32'd65 : 32'd1);
+          choose_state(selector).name() == wanted.name();
+          // Formatting a nonconstant enum expression creates an owned temporary.
+          $sformatf("%p", choose_state(selector)) == wanted.name();
+        };
+        `checkd(result, 1);
+        `checkd(sample, selector ? 32'd65 : 32'd1);
+        `checkd(wanted, selector ? BUSY : IDLE);
+
+        wanted = selector ? IDLE : BUSY;
+        sample = 32'd97;
+        result = std::randomize(sample) with {
+          sample == (selector ? 32'd65 : 32'd1);
+          $sformatf("%p", choose_state(selector)) == wanted.name();
+        };
+        `checkd(result, 0);
+        `checkd(sample, 32'd97);
+      end
+    end
+
+    begin
+      format_constraint::formatTarget target;
+      target = new;
+      format_constraint::exercise(target);
     end
 
     $write("*-* all finished *-*\n");
