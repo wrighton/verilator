@@ -3,4 +3,8 @@
    26 |   assign dummy_in.signal = signal_i;
       |                   ^~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_lint_modport_dir_bad.v:31:25: Attempt to drive input-only modport: 'signal'
+                                        : ... note: In instance 't.sub'
+   31 |     output w = dummy_in.signal;
+      |                         ^~~~~~
 %Error: Exiting due to

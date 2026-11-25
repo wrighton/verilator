@@ -25,6 +25,11 @@ module sub
 
   assign dummy_in.signal = signal_i;
   assign signal_o = dummy_out.signal;
+
+  // A clocking block output whose target is an input-only modport member
+  clocking cb @(posedge signal_i);
+    output w = dummy_in.signal;
+  endclocking
 endmodule
 
 

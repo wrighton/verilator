@@ -155,6 +155,15 @@ class LinkLValueVisitor final : public VNVisitor {
             }
         }
     }
+    void visit(AstClockingItem* nodep) override {
+        VL_RESTORER(m_setRefLvalue);
+        iterateAndNextNull(nodep->skewp());
+        // The target of a clocking output is written by the clocking block's drives
+        m_setRefLvalue = nodep->direction().pinAccess();
+        iterateAndNextNull(nodep->exprp());
+        m_setRefLvalue = VAccess::NOCHANGE;
+        iterateAndNextNull(nodep->varp());
+    }
     void visit(AstAlias* nodep) override {
         VL_RESTORER(m_setRefLvalue);
         m_setRefLvalue = VAccess::READWRITE;
