@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_savable_hier_unsup.v:13:8: Unsupported: --savable with hierarchical block 'sub'
+                                                 : ... note: In instance 't.u_sub'
+   13 | module sub (
+      |        ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
