@@ -67,6 +67,22 @@ class DfgRegularize final {
         return true;
     }
 
+    // Whether 'vtx' is a branch of a condition, or a part or extension of it is, as unsafe()
+    // follows them. Each of those has 'vtx' as its only non-constant operand, so this visits a
+    // tree of vertices.
+    static bool usedInBranch(const DfgVertex& vtx) {
+        return vtx.foreachSink([&](const DfgVertex& sink) {
+            if (const DfgCond* const condp = sink.cast<DfgCond>()) return condp->condp() != &vtx;
+            if (sink.is<DfgSel>()) return usedInBranch(sink);
+            if (const DfgConcat* const concatp = sink.cast<DfgConcat>()) {
+                if (concatp->lhsp()->is<DfgConst>() || concatp->rhsp()->is<DfgConst>()) {
+                    return usedInBranch(sink);
+                }
+            }
+            return false;
+        });
+    }
+
     // Predicate to determine if a temporary should be inserted or if a variable
     // should be preserved. The given vertices are either the same, or aVtxp is
     // the sole driver of bVtx, or aVtxp is cheaper to recompute and might have
@@ -81,6 +97,9 @@ class DfgRegularize final {
         if (aVtx.is<DfgPrev>()) return false;
 
         if (bVtx.hasMultipleSinks()) {
+            // A temporary is computed unconditionally, so recompute a vertex unsafe to evaluate,
+            // as a select at a position out of range, used in a branch of a condition
+            if (aVtx.unsafe() && usedInBranch(aVtx)) return false;
             // Add a temporary if it's cheaper to store and load from memory than recompute
             if (!aVtx.isCheaperThanLoad()) return true;
 
