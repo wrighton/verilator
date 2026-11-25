@@ -17,7 +17,7 @@ test.compile(verilator_flags2=["--binary", "--stats", "+define+T_GATE_VIRTUAL"])
 
 test.execute()
 
-test.file_grep(test.stats, r'Timing, mailbox waits polled\s+(\d+)', 3)
+test.file_grep(test.stats, r'Timing, std waits polled\s+(\d+)', 4)
 test.file_grep(test.stats, r'Timing, event controls on wait queues\s+(\d+)', 0)
 
 test.passes()

@@ -4,8 +4,8 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
-// The waiting queues of a mailbox are internal to it, whatever the warning settings, as only its
-// methods keep its waiting processes informed
+// The waiting queues of a mailbox or a semaphore are internal to it, whatever the warning
+// settings, as only its methods keep its waiting processes informed
 // verilator lint_off ENCAPSULATED
 class Mine extends mailbox #(int);
   type(m_getQueue) copy;
@@ -39,6 +39,7 @@ module t;
   string name;
   int dims;
   chandle c;
+  semaphore sem = new;
   initial begin
     m.wait_turn();
     m.wake();
@@ -58,6 +59,7 @@ module t;
     @(posedge b.m_getQueue);
     dims = $bits(b.m_getQueue);
     b.m_getQueue.foo();
+    listed = sem.m_waitQueue.__Vlisted();
   end
 endmodule
 // verilator lint_on ENCAPSULATED
