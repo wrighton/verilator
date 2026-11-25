@@ -1,0 +1,186 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// verilog_format: off
+`define stop $stop
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
+interface drv_if (
+    input logic clk,
+    input logic v
+);
+  // A port not coerced, as connected to a hierarchical reference
+  // verilator lint_off ASSIGNIN
+  clocking cb @(posedge clk);
+    output v;
+  endclocking
+  // verilator lint_on ASSIGNIN
+endinterface
+
+module dut (
+    input logic clk,
+    input logic v,
+    output logic seen
+);
+  always_ff @(posedge clk) seen <= v;
+endmodule
+
+module mid (
+    input logic clk,
+    input logic v,
+    output logic seen
+);
+  dut u_d (.*);
+endmodule
+
+// Drives the input of the instance it is bound into, through a clocking block
+module drv;
+  drv_if d (
+      .clk(dut.clk),
+      .v(dut.v)
+  );
+  initial begin
+    @(posedge dut.clk);
+    d.cb.v <= 1'b1;
+  end
+endmodule
+
+bind dut drv u_drv ();
+
+// Bound drivers of separate bits of one net, through chains of different depth
+module bdut (
+    input logic clk,
+    input logic p,
+    output logic seen
+);
+  always_ff @(posedge clk) seen <= p;
+endmodule
+
+module bdrv;
+  drv_if d (
+      .clk(bdut.clk),
+      .v(bdut.p)
+  );
+  initial begin
+    @(posedge bdut.clk);
+    d.cb.v <= 1'b1;
+  end
+endmodule
+
+bind bdut bdrv u_bdrv ();
+
+module brelay (
+    input logic clk,
+    input logic p,
+    output logic seen
+);
+  bdut u_hi (.*);
+endmodule
+
+module bmid (
+    input logic clk,
+    input logic [1:0] p,
+    output logic [1:0] seen
+);
+  bdut u_lo (
+      .clk,
+      .p(p[0]),
+      .seen(seen[0])
+  );
+  brelay u_r (
+      .clk,
+      .p(p[1]),
+      .seen(seen[1])
+  );
+endmodule
+
+// Bound drivers of the same bits of one net, at the same and at different depths, whose
+// drive is unsupported; only that they build is checked
+module sdut (
+    input logic clk,
+    input logic v,
+    output logic seen
+);
+  always_ff @(posedge clk) seen <= v;
+endmodule
+
+module sdrv;
+  drv_if d (
+      .clk(sdut.clk),
+      .v(sdut.v)
+  );
+  initial begin
+    @(posedge sdut.clk);
+    d.cb.v <= 1'b1;
+  end
+endmodule
+
+bind sdut sdrv u_sdrv ();
+
+module smid (
+    input logic clk,
+    input logic v,
+    output logic seen
+);
+  sdut u_d (.*);
+endmodule
+
+module t;
+  localparam realtime HALF = 5ns;
+  logic clk = 1'b0;
+  // Otherwise undriven nets the bound drivers drive, through the ports connected to them
+  wire v;
+  wire mv;
+  logic seen;
+  logic mseen;
+  wire [1:0] bv;
+  logic [1:0] bseen;
+  bmid u_b (
+      .clk,
+      .p(bv),
+      .seen(bseen)
+  );
+  dut u (.*);
+  wire sw;
+  logic [3:0] sseen;
+  sdut u_s1 (
+      .clk,
+      .v(sw),
+      .seen(sseen[0])
+  );
+  sdut u_s2 (
+      .clk,
+      .v(sw),
+      .seen(sseen[1])
+  );
+  smid u_sm1 (
+      .clk,
+      .v(sw),
+      .seen(sseen[2])
+  );
+  smid u_sm2 (
+      .clk,
+      .v(sw),
+      .seen(sseen[3])
+  );
+  mid u_m (
+      .clk,
+      .v(mv),
+      .seen(mseen)
+  );
+  initial begin
+    repeat (8) #HALF clk = ~clk;
+    `checkh(seen, 1'b1);
+    `checkh(v, 1'b1);
+    `checkh(mseen, 1'b1);
+    `checkh(mv, 1'b1);
+    `checkh(bseen, 2'b11);
+    `checkh(bv, 2'b11);
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule
