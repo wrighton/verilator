@@ -445,13 +445,18 @@ class ProtectVisitor final : public VNVisitor {
             m_comboAssignsp = new AstTextBlock{fl};
             txtp->add(m_comboAssignsp);
             txtp->add("end\n");
-            m_selectp = new AstTextBlock{fl};
-            txtp->add(m_selectp);
         } else {
             m_comboAssignsp = new AstTextBlock{fl};
             txtp->add(m_comboAssignsp);
         }
         txtp->add("end\n\n");
+        if (m_hasSeqUpdate) {
+            // Apart, as these read what the clock update writes with blocking assignments, so
+            // where another output is a clock, they do not bring the clock update into the
+            // active region
+            m_selectp = new AstTextBlock{fl, "always_comb begin\n", "", "end\n\n"};
+            txtp->add(m_selectp);
+        }
         if (m_hasSeqUpdate) {
             // Apart, so where such an output is a clock the clock update writes it by NBAs alone
             // and stays in the NBA region
@@ -931,8 +936,11 @@ class ProtectVisitor final : public VNVisitor {
         // library settled before the first clock update, its initial value, so the parent has it
         // at time zero like the combinational results
         // A function of the inputs alone is current after either update, so it comes from the
-        // latest one at once, and from the clock update alone if a function of the clocks alone
-        const bool inputsOnly = m_hasSeqUpdate && varp->isPrimaryCombOut();
+        // latest one at once, and from the clock update alone if a function of the clocks alone.
+        // One of the data inputs alone, which the combinational update has, needs that only after
+        // a write through the VPI, and comes like the others.
+        const bool inputsOnly
+            = m_hasSeqUpdate && varp->isPrimaryCombOut() && !varp->isPrimaryDataOut();
         std::string seqAssign = portName + " = " + seqName + ";\n";
         if (inputsOnly) {
             seqAssign = portName + " = " + tmpName + ";\n";
