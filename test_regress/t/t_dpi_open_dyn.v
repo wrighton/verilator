@@ -82,8 +82,11 @@ module t;
   // Sums the elements, read through svGetArrayPtr
   import "DPI-C" function real dpii_sum_real(input real i[]);
 
-  // Doubles each element, through svGetArrayPtr
+  // Doubles each element, through svGetArrElemPtr1
   import "DPI-C" function void dpii_double(inout real io[]);
+
+  // Doubles each element, through svGetArrElemPtr2
+  import "DPI-C" function void dpii_double2(inout real io[][]);
 
   initial begin
     bit [63:0] crc;
@@ -327,6 +330,18 @@ module t;
       dpii_double(q);
       `checkd(q.size(), 3);
       foreach (q[i]) `checkr(q[i], expq[i] * 2);
+    end
+
+    begin
+      real f[3:1];
+      real f2[2][0:2];
+      foreach (f[i]) f[i] = real'(i) + 0.5;
+      foreach (f2[i, j]) f2[i][j] = real'(i * 10 + j);
+      `checkr(dpii_sum_real(f), 7.5);
+      dpii_double(f);
+      foreach (f[i]) `checkr(f[i], 2 * (real'(i) + 0.5));
+      dpii_double2(f2);
+      foreach (f2[i, j]) `checkr(f2[i][j], real'(2 * (i * 10 + j)));
     end
 
     `checkd(dpii_failure(), 0);
