@@ -2290,24 +2290,27 @@ inline void VL_STREAML_RWI(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q
     }
 }
 
-inline IData VL_PACK_I_RI(int /*obits*/, int lbits, const VlQueue<CData>& q) {
-    IData ret = 0;
-    for (size_t i = 0; i < q.size(); ++i)
-        ret |= static_cast<IData>(q.at(q.size() - 1 - i)) << (i * lbits);
+// Pack the elements of a queue left-justified, zero-filled on the right (IEEE 1800-2023 11.4.14)
+template <typename T_Ret, typename T_Elem>
+inline T_Ret _vl_pack_r(int obits, int lbits, const VlQueue<T_Elem>& q) VL_PURE {
+    // A larger queue, which is illegal, keeps the rightmost bits that fit
+    const int offset = std::max(0, obits - q.size() * lbits);
+    T_Ret ret = 0;
+    for (size_t i = 0; i < q.size() && i * lbits < sizeof(T_Ret) * VL_BYTESIZE; ++i)
+        ret |= static_cast<T_Ret>(q.at(q.size() - 1 - i)) << (i * lbits + offset);
     return ret;
 }
 
-inline IData VL_PACK_I_RI(int /*obits*/, int lbits, const VlQueue<SData>& q) {
-    IData ret = 0;
-    for (size_t i = 0; i < q.size(); ++i)
-        ret |= static_cast<IData>(q.at(q.size() - 1 - i)) << (i * lbits);
-    return ret;
+inline IData VL_PACK_I_RI(int obits, int lbits, const VlQueue<CData>& q) {
+    return _vl_pack_r<IData>(obits, lbits, q);
 }
 
-inline IData VL_PACK_I_RI(int /*obits*/, int lbits, const VlQueue<IData>& q) {
-    IData ret = 0;
-    for (size_t i = 0; i < q.size(); ++i) ret |= q.at(q.size() - 1 - i) << (i * lbits);
-    return ret;
+inline IData VL_PACK_I_RI(int obits, int lbits, const VlQueue<SData>& q) {
+    return _vl_pack_r<IData>(obits, lbits, q);
+}
+
+inline IData VL_PACK_I_RI(int obits, int lbits, const VlQueue<IData>& q) {
+    return _vl_pack_r<IData>(obits, lbits, q);
 }
 
 template <typename T>
@@ -2355,25 +2358,16 @@ inline IData VL_PACK_I_UI(const int obits, const int lbits,
     return ret;
 }
 
-inline QData VL_PACK_Q_RI(int /*obits*/, int lbits, const VlQueue<CData>& q) {
-    QData ret = 0;
-    for (size_t i = 0; i < q.size(); ++i)
-        ret |= static_cast<QData>(q.at(q.size() - 1 - i)) << (i * lbits);
-    return ret;
+inline QData VL_PACK_Q_RI(int obits, int lbits, const VlQueue<CData>& q) {
+    return _vl_pack_r<QData>(obits, lbits, q);
 }
 
-inline QData VL_PACK_Q_RI(int /*obits*/, int lbits, const VlQueue<SData>& q) {
-    QData ret = 0;
-    for (size_t i = 0; i < q.size(); ++i)
-        ret |= static_cast<QData>(q.at(q.size() - 1 - i)) << (i * lbits);
-    return ret;
+inline QData VL_PACK_Q_RI(int obits, int lbits, const VlQueue<SData>& q) {
+    return _vl_pack_r<QData>(obits, lbits, q);
 }
 
-inline QData VL_PACK_Q_RI(int /*obits*/, int lbits, const VlQueue<IData>& q) {
-    QData ret = 0;
-    for (size_t i = 0; i < q.size(); ++i)
-        ret |= static_cast<QData>(q.at(q.size() - 1 - i)) << (i * lbits);
-    return ret;
+inline QData VL_PACK_Q_RI(int obits, int lbits, const VlQueue<IData>& q) {
+    return _vl_pack_r<QData>(obits, lbits, q);
 }
 
 template <std::size_t N_Depth>
@@ -2400,16 +2394,12 @@ inline QData VL_PACK_Q_UI(int /*obits*/, int lbits, const VlUnpacked<IData, N_De
     return ret;
 }
 
-inline QData VL_PACK_Q_RQ(int /*obits*/, int lbits, const VlQueue<QData>& q) {
-    QData ret = 0;
-    for (size_t i = 0; i < q.size(); ++i) ret |= q.at(q.size() - 1 - i) << (i * lbits);
-    return ret;
+inline QData VL_PACK_Q_RQ(int obits, int lbits, const VlQueue<QData>& q) {
+    return _vl_pack_r<QData>(obits, lbits, q);
 }
 
-inline IData VL_PACK_I_RQ(int /*obits*/, int lbits, const VlQueue<QData>& q) {
-    IData ret = 0;
-    for (size_t i = 0; i < q.size(); ++i) ret |= q.at(q.size() - 1 - i) << (i * lbits);
-    return ret;
+inline IData VL_PACK_I_RQ(int obits, int lbits, const VlQueue<QData>& q) {
+    return _vl_pack_r<IData>(obits, lbits, q);
 }
 
 template <std::size_t N_Words>
