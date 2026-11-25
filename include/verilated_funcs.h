@@ -3757,8 +3757,13 @@ inline void VL_ASSIGNSEL_PARTIAL_WW(int rbits, int obits, QData lsb, WDataOutP i
                                     WDataInP const rwp, int wlsb, int wbits) VL_MT_SAFE {
     int low, skip, count;
     if (!_vl_assignsel_partial(wbits, obits, lsb, low, skip, count)) return;
-    // The value's bits from 'skip' up, a word at a time
-    for (int bit = 0; bit < count; bit += VL_EDATASIZE) {
+    // The value's bits from 'skip' up, a word at a time. The value may be the destination
+    // itself, as in 'a[p+:n] = a' without V3Expand; then words are written from the top when
+    // written above where they are read, so that none is read once overwritten.
+    const int words = (count + VL_EDATASIZE - 1) / VL_EDATASIZE;
+    const bool fromTop = rwp == iowp && wlsb + low > skip;
+    for (int i = 0; i < words; ++i) {
+        const int bit = (fromTop ? words - 1 - i : i) * VL_EDATASIZE;
         const int bits = std::min(VL_EDATASIZE, count - bit);
         const int pos = wlsb + low + bit;
         _vl_insert_WI(iowp, VL_SEL_IWII(obits, rwp, skip + bit, bits), pos + bits - 1, pos, rbits);
