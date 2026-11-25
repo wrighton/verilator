@@ -307,6 +307,53 @@ void orderSequentially(AstCFunc* funcp, ProcessList& procList) {
 //============================================================================
 // Create simply ordered functions
 
+// The primary input a static initializer statement assigns, if any
+static const AstVar* primaryInputAssigned(const AstNode* stmtp) {
+    const AstNodeAssign* const assignp = VN_CAST(stmtp, NodeAssign);
+    if (!assignp) return nullptr;
+    // Unpacked arrays are assigned by element
+    const AstNode* lhsp = assignp->lhsp();
+    while (const AstArraySel* const selp = VN_CAST(lhsp, ArraySel)) lhsp = selp->fromp();
+    const AstVarRef* const refp = VN_CAST(lhsp, VarRef);
+    const AstVar* const varp = refp ? refp->varp() : nullptr;
+    return varp && varp->isPrimaryIO() && varp->isNonOutput() ? varp : nullptr;
+}
+
+// Move the default values of primary inputs (see V3Inst) from the static initializers into a
+// function called when the model is constructed, so before the user writes them
+void createCtorInit(AstNetlist* netlistp, LogicClasses& logicClasses) {
+    AstCFunc* funcp = nullptr;
+    ProcessList others;
+    for (const Process& process : logicClasses.m_static) {
+        AstNodeProcedure* const procp = process.m_procp;
+        if (!VN_IS(procp, InitialStatic) || !primaryInputAssigned(procp->stmtsp())) {
+            others.add(process);
+            continue;
+        }
+        for (const AstNode* stmtp = procp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            UASSERT_OBJ(primaryInputAssigned(stmtp)
+                            && VN_AS(stmtp, NodeAssign)->rhsp()->isConstantTree(),
+                        stmtp, "Primary input default value should be a constant assignment");
+        }
+        if (!funcp) {
+            AstScope* const scopeTopp = netlistp->topScopep()->scopep();
+            funcp = new AstCFunc{netlistp->fileline(), "_ctor_primary_defaults", scopeTopp, ""};
+            funcp->isStatic(false);
+            funcp->isLoose(true);
+            funcp->slow(true);
+            funcp->isConst(false);
+            funcp->declPrivate(true);
+            // Called by the constructor, see V3CCtors
+            funcp->entryPoint(true);
+            scopeTopp->addBlocksp(funcp);
+            netlistp->ctorInitp(funcp);
+        }
+        funcp->addStmtsp(procp->stmtsp()->unlinkFrBackWithNext());
+        VL_DO_DANGLING(procp->deleteTree(), procp);
+    }
+    logicClasses.m_static = std::move(others);
+}
+
 AstCFunc* createStatic(AstNetlist* netlistp, LogicClasses& logicClasses) {
     AstCFunc* const funcp = netlistp->evalFuncp(VEval::STATIC);
 
@@ -769,6 +816,7 @@ void schedule(AstNetlist* netlistp) {
     }
 
     // Step 4: Schedule static, initial and final logic classes in source order
+    createCtorInit(netlistp, logicClasses);
     AstCFunc* const staticp = createStatic(netlistp, logicClasses);
     if (v3Global.opt.stats()) V3Stats::statsStage("sched-static");
 
