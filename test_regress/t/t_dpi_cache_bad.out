@@ -1,0 +1,8 @@
+%Error: t/t_dpi_cache_bad.v:9:47: /*verilator dpi_cache*/ is only supported on DPI import functions
+    9 |   import "DPI-C" task dpic_task(input int a)  /*verilator dpi_cache*/;
+      |                                               ^~~~~~~~~~~~~~~~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_dpi_cache_bad.v:10:38: /*verilator dpi_cache*/ is only supported on DPI import functions
+   10 |   export "DPI-C" function dpix_func  /*verilator dpi_cache*/;
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~~
+%Error: Exiting due to

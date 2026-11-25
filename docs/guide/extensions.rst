@@ -355,6 +355,21 @@ or "`ifdef`"'s may break other tools.
         end
       endmodule
 
+.. option:: /*verilator&32;dpi_cache*/
+
+   Placed after the prototype of a DPI-C import function, before its ``;``
+   (and after a :option:`/*verilator&32;dpi_c_decl*/`), specifies that a
+   call of the function whose inputs equal those of the previous call may
+   reuse that call's outputs and return value, without calling the
+   function. The previous call is kept for each instance of the scope
+   declaring the import, so calls of an import declared in ``$unit`` or a
+   package share one. Calls of such a function are never evaluated in
+   parallel. The marking is ignored with a warning on a ``context`` import or
+   one with an ``inout``, ``string`` or open array argument, and is an error
+   on a task or an export. The wrappers :vlopt:`--lib-create` generates mark
+   their combinational update with it where the library's outputs depend on
+   its inputs and clock updates alone.
+
 .. option:: /*verilator&32;fargs <arguments>*/
 
    For Verilator developers only. When a source file containing these `fargs`
