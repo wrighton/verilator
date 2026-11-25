@@ -6710,6 +6710,7 @@ class AstVarXRef final : public AstNodeVarRef {
     string m_inlinedDots;  // Dotted hierarchy flattened out
     bool m_containsGenBlock = false;  // Contains gen block reference
     bool m_readOnlyModport = false;  // Linked via an input-only modport, until V3LinkLValue
+    bool m_upward = false;  // Upwards reference, may refer to a different variable per instance
 public:
     AstVarXRef(FileLine* fl, const string& name, const string& dotted, const VAccess& access)
         : ASTGEN_SUPER_VarXRef(fl, nullptr, access)
@@ -6729,6 +6730,8 @@ public:
     void containsGenBlock(const bool flag) { m_containsGenBlock = flag; }
     bool readOnlyModport() const { return m_readOnlyModport; }
     void readOnlyModport(const bool flag) { m_readOnlyModport = flag; }
+    bool upward() const { return m_upward; }
+    void upward(const bool flag) { m_upward = flag; }
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return true; }
@@ -6736,7 +6739,8 @@ public:
     bool sameNode(const AstNode* samep) const override {
         const AstVarXRef* asamep = VN_DBG_AS(samep, VarXRef);
         return (selfPointer() == asamep->selfPointer() && varp() == asamep->varp()
-                && name() == asamep->name() && dotted() == asamep->dotted());
+                && name() == asamep->name() && dotted() == asamep->dotted()
+                && upward() == asamep->upward());
     }
 };
 

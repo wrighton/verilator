@@ -3499,7 +3499,11 @@ class ConstVisitor final : public VNVisitor {
                     }
                 }
             }
-            if (nodep->access().isReadOnly() && valuep
+            // An upwards reference may refer to a different variable in each instance of its
+            // module, so only fold it once V3LinkDot resolved it per scope. Parameter values
+            // are still folded, but cannot use hierarchical references (IEEE 1800-2023 11.2.1).
+            const AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef);
+            if (nodep->access().isReadOnly() && valuep && (m_params || !xrefp || !xrefp->upward())
                 && ((!m_params  // Can reduce constant wires into equations
                      && m_doNConst && v3Global.opt.fConst() && nodep->varp()->isConst())
                     || nodep->varp()->isParam())) {
