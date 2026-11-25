@@ -269,17 +269,17 @@ class RandSequenceVisitor final : public VNVisitor {
         AstJumpBlock* const whilep = new AstJumpBlock{fl, nullptr};
         newp = AstNode::addNext(newp, new AstLoop{fl, whilep});
         {
-            // "if ((std::rand() & 0xffffUL) > (0xffff * weight)) _Vjoin_repick = true;"
-            whilep->addStmtsp(new AstIf{
-                fl,
-                new AstGt{
-                    fl, new AstRand{fl, AstRand::SRandomU32{}},
-                    new AstRToIS{fl, new AstMulD{fl,
+            // "if (double(rand32()) > 4294967295.0 * weight) _Vjoin_repick = true;"
+            // Compared as reals, as 0xffffffff * weight need not fit in a signed int
+            whilep->addStmtsp(
+                new AstIf{fl,
+                          new AstGtD{fl, new AstIToRD{fl, new AstRand{fl, AstRand::SRandomU32{}}},
+                                     new AstMulD{fl,
                                                  new AstConst{fl, AstConst::RealDouble{},
                                                               static_cast<double>(0xffffffffUL)},
-                                                 weightp}}},
-                new AstAssign{fl, new AstVarRef{fl, repickVarp, VAccess::WRITE},
-                              new AstConst{fl, AstConst::BitTrue{}}}});
+                                                 weightp}},
+                          new AstAssign{fl, new AstVarRef{fl, repickVarp, VAccess::WRITE},
+                                        new AstConst{fl, AstConst::BitTrue{}}}});
 
             // "if (_Vjoin_repick) {"
             AstIf* ifp = new AstIf{fl, new AstVarRef{fl, repickVarp, VAccess::READ}};

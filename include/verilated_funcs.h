@@ -434,8 +434,6 @@ inline double VL_ISTOR_D_Q(int lbits, QData lhs) VL_MT_SAFE {
     VL_SET_WQ(lwp, lhs);
     return VL_ISTOR_D_W(lbits, lwp);
 }
-// Return IData truncated from double (numeric)
-inline IData VL_RTOI_I_D(double lhs) VL_PURE { return static_cast<int32_t>(VL_TRUNC(lhs)); }
 
 // Sign extend such that if MSB set, we get ffff_ffff, else 0s
 // (Requires clean input)
@@ -3428,7 +3426,7 @@ inline void VL_UNPACK_UW_W(int lbits, int rbits, VlUnpacked<VlWide<N_Words>, N_D
         VL_SEL_WWII(lbits, rbits, q[i], rwp, bit_offset + (N_Depth - 1 - i) * lbits, lbits);
 }
 
-// Return QData from double (numeric)
+// Return QData from double rounded, keeping the low 64 bits; zero if not finite
 // EMIT_RULE: VL_RTOIROUND_Q_D:  oclean=dirty; lclean==clean/real
 inline QData VL_RTOIROUND_Q_D(double lhs) VL_PURE {
     // IEEE format: [63]=sign [62:52]=exp+1023 [51:0]=mantissa
@@ -3449,6 +3447,10 @@ inline QData VL_RTOIROUND_Q_D(double lhs) VL_PURE {
 }
 inline IData VL_RTOIROUND_I_D(double lhs) VL_PURE {
     return static_cast<IData>(VL_RTOIROUND_Q_D(lhs));
+}
+// Return IData truncated from double, as VL_RTOIROUND_I_D but truncating
+inline IData VL_RTOI_I_D(double lhs) VL_PURE {
+    return static_cast<IData>(VL_RTOIROUND_Q_D(VL_TRUNC(lhs)));
 }
 inline WDataOutP VL_RTOIROUND_W_D(int obits, WDataOutP owp, double lhs) VL_MT_SAFE {
     // IEEE format: [63]=sign [62:52]=exp+1023 [51:0]=mantissa
