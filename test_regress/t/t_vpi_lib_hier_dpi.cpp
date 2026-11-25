@@ -25,6 +25,7 @@
 // As called by the initial process of the library wrapper in another simulator
 extern "C" void* sub_protectlib_create(const char* scopep__V);
 extern "C" long long sub_protectlib_combo_update(void* vhandlep__V);
+extern "C" void sub_protectlib_delete(void* vhandlep__V);
 
 static int checkRoot() {
     // The library model created through its wrapper is at the top level
@@ -54,6 +55,10 @@ int main(int argc, char** argv) {
     sub_protectlib_combo_update(libp);
     topp->eval();
     if (checkRoot()) return 1;
+#ifdef T_DELETE
+    // Deleted by its creator, then not again with the context
+    sub_protectlib_delete(libp);
+#endif
     topp->final();
     printf("*-* All Finished *-*\n");
     return 0;
