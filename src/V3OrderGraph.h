@@ -49,6 +49,8 @@
 //                      completely and assign to the _q directly. This means these delayed
 //                      assignments can be implemented without temporary storage (the redundant
 //                      storage is eliminated in V3LifePost).
+// OrderVarBarrierVertex: Stands for the PRE and POST vertices of an interface member, in every
+//                      instance, read through a virtual interface by sequential logic.
 //
 // Ordering constraints are represented by directed edges, where the source of an edge needs to be
 // ordered before the sink of an edge. A constraint can be either hard (must be satisfied),
@@ -317,6 +319,27 @@ public:
     // LCOV_EXCL_START // Debug code
     string nameSuffix() const override VL_MT_SAFE { return "PORD"; }
     string dotColor() const override { return "blue"; }
+    // LCOV_EXCL_STOP
+};
+
+// Stands for a member read through a virtual interface, in every interface instance. Clocked
+// logic doing such a read, directly or in a function it calls, points to this vertex, which
+// points to the logic the PRE and POST vertices of the member point to. This orders the read like
+// a direct read of the member in each instance, with edges linear in the readers and instances.
+class OrderVarBarrierVertex final : public OrderVarVertex {
+    VL_RTTI_IMPL(OrderVarBarrierVertex, OrderVarVertex)
+public:
+    // CONSTRUCTOR
+    OrderVarBarrierVertex(OrderGraph* graphp, AstVarScope* vscp) VL_MT_DISABLED
+        : OrderVarVertex{graphp, vscp} {}
+    ~OrderVarBarrierVertex() override = default;
+
+    // METHODS
+    bool domainMatters() override { return false; }
+
+    // LCOV_EXCL_START // Debug code
+    string nameSuffix() const override VL_MT_SAFE { return "BARRIER"; }
+    string dotColor() const override { return "orange"; }
     // LCOV_EXCL_STOP
 };
 
