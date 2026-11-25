@@ -625,6 +625,7 @@ class TaskVisitor final : public VNVisitor {
     TaskStateVisitor* const m_statep;  // Common state between visitors
     AstNodeModule* m_modp = nullptr;  // Current module
     AstCFunc* m_cfuncp = nullptr;  // Current function made from a task or function
+    AstForkItem* m_forkItemp = nullptr;  // Current fork item, whose processes make the calls
     AstTopScope* const m_topScopep = v3Global.rootp()->topScopep();  // The AstTopScope
     AstScope* m_scopep = nullptr;  // Current scope
     AstNode* m_insStmtp = nullptr;  // Where to insert statement
@@ -636,6 +637,7 @@ class TaskVisitor final : public VNVisitor {
     V3SharedTmps m_forceTmps{"__Vforcefuncout", VVarType::VAR};  // For calls in force statements
     int m_unconVarNum = 0;  // Unique bad connection variable
     size_t m_autoVarNum = 0;  // Unique automatic variable local to m_cfuncp
+    size_t m_forkVarNum = 0;  // Unique variable of a fork item in m_modp
     std::map<const AstIface*, VifDispatcher> m_vifDispatchers;  // Dispatchers of each interface
 
     // STATE - across all visitors
@@ -647,17 +649,23 @@ class TaskVisitor final : public VNVisitor {
     std::unordered_set<const AstVar*> m_inlineLocalps;
     VDouble0 m_statAutoLocals;  // Statistic tracking
     VDouble0 m_statResetsMoved;  // Statistic tracking
+    VDouble0 m_statForkItemVars;  // Statistic tracking
     VDouble0 m_statGetters;  // Statistic tracking
     VDouble0 m_statHierDpisWithCosts;  // Statistic tracking
 
     // METHODS
 
-    AstVarScope* createFuncVar(AstCFunc* funcp, const string& name, AstNodeDType* dtypep) {
-        AstVar* const newvarp = new AstVar{funcp->fileline(), VVarType::BLOCKTEMP, name, dtypep};
+    // Create a variable local to a function or fork item, for the caller to declare there
+    AstVarScope* createLocalVarScope(FileLine* flp, const string& name, AstNodeDType* dtypep) {
+        AstVar* const newvarp = new AstVar{flp, VVarType::BLOCKTEMP, name, dtypep};
         newvarp->funcLocal(true);
-        funcp->addVarsp(newvarp);
-        AstVarScope* const newvscp = new AstVarScope{funcp->fileline(), m_scopep, newvarp};
+        AstVarScope* const newvscp = new AstVarScope{flp, m_scopep, newvarp};
         m_scopep->addVarsp(newvscp);
+        return newvscp;
+    }
+    AstVarScope* createFuncVar(AstCFunc* funcp, const string& name, AstNodeDType* dtypep) {
+        AstVarScope* const newvscp = createLocalVarScope(funcp->fileline(), name, dtypep);
+        funcp->addVarsp(newvscp->varp());
         return newvscp;
     }
     AstVarScope* createFuncVar(AstCFunc* funcp, const string& name, AstVar* examplep) {
@@ -678,7 +686,15 @@ class TaskVisitor final : public VNVisitor {
                                 const std::string& suffix) {
         const std::string name = refp->taskp()->shortName() + suffix;
         AstVarScope* newvscp = nullptr;
-        if (m_cfuncp) {
+        if (m_forkItemp) {
+            // Each process the fork item starts, such as in a loop, has its own automatic
+            // variables (IEEE 1800-2023 9.3.2), so make them variables of the fork item
+            newvscp = createLocalVarScope(
+                invarp->fileline(), "__Vforkitem_" + name + "_" + std::to_string(m_forkVarNum++),
+                invarp->dtypep());
+            m_forkItemp->addDeclsp(newvscp->varp());
+            ++m_statForkItemVars;
+        } else if (m_cfuncp) {
             // Each call has its own automatic variables (IEEE 1800-2023 6.21), and the variables
             // left in a task are automatic, as V3Begin moved the static ones out of it. So in a
             // function make them locals. A module or class variable would be shared by calls
@@ -2316,7 +2332,9 @@ class TaskVisitor final : public VNVisitor {
     // VISITORS
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_modp);
+        VL_RESTORER(m_forkVarNum);
         m_modp = nodep;
+        m_forkVarNum = 0;
         iterateChildren(nodep);
         UASSERT_OBJ(!m_insStmtp, nodep, "Didn't finish out last statement");
     }
@@ -2637,6 +2655,11 @@ class TaskVisitor final : public VNVisitor {
         nodep->v3fatalSrc(
             "Foreach statements should have been converted to while statements in V3Begin.cpp");
     }
+    void visit(AstForkItem* nodep) override {
+        VL_RESTORER(m_forkItemp);
+        m_forkItemp = nodep;
+        iterateChildren(nodep);
+    }
     void visit(AstNodeStmt* nodep) override {
         VL_RESTORER(m_insStmtp);
         m_insStmtp = nodep;
@@ -2668,6 +2691,7 @@ public:
         V3Stats::addStat("Tasks, Automatic variables local to functions", m_statAutoLocals);
         V3Stats::addStat("Tasks, Automatic variable resets moved into branches",
                          m_statResetsMoved);
+        V3Stats::addStat("Tasks, Automatic variables local to fork items", m_statForkItemVars);
         V3Stats::addStat("Optimizations, Function getters replaced with reads", m_statGetters);
         V3Stats::addStat("Optimizations, Hierarchical DPI wrappers with costs",
                          m_statHierDpisWithCosts);
