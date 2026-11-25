@@ -24,13 +24,19 @@ module t (
   wire b = crc[4];
   wire c = crc[8];
 
-  int fail_rep[1:5];
-  int fail_ref[1:5];
+  int fail_rep[1:8];
+  int fail_ref[1:8];
+  int pass_rep[6:8];
+  int pass_ref[6:8];
 
   initial begin
-    for (int i = 1; i <= 5; ++i) begin
+    for (int i = 1; i <= 8; ++i) begin
       fail_rep[i] = 0;
       fail_ref[i] = 0;
+    end
+    for (int i = 6; i <= 8; ++i) begin
+      pass_rep[i] = 0;
+      pass_ref[i] = 0;
     end
   end
 
@@ -64,13 +70,39 @@ module t (
   assert property (@(posedge clk) (a ##2 b) |-> c)
   else fail_ref[5] <= fail_ref[5] + 1;
 
+  // Longer repetitions, also of an odd count, checked with their pass counts too
+  assert property (@(posedge clk) a |-> (b ##1 !c) [* 5])
+    pass_rep[6] <= pass_rep[6] + 1;
+  else fail_rep[6] <= fail_rep[6] + 1;
+  assert property (@(posedge clk) a |-> b ##1 !c ##1 b ##1 !c ##1 b ##1 !c ##1 b ##1 !c
+                   ##1 b ##1 !c)
+    pass_ref[6] <= pass_ref[6] + 1;
+  else fail_ref[6] <= fail_ref[6] + 1;
+  assert property (@(posedge clk) a |-> (1 ##2 c) [* 7])
+    pass_rep[7] <= pass_rep[7] + 1;
+  else fail_rep[7] <= fail_rep[7] + 1;
+  assert property (@(posedge clk) a |-> 1 ##2 c ##1 1 ##2 c ##1 1 ##2 c ##1 1 ##2 c ##1 1 ##2 c
+                   ##1 1 ##2 c ##1 1 ##2 c)
+    pass_ref[7] <= pass_ref[7] + 1;
+  else fail_ref[7] <= fail_ref[7] + 1;
+  assert property (@(posedge clk) a |=> (b ##1 c ##1 !a) [* 6])
+    pass_rep[8] <= pass_rep[8] + 1;
+  else fail_rep[8] <= fail_rep[8] + 1;
+  assert property (@(posedge clk) a |=> b ##1 c ##1 !a ##1 b ##1 c ##1 !a ##1 b ##1 c ##1 !a
+                   ##1 b ##1 c ##1 !a ##1 b ##1 c ##1 !a ##1 b ##1 c ##1 !a)
+    pass_ref[8] <= pass_ref[8] + 1;
+  else fail_ref[8] <= fail_ref[8] + 1;
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     crc <= {crc[62:0], crc[63] ^ crc[2] ^ crc[0]};
     if (cyc == 99) begin
-      for (int i = 1; i <= 5; ++i) begin
+      for (int i = 1; i <= 8; ++i) begin
         `checkd(fail_rep[i], fail_ref[i]);
         if (fail_ref[i] == 0) `stop;
+      end
+      for (int i = 6; i <= 8; ++i) begin
+        `checkd(pass_rep[i], pass_ref[i]);
       end
       $write("*-* All Finished *-*\n");
       $finish;
