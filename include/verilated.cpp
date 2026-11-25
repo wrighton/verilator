@@ -4139,6 +4139,90 @@ void Verilated::queueBoundError(size_t maxSize, size_t attemptedSize) VL_MT_SAFE
     VL_WARN_MT("", 0, "", msg.c_str());
 }
 
+//===========================================================================
+// Elements of dynamically sized containers passed to ref arguments (see verilated_types.h)
+
+void VlRefPinBase::release() VL_MT_UNSAFE {
+    if (--m_keptp->m_pins == 0) delete m_keptp;
+}
+
+VlRefSlot::~VlRefSlot() {
+    if (m_listp) {
+        VlRefSlot** slotpp = &m_listp->m_slotsp;
+        while (*slotpp != this) slotpp = &(*slotpp)->m_nextp;
+        *slotpp = m_nextp;
+    }
+    if (m_nodep && --m_nodep->m_slots == 0) {
+        ::operator delete(m_nodep->m_p);
+        VL_DO_DANGLING(delete m_nodep, m_nodep);
+    }
+}
+
+VlRefList::~VlRefList() {
+    for (VlRefSlot* slotp = m_slotsp; slotp; slotp = slotp->m_nextp) slotp->m_listp = nullptr;
+}
+
+void VlRefList::outdate(const void* elemp, VlRefKept* keptp) {
+    VlRefPinBase** pinpp = &m_pinsp;
+    while (VlRefPinBase* const pinp = *pinpp) {
+        if (elemp && pinp->m_elemp != elemp) {
+            pinpp = &pinp->m_nextp;
+            continue;
+        }
+        *pinpp = pinp->m_nextp;
+        pinp->m_listp = nullptr;
+        pinp->m_keptp = keptp;
+        ++keptp->m_pins;
+    }
+}
+
+void VlRefList::addSlot(VlRefSlot* slotp, bool atEnd) {
+    slotp->m_atEnd = atEnd;
+    slotp->m_nextp = m_slotsp;
+    slotp->m_listp = this;
+    m_slotsp = slotp;
+}
+
+bool VlRefList::slotAtEnd() const {
+    for (const VlRefSlot* slotp = m_slotsp; slotp; slotp = slotp->m_nextp) {
+        if (slotp->m_atEnd) return true;
+    }
+    return false;
+}
+
+bool VlRefList::slotIn(const void* p, size_t bytes) const {
+    const char* const beginp = static_cast<const char*>(p);
+    for (const VlRefSlot* slotp = m_slotsp; slotp; slotp = slotp->m_nextp) {
+        if (slotp->m_slotp >= beginp && slotp->m_slotp < beginp + bytes) return true;
+    }
+    return false;
+}
+
+bool VlRefList::keepNode(void* p, size_t bytes) {
+    const char* const beginp = static_cast<const char*>(p);
+    VlRefNode* nodep = nullptr;
+    VlRefSlot** slotpp = &m_slotsp;
+    while (VlRefSlot* const slotp = *slotpp) {
+        if (slotp->m_slotp < beginp || slotp->m_slotp >= beginp + bytes) {
+            slotpp = &slotp->m_nextp;
+            continue;
+        }
+        if (!nodep) nodep = new VlRefNode{p, 0};
+        ++nodep->m_slots;
+        slotp->m_nodep = nodep;
+        slotp->m_listp = nullptr;
+        *slotpp = slotp->m_nextp;
+    }
+    return nodep;
+}
+
+void VlRefList::takeSlots(VlRefList& from) {
+    while (VlRefSlot* const slotp = from.m_slotsp) {
+        from.m_slotsp = slotp->m_nextp;
+        addSlot(slotp, slotp->m_atEnd);
+    }
+}
+
 void Verilated::scTimePrecisionError(int sc_prec, int vl_prec) VL_MT_SAFE {
     std::ostringstream msg;
     msg << "SystemC's sc_set_time_resolution is 10^-" << sc_prec
