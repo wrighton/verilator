@@ -1561,6 +1561,20 @@ bool libComboCacheable(const LogicClasses& logicClasses,
         return false;
     };
     if (!virtIfaceTriggers.m_triggers.empty()) return notCacheable("virtual interfaces");
+    // The wrapper's import passes the ports, which V3Task can only reuse the results for if
+    // integral, packed, or arrays of these, and not inout (see V3Task's dpiCacheableArgs)
+    for (const AstVarScope* vscp = v3Global.rootp()->topScopep()->scopep()->varsp(); vscp;
+         vscp = VN_AS(vscp->nextp(), VarScope)) {
+        const AstVar* const varp = vscp->varp();
+        if (!varp->isPrimaryIO()) continue;
+        const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+        while (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+            dtypep = adtypep->subDTypep()->skipRefp();
+        }
+        if (varp->isInout() || !dtypep->isIntegralOrPacked()) {
+            return notCacheable("ports not passed as integral values");
+        }
+    }
     if (v3Global.rootp()->exists([](const AstCFunc* funcp) { return funcp->dpiExportImpl(); })) {
         return notCacheable("DPI exports");
     }
