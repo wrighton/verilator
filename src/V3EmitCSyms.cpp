@@ -1163,11 +1163,7 @@ void EmitCSyms::emitSymHdr() {
              "  // Trace class for $dump*\n");
     }
     if (v3Global.hasEvents()) {
-        if (v3Global.assignsEvents()) {
-            puts("std::vector<VlAssignableEvent> __Vm_triggeredEvents;\n");
-        } else {
-            puts("std::vector<VlEvent*> __Vm_triggeredEvents;\n");
-        }
+        puts("QData __Vm_evalStamp = 2;  // Stamp of the current evaluation, see VlEvent\n");
     }
     if (v3Global.hasClasses()) puts("VlDeleter __Vm_deleter;\n");
     puts("bool& __Vm_didInit;\n");
@@ -1241,28 +1237,9 @@ void EmitCSyms::emitSymHdr() {
     puts("const char* name() const { return vlInst.TOP.vlNamep; }\n");
 
     if (v3Global.hasEvents()) {
-        if (v3Global.assignsEvents()) {
-            puts("void fireEvent(VlAssignableEvent& event) {\n");
-        } else {
-            puts("void fireEvent(VlEvent& event) {\n");
-        }
-        puts("if (VL_LIKELY(!event.isTriggered())) {\n");
-        if (v3Global.assignsEvents()) {
-            puts("__Vm_triggeredEvents.push_back(event);\n");
-        } else {
-            puts("__Vm_triggeredEvents.push_back(&event);\n");
-        }
-        puts("}\n");
-        puts("event.fire();\n");
-        puts("}\n");
-        puts("void clearTriggeredEvents() {\n");
-        if (v3Global.assignsEvents()) {
-            puts("for (auto& event : __Vm_triggeredEvents) event.clearTriggered();\n");
-        } else {
-            puts("for (const auto eventp : __Vm_triggeredEvents) eventp->clearTriggered();\n");
-        }
-        puts("__Vm_triggeredEvents.clear();\n");
-        puts("}\n");
+        const std::string eventType = v3Global.assignsEvents() ? "VlAssignableEvent" : "VlEvent";
+        puts("VL_ATTR_ALWINLINE void fireEvent(" + eventType
+             + "& event) { event.fire(__Vm_evalStamp); }\n");
     }
 
     if (v3Global.needTraceDumper()) {

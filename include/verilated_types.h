@@ -619,11 +619,11 @@ class VlEventBase VL_NOT_FINAL {
 public:
     virtual ~VlEventBase() = default;
 
-    virtual void fire() = 0;
+    // 'evalStamp' is the stamp of the model's current evaluation, see VlEvent
+    virtual void fire(QData evalStamp) = 0;
     virtual bool isFired() const = 0;
-    virtual bool isTriggered() const = 0;
+    virtual bool isTriggered(QData evalStamp) const = 0;
     virtual void clearFired() = 0;
-    virtual void clearTriggered() = 0;
 };
 
 /// Wait list of the processes waiting on one event, or on a wait queue of the std package (see
@@ -634,9 +634,7 @@ public:
 /// waiter since the last trigger evaluation pushes the list onto the scheduler's pending chain.
 /// Starting a wait, killing a waiter, trigger evaluation and finishing only happen while no
 /// MTask runs in parallel: in the serial scheduling steps, or in an MTask that controls
-/// processes, which runs alone (see V3OrderMTaskFixHazards). This only covers the list: other
-/// state a fire updates, such as the model's record of triggered events, is not made safe for
-/// parallel fires here.
+/// processes, which runs alone (see V3OrderMTaskFixHazards).
 struct VlEventWaitLink VL_NOT_FINAL {
     // Event waited on, while the list is live. It outlives the list while it has waiters: as
     // static storage, as a member of the class object of its waiters, which keep it alive, or
@@ -704,8 +702,11 @@ private:
 
 class VlEvent final : public VlEventBase {
     // MEMBERS
-    bool m_fired = false;  // Fired on this scheduling iteration
-    bool m_triggered = false;  // Triggered state of event persisting until next time step
+    // Bit 0: fired on this scheduling iteration. Other bits: stamp of the model evaluation it was
+    // last fired in. The model increases the stamp by 2 at the start of each evaluation, so the
+    // event is triggered until then, while its stamp is not less than the current one. Clearing
+    // visits no event, and a copy keeps the triggered state.
+    QData m_state = 0;
     VlEventWaitLink* m_waitp = nullptr;  // Wait list of processes waiting, if any
 
 public:
@@ -715,31 +716,29 @@ public:
     // original, as a shallow copy of an object does (IEEE 1800-2023 8.12, 15.5.5), needs a
     // VlAssignableEvent.
     VlEvent(const VlEvent& other)
-        : m_fired{other.m_fired}
-        , m_triggered{other.m_triggered} {}
+        : m_state{other.m_state} {}
     VlEvent& operator=(const VlEvent& other) {
-        m_fired = other.m_fired;
-        m_triggered = other.m_triggered;
+        m_state = other.m_state;
         return *this;
     }
     ~VlEvent() override {
         if (VL_UNLIKELY(m_waitp)) m_waitp->m_eventp = nullptr;
     }
 
-    friend std::string VL_TO_STRING(const VlEvent& e);
     friend class VlAssignableEvent;
     // METHODS
-    void fire() override {
-        m_fired = m_triggered = true;
+    VL_ATTR_ALWINLINE void fire(QData evalStamp) override {
+        m_state = evalStamp | 1;
         if (VL_UNLIKELY(m_waitp)) m_waitp->notify();
     }
     /// Wait list of the timing scheduler that firing notifies, if any
     VlEventWaitLink* waitp() const { return m_waitp; }
     void waitp(VlEventWaitLink* waitp) { m_waitp = waitp; }
-    bool isFired() const override { return m_fired; }
-    bool isTriggered() const override { return m_triggered; }
-    void clearFired() override { m_fired = false; }
-    void clearTriggered() override { m_triggered = false; }
+    VL_ATTR_ALWINLINE bool isFired() const override { return m_state & 1; }
+    VL_ATTR_ALWINLINE bool isTriggered(QData evalStamp) const override {
+        return m_state >= evalStamp;
+    }
+    VL_ATTR_ALWINLINE void clearFired() override { m_state &= ~static_cast<QData>(1); }
 };
 
 class VlAssignableEvent final : public std::shared_ptr<VlEvent>, public VlEventBase {
@@ -750,11 +749,12 @@ public:
     ~VlAssignableEvent() override = default;
 
     // METHODS
-    void fire() override { (*this)->fire(); }
-    bool isFired() const override { return (*this)->m_fired; }
-    bool isTriggered() const override { return (*this)->m_triggered; }
-    void clearFired() override { (*this)->m_fired = false; }
-    void clearTriggered() override { (*this)->m_triggered = false; }
+    VL_ATTR_ALWINLINE void fire(QData evalStamp) override { (*this)->fire(evalStamp); }
+    VL_ATTR_ALWINLINE bool isFired() const override { return (*this)->m_state & 1; }
+    VL_ATTR_ALWINLINE bool isTriggered(QData evalStamp) const override {
+        return (*this)->m_state >= evalStamp;
+    }
+    VL_ATTR_ALWINLINE void clearFired() override { (*this)->m_state &= ~static_cast<QData>(1); }
 };
 
 inline VlProcess::~VlProcess() {
@@ -766,22 +766,8 @@ VlEvent& VlProcess::forkDoneEvent() {
     return *m_forkDonep;
 }
 
-inline std::string VL_TO_STRING(const VlEventBase& e);
-
-inline std::string VL_TO_STRING(const VlEvent& e) {
-    return "triggered="s + (e.isTriggered() ? "true" : "false");
-}
-
-inline std::string VL_TO_STRING(const VlAssignableEvent& e) {
-    return "&{ " + VL_TO_STRING(*e) + " }";
-}
-
-inline std::string VL_TO_STRING(const VlEventBase& e) {
-    if (const VlAssignableEvent& assignable = dynamic_cast<const VlAssignableEvent&>(e)) {
-        return VL_TO_STRING(assignable);
-    }
-    return "triggered="s + (e.isTriggered() ? "true" : "false");
-}
+// The triggered state is relative to the evaluation of the model, which is not known here
+inline std::string VL_TO_STRING(const VlEventBase&) { return "event"s; }
 
 // RNG for shuffle()
 class VlURNG final {

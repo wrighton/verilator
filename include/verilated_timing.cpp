@@ -1024,7 +1024,9 @@ void VlProcess::state(int s) {
     m_state = s;
     detachIfDone();
     // The parent's 'wait fork' may now proceed
-    if (completed() && m_parentp && m_parentp->m_forkDonep) m_parentp->m_forkDonep->fire();
+    // Only the fired state and the waiters of this internal event are used, not its triggered
+    // state, so it needs no evaluation stamp
+    if (completed() && m_parentp && m_parentp->m_forkDonep) m_parentp->m_forkDonep->fire(0);
     if (s == KILLED && m_waitListp) m_waitListp->noteKilled(*this);
     // A process waiting to evaluate its trigger, set running, for example by resume(), is set
     // back to waiting when it evaluates its trigger, at every trigger evaluation when polling
