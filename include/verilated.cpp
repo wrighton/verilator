@@ -2286,7 +2286,16 @@ IData VL_FREAD_I(int width, int array_lsb, int array_size, void* memp, IData fpi
     // While threadsafe, each thread can only access different file handles
     FILE* const fp = VL_CVT_I_FP(fpi);
     if (VL_UNLIKELY(!fp)) return 0;
-    if (count > (array_size - (start - array_lsb))) count = array_size - (start - array_lsb);
+    // Element offset of start and number of elements to load; an integral variable
+    // (array_size 0) ignores start and count
+    int64_t offset = 0;
+    int64_t elements = 1;
+    if (array_size) {
+        // start and count are signed; a start outside the array loads nothing
+        offset = static_cast<int64_t>(static_cast<int32_t>(start)) - array_lsb;
+        elements = std::min<int64_t>(static_cast<int32_t>(count), array_size - offset);
+        if (VL_UNLIKELY(offset < 0 || elements <= 0)) return 0;
+    }
     // Prep for reading
     IData read_count = 0;
     IData read_elements = 0;
@@ -2299,7 +2308,7 @@ IData VL_FREAD_I(int width, int array_lsb, int array_size, void* memp, IData fpi
         const int c = std::fgetc(fp);
         if (VL_UNLIKELY(c == EOF)) break;
         // Shift value in
-        const IData entry = read_elements + start - array_lsb;
+        const IData entry = read_elements + static_cast<IData>(offset);
         if (width <= 8) {
             CData* const datap = &(reinterpret_cast<CData*>(memp))[entry];
             if (shift == start_shift) *datap = 0;
@@ -2328,7 +2337,7 @@ IData VL_FREAD_I(int width, int array_lsb, int array_size, void* memp, IData fpi
         if (shift < 0) {
             shift = start_shift;
             ++read_elements;
-            if (VL_UNLIKELY(read_elements >= count)) break;
+            if (VL_UNLIKELY(read_elements >= elements)) break;
         }
     }
     return read_count;
