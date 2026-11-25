@@ -3227,13 +3227,19 @@ VerilatedContext::VerilatedContext()
 VerilatedContext::~VerilatedContext() {
     Verilated::threadContextp(this);  // In unlikely case some other destructor needs it
     checkMagic(this);
-    // Callbacks may delete models whose destructors need this context
-    std::vector<std::pair<VoidPCb, void*>> endContextCbs;
-    {
-        const VerilatedLockGuard lock{m_endContextMutex};
-        endContextCbs.swap(m_endContextCbs);
+    // Callbacks may delete models whose destructors need this context. Each runs unlocked, as
+    // it may add or remove the ones not run yet. Quadratic in the number of callbacks, which
+    // is small.
+    while (true) {
+        std::pair<VoidPCb, void*> cb;
+        {
+            const VerilatedLockGuard lock{m_endContextMutex};
+            if (m_endContextCbs.empty()) break;
+            cb = m_endContextCbs.front();
+            m_endContextCbs.erase(m_endContextCbs.begin());
+        }
+        cb.first(cb.second);
     }
-    for (const auto& cbp : endContextCbs) cbp.first(cbp.second);
     m_magic = 0x1;  // Arbitrary but 0x1 is what Verilator src uses for a deleted pointer
     logRestoreOutput();
     Verilated::threadContextp(nullptr);
@@ -3243,6 +3249,14 @@ void VerilatedContext::addEndContextCb(void (*cb)(void*), void* datap)
     VL_MT_SAFE_EXCLUDES(m_endContextMutex) {
     const VerilatedLockGuard lock{m_endContextMutex};
     m_endContextCbs.emplace_back(cb, datap);
+}
+
+void VerilatedContext::removeEndContextCb(void (*cb)(void*), void* datap)
+    VL_MT_SAFE_EXCLUDES(m_endContextMutex) {
+    const VerilatedLockGuard lock{m_endContextMutex};
+    const auto it
+        = std::find(m_endContextCbs.begin(), m_endContextCbs.end(), std::make_pair(cb, datap));
+    if (it != m_endContextCbs.end()) m_endContextCbs.erase(it);
 }
 
 void VerilatedContext::checkMagic(const VerilatedContext* contextp) {
