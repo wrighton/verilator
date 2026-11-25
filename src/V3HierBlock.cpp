@@ -368,6 +368,11 @@ class HierBlockUsageCollectVisitor final : public VNVisitorConst {
             return;
         }
 
+        // The library model of a hierarchical block is not saved
+        if (v3Global.opt.savable()) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: --savable with hierarchical block "
+                                             + nodep->prettyNameQ());
+        }
         // This is a hierarchical block, gather parts
         VL_RESTORER_CLEAR(m_params);
         VL_RESTORER_CLEAR(m_typeParams);
