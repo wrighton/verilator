@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: obj_vlt/t_property_local_var_depth_unsup/t_property_local_var_depth_unsup.v:523:63: Unsupported: match item assigning an impure value to a local variable read in a later cycle than its assignment.
+                                                                                                      : ... note: In instance 't'
+  523 |   property p65; int v; @(posedge clk) (1, v = calc65(n)) |=> (v == $past(n) + 1); endproperty
+      |                                                               ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
