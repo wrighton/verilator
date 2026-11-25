@@ -392,6 +392,44 @@ module t (
       `checkh(mqa[kqa], 30);
     end
 
+    begin  // Array keys that differ in length or element order
+      typedef int q_t[$];
+      typedef int a_t[2];
+      int mq[q_t];
+      int ma[a_t];
+      q_t kq;
+      a_t ka;
+      kq = '{0, 9};
+      mq[kq] = 1;
+      kq = '{9, 0};
+      mq[kq] = 2;
+      kq = '{0};
+      mq[kq] = 3;
+      kq = '{0, 9, 0};
+      mq[kq] = 4;
+      kq.delete();
+      mq[kq] = 5;
+      `checkh(mq.size(), 5);
+      kq = '{9, 0};
+      `checkh(mq[kq], 2);
+      kq = '{0, 9};
+      `checkh(mq[kq], 1);
+      kq = '{0};
+      `checkh(mq[kq], 3);
+      kq = '{0, 9, 0};
+      `checkh(mq[kq], 4);
+      kq.delete();
+      `checkh(mq[kq], 5);
+      ka = '{0, 9};
+      ma[ka] = 6;
+      ka = '{9, 0};
+      ma[ka] = 7;
+      `checkh(ma.size(), 2);
+      `checkh(ma[ka], 7);
+      ka = '{0, 9};
+      `checkh(ma[ka], 6);
+    end
+
     begin  // Enum identifier keys of an integral key type
       typedef enum {
         E0,
