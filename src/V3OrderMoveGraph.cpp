@@ -23,6 +23,7 @@
 #include "V3OrderMoveGraph.h"
 
 #include "V3Graph.h"
+#include "V3Stats.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -55,6 +56,7 @@ class OrderMoveGraphBuilder final {
     std::unique_ptr<OrderMoveGraph> m_moveGraphp{new OrderMoveGraph{m_orderGraph}};
     // Storage for domain -> OrderMoveVertex, maps held in OrderVarVertex::userp()
     std::deque<DomainMap> m_domainMaps;
+    size_t m_barrierEdges = 0;  // Edges of the OrderMoveVertices of barrier vertices
 
     // CONSTRUCTORS
     explicit OrderMoveGraphBuilder(OrderGraph& orderGraph)
@@ -88,6 +90,8 @@ class OrderMoveGraphBuilder final {
         }
         m_moveGraphp->removeRedundantEdgesSum(&V3GraphEdge::followAlwaysTrue);
         m_moveGraphp->userClearVertices();
+        V3Stats::addStatSum("Scheduling, virtual interface read barrier move edges",
+                            m_barrierEdges);
     }
     virtual ~OrderMoveGraphBuilder() = default;
     VL_UNCOPYABLE(OrderMoveGraphBuilder);
@@ -144,14 +148,26 @@ class OrderMoveGraphBuilder final {
             // OrderGraph is a bipartite graph, so we know it's an OrderVarVertex
             const OrderVarVertex* const vvtxp = static_cast<const OrderVarVertex*>(edge.top());
 
+            // A barrier vertex is read in many domains, use a single OrderMoveVertex for it in
+            // its own domain, the union of theirs, to keep its edges linear in the readers
+            const OrderDomain* const vDomainp
+                = vvtxp->is<OrderVarBarrierVertex>() ? vvtxp->domainp() : domainp;
+
             // Look up OrderMoveVertex for this domain on this variable
             DomainMap& mapp = *static_cast<DomainMap*>(vvtxp->userp());
-            const auto pair = mapp.emplace(domainp, nullptr);
+            const auto pair = mapp.emplace(vDomainp, nullptr);
             // Reference to the mapped OrderMoveVertex
             OrderMoveVertex*& vMoveVtxp = pair.first->second;
 
             // On first encounter, visit downstream logic dependent on this (var, domain)
-            if (pair.second) vMoveVtxp = iterateVarVertex(vvtxp, domainp);
+            if (pair.second) {
+                vMoveVtxp = iterateVarVertex(vvtxp, vDomainp);
+                if (vMoveVtxp && vvtxp->is<OrderVarBarrierVertex>()) {
+                    for (const V3GraphEdge& e VL_ATTR_UNUSED : vMoveVtxp->outEdges()) {
+                        ++m_barrierEdges;
+                    }
+                }
+            }
 
             // If no downstream dependents from this variable, then there is no need to add this
             // variable as a dependent.
@@ -159,6 +175,7 @@ class OrderMoveGraphBuilder final {
 
             // Add this (variable, domain) as dependent of the logic that writes it.
             addEdge(lMoveVtxp, vMoveVtxp);
+            if (vvtxp->is<OrderVarBarrierVertex>()) ++m_barrierEdges;
         }
     }
 

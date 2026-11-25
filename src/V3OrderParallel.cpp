@@ -29,6 +29,7 @@
 #include "V3OrderCFuncEmitter.h"
 #include "V3OrderInternal.h"
 #include "V3OrderMTaskGraph.h"
+#include "V3Stats.h"
 #include "V3VNUserAllocator.h"
 
 #include <map>
@@ -202,6 +203,63 @@ public:
 };
 
 //######################################################################
+// Reroute the edges of a variable OrderMoveVertex not assigned to an MTask. Only the edges within
+// an MTask are kept after, so where connecting all predecessors to all successors would need more
+// edges than the vertex has, as for a barrier between many readers and writers, connect only those
+// in the same MTask, through a new variable vertex in that MTask holding both.
+
+struct RerouteStats final {
+    size_t m_vertices = 0;  // Vertices rerouted per MTask
+    size_t m_edgesSaved = 0;  // Edges not created, against connecting all of their ends
+};
+
+static void rerouteUnassigned(OrderMoveGraph& moveGraph, OrderMoveVertex* mVtxp,
+                              RerouteStats& stats) {
+    size_t nIn = 0;
+    for (const V3GraphEdge& edge VL_ATTR_UNUSED : mVtxp->inEdges()) ++nIn;
+    size_t nOut = 0;
+    for (const V3GraphEdge& edge VL_ATTR_UNUSED : mVtxp->outEdges()) ++nOut;
+    if (nIn * nOut <= nIn + nOut) {
+        mVtxp->rerouteEdges(&moveGraph);
+        return;
+    }
+    // Predecessors and successors in each MTask, in order of first encounter
+    struct Ends final {
+        std::vector<V3GraphVertex*> m_fromps;  // Predecessors
+        std::vector<V3GraphVertex*> m_tops;  // Successors
+    };
+    std::vector<std::pair<void*, Ends>> mtaskEnds;
+    std::unordered_map<const void*, size_t> mtaskIndex;
+    const auto endsFor = [&](const V3GraphVertex* vtxp) -> Ends& {
+        void* const mtaskp = vtxp->userp();
+        const auto pair = mtaskIndex.emplace(mtaskp, mtaskEnds.size());
+        if (pair.second) mtaskEnds.emplace_back(mtaskp, Ends{});
+        return mtaskEnds[pair.first->second].second;
+    };
+    for (const V3GraphEdge& edge : mVtxp->inEdges()) {
+        endsFor(edge.fromp()).m_fromps.push_back(edge.fromp());
+    }
+    for (const V3GraphEdge& edge : mVtxp->outEdges()) {
+        endsFor(edge.top()).m_tops.push_back(edge.top());
+    }
+    size_t nEdges = 0;
+    for (const auto& pair : mtaskEnds) {
+        const std::vector<V3GraphVertex*>& fromps = pair.second.m_fromps;
+        const std::vector<V3GraphVertex*>& tops = pair.second.m_tops;
+        if (fromps.empty() || tops.empty()) continue;
+        OrderMoveVertex* const newp
+            = new OrderMoveVertex{moveGraph, nullptr, mVtxp->domScope().domainp()};
+        newp->userp(pair.first);
+        for (V3GraphVertex* const fromp : fromps) new V3GraphEdge{&moveGraph, fromp, newp, 1};
+        for (V3GraphVertex* const top : tops) new V3GraphEdge{&moveGraph, newp, top, 1};
+        nEdges += fromps.size() + tops.size();
+    }
+    mVtxp->unlinkEdges(&moveGraph);
+    ++stats.m_vertices;
+    stats.m_edgesSaved += nIn * nOut - nEdges;
+}
+
+//######################################################################
 // Entry point
 
 AstNodeStmt* V3Order::createParallel(OrderMoveGraph& moveGraph, const std::string& tag,
@@ -218,14 +276,18 @@ AstNodeStmt* V3Order::createParallel(OrderMoveGraph& moveGraph, const std::strin
     if (dumpGraphLevel() >= 9) moveGraph.dumpDotFilePrefixed(tag + "_ordermv_mtasks");
 
     // Some variable OrderMoveVertices are not assigned to an MTask. Reroute and delete these.
+    RerouteStats rerouteStats;
     for (V3GraphVertex* const vtxp : moveGraph.vertices().unlinkable()) {
         OrderMoveVertex* const mVtxp = vtxp->as<OrderMoveVertex>();
         if (!mVtxp->userp()) {
             UASSERT_OBJ(!mVtxp->logicp(), mVtxp, "Logic OrderMoveVertex not assigned to mtask");
-            mVtxp->rerouteEdges(&moveGraph);
+            rerouteUnassigned(moveGraph, mVtxp, rerouteStats);
             VL_DO_DANGLING(mVtxp->unlinkDelete(&moveGraph), mVtxp);
         }
     }
+    V3Stats::addStatSum("MTask graph, variables rerouted per MTask", rerouteStats.m_vertices);
+    V3Stats::addStatSum("MTask graph, edges saved rerouting variables per MTask",
+                        rerouteStats.m_edgesSaved);
 
     // Remove all edges from the move graph that cross between MTasks. Add logic to MTask lists.
     for (V3GraphVertex& vtx : moveGraph.vertices()) {

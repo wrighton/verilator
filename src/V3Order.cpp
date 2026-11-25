@@ -103,13 +103,14 @@ AstCFunc* V3Order::order(const std::vector<V3Sched::ProcessList*>& logic,  //
                          const V3Sched::TriggerKit& trigKit,  //
                          AstVarScope* trigVscp,  //
                          const V3Sched::CovergroupRefBindings& cgRefBindings,
+                         const V3Sched::VirtIfaceClockedReads& vifReads,  //
                          const string& tag,  //
                          bool parallel,  //
                          bool slow,  //
                          const ExternalTriggersProvider& externalTriggers) {
     // Build the OrderGraph
     const std::unique_ptr<OrderGraph> graph
-        = buildOrderGraph(trigKit, trigVscp, logic, cgRefBindings, parallel);
+        = buildOrderGraph(trigKit, trigVscp, logic, cgRefBindings, vifReads, parallel);
     // Order it
     orderOrderGraph(*graph, tag);
     // Assign sensitivity domains to combinational logic
