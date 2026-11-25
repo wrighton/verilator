@@ -271,18 +271,48 @@ const VIfaceCaptureTag* V3LinkDotIfaceCapture::captureTag(AstRefDType* refp) {
     return tagp;
 }
 
-// Walk a dot-separated cell path through the cell / IFACEREFDTYPE hierarchy
-// starting from startModp.  Returns the module at the end of the path, or
-// nullptr if any component cannot be resolved.
+namespace {
+// Find the item that one cell path component names among a scope's items: an instance, an
+// interface port, or a generate block, as these are not flattened until V3Begin
+AstNode* findPathItem(AstNode* itemsp, const string& component) {
+    // Matched without any array index; the elements of an instance array (see V3Param) all
+    // instantiate the same module, so any of them will do
+    const string componentBase = AstNode::nameNoArray(component);
+    for (AstNode* const itemp : VNList<AstNode>{itemsp}) {
+        if (const AstCell* const cellp = VN_CAST(itemp, Cell)) {
+            if ((cellp->name() == component
+                 || AstNode::nameNoArray(cellp->name()) == componentBase)
+                && cellp->modp()) {
+                return itemp;
+            }
+        } else if (const AstVar* const varp = VN_CAST(itemp, Var)) {
+            if (varp->isIfaceRef() && varp->subDTypep()) {
+                string varBaseName = varp->name();
+                const size_t viftopPos = varBaseName.find("__Viftop");
+                if (viftopPos != string::npos) varBaseName = varBaseName.substr(0, viftopPos);
+                if (varBaseName == component
+                    || AstNode::nameNoArray(varBaseName) == componentBase) {
+                    return itemp;
+                }
+            }
+        } else if (VN_IS(itemp, GenBlock) && itemp->name() == component) {
+            return itemp;
+        }
+    }
+    return nullptr;
+}
+}  // namespace
+
+// Walk a dot-separated cell path through the cell / IFACEREFDTYPE / generate
+// block hierarchy, starting from the items of a scope.  Returns the module at
+// the end of the path, or nullptr if any component cannot be resolved.
 // Cell/port names are preserved across clones by cloneTree, so this works
 // identically on template and cloned modules.
-AstNodeModule* V3LinkDotIfaceCapture::followCellPath(const AstNodeModule* startModp,
-                                                     const string& cellPath) {
-    if (cellPath.empty() || !startModp) return nullptr;
-    const AstNodeModule* curModp = startModp;
-    AstNodeModule* nextModp = nullptr;
+AstNodeModule* V3LinkDotIfaceCapture::followCellPathFromItems(AstNode* itemsp,
+                                                              const string& cellPath) {
+    AstNodeModule* modp = nullptr;
     string remaining = cellPath;
-    while (!remaining.empty() && curModp) {
+    while (!remaining.empty()) {
         string component;
         const size_t dotPos = remaining.find('.');
         if (dotPos == string::npos) {
@@ -292,43 +322,52 @@ AstNodeModule* V3LinkDotIfaceCapture::followCellPath(const AstNodeModule* startM
             component = remaining.substr(0, dotPos);
             remaining = remaining.substr(dotPos + 1);
         }
-        // Matched without any array index; the elements of an instance array (see V3Param) all
-        // instantiate the same module, so any of them will do
-        const string componentBase = AstNode::nameNoArray(component);
-        nextModp = nullptr;
-        for (AstNode* const sp : curModp->stmtspList()) {
-            if (AstCell* const cellp = VN_CAST(sp, Cell)) {
-                if ((cellp->name() == component
-                     || AstNode::nameNoArray(cellp->name()) == componentBase)
-                    && cellp->modp()) {
-                    nextModp = cellp->modp();
-                    break;
-                }
-            }
-            if (AstVar* const varp = VN_CAST(sp, Var)) {
-                if (varp->isIfaceRef() && varp->subDTypep()) {
-                    string varBaseName = varp->name();
-                    const size_t viftopPos = varBaseName.find("__Viftop");
-                    if (viftopPos != string::npos) {
-                        varBaseName = varBaseName.substr(0, viftopPos);
-                    }
-                    if (varBaseName == component
-                        || AstNode::nameNoArray(varBaseName) == componentBase) {
-                        if (AstIfaceRefDType* const irefp
-                            = ifaceRefFromVarDType(varp->subDTypep())) {
-                            AstIface* const ifacep = irefp->ifaceViaCellp();
-                            if (ifacep) {
-                                nextModp = ifacep;
-                                break;
-                            }
-                        }
-                    }
-                }
+        AstNode* const itemp = findPathItem(itemsp, component);
+        modp = nullptr;
+        if (const AstGenBlock* const blockp = VN_CAST(itemp, GenBlock)) {
+            itemsp = blockp->itemsp();
+            continue;
+        }
+        if (const AstCell* const cellp = VN_CAST(itemp, Cell)) {
+            modp = cellp->modp();
+        } else if (AstVar* const varp = VN_CAST(itemp, Var)) {
+            if (AstIfaceRefDType* const irefp = ifaceRefFromVarDType(varp->subDTypep())) {
+                modp = irefp->ifaceViaCellp();
             }
         }
-        curModp = nextModp;
+        if (!modp) return nullptr;
+        itemsp = modp->stmtsp();
     }
-    return nextModp;
+    return modp;
+}
+
+AstNodeModule* V3LinkDotIfaceCapture::followCellPath(const AstNodeModule* startModp,
+                                                     const string& cellPath) {
+    if (cellPath.empty() || !startModp) return nullptr;
+    return followCellPathFromItems(startModp->stmtsp(), cellPath);
+}
+
+AstNodeModule* V3LinkDotIfaceCapture::followCellPathAt(const AstNode* nodep,
+                                                       const string& cellPath) {
+    const string first = cellPath.substr(0, cellPath.find('.'));
+    // Resolve the first component as a name is resolved at nodep: in the innermost
+    // enclosing generate block or module that declares it
+    const AstNode* childp = nodep;
+    for (const AstNode* curp = nodep->backp(); curp; childp = curp, curp = curp->backp()) {
+        if (curp->nextp() == childp) continue;  // Previous sibling, not a parent
+        AstNode* itemsp = nullptr;
+        if (const AstGenBlock* const blockp = VN_CAST(curp, GenBlock)) {
+            itemsp = blockp->itemsp();
+        } else if (const AstNodeModule* const modp = VN_CAST(curp, NodeModule)) {
+            itemsp = modp->stmtsp();
+        }
+        if (itemsp && findPathItem(itemsp, first)) {
+            return followCellPathFromItems(itemsp, cellPath);
+        }
+        // A class may be declared in a module, and use its names
+        if (VN_IS(curp, NodeModule) && !VN_IS(curp, Class)) break;
+    }
+    return nullptr;
 }
 
 // replaces the lambda used in V3LinkDot.cpp for iface capture
@@ -432,7 +471,7 @@ int V3LinkDotIfaceCapture::resolveCapturedRefs() {
         if (moduleMatchesOwner(ownerModp, tagp->m_ownerModName)) {
             correctModp = ownerModp;
         } else {
-            correctModp = followCellPath(ownerModp, tagp->m_cellPath);
+            correctModp = followCellPathAt(refp, tagp->m_cellPath);
             UINFO(9, "  followCellPath('"
                          << ownerModp->name() << "', '" << tagp->m_cellPath
                          << "') = " << (correctModp ? correctModp->name() : "<null>")
