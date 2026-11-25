@@ -143,6 +143,7 @@ class AstNodeFTask VL_NOT_FINAL : public AstNode {
     bool m_isHideLocal : 1;  // Verilog local
     bool m_isHideProtected : 1;  // Verilog protected
     bool m_dpiPure : 1;  // DPI import pure (vs. virtual pure)
+    bool m_dpiCache : 1;  // DPI import whose results the call may reuse for unchanged inputs
     bool m_keepAlive : 1;  // Disable dead function elimination
     bool m_needsSyms : 1;  // Requires vlSymsp argument
     bool m_pureVirtual : 1;  // Pure virtual
@@ -180,6 +181,7 @@ protected:
         , m_isHideLocal{false}
         , m_isHideProtected{false}
         , m_dpiPure{false}
+        , m_dpiCache{false}
         , m_keepAlive{false}
         , m_needsSyms{true}
         , m_pureVirtual{false}
@@ -252,6 +254,8 @@ public:
     void isHideProtected(bool flag) { m_isHideProtected = flag; }
     bool dpiPure() const { return m_dpiPure; }
     void dpiPure(bool flag) { m_dpiPure = flag; }
+    bool dpiCache() const { return m_dpiCache; }
+    void dpiCache(bool flag) { m_dpiCache = flag; }
     bool keepAlive() const { return m_keepAlive; }
     void keepAlive(bool flag) { m_keepAlive = flag; }
     bool needsSyms() const { return m_needsSyms; }
@@ -631,6 +635,7 @@ class AstCFunc final : public AstNode {
     bool m_isVirtual : 1;  // Virtual function
     bool m_entryPoint : 1;  // User may call into this top level function
     bool m_dpiPure : 1;  // Pure DPI function
+    bool m_dpiCache : 1;  // DPI import wrapper reusing the results of a call with the same inputs
     bool m_dpiContext : 1;  // Declared as 'context' DPI import/export function
     bool m_dpiExportDispatcher : 1;  // This is the DPI export entry point (i.e.: called by user)
     bool m_dpiExportImpl : 1;  // DPI export implementation (called from DPI dispatcher via lookup)
@@ -668,6 +673,7 @@ public:
         m_needsVlProcess = false;
         m_entryPoint = false;
         m_dpiPure = false;
+        m_dpiCache = false;
         m_dpiContext = false;
         m_dpiExportDispatcher = false;
         m_dpiExportImpl = false;
@@ -743,6 +749,8 @@ public:
     void entryPoint(bool flag) { m_entryPoint = flag; }
     bool dpiPure() const { return m_dpiPure; }
     void dpiPure(bool flag) { m_dpiPure = flag; }
+    bool dpiCache() const { return m_dpiCache; }
+    void dpiCache(bool flag) { m_dpiCache = flag; }
     bool dpiContext() const { return m_dpiContext; }
     void dpiContext(bool flag) { m_dpiContext = flag; }
     bool dpiExportDispatcher() const VL_MT_SAFE { return m_dpiExportDispatcher; }

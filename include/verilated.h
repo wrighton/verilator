@@ -288,6 +288,38 @@ private:
     }
 };
 
+// The arguments of the previous call of a DPI import marked /*verilator dpi_cache*/ from one
+// instance, its inputs then its outputs, as bytes. A call with the same inputs reuses the outputs.
+// Not synchronized: scheduling never runs the calls of one wrapper at the same time.
+class VlDpiCache final {
+    std::vector<uint8_t> m_data;  // Arguments of the previous call
+    uint64_t m_skipped = 0;  // Calls that reused the outputs
+    bool m_valid = false;  // m_data holds the arguments of a call
+
+public:
+    bool valid() const VL_MT_UNSAFE { return m_valid; }
+    // Whether the 'size' bytes at 'datap' equal those at 'pos', moving 'pos' past them
+    bool same(size_t& pos, const void* datap, size_t size) const VL_MT_UNSAFE {
+        const bool same = std::memcmp(m_data.data() + pos, datap, size) == 0;
+        pos += size;
+        return same;
+    }
+    // Copy the 'size' bytes at 'pos' to 'datap', moving 'pos' past them
+    void load(size_t& pos, void* datap, size_t size) const VL_MT_UNSAFE {
+        std::memcpy(datap, m_data.data() + pos, size);
+        pos += size;
+    }
+    // Copy the 'size' bytes at 'datap' to 'pos', moving 'pos' past them
+    void save(size_t& pos, const void* datap, size_t size) VL_MT_UNSAFE {
+        if (m_data.size() < pos + size) m_data.resize(pos + size);
+        std::memcpy(m_data.data() + pos, datap, size);
+        pos += size;
+    }
+    void validate() VL_MT_UNSAFE { m_valid = true; }
+    void skipped() VL_MT_UNSAFE { ++m_skipped; }
+    uint64_t skippedCount() const VL_MT_UNSAFE { return m_skipped; }
+};
+
 // Type trait: whether T is a user-defined custom struct
 template <typename>
 struct VlIsCustomStruct : public std::false_type {};

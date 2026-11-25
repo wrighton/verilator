@@ -128,6 +128,7 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 // Scan node, indicate whether it contains a call to a DPI imported routine.
 class DpiImportCallVisitor final : public VNVisitorConst {
     bool m_hasDpiHazard = false;  // Found a DPI import call.
+    bool m_hasDpiCacheHazard = false;  // Found a call of a DPI import reusing results
     bool m_tracingCall = false;  // Iterating into a CCall to a CFunc
     std::unordered_set<const AstCFunc*> m_visitedps;  // Functions already visited
     // METHODS
@@ -135,11 +136,25 @@ class DpiImportCallVisitor final : public VNVisitorConst {
         if (!m_tracingCall) return;
         m_tracingCall = false;
         if (nodep->dpiImportWrapper()) {
-            if (nodep->dpiPure() ? !v3Global.opt.threadsDpiPure()
-                                 : !v3Global.opt.threadsDpiUnpure()) {
+            // A wrapper reusing results keeps them unsynchronized, in the instance of the scope
+            // declaring the import, whatever --threads-dpi says. The wrapper of a library's
+            // combinational update, in the module --lib-create generated, with a hierarchical
+            // cost, keeps them in the instance using the library, whose only call is in its
+            // combinational process, a single logic in each region, so is never run at the same
+            // time.
+            const AstNodeModule* const modp = nodep->scopep() ? nodep->scopep()->modp() : nullptr;
+            const bool libWrapper = modp && modp->verilatorLib();
+            const bool hierCost = V3Control::getProfileData(nodep->cname()) != 0;
+            if (nodep->dpiCache() && !(libWrapper && hierCost)) {
+                m_hasDpiHazard = true;
+                m_hasDpiCacheHazard = true;
+                UINFO(9, "DPI wrapper '" << nodep->cname() << "' reusing results has dpi hazard");
+            } else if (nodep->dpiCache()
+                       || (nodep->dpiPure() ? !v3Global.opt.threadsDpiPure()
+                                            : !v3Global.opt.threadsDpiUnpure())) {
                 // If hierarchical DPI wrapper cost is not found or is of a 0 cost,
                 // we have a normal DPI which induces DPI hazard by default.
-                const bool dpiHazard = V3Control::getProfileData(nodep->cname()) == 0;
+                const bool dpiHazard = !hierCost;
                 m_hasDpiHazard |= dpiHazard;
                 UINFO(9, "DPI wrapper '" << nodep->cname() << "' has dpi hazard = " << dpiHazard);
             }
@@ -159,7 +174,11 @@ class DpiImportCallVisitor final : public VNVisitorConst {
     explicit DpiImportCallVisitor(AstNode* nodep) { iterateConst(nodep); }
 
 public:
-    static bool hasDpiHazard(AstNode* nodep) { return DpiImportCallVisitor{nodep}.m_hasDpiHazard; }
+    static bool hasDpiHazard(AstNode* nodep, bool& cacheHazard) {
+        const DpiImportCallVisitor visitor{nodep};
+        cacheHazard |= visitor.m_hasDpiCacheHazard;
+        return visitor.m_hasDpiHazard;
+    }
 };
 
 //######################################################################
@@ -479,7 +498,7 @@ class FixDataHazards final {
         m_mTaskGraph.addEdges(edges);
     }
 
-    bool hasDpiHazard(LogicMTask* mtaskp) {
+    bool hasDpiHazard(LogicMTask* mtaskp, bool& cacheHazard) {
         for (const OrderMoveVertex& mVtx : mtaskp->vertexList()) {
             OrderLogicVertex* const lvtxp = mVtx.logicp();
             if (!lvtxp) continue;
@@ -490,7 +509,7 @@ class FixDataHazards final {
 
             // Find all calls to DPI-imported functions, we can put those into a serial order at
             // least. That should solve the most likely DPI-related data hazards.
-            if (DpiImportCallVisitor::hasDpiHazard(lvtxp->nodep())) return true;
+            if (DpiImportCallVisitor::hasDpiHazard(lvtxp->nodep(), cacheHazard)) return true;
         }
         return false;
     }
@@ -565,13 +584,20 @@ class FixDataHazards final {
             if (!m_scratch.empty()) runAlone(m_scratch);
         }
 
-        // Serialize DPI calls unless user gave '--threads-dpi none'.
-        if (!v3Global.opt.threadsDpiPure() || !v3Global.opt.threadsDpiUnpure()) {
+        // Serialize DPI calls unless user gave '--threads-dpi none', and those reusing results
+        if (!v3Global.opt.threadsDpiPure() || !v3Global.opt.threadsDpiUnpure()
+            || v3Global.usesDpiCache()) {
             m_scratch.clear();
+            size_t cacheHazards = 0;
             for (V3GraphVertex& vtx : m_mTaskGraph.vertices()) {
                 LogicMTask& mtask = static_cast<LogicMTask&>(vtx);
-                if (hasDpiHazard(&mtask)) m_scratch.push_back(&mtask);
+                bool cacheHazard = false;
+                if (hasDpiHazard(&mtask, cacheHazard)) m_scratch.push_back(&mtask);
+                if (cacheHazard) ++cacheHazards;
             }
+            V3Stats::addStatSum("Scheduling, MTasks with DPI hazards", m_scratch.size());
+            V3Stats::addStatSum("Scheduling, MTasks with DPI hazards reusing results",
+                                cacheHazards);
             serializeMTasks(m_scratch);
         }
     }

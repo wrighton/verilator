@@ -314,8 +314,12 @@ class ProtectVisitor final : public VNVisitor {
         initialComment(txtp, fl);
         txtp->add(dpiImport(s_createSuffix, "chandle") + "string scope__V);\n\n");
         comboComment(txtp, fl);
+        // Where the library's outputs depend on its inputs and clock updates alone, the call
+        // may reuse the results of the previous one with the same inputs: a clock update since
+        // has newer results, which the selection of the outputs then takes
         m_comboPortsp = new AstTextBlock{
-            fl, dpiImport(s_comboUpdateSuffix, "longint unsigned") + "\n", ", ", ");\n\n"};
+            fl, dpiImport(s_comboUpdateSuffix, "longint unsigned") + "\n", ", ",
+            v3Global.libComboCache() ? ") /*verilator dpi_cache*/;\n\n" : ");\n\n"};
         m_comboPortsp->add("chandle handle__V\n");
         txtp->add(m_comboPortsp);
         seqComment(txtp, fl);
