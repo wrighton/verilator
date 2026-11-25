@@ -1355,7 +1355,7 @@ class V3DfgPeephole final : public DfgVisitor {
         // Altered form of extended MSB
         if (DfgShiftR* const shiftrp = vtxp->cast<DfgShiftR>()) {
             if (DfgConst* const rConstp = shiftrp->rhsp()->cast<DfgConst>()) {
-                if (rConstp->toU32() == shiftrp->width() - 1) {
+                if (rConstp->hasValue(shiftrp->width() - 1)) {
                     return {shiftrp->lhsp(), shiftrp->width() - 1, 1};
                 }
             }
@@ -2906,7 +2906,7 @@ class V3DfgPeephole final : public DfgVisitor {
         }
 
         if (DfgConst* const rConstp = rhsp->cast<DfgConst>()) {
-            const uint32_t shiftAmount = rConstp->toU32();
+            const uint32_t shiftAmount = rConstp->toShiftAmount();
 
             if (shiftAmount == 0) {
                 APPLYING(REMOVE_SHIFTL_ZERO) {
@@ -3001,7 +3001,7 @@ class V3DfgPeephole final : public DfgVisitor {
         }
 
         if (DfgConst* const rConstp = rhsp->cast<DfgConst>()) {
-            const uint32_t shiftAmount = rConstp->toU32();
+            const uint32_t shiftAmount = rConstp->toShiftAmount();
 
             if (shiftAmount == 0) {
                 APPLYING(REMOVE_SHIFTR_ZERO) {
