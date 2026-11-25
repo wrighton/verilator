@@ -81,8 +81,20 @@ inline void collectForceReadEdgeIgnores(const AstNodeProcedure* nodep, VarScopeS
     });
 }
 
+// Whether the accesses in the body of a called function are accesses of the calling logic:
+// the Verilog functions V3Task did not inline, but not tasks (IEEE 1800-2023 9.2.2.2.1)
+inline bool isLogicCallee(const AstCFunc* funcp) { return funcp->verilogFunction(); }
+// A variable access of logic
+using LogicAccessFunc = std::function<void(AstVarScope* vscp, VAccess access)>;
+// Call 'f' on each variable access in 'nodep', in tree order, and at each call of a logic
+// callee (see isLogicCallee), on its accesses of non-local variables. Of a static class
+// method, only its reads are accesses of the caller.
+void foreachLogicAccess(AstNode* nodep, const LogicAccessFunc& f);
+// Call 'f' on each access of a non-local variable in the function 'callp' calls, if a logic
+// callee, and in the logic callees it calls, as foreachLogicAccess
+void foreachCallAccess(const AstCCall* callp, const LogicAccessFunc& f);
 // Compute the implicit sensitivities of the given combinational process
-std::unordered_set<const AstVarScope*> computeImplicitSensitivities(const AstNodeProcedure* procp);
+std::unordered_set<const AstVarScope*> computeImplicitSensitivities(AstNodeProcedure* procp);
 }  // namespace util
 
 //============================================================================
