@@ -349,6 +349,7 @@ class SvaNfaBuilder final {
     // Outer abort conditions, AND-ed as !cond into inner abort edges
     // (IEEE 1800-2023 16.12.14 outer-wraps-inner).
     std::vector<AstNodeExpr*> m_outerAbortStack;
+    bool m_hasAbort = false;  // The property has an abort operator
     bool m_inUnboundedScope = false;  // Sticky: nodes created after inherit liveness
     bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
     // A cover only records matches, so a pending obligation at $finish is not a failure
@@ -1271,6 +1272,23 @@ class SvaNfaBuilder final {
         return {true, prep, sexprp->exprp()};
     }
 
+    // b[=N] as b[->N] ##1 !b[*0:$] (IEEE 1800-2023 16.9.2); V3Width rejects N of 0
+    static AstNodeExpr* newNonConsRepTree(const AstSNonConsRep* repp) {
+        FileLine* const flp = repp->fileline();
+        AstSGotoRep* const gotop = new AstSGotoRep{flp, repp->exprp()->cloneTreePure(false),
+                                                   repp->countp()->cloneTreePure(false)};
+        gotop->dtypeSetBit();
+        AstNodeExpr* const notp = new AstLogNot{flp, repp->exprp()->cloneTreePure(false)};
+        notp->dtypeSetBit();
+        AstSConsRep* const tailp
+            = new AstSConsRep{flp, notp, new AstConst{flp, 0U}, nullptr, /*unbounded=*/true};
+        tailp->dtypeSetBit();
+        AstDelay* const delayp = new AstDelay{flp, new AstConst{flp, 1U}, /*isCycle=*/true};
+        AstSExpr* const seqp = new AstSExpr{flp, gotop, delayp, tailp};
+        seqp->dtypeSetBit();
+        return seqp;
+    }
+
     // Build the NFA for a synthesized intersect lowering tree, then free it.
     // buildExpr returns the terminal condition (finalCondp) by reference into the
     // tree; detach a clone so the tree can be freed here. The graph already holds
@@ -1622,6 +1640,7 @@ public:
         , m_noEosFailure{noEosFailure}
         , m_isCoverSeq{isCoverSeq}
         , m_isSeqEvent{isSeqEvent} {}
+    void hasAbort(bool flag) { m_hasAbort = flag; }
 
     // Reset scope between antecedent and consequent: liveness must not leak.
     // m_outerAbortStack survives: an abort wrapping the implication covers the
@@ -1692,7 +1711,11 @@ public:
             return buildAbortOn(ap->condp(), ap->propp(), entryVtxp, ap->kind(), ap->fileline(),
                                 isTopLevelStep);
         }
-        if (VN_IS(nodep, SNonConsRep)) return BuildResult::fail();
+        if (AstSNonConsRep* const repp = VN_CAST(nodep, SNonConsRep)) {
+            // Lowered here only in a property with an abort operator, which no later pass lowers
+            if (!m_hasAbort || repp->maxCountp()) return BuildResult::fail();
+            return buildFromLoweringTree(newNonConsRepTree(repp), entryVtxp, isTopLevelStep);
+        }
         if (AstImplication* const implp = VN_CAST(nodep, Implication)) {
             return buildImplicationEdges(implp->lhsp(), implp->rhsp(), entryVtxp,
                                          implp->isOverlapped(), implp->isFollowedBy(),
@@ -3349,6 +3372,7 @@ class AssertNfaVisitor final : public VNVisitor {
         SvaGraph graph;
         SvaNfaBuilder builder{graph,      m_modp,     m_propTempNames,
                               isCoverSeq, isSeqEvent, coverp != nullptr};
+        builder.hasAbort(propp->exists([](const AstAbortOn*) { return true; }));
 
         const BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
         if (result.valid()) wireMatchAndMidSources(graph, result, flp);

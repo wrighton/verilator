@@ -7,4 +7,8 @@
                                                       : ... note: In instance 't'
    16 |     @(posedge clk) a [= 1: 2] |-> b;
       |                               ^~~
+%Error-UNSUPPORTED: t/t_assert_rep_range_unsup.v:19:36: Unsupported: [=M:N] nonconsecutive range repetition (IEEE 1800-2023 16.9.2)
+                                                      : ... note: In instance 't'
+   19 |     @(posedge clk) accept_on (a) b [= 1: 2];
+      |                                    ^~
 %Error: Exiting due to
