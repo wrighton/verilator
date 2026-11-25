@@ -16,7 +16,7 @@ test.compile(verilator_flags2=["--binary", "--stats"])
 
 test.execute()
 
-test.file_grep(test.stats, r'Timing, mailbox waits polled\s+(\d+)', 0)
+test.file_grep(test.stats, r'Timing, std waits polled\s+(\d+)', 0)
 test.file_grep(test.stats, r'Timing, event controls on wait queues\s+(\d+)', 4)
 
 test.passes()
