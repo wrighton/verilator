@@ -386,6 +386,8 @@ class SvaNfaBuilder final {
     // Building the outer operand of a variable-length 'within', which needs a vertex on every
     // tick of each thread, so no delay ring (see buildVarLenWithin)
     bool m_perTickVertices = false;
+    unsigned m_depth = 0;  // Nesting of buildExpr
+    unsigned m_maxDepth = 0;  // Deepest nesting of buildExpr, summed over properties in V3Stats
 
     struct RangeDelayRejectInfo final {
         SvaStateVertex* startp = nullptr;
@@ -900,6 +902,18 @@ class SvaNfaBuilder final {
         return repp && getConstUInt(repp->countp()) == 0 ? repp : nullptr;
     }
 
+    // Join count copies of exprp by ##1 as a balanced tree, so building it nests O(log count)
+    // deep, and scans of the sequence before each step visit O(count log count) nodes
+    static AstNodeExpr* newConcatTree(AstNodeExpr* exprp, unsigned count, FileLine* flp) {
+        if (count == 1) return exprp->cloneTree(false);
+        AstNodeExpr* const lhsp = newConcatTree(exprp, count / 2, flp);
+        AstNodeExpr* const rhsp = newConcatTree(exprp, count - count / 2, flp);
+        AstDelay* const delayp = new AstDelay{flp, new AstConst{flp, 1U}, /*isCycle=*/true};
+        AstSExpr* const sexprp = new AstSExpr{flp, lhsp, delayp, rhsp};
+        sexprp->dtypeSetBit();
+        return sexprp;
+    }
+
     // nonEmpty: Drop the empty match of a zero-minimum repetition
     BuildResult buildConsRep(AstSConsRep* repp, SvaStateVertex* entryVtxp,
                              bool isTopLevelStep = false, bool nonEmpty = false) {
@@ -910,14 +924,8 @@ class SvaNfaBuilder final {
             // `s[*n]` is `s ##1 s ##1 ... ##1 s` (IEEE 1800-2023 16.9.2)
             const unsigned count = getConstUInt(repp->countp());
             UASSERT_OBJ(count >= 1, repp, "[*0] is removed by V3Width");
-            AstNodeExpr* chainp = exprp->cloneTree(false);
-            for (unsigned i = count; i > 1; --i) {
-                AstDelay* const delayp
-                    = new AstDelay{flp, new AstConst{flp, 1U}, /*isCycle=*/true};
-                chainp = new AstSExpr{flp, chainp, delayp, exprp->cloneTree(false)};
-                chainp->dtypeSetBit();
-            }
-            return buildFromLoweringTree(chainp, entryVtxp, isTopLevelStep);
+            return buildFromLoweringTree(newConcatTree(exprp, count, flp), entryVtxp,
+                                         isTopLevelStep);
         }
         // Other multi-cycle expr in ConsRep not yet supported; bail to avoid invalid AST.
         if (exprp->isMultiCycleSva()) {
@@ -2746,6 +2754,7 @@ class SvaNfaBuilder final {
     }
 
 public:
+    unsigned maxDepth() const { return m_maxDepth; }
     // Free a dropped sub-result condition that is not linked into the AST
     // (abort folds synthesize unparented finalCondp trees).
     static void freeUnlinkedCondp(AstNodeExpr* condp) {
@@ -2775,6 +2784,8 @@ public:
 
     BuildResult buildExpr(AstNodeExpr* nodep, SvaStateVertex* entryVtxp,
                           bool isTopLevelStep = false) {
+        VL_RESTORER(m_depth);
+        m_maxDepth = std::max(m_maxDepth, ++m_depth);
         VL_RESTORER(m_wantBoolLeaf);
         const bool wantBoolLeaf = m_wantBoolLeaf;
         m_wantBoolLeaf = false;
@@ -5831,6 +5842,7 @@ class AssertNfaVisitor final : public VNVisitor {
                               negated,    trackVacuous, isDeclarative};
 
         const BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
+        V3Stats::addStatSum("Assertions, NFA build nesting depth maxima", builder.maxDepth());
         if (result.valid()) wireMatchAndMidSources(graph, result, flp);
         if (!result.valid()) {
             // Fall through to V3AssertPre for unsupported constructs; only
