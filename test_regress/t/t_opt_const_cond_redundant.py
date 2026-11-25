@@ -15,7 +15,7 @@ test.compile(verilator_flags2=['--stats'])
 
 test.execute()
 
-test.file_grep(test.stats, r'Optimizations, Cond redundant expressions\s+(\d+)', 1)
+test.file_grep(test.stats, r'Optimizations, Cond redundant expressions\s+(\d+)', 5)
 test.file_grep(test.stats, r'Optimizations, If cond redundant expressions\s+(\d+)', 1)
 
 test.passes()
