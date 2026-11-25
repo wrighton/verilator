@@ -81,8 +81,20 @@ CASES = (
   assign o = a;
   always_comb seen = report(pr);
 """),
+    # Nor if it triggers an event, which wakes logic without a change of value
+    ("every_eval_event", "logic run at every evaluation with effects", """
+  logic [7:0] pr  /*verilator public_flat_rw*/ = 8'd3;
+  event ev;
+  int cnt = 0;
+  assign o = a;
+  // verilator lint_off LATCH
+  always_comb if (pr[0]) -> ev;
+  // verilator lint_on LATCH
+  always @(ev) cnt++;
+  final $display("CNT=%0d", cnt);
+"""),
     # Nor if it affects the outputs, reading a sampled variable
-    ("every_eval_sampled", "logic run at every evaluation with effects", """
+    ("every_eval_sampled", "logic run at every evaluation reading sampled values", """
   logic [7:0] t  /*verilator public_flat_rd*/;
   always_comb t = $sampled(a);
   assign o = t + 8'd1;
