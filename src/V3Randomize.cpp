@@ -323,7 +323,7 @@ static const AstClass* foreignStaticClassp(const AstClass* classp, const AstVar*
 }
 
 // Class of a class handle, or of an array/assoc/queue of class handles, else nullptr
-static const AstClass* handleClassp(const AstVar* varp) {
+static AstClass* handleClassp(const AstVar* varp) {
     const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
     while (const AstNodeDType* const subp = dtypep->subDTypep()) dtypep = subp->skipRefp();
     const AstClassRefDType* const classRefp = VN_CAST(dtypep, ClassRefDType);
@@ -365,6 +365,11 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
     BaseToDerivedMap m_baseToDerivedMap;  // Mapping from base classes to classes that extend them
     BaseToDerivedMap m_allDerivedMap;  // As m_baseToDerivedMap, but complete before traversal
+    std::unordered_map<const AstClass*, ActiveSet>
+        m_classesReaching;  // Classes reaching a class's statics through rand handles
+    std::unordered_map<const AstClass*, std::vector<const AstClass*>>
+        m_handleHolders;  // Classes holding a rand class handle of each class
+    bool m_handleHoldersBuilt = false;  // m_handleHolders is complete
     std::vector<AstClass*> m_classps;  // All classes, in tree order
     AstClass* m_classp = nullptr;  // Current class
     AstNode* m_constraintExprGenp = nullptr;  // Current constraint or constraint if expression
@@ -426,8 +431,77 @@ class RandomizeMarkVisitor final : public VNVisitor {
             return count > 1;
         });
     }
+    // Class of a rand class handle, or of a rand array of class handles, else nullptr
+    static AstClass* randHandleClassp(const AstVar* varp) {
+        return varp->rand().isRandomizable() ? handleClassp(varp) : nullptr;
+    }
+    // Classes whose rand class handles reach the static members of declClassp (as
+    // reachesThroughRandHandle), propagated backwards from the holders of declClassp handles;
+    // cached per declClassp. Cost: classes and handles times the inheritance depth, as
+    // foreachMember and isClassExtendedFrom walk the base classes, the same bound as one
+    // reachesThroughRandHandle search
+    const ActiveSet& classesReaching(const AstClass* declClassp) {
+        const auto pair = m_classesReaching.emplace(declClassp, ActiveSet{});
+        ActiveSet& reachingps = pair.first->second;
+        if (!pair.second) return reachingps;
+        if (!m_handleHoldersBuilt) {
+            // From the whole netlist: during the traversal m_classps is still partial
+            m_handleHoldersBuilt = true;
+            v3Global.rootp()->foreach([&](AstClass* const classp) {
+                classp->foreachMember([&](AstClass* const, AstVar* const varp) {
+                    if (const AstClass* const memberClassp = randHandleClassp(varp)) {
+                        m_handleHolders[memberClassp].push_back(classp);
+                    }
+                });
+            });
+        }
+        std::vector<const AstClass*> workps;
+        const auto addHoldersOf = [&](const std::vector<const AstClass*>& holderps) {
+            for (const AstClass* const holderp : holderps) {
+                if (reachingps.emplace(holderp).second) workps.push_back(holderp);
+            }
+        };
+        for (const auto& it : m_handleHolders) {
+            if (AstClass::isClassExtendedFrom(it.first, declClassp)) addHoldersOf(it.second);
+        }
+        while (!workps.empty()) {
+            const AstClass* const classp = workps.back();
+            workps.pop_back();
+            const auto it = m_handleHolders.find(classp);
+            if (it != m_handleHolders.end()) addHoldersOf(it->second);
+        }
+        return reachingps;
+    }
+    // Mark the rand class handles through which classp reaches the static members of
+    // declClassp, and those of the objects they hold
+    void markHandlesReaching(AstClass* classp, const AstClass* declClassp, ActiveSet& visited) {
+        const ActiveSet& reachingps = classesReaching(declClassp);
+        classp->foreachMember([&](AstClass* const, AstVar* const varp) {
+            AstClass* const memberClassp = randHandleClassp(varp);
+            if (!memberClassp) return;
+            if (!AstClass::isClassExtendedFrom(memberClassp, declClassp)
+                && !reachingps.count(memberClassp)) {
+                return;
+            }
+            varp->globalConstrained(true);
+            if (visited.emplace(memberClassp).second) {
+                markHandlesReaching(memberClassp, declClassp, visited);
+            }
+        });
+    }
+    // As markHandlesReaching, for classp and every class derived from it, as an object of a
+    // derived class is randomized with the constraints it inherits
+    void markHierarchyHandlesReaching(AstClass* classp, const AstClass* declClassp,
+                                      ActiveSet& visited) {
+        markHandlesReaching(classp, declClassp, visited);
+        const auto it = m_allDerivedMap.find(classp);
+        if (it == m_allDerivedMap.end()) return;
+        for (AstClass* const derivedp : it->second) {
+            markHierarchyHandlesReaching(derivedp, declClassp, visited);
+        }
+    }
     // Mark the rand handles that the member selects of a constraint select through
-    static void markSelectedHandles(AstNode* nodep) {
+    void markSelectedHandles(AstNode* nodep, AstClass* classp) {
         // Such a member is solved with the class of the constraint, so the constraint and the
         // member's own constraints are solved together (IEEE 1800-2023 18.5.8). Other members
         // are randomized by their own randomize().
@@ -439,6 +513,16 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 varp = fromSelp->varp();
             }
             if (varp && varp->rand().isRandomizable()) varp->globalConstrained(true);
+        });
+        // V3Width made a static member selected through rand class handles a VarRef of its
+        // class, so the handles it is reached through are found by the class
+        UASSERT_OBJ(classp, nodep, "No class for the constraint");
+        nodep->foreach([&](const AstNodeVarRef* refp) {
+            if (!refp->varp()->rand().isRandomizable()) return;
+            const AstClass* const declClassp = foreignStaticClassp(classp, refp->varp());
+            if (!declClassp) return;
+            ActiveSet visited;
+            markHierarchyHandlesReaching(classp, declClassp, visited);
         });
     }
     // Check if an expression in a 'with' clause is a std::randomize() argument
@@ -526,7 +610,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
         // they do not depend on the order of the classes or randomize() calls.
         for (AstClass* const classp : m_classps) {
             for (AstNode* const memberp : classp->memberspList()) {
-                if (VN_IS(memberp, Constraint)) markSelectedHandles(memberp);
+                if (VN_IS(memberp, Constraint)) markSelectedHandles(memberp, classp);
             }
         }
         std::vector<std::pair<AstClass*, AstVar*>> handles;  // Owner class and handle
@@ -1127,7 +1211,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
             return;
         }
-        if (nodep->withp()) markSelectedHandles(nodep->withp());
+        if (nodep->withp()) markSelectedHandles(nodep->withp(), classp);
         for (AstArg* const argp : nodep->argspList()) {
             // randomize(null): handle before IS_RANDOMIZED_INLINE so the
             // check-only path does not allocate unused __Vrandmode slots.
@@ -1170,13 +1254,16 @@ class RandomizeMarkVisitor final : public VNVisitor {
         if (nodep->varp()->lifetime().isStatic()) m_staticRefs.emplace(nodep);
 
         // In obj.randomize() with, linking made obj's members MemberRefs of the LambdaArgRef,
-        // and V3Width turned the static ones into VarRefs of obj's class. Any other reference
-        // names a variable in the caller's scope (IEEE 1800-2023 18.7), which is a state value
-        // even if declared rand.
-        const bool callerVar = m_withClassp
-                               && !(nodep->varp()->lifetime().isStatic()
-                                    && AstClass::isClassExtendedFrom(
-                                        m_withClassp, VN_CAST(nodep->classOrPackagep(), Class)));
+        // and V3Width turned the static ones, also those of objects obj reaches through rand
+        // class handles, into VarRefs of their class. Any other reference names a variable in
+        // the caller's scope (IEEE 1800-2023 18.7), which is a state value even if declared rand.
+        bool callerVar = m_withClassp != nullptr;
+        if (callerVar && nodep->varp()->lifetime().isStatic()) {
+            const AstClass* const varClassp = VN_CAST(nodep->classOrPackagep(), Class);
+            ActiveSet visited;
+            callerVar = !AstClass::isClassExtendedFrom(m_withClassp, varClassp)
+                        && !(varClassp && hierarchyReaches(m_withClassp, varClassp, visited));
+        }
         // Mark as randomizable if: rand-declared, or listed in std::randomize() args
         if (nodep->varp()->rand().isRandomizable() && !(m_inStdWith && m_stdRandCallp)
             && !isStateStatic(nodep->varp()) && !callerVar) {
