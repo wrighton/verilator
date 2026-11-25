@@ -92,6 +92,7 @@ void OrderMTaskGraph::propagatePush(LogicMTask* mtaskp) {
     constexpr GraphWay way{N_Way};
     constexpr GraphWay inv{way.invert()};
     const uint64_t inclusiveCp = mtaskp->cpInclusive<way>();
+    ++m_cpUpdates;
 
     for (V3GraphEdge& graphEdge : mtaskp->edges<way>()) {
         MTaskEdge& edge = static_cast<MTaskEdge&>(graphEdge);
@@ -213,6 +214,7 @@ void OrderMTaskGraph::initCriticalPaths() {
     size_t nVisited = 0;
     while (const V3GraphVertex* const vtxp = stream.nextp()) {
         ++nVisited;
+        ++m_cpUpdates;
         LogicMTask* const mtaskp = const_cast<LogicMTask*>(vtxp->as<LogicMTask>());
         mtaskp->cpExclusive<N_Way>(mtaskp->cpExclusiveFromEdges<N_Way>());
         const uint64_t inclusiveCp = mtaskp->cpInclusive<way>();
