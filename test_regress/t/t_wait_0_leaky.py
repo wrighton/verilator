@@ -11,7 +11,6 @@ import vltest_bootstrap
 
 test.scenarios('simulator')
 
-test.leak_check_disable()  # unreachable join is expected to leak
 test.compile(timing_loop=True, verilator_flags2=['--timing'])
 
 test.execute()

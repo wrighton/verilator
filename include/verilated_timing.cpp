@@ -329,7 +329,10 @@ void VlDynamicTriggerScheduler::dump() const {
 // VlForkSync:: Methods
 
 void VlProcess::forkSyncOnKill(std::shared_ptr<VlForkSyncState> forkSyncp) {
-    m_forkSyncOnKillp = forkSyncp;
+    // Until dropped, the kill callback may call done(), so it counts as a resumer
+    ++forkSyncp->m_resumers;
+    m_forkSyncOnKillp
+        = {std::move(forkSyncp), [](VlForkSyncState* statep) { statep->releaseResumer(); }};
     m_forkSyncOnKillDone = false;
 }
 
@@ -357,6 +360,13 @@ void VlProcess::state(int s) {
 void VlForkSync::onKill(VlProcessRef process) {
     if (!process) return;
     process->forkSyncOnKill(m_state);
+}
+
+void VlForkSyncState::releaseResumer() {
+    if (--m_resumers) return;
+    // Nothing can call done() anymore, e.g. the forked processes were destroyed with the model,
+    // so destroy the coroutine waiting at the join, as it owns this state through its frame
+    m_susp.destroyForever();
 }
 
 void VlForkSyncState::done(const char* filename, int lineno) {
