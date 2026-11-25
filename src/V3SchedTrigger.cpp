@@ -403,6 +403,15 @@ void TriggerKit::addExtraTriggerAssignment(AstVarScope* vscp, uint32_t index) co
     m_compVecp->prependStmtsp(setp);
 }
 
+bool TriggerKit::supportsValueChange(const AstNodeDType* dtypep) {
+    if (const AstBasicDType* const bdtypep = VN_CAST(dtypep, BasicDType)) {
+        return !bdtypep->isEvent() && !bdtypep->isString()
+               && bdtypep->keyword() != VBasicDTypeKwd::CHANDLE;
+    }
+    return VN_IS(dtypep, PackArrayDType) || VN_IS(dtypep, UnpackArrayDType)
+           || VN_IS(dtypep, NodeUOrStructDType) || VN_IS(dtypep, ClassRefDType);
+}
+
 // Value-change detection for a single interface member VarScope written through a VIF.
 // Creates: trigger[bit] = (vscp != prev); prev = vscp;
 void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc* initFuncp,
@@ -415,16 +424,7 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
     FileLine* const flp = netlistp->fileline();
     AstNodeDType* const dtypep = instVscp->dtypep()->skipRefp();
 
-    // Reject types that do not support value-change comparison
-    if (const AstBasicDType* const bdtypep = VN_CAST(dtypep, BasicDType)) {
-        if (bdtypep->isEvent() || bdtypep->isString()
-            || bdtypep->keyword() == VBasicDTypeKwd::CHANDLE) {
-            instVscp->v3warn(E_UNSUPPORTED, "Unsupported: virtual interface trigger on "
-                                                << dtypep->prettyDTypeNameQ() << " type");
-            return;
-        }
-    } else if (!VN_IS(dtypep, PackArrayDType) && !VN_IS(dtypep, UnpackArrayDType)
-               && !VN_IS(dtypep, NodeUOrStructDType) && !VN_IS(dtypep, ClassRefDType)) {
+    if (!supportsValueChange(dtypep)) {
         instVscp->v3warn(E_UNSUPPORTED, "Unsupported: virtual interface trigger on "
                                             << dtypep->prettyDTypeNameQ() << " type");
         return;
