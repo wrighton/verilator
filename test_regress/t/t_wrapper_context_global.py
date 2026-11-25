@@ -16,5 +16,6 @@ test.compile(make_top_shell=False, make_main=False, verilator_flags2=["--exe", t
 test.execute()
 
 test.file_grep(test.run_log_filename, r'End of the default context')
+test.file_grep(test.run_log_filename, r'Default context after its end at time 0')
 
 test.passes()
