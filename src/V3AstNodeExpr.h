@@ -3541,10 +3541,7 @@ public:
     ASTGEN_MEMBERS_AstFUngetC;
     void numberOperate(V3Number&, const V3Number&, const V3Number&) override { V3ERROR_NA; }
     string emitVerilog() override { return "%f$ungetc(%r, %l)"; }
-    // Non-existent filehandle returns EOF
-    string emitC() override {
-        return "(%li ? (ungetc(%ri, VL_CVT_I_FP(%li)) >= 0 ? 0 : -1) : -1)";
-    }
+    string emitC() override { return "VL_UNGETC_I(%li, %ri)"; }
     bool cleanOut() const override { return false; }
     bool cleanLhs() const override { return true; }
     bool cleanRhs() const override { return true; }
@@ -6146,7 +6143,7 @@ public:
     ASTGEN_MEMBERS_AstFEof;
     void numberOperate(V3Number& out, const V3Number& lhs) override { V3ERROR_NA; }
     string emitVerilog() override { return "%f$feof(%l)"; }
-    string emitC() override { return "(%li ? feof(VL_CVT_I_FP(%li)) : true)"; }
+    string emitC() override { return "VL_FEOF_I(%li)"; }
     bool cleanOut() const override { return true; }
     bool cleanLhs() const override { return true; }
     bool sizeMattersLhs() const override { return false; }
@@ -6167,8 +6164,7 @@ public:
     ASTGEN_MEMBERS_AstFGetC;
     void numberOperate(V3Number& out, const V3Number& lhs) override { V3ERROR_NA; }
     string emitVerilog() override { return "%f$fgetc(%l)"; }
-    // Non-existent filehandle returns EOF
-    string emitC() override { return "(%li ? fgetc(VL_CVT_I_FP(%li)) : -1)"; }
+    string emitC() override { return "VL_FGETC_I(%li)"; }
     bool cleanOut() const override { return false; }
     bool cleanLhs() const override { return true; }
     bool sizeMattersLhs() const override { return false; }

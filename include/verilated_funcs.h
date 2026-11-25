@@ -144,6 +144,9 @@ extern IData VL_FGETS_IXI(int obits, void* destp, IData fpi) VL_MT_SAFE;
 extern void VL_FFLUSH_I(IData fdi) VL_MT_SAFE;
 extern IData VL_FSEEK_I(IData fdi, IData offset, IData origin) VL_MT_SAFE;
 extern IData VL_FTELL_I(IData fdi) VL_MT_SAFE;
+extern IData VL_FEOF_I(IData fpi) VL_MT_SAFE;
+extern IData VL_FGETC_I(IData fpi) VL_MT_SAFE;
+extern IData VL_UNGETC_I(IData fpi, IData c) VL_MT_SAFE;
 extern void VL_FCLOSE_I(IData fdi) VL_MT_SAFE;
 
 extern IData VL_FREAD_I(int width, int array_lsb, int array_size, void* memp, IData fpi,
