@@ -199,6 +199,14 @@ class TraceDriver final : public DfgVisitor {
     DfgVertex* m_splicep = nullptr;  // The splice vertex being traced, just for assertions
     // Result cache for reusing already traced vertices
     std::unordered_map<CacheKey, DfgVertex*, CacheKey::Hash, CacheKey::Equal> m_cache;
+    // A Concat whose only sink is a Concat in the same component is inside a tree of Concats.
+    // Map from a Concat in such a tree to the root of the tree and its offset in it, and from
+    // the root to the leaves, with their offsets, by increasing offset. Built when first
+    // needed, for the current component, as graph edits change the trees.
+    std::unordered_map<const DfgVertex*, std::pair<const DfgVertex*, uint32_t>> m_concatRoots;
+    std::unordered_map<const DfgVertex*, std::vector<std::pair<uint32_t, DfgVertex*>>>
+        m_concatLeaves;
+    size_t m_nVisited = 0;  // Number of vertices visited while tracing, for statistics
     // Cache for boundary vertices (where m_sccInfo.get(*vtxp) != m_component)
     std::unordered_map<CacheKey, DfgVertex*, CacheKey::Hash, CacheKey::Equal> m_boundaryCache;
 
@@ -265,6 +273,7 @@ class TraceDriver final : public DfgVisitor {
         DfgVertex* resp = nullptr;
 
         while (true) {
+            ++m_nVisited;
             UASSERT_OBJ(vtxp->isPacked(), vtxp, "Can only trace packed type vertices");
             UASSERT_OBJ(vtxp->size() > msb, vtxp, "Traced Vertex too narrow");
             UASSERT_OBJ(!m_defaultp || vtxp == m_splicep, vtxp, "Tracing wrong vertex");
@@ -646,44 +655,71 @@ class TraceDriver final : public DfgVisitor {
         RETURN_RESULT(tracePopIdx(vtxp->srcp()));
     }
 
-    void visit(DfgConcat* vtxp) override {
-        // While the traced bits are wholly in one side, continue with that side. Descend
-        // directly through Concats with a single sink in the same component, as there is
-        // nothing to reuse in them, but a long chain of them, e.g. a wide value assembled bit
-        // by bit, is otherwise traced along its length for every bit.
-        DfgConcat* catp = vtxp;
-        DfgVertex* nextp = nullptr;  // Vertex to continue tracing with
-        while (!nextp) {
-            DfgVertex* const rhsp = catp->rhsp();
-            DfgVertex* const lhsp = catp->lhsp();
-            const uint32_t rWidth = rhsp->width();
-            DfgVertex* sidep = nullptr;
-            if (rWidth > m_msb) {
-                sidep = rhsp;
-            } else if (m_lsb >= rWidth) {
-                sidep = lhsp;
-                m_msb -= rWidth;
-                m_lsb -= rWidth;
-            } else if (catp != vtxp) {
-                // Spans both sides of a Concat descended into, trace that as usual
-                nextp = catp;
-                break;
-            } else {
-                // The traced bit spans both sides, trace both
-                DfgConcat* const resp = make<DfgConcat>(vtxp, m_msb - m_lsb + 1);
-                resp->rhsp(trace(rhsp, rWidth - 1, m_lsb));
-                resp->lhsp(trace(lhsp, m_msb - rWidth, 0));
-                RETURN_RESULT(resp);
-            }
-            DfgConcat* const sideCatp = sidep->cast<DfgConcat>();
-            if (!sideCatp || sideCatp->hasMultipleSinks()
-                || m_sccInfo.get(*sideCatp) != m_component) {
-                nextp = sidep;
-            } else {
-                catp = sideCatp;
+    // Whether 'vtx' is a Concat inside a tree of Concats, see 'm_concatRoots'
+    bool isInnerConcat(const DfgVertex& vtx) const {
+        if (!vtx.is<DfgConcat>() || m_sccInfo.get(vtx) != m_component) return false;
+        const DfgVertex* const sinkp = vtx.singleSink();
+        return sinkp && sinkp->is<DfgConcat>() && m_sccInfo.get(*sinkp) == m_component;
+    }
+
+    // Root of the tree of Concats containing 'vtx', and the offset of 'vtx' in it
+    std::pair<const DfgVertex*, uint32_t> concatRoot(DfgConcat& vtx) {
+        const auto it = m_concatRoots.find(&vtx);
+        if (it != m_concatRoots.end()) return it->second;
+        DfgVertex* rootp = &vtx;
+        while (isInnerConcat(*rootp)) rootp = rootp->singleSink();
+        // Enumerate the tree
+        std::vector<std::pair<uint32_t, DfgVertex*>>& leaves = m_concatLeaves[rootp];
+        std::vector<std::pair<uint32_t, DfgConcat*>> stack{{0, rootp->as<DfgConcat>()}};
+        while (!stack.empty()) {
+            const uint32_t offset = stack.back().first;
+            DfgConcat* const catp = stack.back().second;
+            stack.pop_back();
+            m_concatRoots.emplace(catp, std::make_pair(rootp, offset));
+            const std::pair<uint32_t, DfgVertex*> children[]
+                = {{offset, catp->rhsp()}, {offset + catp->rhsp()->width(), catp->lhsp()}};
+            for (const std::pair<uint32_t, DfgVertex*>& child : children) {
+                if (isInnerConcat(*child.second)) {
+                    stack.emplace_back(child.first, child.second->as<DfgConcat>());
+                } else {
+                    leaves.push_back(child);
+                }
             }
         }
-        RETURN_RESULT_TAIL(nextp, m_msb, m_lsb);
+        std::sort(leaves.begin(), leaves.end());
+        return m_concatRoots.at(&vtx);
+    }
+
+    void visit(DfgConcat* vtxp) override {
+        // If the traced bits are wholly in one leaf of the tree of Concats, continue with that
+        // leaf. There is nothing to reuse inside the tree, but a long chain of Concats, e.g.
+        // a wide value assembled bit by bit, is otherwise traced along its length for every bit.
+        const std::pair<const DfgVertex*, uint32_t> root = concatRoot(*vtxp);
+        const uint32_t lsb = m_lsb + root.second;
+        const uint32_t msb = m_msb + root.second;
+        const std::vector<std::pair<uint32_t, DfgVertex*>>& leaves = m_concatLeaves.at(root.first);
+        const auto it = std::prev(
+            std::upper_bound(leaves.begin(), leaves.end(), lsb,
+                             [](uint32_t bit, const std::pair<uint32_t, DfgVertex*>& leaf) {
+                                 return bit < leaf.first;
+                             }));
+        if (msb < it->first + it->second->width()) {
+            RETURN_RESULT_TAIL(it->second, msb - it->first, lsb - it->first);
+        }
+        DfgVertex* const rhsp = vtxp->rhsp();
+        DfgVertex* const lhsp = vtxp->lhsp();
+        const uint32_t rWidth = rhsp->width();
+        // If the traced bits are wholly in one side, continue with that side
+        if (rWidth > m_msb || m_lsb >= rWidth) {
+            const bool inLhs = m_lsb >= rWidth;
+            const uint32_t offset = inLhs ? rWidth : 0;
+            RETURN_RESULT_TAIL(inLhs ? lhsp : rhsp, m_msb - offset, m_lsb - offset);
+        }
+        // The traced bit spans both sides, trace both
+        DfgConcat* const resp = make<DfgConcat>(vtxp, m_msb - m_lsb + 1);
+        resp->rhsp(trace(rhsp, rWidth - 1, m_lsb));
+        resp->lhsp(trace(lhsp, m_msb - rWidth, 0));
+        RETURN_RESULT(resp);
     }
 
     void visit(DfgRep* vtxp) override {
@@ -891,6 +927,9 @@ public:
         }
 #endif
     }
+    ~TraceDriver() {
+        V3Stats::addStatSum("Optimizations, DFG, BreakCycles, vertices traced", m_nVisited);
+    }
 
     // Given a Vertex that is part of an SCC, return a vertex that is equivalent
     // to 'vtxp[lsb +: width]', but is not part of the same SCC. This should only
@@ -899,6 +938,8 @@ public:
     DfgVertex* apply(DfgVertex& vtx, uint32_t lsb, uint32_t width) {
         VL_RESTORER(m_component);
         m_component = m_sccInfo.get(vtx);
+        m_concatRoots.clear();
+        m_concatLeaves.clear();
         return trace(&vtx, lsb + width - 1, lsb);
     }
 };

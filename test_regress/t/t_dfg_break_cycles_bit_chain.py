@@ -23,6 +23,8 @@ SIZE_SMALL = 250
 SIZE_LARGE = SIZE_SMALL * SIZE_RATIO
 RATIO_MIN = 3
 RATIO_MAX = 8  # Linear scaling gives 4x, quadratic gives 16x
+# Vertices visited when tracing the drivers of the independent bits, also linear in the width
+VERTICES_TRACED = {SIZE_SMALL: 1739, SIZE_LARGE: 6989}
 
 
 def gen(filename, n):
@@ -46,6 +48,8 @@ def verilation(n):
                  verilator_make_gmake=False)
     test.file_cache_clear()
     test.file_grep(test.stats, r'Optimizations, DFG, BreakCycles, made acyclic\s+(\d+)', 1)
+    test.file_grep(test.stats, r'Optimizations, DFG, BreakCycles, vertices traced\s+(\d+)',
+                   VERTICES_TRACED[n])
     return test.op_count_read(test.stats)
 
 
