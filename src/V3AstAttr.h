@@ -939,6 +939,8 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(ARRAY_AT,                           "at",                     PURE,   CLEAN,  false,      "r", "array or queue element selection") \
     macro(ARRAY_AT_BACK,                      "atBack",                 PURE,   CLEAN,  false,      "r", "array or queue element selection") \
     macro(ARRAY_AT_WRITE,                     "atWrite",                PURE,   CLEAN,  false,      "r", "array or queue element selection") \
+    macro(ARRAY_AT_WRITE_REF,                 "atWriteRef",             false,  CLEAN,  false,      "r", "array element passed by reference") \
+    macro(ARRAY_ELEM_REF,                     "elem",                   false,  CLEAN,  false,      "", "element of a pinned array element") \
     macro(ARRAY_FIND,                         "find",                   PURE,   CLEAN,  false,      "", "") \
     macro(ARRAY_FIND_FIRST,                   "find_first",             PURE,   CLEAN,  false,      "", "") \
     macro(ARRAY_FIND_FIRST_INDEX,             "find_first_index",       PURE,   CLEAN,  false,      "", "") \
@@ -970,7 +972,6 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(ARRAY_SORT,                         "sort",                   false,  CLEAN,  false,      "", "") \
     macro(ARRAY_UNIQUE,                       "unique",                 PURE,   CLEAN,  false,      "", "") \
     macro(ARRAY_UNIQUE_INDEX,                 "unique_index",           PURE,   CLEAN,  false,      "", "") \
-    macro(ASSOC_AT_WRITE,                     "atWrite",                false,  CLEAN,  false,      "r", "") \
     macro(ASSOC_CLEAR,                        "clear",                  false,  CLEAN,  false,      "", "") \
     macro(ASSOC_ERASE,                        "erase",                  false,  CLEAN,  false,      "r", "") \
     macro(ASSOC_EXISTS,                       "exists",                 PURE,   CLEAN,  false,      "r", "") \
@@ -988,7 +989,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_ADD_SINGLE_NAMER,        "addSingleNamer",         false,  CLEAN,  false,      "r+", "") \
     macro(COVERGROUP_ATTACH,                  "attach",                 false,  CLEAN,  false,      "r", "") \
     macro(COVERGROUP_CLEAR_HIT_LIST,          "clearHitList",           false,  CLEAN,  false,      "", "") \
-    macro(COVERGROUP_COVERAGE,                "coverage",               false,  CLEAN,  false,      "ww", "") \
+    macro(COVERGROUP_COVERAGE,                "coverage",               false,  CLEAN,  false,      "", "") \
     macro(COVERGROUP_CROSS_WITH_BEGIN,        "withBegin",              false,  CLEAN,  false,      "r+", "") \
     macro(COVERGROUP_CROSS_WITH_END,          "withEnd",                false,  CLEAN,  false,      "", "") \
     macro(COVERGROUP_CROSS_WITH_TEST,         "withTest",               false,  CLEAN,  false,      "r", "") \
@@ -999,7 +1000,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_INIT,                    "init",                   false,  CLEAN,  false,      "r+", "") \
     macro(COVERGROUP_INST_P,                  "p",                      PURE,   CLEAN,  false,      "", "") \
     macro(COVERGROUP_LEND_WEIGHT,             "lendWeight",             false,  CLEAN,  false,      "rr", "") \
-    macro(COVERGROUP_MERGED_COVERAGE,         "mergedCoverage",         false,  CLEAN,  false,      "rww", "") \
+    macro(COVERGROUP_MERGED_COVERAGE,         "mergedCoverage",         false,  CLEAN,  false,      "r", "") \
     macro(COVERGROUP_RECORD_HIT,              "recordHit",              false,  CLEAN,  false,      "r", "") \
     macro(COVERGROUP_REGISTER_BINS,           "registerBins",           false,  CLEAN,  false,      "rrrrr", "") \
     macro(COVERGROUP_SAMPLE,                  "sample",                 false,  CLEAN,  false,      "", "") \
@@ -1023,7 +1024,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_TRANSITION_SAMPLE,       "transitionSample",       false,  CLEAN,  false,      "rr", "") \
     macro(COVERGROUP_TRANSITION_SAMPLE_W,     "transitionSampleW",      false,  CLEAN,  false,      "rr", "") \
     macro(COVERGROUP_TRANSITION_TABLE,        "transitionTable",        false,  CLEAN,  false,      "r", "") \
-    macro(COVERGROUP_TYPE_COVERAGE,           "typeCoverage",           false,  CLEAN,  false,      "rrrrww", "") \
+    macro(COVERGROUP_TYPE_COVERAGE,           "typeCoverage",           false,  CLEAN,  false,      "rrrr", "") \
     macro(COVERGROUP_TYPE_WEIGHT,             "typeWeight",             false,  CLEAN,  false,      "r", "") \
     macro(COVERGROUP_VALUE_EXCLUDED,          "valueExcluded",          PURE,   CLEAN,  false,      "r", "") \
     macro(COVERGROUP_VALUE_EXCLUDED_W,        "valueExcludedW",         PURE,   CLEAN,  false,      "r", "") \
@@ -1046,6 +1047,8 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_WITH_RUN_W,              "withRunW",               false,  CLEAN,  false,      "rr", "") \
     macro(DYN_AT_WRITE_APPEND,                "atWriteAppend",          false,  CLEAN,  false,      "r", "array or queue element selection") \
     macro(DYN_AT_WRITE_APPEND_BACK,           "atWriteAppendBack",      false,  CLEAN,  false,      "r", "array or queue element selection") \
+    macro(DYN_AT_WRITE_APPEND_BACK_REF,       "atWriteAppendBackRef",   false,  CLEAN,  false,      "r", "queue element passed by reference") \
+    macro(DYN_AT_WRITE_APPEND_REF,            "atWriteAppendRef",       false,  CLEAN,  false,      "r", "queue element passed by reference") \
     macro(DYN_CLEAR,                          "clear",                  false,  CLEAN,  false,      "", "") \
     macro(DYN_ERASE,                          "erase",                  false,  CLEAN,  false,      "r", "") \
     macro(DYN_INSERT,                         "insert",                 false,  CLEAN,  false,      "rr", "") \
@@ -1061,11 +1064,10 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(DYN_SLICE_ASSIGN,                   "sliceAssign",            false,  CLEAN,  false,      "rrr", "") \
     macro(DYN_SLICE_ASSIGN_BACK_BACK,         "sliceAssignBackBack",    false,  CLEAN,  false,      "rrr", "") \
     macro(DYN_SLICE_ASSIGN_FRONT_BACK,        "sliceAssignFrontBack",   false,  CLEAN,  false,      "rrr", "") \
-    macro(DYN_SLICE_ASSIGN_PLUS,              "sliceAssignPlus",        false,  CLEAN,  false,      "rrr", "") \
     macro(DYN_SLICE_BACK_BACK,                "sliceBackBack",          PURE,   CLEAN,  false,      "rr", "") \
     macro(DYN_SLICE_FRONT_BACK,               "sliceFrontBack",         PURE,   CLEAN,  false,      "rr", "") \
-    macro(DYN_SLICE_PLUS,                     "slicePlus",              PURE,   CLEAN,  false,      "rr", "") \
     macro(EVENT_CLEAR_FIRED,                  "clearFired",             false,  CLEAN,  false,      "", "") \
+    macro(EVENT_CLEAR_TRIGGERED,              "clearTriggered",         false,  CLEAN,  false,      "", "") \
     macro(EVENT_FIRE,                         "fire",                   false,  CLEAN,  false,      "", "") \
     macro(EVENT_IS_FIRED,                     "isFired",                PURE,   CLEAN,  false,      "", "") \
     macro(EVENT_IS_TRIGGERED,                 "isTriggered",            PURE,   CLEAN,  false,      "", "") \
@@ -1074,6 +1076,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(FORCE_READ_INDEX,                   "readIndex",              PURE,   CLEAN,  false,      "rr", "") \
     macro(FORCE_READ_SEL,                     "readSel",                PURE,   CLEAN,  false,      "TODO", "") \
     macro(FORCE_RELEASE,                      "release",                false,  CLEAN,  false,      "rr+", "") \
+    macro(FORCE_TOUCH,                        "touch",                  false,  CLEAN,  false,      "", "") \
     macro(FORK_DONE,                          "done",                   false,  CLEAN,  false,      "rr", "") \
     macro(FORK_INIT,                          "init",                   false,  CLEAN,  false,      "rr", "") \
     macro(FORK_JOIN,                          "join",                   false,  CLEAN,  AWAITABLE,  "rrr", "") \
@@ -1083,32 +1086,12 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_BASIC_STD_RANDOMIZATION, "basicStdRandomization",  false,  CLEAN,  false,      "mr", "") \
     macro(RANDOMIZER_CLEARCONSTRAINTS,        "clearConstraints",       false,  CLEAN,  false,      "", "") \
     macro(RANDOMIZER_CLEARALL,                "clearAll",               false,  CLEAN,  false,      "", "") \
-    macro(RANDOMIZER_CLEAR_ELEM_VARS,         "clear_elem_vars",        false,  CLEAN,  false,      "r", "") \
-    macro(RANDOMIZER_CLEAR_VAR,               "clear_var",              false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_DISABLE_SOFT,            "disable_soft",           false,  CLEAN,  false,      "r", "") \
-    macro(RANDOMIZER_END_PRIOR,               "end_prior",              false,  CLEAN,  false,      "r", "") \
-    macro(RANDOMIZER_ENUM_DOMAIN,             "enum_domain",            false,  CLEAN,  false,      "rr", "") \
-    macro(RANDOMIZER_FAST_BEGIN,              "fast_begin",             false,  CLEAN,  false,      "mrrrrrrr", "") \
-    macro(RANDOMIZER_FAST_DISABLE,            "fast_disable",           false,  CLEAN,  false,      "", "") \
-    macro(RANDOMIZER_FAST_DIST_PICK,          "fast_dist_pick",         false,  CLEAN,  false,      "mr", "") \
-    macro(RANDOMIZER_FAST_QUEUE,              "fast_queue",             false,  CLEAN,  false,      "rr", "") \
-    macro(RANDOMIZER_FAST_RANGE,              "fast_range",             false,  CLEAN,  false,      "rrrr", "") \
-    macro(RANDOMIZER_FUNC_ARGS_READY,         "func_args_ready",        false,  CLEAN,  false,      "r", "") \
-    macro(RANDOMIZER_FUNC_ROUND_END,          "func_round_end",         false,  CLEAN,  false,      "rr", "") \
-    macro(RANDOMIZER_FUNC_ROUND_FINAL,        "func_round_final",       false,  CLEAN,  false,      "", "") \
-    macro(RANDOMIZER_FUNC_ROUND_NEXT,         "func_round_next",        false,  CLEAN,  false,      "r", "") \
-    macro(RANDOMIZER_FUNC_ROUND_START,        "func_round_start",       false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_HARD,                    "hard",                   false,  CLEAN,  false,      "r+", "") \
-    macro(RANDOMIZER_KEEP_PRIOR,              "keep_prior",             false,  CLEAN,  false,      "", "") \
-    macro(RANDOMIZER_KEEP_SOLUTION,           "keep_solution",          false,  CLEAN,  false,      "", "") \
-    macro(RANDOMIZER_PIN_FROZEN,              "pin_frozen",             false,  CLEAN,  false,      "rr", "") \
-    macro(RANDOMIZER_RANDC_HISTORY_FROM,      "randc_history_from",     false,  CLEAN,  false,      "r", "") \
-    macro(RANDOMIZER_RESTORE_SOLUTION,        "restore_solution",       false,  CLEAN,  false,      "", "") \
-    macro(RANDOMIZER_SOFT,                    "soft",                   false,  CLEAN,  false,      "rrrrr", "") \
+    macro(RANDOMIZER_SOFT,                    "soft",                   false,  CLEAN,  false,      "rrrr", "") \
     macro(RANDOMIZER_UNIQUE,                  "rand_unique",            false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_MARK_RANDC,              "markRandc",              false,  CLEAN,  false,      "r", "") \
-    macro(RANDOMIZER_MARK_SIZE_VAR,           "markSizeVar",            false,  CLEAN,  false,      "r", "") \
-    macro(RANDOMIZER_SOLVE_BEFORE,            "solveBefore",            false,  CLEAN,  false,      "rrrrrr", "") \
+    macro(RANDOMIZER_SOLVE_BEFORE,            "solveBefore",            false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_PIN_VAR,                 "pin_var",                false,  CLEAN,  false,      "rrr", "") \
     macro(RANDOMIZER_UPDATE_VAR,              "update_var",             false,  CLEAN,  false,      "TODO", "") \
     macro(RANDOMIZER_WRITE_VAR,               "write_var",              false,  CLEAN,  false,      "TODO", "") \
@@ -1123,20 +1106,11 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(SCHED_AWAITING_ZERO_DELAY,          "awaitingZeroDelay",      PURE,   CLEAN,  false,      "", "") \
     macro(SCHED_READY,                        "ready",                  false,  CLEAN,  false,      "r", "") \
     macro(SCHED_MOVE_TO_RESUME_QUEUE,         "moveToResumeQueue",      false,  CLEAN,  false,      "r", "") \
-    macro(SCHED_DELAY,                        "delay",                  false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
+    macro(SCHED_DELAY,                        "delay",                  false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_DO_POST_UPDATES,              "doPostUpdates",          false,  CLEAN,  false,      "", "") \
-    macro(SCHED_EMPTY,                        "empty",                  PURE,   CLEAN,  false,      "", "") \
     macro(SCHED_EVALUATE,                     "evaluate",               false,  CLEAN,  false,      "", "") \
     macro(SCHED_EVALUATION,                   "evaluation",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
-    macro(SCHED_EVALUATION_KEYED,             "evaluationKeyed",        false,  CLEAN,  AWAITABLE,  "rrrr", "") \
-    macro(SCHED_EVENT_EVALUATION,             "eventEvaluation",        false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
-    macro(SCHED_EVENT_TRIGGER,                "eventTrigger",           false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
-    macro(SCHED_EVENT_TRIGGER_REACTIVE,       "eventTriggerReactive",   false,  CLEAN,  AWAITABLE,  "rrrrrw", "") \
-    macro(SCHED_FORK_EVALUATION,              "forkEvaluation",         false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
-    macro(SCHED_FORK_START,                   "forkStart",              false,  CLEAN,  AWAITABLE,  "rrr", "") \
-    macro(SCHED_HANDLES_WRITTEN,              "handlesWritten",         false,  CLEAN,  false,      "", "") \
     macro(SCHED_POST_UPDATE,                  "postUpdate",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
-    macro(SCHED_QUEUE_WAIT,                   "queueWait",              false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
     macro(SCHED_RESUME,                       "resume",                 false,  CLEAN,  false,      "TODO", "") \
     macro(SCHED_RESUME_ZERO_DELAY,            "resumeZeroDelay",        false,  CLEAN,  false,      "", "") \
     macro(SCHED_RESUMPTION,                   "resumption",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
@@ -1144,12 +1118,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(SCHED_WAIT_FOREVER,                 "waitForever",            false,  CLEAN,  AWAITABLE,  "rrr", "") \
     macro(UNPACKED_ASSIGN,                    "assign",                 false,  CLEAN,  false,      "r", "") \
     macro(UNPACKED_FILL,                      "fill",                   false,  CLEAN,  false,      "r", "") \
-    macro(UNPACKED_NEQ,                       "neq",                    PURE,   CLEAN,  false,      "r", "") \
-    macro(WAIT_QUEUE_LISTED,                  "listed",                 false,  CLEAN,  false,      "", "") \
-    macro(WAIT_QUEUE_POLLED,                  "polled",                 false,  CLEAN,  false,      "", "") \
-    macro(WAIT_QUEUE_RELEASE,                 "release",                false,  CLEAN,  false,      "r", "") \
-    macro(WAIT_QUEUE_TAKE,                    "take",                   false,  CLEAN,  false,      "r", "") \
-    macro(WAIT_QUEUE_WAKE,                    "wake",                   false,  CLEAN,  false,      "r", "")
+    macro(UNPACKED_NEQ,                       "neq",                    PURE,   CLEAN,  false,      "r", "")
 // clang-format on
 
 class VCMethod final {
@@ -1169,6 +1138,25 @@ public:
     explicit VCMethod(int _e)
         : m_e(static_cast<en>(_e)) {}  // Need () or GCC 4.8 false warning
     constexpr operator en() const { return m_e; }
+    // Indexed element access to an array or queue, including writable and back-indexed forms.
+    bool isDynElementAccess() const VL_PURE {
+        switch (m_e) {
+        case ARRAY_AT:
+        case ARRAY_AT_BACK:
+        case ARRAY_AT_WRITE:
+        case ARRAY_AT_WRITE_REF:
+        case DYN_AT_WRITE_APPEND:
+        case DYN_AT_WRITE_APPEND_BACK:
+        case DYN_AT_WRITE_APPEND_BACK_REF:
+        case DYN_AT_WRITE_APPEND_REF: return true;
+        default: return false;
+        }
+    }
+    // Element access through a pin, for an element passed to a ref argument
+    bool isRefElementAccess() const VL_PURE {
+        return m_e == ARRAY_AT_WRITE_REF || m_e == ARRAY_ELEM_REF
+               || m_e == DYN_AT_WRITE_APPEND_BACK_REF || m_e == DYN_AT_WRITE_APPEND_REF;
+    }
     const char* ascii() const VL_PURE {
         static constexpr const char* const values[] = {
 #define VL_CMETHOD_NAME(id, method, pure, clean, awaitable, args) method,
