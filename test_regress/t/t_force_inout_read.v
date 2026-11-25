@@ -32,6 +32,37 @@ module middle (
   );
 endmodule
 
+// Value-preserving forwards of a force-capable port, observed only from another module
+module forwarding_leaf (
+    inout wire [6:0] p,
+    input bit sel,
+    input bit [2:0] idx
+);
+  wire [6:0] direct, rotated, chosen, left, right, joined;
+  wire [2:0] low;
+  wire picked;
+  wire [1:0] window;
+  assign direct = p;
+  assign rotated = {p[3:0], p[6:4]};
+  assign low = p[2:0];
+  assign picked = p[idx];
+  assign window = p[idx+:2];
+  assign chosen = sel ? p : 7'h33;
+  assign left = p;
+  assign right = p;
+  assign joined = sel ? left : right;
+endmodule
+
+// A forward of a force-capable port with a bit another module writes
+module partial_leaf (
+    inout wire p
+);
+  // verilator lint_off MULTIDRIVEN
+  wire [1:0] q;
+  // verilator lint_on MULTIDRIVEN
+  assign q[0] = p;
+endmodule
+
 module registered_leaf (
     inout wire [6:0] p,
     input bit clk
@@ -204,6 +235,119 @@ module t;
     `checkh(bit_pulled_forwarded === 7'b11zzz00, 1'b1);
     `checkh(forced_high_forwarded === 7'h7f, 1'b1);
     `checkh(forced_low_forwarded === 7'h00, 1'b1);
+  end
+
+  bit fwd_en = 1, fwd_sel = 1;
+  bit [2:0] fwd_idx = 3'd2;
+  logic [6:0] fwd_raw = 7'h00;
+  wire [6:0] fwd_net;
+  assign fwd_net = fwd_en ? fwd_raw : 7'bzzzzzzz;
+  forwarding_leaf fwd (
+      .p(fwd_net),
+      .sel(fwd_sel),
+      .idx(fwd_idx)
+  );
+  wire [6:0] fwd_other_net = 7'h4c;
+  forwarding_leaf fwd_other (
+      .p(fwd_other_net),
+      .sel(1'b1),
+      .idx(3'd0)
+  );
+  task automatic check_forwarded(logic [6:0] expected);
+    `checkh(fwd.direct, expected);
+    `checkh(fwd.rotated, {expected[3:0], expected[6:4]});
+    `checkh(fwd.low, expected[2:0]);
+    `checkh(fwd.picked, expected[fwd_idx]);
+    `checkh(fwd.window, expected[fwd_idx+:2]);
+    `checkh(fwd.joined, expected);
+  endtask
+  initial begin
+    #1.5;
+    // Externally driven values, including zero, are not high impedance.
+    `checkh(fwd.direct === 7'bzzzzzzz, 1'b0);
+    `checkh(fwd.rotated === 7'bzzzzzzz, 1'b0);
+    `checkh(fwd.low === 3'bzzz, 1'b0);
+    `checkh(fwd.picked === 1'bz, 1'b0);
+    `checkh(fwd.window === 2'bzz, 1'b0);
+    `checkh(fwd.chosen === 7'bzzzzzzz, 1'b0);
+    `checkh(fwd.joined === 7'bzzzzzzz, 1'b0);
+    check_forwarded(7'h00);
+    `checkh(fwd.chosen, 7'h00);
+    fwd_raw = 7'h55;
+    #0.1;
+    check_forwarded(7'h55);
+    force fwd.p = 7'bzzzzzzz;
+    #0.1;
+    `checkh(fwd.direct === 7'bzzzzzzz, 1'b1);
+    `checkh(fwd.rotated === 7'bzzzzzzz, 1'b1);
+    `checkh(fwd.low === 3'bzzz, 1'b1);
+    `checkh(fwd.picked === 1'bz, 1'b1);
+    `checkh(fwd.window === 2'bzz, 1'b1);
+    `checkh(fwd.chosen === 7'bzzzzzzz, 1'b1);
+    `checkh(fwd.joined === 7'bzzzzzzz, 1'b1);
+    fwd_sel = 0;
+    #0.1;
+    `checkh(fwd.chosen, 7'h33);
+    `checkh(fwd.chosen === 7'bzzzzzzz, 1'b0);
+    `checkh(fwd.joined === 7'bzzzzzzz, 1'b1);
+    force fwd.p = 7'h2a;
+    #0.1;
+    check_forwarded(7'h2a);
+    `checkh(fwd.joined === 7'bzzzzzzz, 1'b0);
+    // Mixed driven and high-impedance bits keep their positions
+    fwd_sel = 1;
+    force fwd.p = 7'bz0z1zz0;
+    #0.1;
+    `checkh(fwd.direct === 7'bz0z1zz0, 1'b1);
+    `checkh(fwd.rotated === 7'b1zz0z0z, 1'b1);
+    `checkh(fwd.low === 3'bzz0, 1'b1);
+    `checkh(fwd.picked === 1'bz, 1'b1);
+    `checkh(fwd.window === 2'b1z, 1'b1);
+    `checkh(fwd.chosen === 7'bz0z1zz0, 1'b1);
+    `checkh(fwd.joined === 7'bz0z1zz0, 1'b1);
+    force fwd.p = 7'b1zz0z01;
+    fwd_idx = 3'd3;
+    #0.1;
+    `checkh(fwd.direct === 7'b1zz0z01, 1'b1);
+    `checkh(fwd.rotated === 7'b0z011zz, 1'b1);
+    `checkh(fwd.low === 3'bz01, 1'b1);
+    `checkh(fwd.picked === 1'b0, 1'b1);
+    `checkh(fwd.window === 2'bz0, 1'b1);
+    `checkh(fwd.chosen === 7'b1zz0z01, 1'b1);
+    `checkh(fwd.joined === 7'b1zz0z01, 1'b1);
+    release fwd.p;
+    #0.1;
+    check_forwarded(7'h55);
+    `checkh(fwd.direct === 7'bzzzzzzz, 1'b0);
+    `checkh(fwd.window === 2'bzz, 1'b0);
+    fwd_en = 0;
+    #0.1;
+    `checkh(fwd.direct === 7'bzzzzzzz, 1'b1);
+    `checkh(fwd.rotated === 7'bzzzzzzz, 1'b1);
+    `checkh(fwd.low === 3'bzzz, 1'b1);
+    `checkh(fwd.picked === 1'bz, 1'b1);
+    `checkh(fwd.window === 2'bzz, 1'b1);
+    `checkh(fwd.chosen === 7'bzzzzzzz, 1'b1);
+    `checkh(fwd.joined === 7'bzzzzzzz, 1'b1);
+    // Another instance of the module keeps its own driven connection.
+    `checkh(fwd_other.direct, 7'h4c);
+    `checkh(fwd_other.direct === 7'bzzzzzzz, 1'b0);
+    `checkh(fwd_other.picked === 1'bz, 1'b0);
+    `checkh(fwd_other.joined === 7'bzzzzzzz, 1'b0);
+  end
+
+  bit part_data = 1;
+  wire part_net;
+  assign part_net = part_data;
+  partial_leaf part (part_net);
+  assign part.q[1] = 1'b0;
+  task automatic part_force_unused;
+    force part.p = 1'b0;
+  endtask
+  initial begin
+    #1.5;
+    `checkh(part.q, 2'b01);
+    `checkh(part.q[0] === 1'bz, 1'b0);
   end
 
   task automatic check_ordinary(logic [6:0] expected);

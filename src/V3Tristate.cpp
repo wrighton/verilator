@@ -2426,6 +2426,9 @@ class TristateVisitor final : public TristateBaseVisitor {
     void propagateResolvedInoutReads(AstNodeModule* modp) {
         // A prepared INOUT can carry Z from the parent even when no local driver supplies it.
         // Mark value-transparent forwarding destinations so the read enable follows the data.
+        // Create their enables now, which resolution drives; a hierarchical reader in a later
+        // module would otherwise create an undriven one. A net with a hierarchical writer
+        // keeps none, as the enable would make that writer an unsupported tristate driver.
         std::vector<AstVar*> pendingps;
         std::unordered_set<const AstVar*> visitedps;
         for (AstNode* const itemp : modp->stmtspList()) {
@@ -2443,6 +2446,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                     continue;
                 if (!visitedps.emplace(destp).second) continue;
                 m_tgraph.setTristate(destp);
+                if (!hasUnresolvedWriter(destp)) getCreateEnVarp(destp, false, modp);
                 pendingps.push_back(destp);
             }
         }
