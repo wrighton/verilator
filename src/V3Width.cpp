@@ -85,6 +85,7 @@
 #include "V3Number.h"
 #include "V3PreShell.h"
 #include "V3Randomize.h"
+#include "V3Stats.h"
 #include "V3String.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
@@ -370,6 +371,7 @@ class WidthVisitor final : public VNVisitor {
                                       // `inside` expressions
     V3UniqueNames m_bitstreamTempNames;  // Impure values in bit-stream casts
     VMemberMap m_memberMap;  // Member names cached for fast lookup
+    VDouble0 m_statIfaceMemberSteps;  // Interface items examined, or lookups, for member refs
     std::unordered_map<const AstModport*, std::unordered_map<string, const AstNode*>>
         m_modportItems;  // Items listed by each modport, by name
     std::unordered_map<const AstClass*, std::unordered_map<string, AstNodeFuncCovItem*>>
@@ -6354,21 +6356,27 @@ class WidthVisitor final : public VNVisitor {
             }
             return mvarp->varp();
         }
-        VSpellCheck speller;
-        for (AstNode* const itemp : ifacep->stmtspList()) {
-            // An array of interface instances, split by V3Param, is found by its whole array
-            // variable
-            const AstVar* const varp = VN_CAST(itemp, Var);
-            if (itemp->name() == nodep->name()
-                || (varp && varp->isIfaceArraySplit()
-                    && varp->name() == nodep->name() + "__Viftop")) {
-                if (!modportAllowsItem(nodep, adtypep, itemp)) {
-                    return nullptr;  // Caller handles error
-                }
-                return itemp;
+        // Looked up by name, as scanning the items for each reference is quadratic. An array
+        // of interface instances, split by V3Param, is found by its whole array variable, which
+        // no other item of its name precedes, as the instances were renamed
+        ++m_statIfaceMemberSteps;
+        AstNode* itemp = m_memberMap.findMember(ifacep, nodep->name());
+        if (!itemp) {
+            AstVar* const varp
+                = VN_CAST(m_memberMap.findMember(ifacep, nodep->name() + "__Viftop"), Var);
+            if (varp && varp->isIfaceArraySplit()) itemp = varp;
+        }
+        if (itemp) {
+            if (!modportAllowsItem(nodep, adtypep, itemp)) {
+                return nullptr;  // Caller handles error
             }
-            if (VN_IS(itemp, Var) || VN_IS(itemp, Modport) || VN_IS(itemp, Cell)) {
-                speller.pushCandidate(itemp->prettyName());
+            return itemp;
+        }
+        VSpellCheck speller;
+        for (AstNode* const candp : ifacep->stmtspList()) {
+            ++m_statIfaceMemberSteps;
+            if (VN_IS(candp, Var) || VN_IS(candp, Modport) || VN_IS(candp, Cell)) {
+                speller.pushCandidate(candp->prettyName());
             }
         }
         const string suggest = speller.bestCandidateMsg(nodep->prettyName());
@@ -15903,6 +15911,10 @@ public:
     ~WidthVisitor() override {
         for (AstNodeSchema* const declp : m_untypedFormalDecls) {
             VL_DO_DANGLING(pushDeletep(declp->unlinkFrBack()), declp);
+        }
+        // Many visitors width a single parameter, so only report a count
+        if (m_statIfaceMemberSteps) {
+            V3Stats::addStatSum("Width, Interface member lookup steps", m_statIfaceMemberSteps);
         }
     }
 };
