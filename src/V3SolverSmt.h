@@ -32,7 +32,7 @@ public:
     std::unique_ptr<V3SolverLowering>
     newLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames, const RandModeVars& modeVars,
                 ElemRandModes& elemModes, const ClonedConstraints& cloneObjps,
-                VNDeleter& deleter) const override VL_MT_DISABLED;
+                const RandDispatch& dispatch, VNDeleter& deleter) const override VL_MT_DISABLED;
 };
 
 #endif  // Guard
