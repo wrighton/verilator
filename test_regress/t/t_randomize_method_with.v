@@ -105,6 +105,36 @@ class Cls2 extends Cls;
   rand int c;
 endclass
 
+class StaticRandCls;
+  static rand int s;
+endclass
+
+class StaticOwnCls;
+  static rand bit [6:0] s;
+  rand bit [6:0] x;
+  constraint keep_s {s == 45;}
+endclass
+
+class StaticOwnDerived extends StaticOwnCls;
+endclass
+
+class StaticBareCls;
+  static rand bit [6:0] s;
+  rand bit [6:0] x;
+endclass
+
+class StaticBareDerived extends StaticBareCls;
+endclass
+
+// Not reaching a StaticRandCls through rand class handles, so StaticRandCls::s is a state value
+class StaticRandUser;
+  rand int v;
+  function bit test_static_of_other_class();
+    StaticRandCls::s = 60;
+    return randomize() with {v == StaticRandCls::s;} == 1 && v == 60;
+  endfunction
+endclass
+
 class NoParen;
   int a = 4;  // Not rand, so constraints only read it
   rand int b;
@@ -174,6 +204,56 @@ module mwith ();
     if (!foo.test_this_randomize()) $stop;
     // Check this.randomize() with no constraints
     if (!baz2.test_this_randomize()) $stop;
+
+    // Check a static rand member of another class, a state value of the caller
+    begin
+      automatic StaticRandUser su = new;
+      int randomize_result;
+      StaticRandCls::s = 50;
+      randomize_result = su.randomize() with {v == StaticRandCls::s;};
+      `checkd(randomize_result, 1);
+      `checkd(su.v, 50);
+      randomize_result = su.randomize() with {StaticRandCls::s == 3;};
+      `checkd(randomize_result, 0);
+      `checkd(StaticRandCls::s, 50);
+      `checkd(su.test_static_of_other_class(), 1'b1);
+    end
+
+    // Check a static rand member of the randomized object's class, a random variable
+    begin
+      automatic StaticOwnDerived so = new;
+      int randomize_result;
+      StaticOwnCls::s = 11;
+      randomize_result = so.randomize() with {s == 45; x == s;};
+      `checkd(randomize_result, 1);
+      `checkd(StaticOwnCls::s, 45);
+      `checkd(so.x, 45);
+      StaticOwnCls::s = 11;
+      so.x = 0;
+      randomize_result = so.randomize() with {StaticOwnCls::s == 45; x == StaticOwnCls::s;};
+      `checkd(randomize_result, 1);
+      `checkd(StaticOwnCls::s, 45);
+      `checkd(so.x, 45);
+    end
+    begin
+      automatic StaticBareCls sb = new;
+      automatic StaticBareDerived sd = new;
+      int randomize_result;
+      randomize_result = sb.randomize() with {StaticBareCls::s == 8;};
+      `checkd(randomize_result, 1);
+      `checkd(StaticBareCls::s, 8);
+      randomize_result = sd.randomize() with {StaticBareCls::s == 9;};
+      `checkd(randomize_result, 1);
+      `checkd(StaticBareCls::s, 9);
+      randomize_result = sb.randomize() with {sb.s == 14;};
+      `checkd(randomize_result, 1);
+      `checkd(StaticBareCls::s, 14);
+      repeat (10) begin
+        randomize_result = sb.randomize() with {s inside {[1 : 9]};};
+        `checkd(randomize_result, 1);
+        `checkd(StaticBareCls::s inside {[1 : 9]}, 1);
+      end
+    end
 
     // Check randomize with a constraint block and no argument parentheses
     begin

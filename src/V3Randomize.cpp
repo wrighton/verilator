@@ -1022,17 +1022,16 @@ class CaptureVisitor final : public VNVisitor {
         if (varIsParam) return CaptureMode::CAP_VALUE;
         // Static var in function (will not be inlined, because it's in class)
         if (callerIsClass && varIsFuncLocal) return CaptureMode::CAP_VALUE;
-        // Static class members in static context don't need 'this' capture;
-        // V3Class will move both the function and the member to __Vclpkg
-        if (m_staticContext && callerIsClass && varIsFieldOfCaller
-            && varRefp->varp()->lifetime().isStatic())
-            return CaptureMode::CAP_NO;
-        if (callerIsClass && varIsFieldOfCaller) return CaptureMode::CAP_THIS;
-        // Static member of a different class: V3Width replaces AstMemberRef with a bare
-        // AstVarRef (classOrPackagep set). Capture current value as a function argument.
-        if (callerIsClass && varClassp && !varIsFieldOfCaller
-            && varRefp->varp()->lifetime().isStatic())
+        if (varClassp && varRefp->varp()->lifetime().isStatic()) {
+            // A static member is not reached through 'this'. One of the class the randomize
+            // function is created in, or of a base, is referenced directly, which keeps the
+            // object's static rand members random (IEEE 1800-2023 18.4). Any other is captured
+            // by value.
+            const AstClass* const funcClassp = m_targetp ? m_targetp : callerClassp;
+            if (AstClass::isClassExtendedFrom(funcClassp, varClassp)) return CaptureMode::CAP_NO;
             return CaptureMode::CAP_VALUE;
+        }
+        if (callerIsClass && varIsFieldOfCaller) return CaptureMode::CAP_THIS;
         UASSERT_OBJ(!callerIsClass, varRefp, "Invalid reference?");
         return CaptureMode::CAP_VALUE;
     }
@@ -1044,6 +1043,10 @@ class CaptureVisitor final : public VNVisitor {
         if (!hasFlags(capModeFlags, CaptureMode::CAP_F_SET_CLASSORPACKAGEP)) {
             // Keeping classOrPackagep will cause a broken link after inlining
             nodep->classOrPackagep(nullptr);  // AstScope will figure this out
+        }
+        // A static member of another class is then a variable of the caller, so a state value
+        if (VN_IS(nodep->varp()->user2p(), Class) && nodep->varp()->lifetime().isStatic()) {
+            nodep->user1(false);
         }
         nodep->varp(newVarp);
         if (!newCapture) return;
