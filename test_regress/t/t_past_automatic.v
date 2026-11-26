@@ -122,6 +122,26 @@ module t;
     end
   end
 
+  // A class property is not an automatic variable, whatever its lifetime: its past value is its
+  // history
+  class Cp;
+    int v;
+    static int sv;
+  endclass
+  Cp cp = new;
+  int hv = 0;
+  int hsv = 0;
+  always @(negedge clk) begin
+    cp.v = cyc * 3;
+    Cp::sv = cyc * 5;
+  end
+  always @(posedge clk) begin
+    `checkh($past(cp.v), hv);
+    `checkh($past(Cp::sv), hsv);
+    hv <= cp.v;
+    hsv <= Cp::sv;
+  end
+
   initial begin
     #100;
     `checkh(npass, 70);
