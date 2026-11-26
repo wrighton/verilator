@@ -175,12 +175,67 @@ class MemberIndexedHolder;
   endfunction
 endclass
 
+class Ordered2;  // Selects by two expressions of a foreach index, sized by another class
+  rand Entry q[$];
+  constraint c_q {foreach (q[i]) if (i < q.size() - 2) q[i+1].x < q[i+2].x;}
+  function void pre_randomize();
+    q.delete();
+    repeat (6) begin
+      Entry e = new;
+      q.push_back(e);
+    end
+  endfunction
+endclass
+
+class Ordered2Holder;
+  rand Ordered2 o;
+  rand int unsigned n;
+  constraint c_n {
+    n inside {[3 : 5]};
+    o.q.size() == n;
+  }
+  function new();
+    o = new;
+  endfunction
+endclass
+
+class Limited;  // Its elements' constraint reads another array's size, not their array's
+  rand Entry q[$];
+  int lim[$] = '{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  int fix = 0;
+  constraint c_q {
+    foreach (q[i]) q[i].x < 8'(lim.size());
+    q[fix].x == 8'd7;
+  }
+  function void pre_randomize();
+    q.delete();
+    repeat (6) begin
+      Entry e = new;
+      q.push_back(e);
+    end
+  endfunction
+endclass
+
+class LimitedHolder;
+  rand Limited l;
+  rand int unsigned n;
+  constraint c_n {
+    n inside {[1 : 4]};
+    l.q.size() == n;
+  }
+  function new();
+    l = new;
+  endfunction
+endclass
+
 module t;
   Trn trn;
   Grower grower;
   IndexedHolder indexedHolder;
   MemberIndexedHolder memberIndexedHolder;
   MixedHolder mixedHolder;
+  Ordered2Holder ordered2Holder;
+  LimitedHolder limitedHolder;
   FixedHolder fixedHolder;
   int ok;
   initial begin
@@ -189,6 +244,8 @@ module t;
     indexedHolder = new;
     memberIndexedHolder = new;
     mixedHolder = new;
+    ordered2Holder = new;
+    limitedHolder = new;
     fixedHolder = new;
     repeat (20) begin
       ok = trn.randomize();
@@ -207,6 +264,16 @@ module t;
       `checkh(indexedHolder.indexed.q.size(), 2);
       `checkh(indexedHolder.indexed.q[0].x, 8'd17);
       `checkh(indexedHolder.indexed.q[0].bos, 1'b1);
+      ok = limitedHolder.randomize();
+      `checkh(ok, 1);
+      `checkh(limitedHolder.l.q.size(), limitedHolder.n);
+      `checkh(limitedHolder.l.q[0].x, 8'd7);
+      foreach (limitedHolder.l.q[i]) `checkh(limitedHolder.l.q[i].x < 8'd10, 1'b1);
+      ok = ordered2Holder.randomize();
+      `checkh(ok, 1);
+      `checkh(ordered2Holder.o.q.size(), ordered2Holder.n);
+      for (int i = 0; i < int'(ordered2Holder.o.q.size()) - 2; ++i)
+        `checkh(ordered2Holder.o.q[i+1].x < ordered2Holder.o.q[i+2].x, 1'b1);
       ok = mixedHolder.randomize();
       `checkh(ok, 1);
       `checkh(mixedHolder.mixed.q.size(), 2);
