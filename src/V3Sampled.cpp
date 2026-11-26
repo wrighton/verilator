@@ -18,6 +18,9 @@
 // Top Scope:
 //   Replace each variable reference under SAMPLED with a new variable.
 //   Sample only the ranges of a wide variable that constant selects read.
+//   Sample a selection of a variable, such as an array element or a queue size, by evaluating
+//   it at sampling time, if it reads only sampled variables and the variable is not otherwise
+//   read.
 //   Capture whole-signal force reads by value, before sampling their children.
 //   Make a process computing a value marked to follow the time read a new variable holding the
 //   time, so it is computed at each evaluation.
@@ -30,6 +33,7 @@
 
 #include "V3Sampled.h"
 
+#include "V3Const.h"
 #include "V3Sched.h"
 #include "V3SharedTmps.h"
 #include "V3Stats.h"
@@ -69,6 +73,9 @@ class SampledVisitor final : public VNVisitor {
     // Ranges of wide variables that sampled expressions only read with constant selects
     std::unordered_map<const AstVarScope*, VarRanges> m_varRanges;
     VDouble0 m_statRanges;  // Ranges sampled instead of their whole variable
+    // Keys remain in the tree as the sampled variables' value expressions.
+    std::unordered_map<VNRef<AstNode>, AstVarScope*> m_selectionSamples;
+    VDouble0 m_statSelections;  // Selections sampled instead of their whole variable
 
     // STATE - for current visit position (use VL_RESTORER)
     AstScope* m_scopep = nullptr;  // Current scope
@@ -118,11 +125,66 @@ class SampledVisitor final : public VNVisitor {
         }
         return false;
     }
+    // The expression that 'nodep' selects from, if a selection that can be evaluated at any
+    // time: an element of an array or of a queue, a size, or an unpacked structure member
+    static AstNode* selectionFromp(const AstNode* nodep) {
+        if (const AstArraySel* const selp = VN_CAST(nodep, ArraySel)) return selp->fromp();
+        if (const AstStructSel* const selp = VN_CAST(nodep, StructSel)) return selp->fromp();
+        const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard);
+        if (!methodp) return nullptr;
+        switch (methodp->method()) {
+        case VCMethod::ARRAY_AT:
+        case VCMethod::ARRAY_AT_BACK: {
+            // Unlike a fixed-size array, a queue or a dynamic array gives the default for an
+            // index out of bounds
+            const AstNodeDType* const dtypep = methodp->fromp()->dtypep()->skipRefp();
+            return VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType) ? methodp->fromp()
+                                                                             : nullptr;
+        }
+        case VCMethod::ASSOC_SIZE:
+        case VCMethod::DYN_SIZE: return methodp->fromp();
+        default: return nullptr;
+        }
+    }
+    // The sampled variable reference that selection 'nodep' reads from, if any
+    static const AstVarRef* selectionRefp(const AstNode* nodep) {
+        while (const AstNode* const fromp = selectionFromp(nodep)) nodep = fromp;
+        const AstSampled* const sampledp = VN_CAST(nodep, Sampled);
+        return sampledp ? VN_CAST(sampledp->exprp(), VarRef) : nullptr;
+    }
+    // Whether 'nodep' reads only sampled variables, so its sampled value is its value at
+    // sampling time; it calls no function, as functions are called at its evaluation, and has
+    // no side effect (IEEE 1800-2023 16.5.1)
+    static bool readsSampledOnly(AstNodeExpr* nodep) {
+        return nodep->forall([](AstNode* np) {
+            // Automatic variables and values following the time are not sampled
+            if (const AstSampled* const sampledp = VN_CAST(np, Sampled)) {
+                return !sampledp->timed() && VN_IS(sampledp->exprp(), VarRef);
+            }
+            if (const AstVarRef* const refp = VN_CAST(np, VarRef)) {
+                return VN_IS(refp->backp(), Sampled) && !refp->varp()->isFuncLocal();
+            }
+            if (VN_IS(np, Const) || selectionFromp(np)) return true;
+            // An associative array selection creates a missing element
+            if (VN_IS(np, NodeSel)) return false;
+            return (VN_IS(np, NodeUniop) || VN_IS(np, NodeBiop) || VN_IS(np, NodeTriop))
+                   && np->isPure();
+        });
+    }
+    // Whether 'refp' is read by a selection evaluated at sampling time
+    static bool readBySelection(const AstVarRef* refp) {
+        const AstSampled* const sampledp = VN_CAST(refp->backp(), Sampled);
+        if (!sampledp) return false;
+        AstNodeExpr* const selp = VN_CAST(sampledp->backp(), NodeExpr);
+        return selp && selectionFromp(selp) == sampledp && readsSampledOnly(selp);
+    }
     // Find the variables wider than a quad whose sampled reads are all constant selects, and
-    // the ranges they read, if few and narrower than the variable
+    // the ranges they read, if few and narrower than the variable; and the variables read
+    // otherwise than by selections evaluated at sampling time
     void findRanges(AstNetlist* netlistp) {
         netlistp->foreach([&](const AstSampled* sampledp) {
             sampledp->exprp()->foreach([&](const AstVarRef* refp) {
+                if (readBySelection(refp)) return;
                 VarRanges& ranges = m_varRanges[refp->varScopep()];
                 const AstSel* const selp = selectOf(refp);
                 int lsb = 0;
@@ -162,7 +224,69 @@ class SampledVisitor final : public VNVisitor {
         }
     }
 
+    // Clamp the index of 'nodep' to the bounds of its array
+    static void clampIndex(AstArraySel* nodep) {
+        const AstNodeArrayDType* const adtypep
+            = VN_AS(nodep->fromp()->dtypep()->skipRefp(), NodeArrayDType);
+        const int elements = adtypep->elementsConst();
+        AstNodeExpr* const bitp = nodep->bitp();
+        if (bitp->width() <= VL_IDATASIZE
+            && VL_MASK_I(bitp->width()) < static_cast<uint32_t>(elements)) {
+            return;
+        }
+        FileLine* const flp = bitp->fileline();
+        VNRelinker relinker;
+        bitp->unlinkFrBack(&relinker);
+        AstConst* const lastp = new AstConst{flp, AstConst::WidthedValue{}, bitp->width(),
+                                             static_cast<uint32_t>(elements - 1)};
+        AstConst* const firstp = new AstConst{flp, AstConst::WidthedValue{}, bitp->width(), 0};
+        AstNodeExpr* const newp
+            = new AstCond{flp, new AstGte{flp, lastp, bitp->cloneTreePure(false)}, bitp, firstp};
+        relinker.relink(V3Const::constifyEdit(newp));
+    }
+    // Replace a selection reading only sampled values by a variable assigned its value at
+    // sampling time, unless its variable is sampled whole; return whether replaced
+    bool sampleSelection(AstNodeExpr* nodep) {
+        const AstVarRef* const refp = selectionRefp(nodep);
+        if (!refp || !readsSampledOnly(nodep)) return false;
+        const auto it = m_varRanges.find(refp->varScopep());
+        if (it != m_varRanges.end() && it->second.m_whole) return false;
+        FileLine* const flp = nodep->fileline();
+        VNRelinker relinker;
+        nodep->unlinkFrBack(&relinker);
+        // At sampling time, the current values of the variables are their sampled values
+        std::vector<AstSampled*> sampledps;
+        nodep->foreach([&](AstSampled* sampledp) { sampledps.push_back(sampledp); });
+        std::for_each(sampledps.begin(), sampledps.end(), [this](AstSampled* sampledp) {
+            sampledp->replaceWith(sampledp->exprp()->unlinkFrBack());
+            VL_DO_DANGLING(pushDeletep(sampledp), sampledp);
+        });
+        // The guard of an element read stays where it is read, so read an element in bounds
+        // here; its value is unused where the index is out of bounds
+        for (AstNode* selp = nodep; selp; selp = selectionFromp(selp)) {
+            if (AstArraySel* const arraySelp = VN_CAST(selp, ArraySel)) clampIndex(arraySelp);
+        }
+        const auto pair = m_selectionSamples.emplace(*nodep, nullptr);
+        AstVarScope*& vscp = pair.first->second;
+        if (pair.second) {
+            ++m_statSelections;
+            vscp = createSampledVar(m_sampledTmps, nodep, refp->varp()->name());
+        } else {
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        }
+        AstVarRef* const newp = new AstVarRef{flp, vscp, VAccess::READ};
+        newp->user1SetOnce();  // Don't sample this one
+        relinker.relink(newp);
+        return true;
+    }
+
     // VISITORS
+    void visit(AstArraySel* nodep) override {
+        if (!sampleSelection(nodep)) iterateChildren(nodep);
+    }
+    void visit(AstStructSel* nodep) override {
+        if (!sampleSelection(nodep)) iterateChildren(nodep);
+    }
     void visit(AstSel* nodep) override {
         // A constant select of a sampled variable, inside or around its sampled expression
         const AstSampled* const sampledp = VN_CAST(nodep->fromp(), Sampled);
@@ -246,6 +370,7 @@ class SampledVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void visit(AstCMethodHard* nodep) override {
+        if (sampleSelection(nodep)) return;
         if (!m_inSampled || nodep->method() != VCMethod::FORCE_READ) {
             iterateChildren(nodep);
             return;
@@ -298,6 +423,7 @@ public:
     }
     ~SampledVisitor() override {
         V3Stats::addStat("Optimizations, Sampled variable ranges", m_statRanges);
+        V3Stats::addStat("Optimizations, Sampled variable selections", m_statSelections);
     }
 };
 
