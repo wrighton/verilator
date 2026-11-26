@@ -5414,8 +5414,6 @@ class ConstVisitor final : public VNVisitor {
     // AstLogAnd/AstLogOr already converted to AstAnd/AstOr for these rules
     // AstAdd->ShiftL(#,1) but uncommon
     TREEOP ("AstAnd    {operandsSameTree($lhsp,,$rhsp)}",   "replaceWLhs(nodep)");
-    TREEOP ("AstDiv    {operandsSame($lhsp,,$rhsp)}",   "replaceNum(nodep,1)");  // Not a tree: x/0 is 0
-    TREEOP ("AstDivS   {operandsSame($lhsp,,$rhsp)}",   "replaceNum(nodep,1)");  // Not a tree: x/0 is 0
     TREEOP ("AstOr     {operandsSameTree($lhsp,,$rhsp)}",   "replaceWLhs(nodep)");
     TREEOP ("AstSub    {operandsSameTree($lhsp,,$rhsp)}",   "replaceZero(nodep)");
     TREEOP ("AstXor    {operandsSameTree($lhsp,,$rhsp)}",   "replaceZero(nodep)");
