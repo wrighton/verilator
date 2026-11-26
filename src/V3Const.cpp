@@ -929,6 +929,465 @@ public:
 };
 
 //######################################################################
+// Whole-variable assignments that a following counted loop nest overwrites before reading
+
+class ConstLoopCover final {
+    // Bounds keeping the products and sums below in 64 bits: a product of two values below
+    // MAX_VALUE, or of one and a loop bound, is below 2^62
+    static constexpr int64_t MAX_VALUE = int64_t{1} << 31;
+    static constexpr int64_t MAX_TRIPS = int64_t{1} << 24;
+    static constexpr size_t MAX_DEPTH = 8;
+
+    // A loop variable and its values [m_lo, m_hi)
+    struct LoopRange final {
+        const void* m_targetp = nullptr;  // Variable, or variable scope once scoped
+        int64_t m_lo = 0;  // First value
+        int64_t m_hi = 0;  // Value ending the loop
+    };
+    // m_c plus the sum of m_coefs[k] times the variable of the k-th enclosing loop
+    struct Affine final {
+        int64_t m_c = 0;  // Constant term
+        std::vector<int64_t> m_coefs;  // Coefficient of each loop variable
+    };
+    // The first write to a candidate in a loop body, which every later access must stay within
+    struct Write final {
+        const AstLoop* m_loopp = nullptr;  // Innermost loop whose body has the write
+        Affine m_pos;  // Position of the element written
+        int m_width = 0;  // Width of the element written
+        std::vector<LoopRange> m_ranges;  // Loops enclosing the write
+    };
+    struct Candidate final {
+        int m_width;  // Width of the variable
+        AstNode* m_stmtp;  // The whole-variable assignment before the nest
+        bool m_ok = true;  // No access in the nest is outside the element written
+        bool m_written = false;  // Written in the nest, as in m_write
+        Write m_write;  // The first write in the nest
+    };
+
+    std::vector<Candidate> m_cands;  // Variables whose assignments may be dead
+    std::unordered_map<const void*, size_t> m_candIndex;  // Index in m_cands of each target
+    std::vector<LoopRange> m_ranges;  // Enclosing loops while scanning
+    const AstLoop* m_loopp = nullptr;  // Innermost loop while scanning
+    bool m_fail = false;  // The nest cannot be analyzed
+
+    // The storage a reference accesses, distinct for each scope of a variable. A hierarchical
+    // reference is to its variable, as references are before scoping.
+    static const void* targetOf(const AstNodeVarRef* refp) {
+        if (refp->varScopep()) return refp->varScopep();
+        UASSERT_OBJ(refp->varp(), refp, "Unlinked variable reference");
+        return refp->varp();
+    }
+    Candidate* candidatep(const void* targetp) {
+        const auto it = m_candIndex.find(targetp);
+        return it == m_candIndex.end() ? nullptr : &m_cands[it->second];
+    }
+    bool isLoopVar(const void* targetp) const {
+        return std::any_of(m_ranges.begin(), m_ranges.end(),
+                           [targetp](const LoopRange& r) { return r.m_targetp == targetp; });
+    }
+
+    // Statements of 'stmtsp' in order, with those of unnamed-or-named begin blocks in place
+    static void flatten(AstNode* stmtsp, std::vector<AstNode*>& out) {
+        for (AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+            if (const AstBegin* const beginp = VN_CAST(stmtp, Begin)) {
+                flatten(beginp->stmtsp(), out);
+            } else {
+                out.push_back(stmtp);
+            }
+        }
+    }
+    // The assignment of a constant to a variable that 'stmtp' is, if any
+    static const AstAssign* initAssign(const AstNode* stmtp) {
+        if (const AstInitialAutomaticStmt* const autop = VN_CAST(stmtp, InitialAutomaticStmt)) {
+            if (autop->stmtsp() && !autop->stmtsp()->nextp()) stmtp = autop->stmtsp();
+        }
+        const AstAssign* const assignp = VN_CAST(stmtp, Assign);
+        if (!assignp || assignp->timingControlp()) return nullptr;
+        if (!VN_IS(assignp->lhsp(), VarRef) || !VN_IS(assignp->rhsp(), Const)) return nullptr;
+        return assignp;
+    }
+    static bool constValue(const AstConst* constp, int64_t& value) {
+        const V3Number& num = constp->num();
+        const bool isSigned = constp->isSigned();
+        if (num.isFourState() || (isSigned ? num.width() > 64 : num.mostSetBitP1() > 62)) {
+            return false;
+        }
+        value = isSigned ? num.toSQuad() : static_cast<int64_t>(num.toUQuad());
+        return value > -MAX_VALUE && value < MAX_VALUE;
+    }
+    // Whether 'loopp', after init 'initp', counts its variable up by one from a constant to
+    // below a constant, testing it first; return that range and the increment
+    static bool countedLoop(const AstLoop* loopp, const AstAssign* initp, LoopRange& range,
+                            const AstNode*& incp) {
+        const AstVarRef* const initRefp = VN_AS(initp->lhsp(), VarRef);
+        const AstVar* const varp = initRefp->varp();
+        if (!varp->dtypep()->skipRefp()->isIntegralOrPacked() || varp->width() > 64) return false;
+        const AstLoopTest* const testp = VN_CAST(loopp->stmtsp(), LoopTest);
+        if (!testp || loopp->contsp()) return false;
+        // 'hi > v' or 'v < hi'
+        const AstNodeBiop* const condp = VN_CAST(testp->condp(), NodeBiop);
+        const bool gt = condp && (VN_IS(condp, Gt) || VN_IS(condp, GtS));
+        const bool lt = condp && (VN_IS(condp, Lt) || VN_IS(condp, LtS));
+        if (!gt && !lt) return false;
+        const AstConst* const hip = VN_CAST(gt ? condp->lhsp() : condp->rhsp(), Const);
+        const AstVarRef* const refp = VN_CAST(gt ? condp->rhsp() : condp->lhsp(), VarRef);
+        if (!hip || !refp || targetOf(refp) != targetOf(initRefp)) return false;
+        // Last statement 'v = v + 1' or 'v = 1 + v'
+        const AstNode* lastp = testp;
+        while (lastp->nextp()) lastp = lastp->nextp();
+        const AstAssign* const assignp = VN_CAST(lastp, Assign);
+        const AstVarRef* const lhsp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+        const AstAdd* const addp = assignp ? VN_CAST(assignp->rhsp(), Add) : nullptr;
+        if (!lhsp || !addp || assignp->timingControlp() || targetOf(lhsp) != targetOf(initRefp)
+            || !VN_IS(addp->lhsp(), Const) || !VN_AS(addp->lhsp(), Const)->num().isEqOne()
+            || !VN_IS(addp->rhsp(), VarRef)
+            || targetOf(VN_AS(addp->rhsp(), VarRef)) != targetOf(initRefp)) {
+            return false;
+        }
+        // The variable and the increment hold every value below 'hi' without wrapping, and the
+        // bounds keep products of positions in 64 bits
+        int64_t lo = 0;
+        int64_t hi = 0;
+        if (!constValue(VN_AS(initp->rhsp(), Const), lo) || !constValue(hip, hi) || lo < 0
+            || lo >= hi || hi > MAX_TRIPS
+            || (varp->width() < 64 && hi >= (int64_t{1} << (varp->width() - 1)))) {
+            return false;
+        }
+        range = LoopRange{targetOf(initRefp), lo, hi};
+        incp = assignp;
+        return true;
+    }
+
+    // Least and greatest values of 'aff' over the enclosing loops
+    void bounds(const Affine& aff, int64_t& minv, int64_t& maxv) const {
+        minv = maxv = aff.m_c;
+        for (size_t k = 0; k < aff.m_coefs.size(); ++k) {
+            const int64_t a = aff.m_coefs[k] * m_ranges[k].m_lo;
+            const int64_t b = aff.m_coefs[k] * (m_ranges[k].m_hi - 1);
+            minv += std::min(a, b);
+            maxv += std::max(a, b);
+        }
+    }
+    static bool fitsValue(const Affine& aff) {
+        const auto fits = [](int64_t value) { return value > -MAX_VALUE && value < MAX_VALUE; };
+        return fits(aff.m_c) && std::all_of(aff.m_coefs.begin(), aff.m_coefs.end(), fits);
+    }
+    // Whether the values of 'aff' fit 'nodep', so no operation on the way wrapped
+    bool fitsNode(const Affine& aff, const AstNodeExpr* nodep, bool asUnsigned) const {
+        if (!fitsValue(aff)) return false;
+        int64_t minv = 0;
+        int64_t maxv = 0;
+        bounds(aff, minv, maxv);
+        const int width = nodep->width();
+        const bool isSigned = nodep->isSigned() && !asUnsigned;
+        if (width >= 63) return isSigned || minv >= 0;
+        if (isSigned) {
+            const int64_t half = int64_t{1} << (width - 1);
+            return minv >= -half && maxv < half;
+        }
+        return minv >= 0 && maxv < (int64_t{1} << width);
+    }
+    // Parse 'nodep' as an affine function of the enclosing loop variables, its value read as
+    // unsigned if 'asUnsigned', as a select position is
+    bool affine(const AstNodeExpr* nodep, Affine& out, bool asUnsigned = false) const {
+        out = Affine{};
+        out.m_coefs.assign(m_ranges.size(), 0);
+        if (const AstConst* const constp = VN_CAST(nodep, Const)) {
+            return constValue(constp, out.m_c) && fitsNode(out, nodep, asUnsigned);
+        } else if (const AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
+            size_t k = 0;
+            while (k < m_ranges.size() && m_ranges[k].m_targetp != targetOf(refp)) ++k;
+            if (k == m_ranges.size()) return false;
+            out.m_coefs[k] = 1;
+        } else if (VN_IS(nodep, Add) || VN_IS(nodep, Sub)) {
+            const AstNodeBiop* const biopp = VN_AS(nodep, NodeBiop);
+            Affine rhs;
+            if (!affine(biopp->lhsp(), out) || !affine(biopp->rhsp(), rhs)) return false;
+            const int64_t sign = VN_IS(nodep, Sub) ? -1 : 1;
+            out.m_c += sign * rhs.m_c;
+            for (size_t k = 0; k < out.m_coefs.size(); ++k)
+                out.m_coefs[k] += sign * rhs.m_coefs[k];
+        } else if (VN_IS(nodep, Mul) || VN_IS(nodep, MulS) || VN_IS(nodep, ShiftL)) {
+            const AstNodeBiop* const biopp = VN_AS(nodep, NodeBiop);
+            const bool shift = VN_IS(nodep, ShiftL);
+            const AstConst* constp = VN_CAST(biopp->rhsp(), Const);
+            const AstNodeExpr* otherp = biopp->lhsp();
+            if (!constp && !shift) {
+                constp = VN_CAST(biopp->lhsp(), Const);
+                otherp = biopp->rhsp();
+            }
+            int64_t factor = 0;
+            if (!constp || !constValue(constp, factor) || (shift && (factor < 0 || factor > 31))
+                || !affine(otherp, out)) {
+                return false;
+            }
+            if (shift) factor = int64_t{1} << factor;
+            // Both below MAX_VALUE, so the products fit 64 bits
+            out.m_c *= factor;
+            for (int64_t& coef : out.m_coefs) coef *= factor;
+        } else if (const AstExtend* const extendp = VN_CAST(nodep, Extend)) {
+            // Zero extension of a value that is not negative
+            if (!affine(extendp->lhsp(), out) || !fitsNode(out, extendp->lhsp(), true)) {
+                return false;
+            }
+        } else if (const AstCond* const condp = VN_CAST(nodep, Cond)) {
+            // A condition the same in every iteration, such as a bounds check of an index
+            bool value = false;
+            if (!decided(condp->condp(), value)
+                || !affine(value ? condp->thenp() : condp->elsep(), out)) {
+                return false;
+            }
+        } else if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+            // Truncation of a value it holds whole
+            const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
+            if (!lsbp || !lsbp->isZero() || !affine(selp->fromp(), out)) return false;
+        } else {
+            return false;
+        }
+        return fitsNode(out, nodep, asUnsigned);
+    }
+
+    // Whether comparison 'nodep' of affine values has the same 'value' in every iteration
+    bool decided(const AstNodeExpr* nodep, bool& value) const {
+        const AstNodeBiop* const biopp = VN_CAST(nodep, NodeBiop);
+        if (!biopp) return false;
+        // As 'lhs - rhs >= threshold', or 'rhs - lhs >= threshold' if 'swap'
+        const bool swap
+            = VN_IS(nodep, Lt) || VN_IS(nodep, LtS) || VN_IS(nodep, Lte) || VN_IS(nodep, LteS);
+        const bool orEq
+            = VN_IS(nodep, Gte) || VN_IS(nodep, GteS) || VN_IS(nodep, Lte) || VN_IS(nodep, LteS);
+        if (!swap && !orEq && !VN_IS(nodep, Gt) && !VN_IS(nodep, GtS)) return false;
+        Affine diff;
+        Affine sub;
+        if (!affine(swap ? biopp->rhsp() : biopp->lhsp(), diff)
+            || !affine(swap ? biopp->lhsp() : biopp->rhsp(), sub)) {
+            return false;
+        }
+        diff.m_c -= sub.m_c;
+        for (size_t k = 0; k < diff.m_coefs.size(); ++k) diff.m_coefs[k] -= sub.m_coefs[k];
+        int64_t minv = 0;
+        int64_t maxv = 0;
+        bounds(diff, minv, maxv);
+        const int64_t threshold = orEq ? 0 : 1;
+        if (minv < threshold && maxv >= threshold) return false;
+        value = minv >= threshold;
+        return true;
+    }
+
+    // The variable a chain of selects 'nodep' reads or writes, the position and the width
+    bool selOf(const AstNodeExpr* nodep, const void*& targetp, Affine& pos, int& width) const {
+        const AstSel* const selp = VN_CAST(nodep, Sel);
+        Affine lsb;
+        if (!selp || !affine(selp->lsbp(), lsb, true)) return false;
+        if (const AstVarRef* const refp = VN_CAST(selp->fromp(), VarRef)) {
+            targetp = targetOf(refp);
+            pos = lsb;
+        } else {
+            // Integ keeps a select of a select, of an element of a packed array
+            int belowWidth = 0;
+            if (!selOf(selp->fromp(), targetp, pos, belowWidth)) return false;
+            pos.m_c += lsb.m_c;
+            for (size_t k = 0; k < pos.m_coefs.size(); ++k) pos.m_coefs[k] += lsb.m_coefs[k];
+        }
+        width = selp->widthConst();
+        return fitsValue(pos);
+    }
+    // Whether bits 'pos' to 'pos + width' are within the element 'cand' wrote earlier in this body
+    bool withinWrite(const Candidate& cand, const Affine& pos, int width) const {
+        if (!cand.m_written || cand.m_write.m_loopp != m_loopp) return false;
+        const Affine& wpos = cand.m_write.m_pos;
+        if (wpos.m_coefs != pos.m_coefs) return false;
+        const int64_t offset = pos.m_c - wpos.m_c;
+        return offset >= 0 && offset + width <= cand.m_write.m_width;
+    }
+    // Whether 'nodep' is pure and calls nothing that might read a variable
+    static bool callFree(AstNode* nodep) {
+        return nodep->isPure() && !nodep->exists([](const AstNode* subp) {
+            return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, NodeCCall) || VN_IS(subp, ExprStmt)
+                   || VN_IS(subp, CExpr);
+        });
+    }
+    // Check the references of 'nodep' to candidates, all reads but in 'writep' itself
+    void checkRefs(AstNode* nodep, const AstNodeExpr* writep) {
+        nodep->foreach([&](const AstNode* subp) {
+            // Control flow leaving the body, a suspension, or code that may read or write anything
+            if (VN_IS(subp, NodeFTaskRef) || VN_IS(subp, NodeCCall) || VN_IS(subp, ExprStmt)
+                || VN_IS(subp, CExpr) || VN_IS(subp, CStmt) || VN_IS(subp, JumpGo)
+                || VN_IS(subp, JumpBlock) || VN_IS(subp, LoopTest) || VN_IS(subp, Loop)
+                || VN_IS(subp, Delay) || VN_IS(subp, EventControl) || VN_IS(subp, Wait)
+                || VN_IS(subp, Fork) || VN_IS(subp, CAwait) || VN_IS(subp, Disable)
+                || VN_IS(subp, Finish) || VN_IS(subp, FinishFork) || VN_IS(subp, Stop)) {
+                m_fail = true;
+                return;
+            }
+            if (const AstNodeAssign* const assignp = VN_CAST(subp, NodeAssign)) {
+                if (assignp->timingControlp()) m_fail = true;
+            }
+            const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef);
+            if (!refp) return;
+            if (isLoopVar(targetOf(refp))) {
+                if (!refp->access().isReadOnly()) m_fail = true;
+                return;
+            }
+            Candidate* const candp = candidatep(targetOf(refp));
+            if (!candp || !candp->m_ok) return;
+            // The outermost of the selects of the reference
+            const AstSel* selp = nullptr;
+            for (const AstNode* fromp = refp;
+                 VN_IS(fromp->backp(), Sel) && VN_AS(fromp->backp(), Sel)->fromp() == fromp;
+                 fromp = fromp->backp()) {
+                selp = VN_AS(fromp->backp(), Sel);
+            }
+            const bool selected = selp;
+            if (selected && selp == writep) return;
+            const void* targetp = nullptr;
+            Affine pos;
+            int width = 0;
+            if (refp->access().isReadOnly() && selected && selOf(selp, targetp, pos, width)
+                && withinWrite(*candp, pos, width)) {
+                return;
+            }
+            candp->m_ok = false;
+        });
+    }
+    // Record the write of assignment 'assignp' to a candidate, if it is one
+    void write(const AstAssign* assignp) {
+        const void* targetp = nullptr;
+        Affine pos;
+        int width = 0;
+        if (!selOf(assignp->lhsp(), targetp, pos, width)) return;
+        Candidate* const candp = candidatep(targetp);
+        if (!candp || !candp->m_ok) return;
+        if (candp->m_written) {
+            // Later writes stay within the first, so leave it
+            if (!withinWrite(*candp, pos, width)) candp->m_ok = false;
+            return;
+        }
+        candp->m_written = true;
+        candp->m_write = Write{m_loopp, pos, width, m_ranges};
+    }
+    // Scan the body of counted loop 'loopp' of range 'range' and increment 'incp'
+    void scanLoop(AstLoop* loopp, const LoopRange& range, const AstNode* incp) {
+        VL_RESTORER(m_loopp);
+        m_loopp = loopp;
+        m_ranges.push_back(range);
+        std::vector<AstNode*> stmts;
+        flatten(loopp->stmtsp()->nextp(), stmts);
+        for (size_t i = 0; i < stmts.size() && !m_fail; ++i) {
+            AstNode* const stmtp = stmts[i];
+            if (stmtp == incp) continue;
+            // An inner counted loop after its initialization
+            if (const AstAssign* const initp = initAssign(stmtp)) {
+                if (i + 1 < stmts.size() && VN_IS(stmts[i + 1], Loop)) {
+                    LoopRange inner;
+                    const AstNode* innerIncp = nullptr;
+                    AstLoop* const innerp = VN_AS(stmts[i + 1], Loop);
+                    // A loop nested too deep is left, and fails the check below
+                    if (m_ranges.size() < MAX_DEPTH
+                        && !isLoopVar(targetOf(VN_AS(initp->lhsp(), VarRef)))
+                        && countedLoop(innerp, initp, inner, innerIncp)) {
+                        scanLoop(innerp, inner, innerIncp);
+                        ++i;
+                        continue;
+                    }
+                }
+            }
+            AstAssign* const assignp = VN_CAST(stmtp, Assign);
+            if (assignp && VN_IS(assignp->lhsp(), Sel)) {
+                checkRefs(assignp, assignp->lhsp());
+                if (!m_fail) write(assignp);
+            } else {
+                checkRefs(stmtp, nullptr);
+            }
+        }
+        m_ranges.pop_back();
+    }
+
+    // Whether the positions the write of 'cand' takes over its loops are exactly the elements
+    // of the variable
+    static bool tiles(const Candidate& cand) {
+        const Write& wr = cand.m_write;
+        int64_t offset = wr.m_pos.m_c;
+        // Strides, and the number of positions each runs over, ignoring loops not moving it
+        std::vector<std::pair<int64_t, int64_t>> strides;
+        for (size_t k = 0; k < wr.m_ranges.size(); ++k) {
+            const int64_t coef = wr.m_pos.m_coefs[k];
+            const LoopRange& range = wr.m_ranges[k];
+            const int64_t trips = range.m_hi - range.m_lo;
+            offset += coef * (coef < 0 ? range.m_hi - 1 : range.m_lo);
+            if (coef != 0 && trips > 1) strides.emplace_back(std::abs(coef), trips);
+        }
+        if (offset != 0) return false;
+        std::stable_sort(strides.begin(), strides.end());
+        int64_t extent = wr.m_width;
+        for (const auto& stride : strides) {
+            if (stride.first != extent) return false;
+            extent *= stride.second;
+            if (extent > cand.m_width) return false;
+        }
+        return extent == cand.m_width;
+    }
+
+public:
+    // Return the whole-variable assignments before loop 'loopp' that it overwrites before any
+    // read, with every bit, so are dead
+    static std::vector<AstNode*> deadDefaults(AstLoop* loopp) {
+        ConstLoopCover cover;
+        // The initialization of the loop variable
+        AstNode* prevp = loopp->backp();
+        if (!prevp || prevp->nextp() != loopp) return {};
+        const AstAssign* const initp = initAssign(prevp);
+        if (!initp) return {};
+        LoopRange range;
+        const AstNode* incp = nullptr;
+        if (!countedLoop(loopp, initp, range, incp)) return {};
+        // Whole-variable assignments before it, through enclosing begin blocks, read by no
+        // statement between them and the loop
+        std::unordered_set<const void*> readTargets;
+        for (AstNode* stmtp = prevp;;) {
+            AstNode* const backp = stmtp->backp();
+            if (backp && backp->nextp() == stmtp) {
+                stmtp = backp;
+            } else if (AstBegin* const beginp = VN_CAST(backp, Begin)) {
+                stmtp = beginp;  // Its statements start with the last one checked
+                continue;
+            } else {
+                break;
+            }
+            // An assignment, possibly the initialization of an automatic variable
+            AstNode* assignStmtp = stmtp;
+            const AstInitialAutomaticStmt* const autop = VN_CAST(stmtp, InitialAutomaticStmt);
+            if (autop && autop->stmtsp() && !autop->stmtsp()->nextp()) {
+                assignStmtp = autop->stmtsp();
+            }
+            const AstAssign* const assignp = VN_CAST(assignStmtp, Assign);
+            const AstVarRef* const lhsp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+            if (!lhsp || assignp->timingControlp()) break;
+            // A call may read any variable, so earlier assignments may be observed
+            if (!callFree(assignp->rhsp())) break;
+            const void* const targetp = targetOf(lhsp);
+            const int width = lhsp->varp()->width();
+            if (width == lhsp->width() && !readTargets.count(targetp) && !cover.candidatep(targetp)
+                && targetp != range.m_targetp) {
+                cover.m_candIndex.emplace(targetp, cover.m_cands.size());
+                cover.m_cands.push_back(Candidate{width, stmtp, true, false, Write{}});
+            }
+            assignp->rhsp()->foreach(
+                [&](const AstNodeVarRef* refp) { readTargets.insert(targetOf(refp)); });
+        }
+        if (cover.m_cands.empty()) return {};
+        cover.scanLoop(loopp, range, incp);
+        if (cover.m_fail) return {};
+        std::vector<AstNode*> dead;
+        for (const Candidate& cand : cover.m_cands) {
+            if (!cand.m_ok || !cand.m_written || !tiles(cand)) continue;
+            dead.push_back(cand.m_stmtp);
+        }
+        return dead;
+    }
+};
+
+//######################################################################
 // Const state, as a visitor of each AstNode
 
 class ConstVisitor final : public VNVisitor {
@@ -979,6 +1438,7 @@ class ConstVisitor final : public VNVisitor {
     VDouble0 m_statLogicPurities;  // Purities computed to convert LogAnd/LogOr to bitwise
     VDouble0 m_statMemberAccessVisits;  // Nodes visited by containsMemberAccessRecurse
     VDouble0 m_statSelSelPadded;  // Selects of selects reading the value padded above
+    VDouble0 m_statLoopCoveredDefaults;  // Assignments a following loop overwrites
     const bool m_globalPass;  // ConstVisitor invoked as a global pass
     static uint32_t s_globalPassNum;  // Counts number of times ConstVisitor invoked as global pass
     V3UniqueNames m_concswapNames;  // For generating unique temporary variable names
@@ -5051,6 +5511,15 @@ class ConstVisitor final : public VNVisitor {
             nodep->v3warn(INFINITELOOP, "Infinite loop (condition always true)");
             nodep->fileline()->modifyWarnOff(V3ErrorCode::INFINITELOOP, true);  // Complain once
         }
+        // Delete assignments of whole variables the loop overwrites before reading them. They
+        // are expressions without declarations, so need no lifted statics to delete.
+        if (m_doV && m_doNConst && !m_params) {
+            for (AstNode* const stmtp : ConstLoopCover::deadDefaults(nodep)) {
+                UINFO(4, "Loop-covered assignment " << stmtp);
+                VL_DO_DANGLING(pushDeletep(stmtp->unlinkFrBack()), stmtp);
+                ++m_statLoopCoveredDefaults;
+            }
+        }
     }
     void visit(AstLoopTest* nodep) override {
         iterateChildren(nodep);
@@ -5639,6 +6108,8 @@ public:
         V3Stats::addStatSum("Optimizations, Member access predicate node visits",
                             m_statMemberAccessVisits);
         V3Stats::addStatSum("Optimizations, Selects of selects padded", m_statSelSelPadded);
+        V3Stats::addStatSum("Optimizations, Loop-covered assignments removed",
+                            m_statLoopCoveredDefaults);
     }
 
     AstNode* mainAcceptEdit(AstNode* nodep) {
