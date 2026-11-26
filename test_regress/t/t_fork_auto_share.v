@@ -234,6 +234,59 @@ module t;
     foreach (box_nba.a[i]) `checkd(box_nba.a[i], i + 10);
   end
 
+  // Test: an NBA uses the value of a variable a forked process writes later
+  Box box_child;
+  task automatic nba_child_write(Box b);
+    int x = 1;
+    fork
+      #1 x = 5;
+    join_none
+    b.v <= x;
+    x = 2;
+    #2;
+  endtask
+  initial begin
+    box_child = new;
+    nba_child_write(box_child);
+    `checkd(box_child.v, 1);
+  end
+
+  // Test: a forked process and an NBA read one variable; the process sees the parent's later
+  // write (2), and the NBA the value when it runs (1)
+  Box box_both;
+  int seen_both;
+  task automatic reader_and_nba(Box b);
+    int x = 1;
+    fork
+      seen_both = x;
+    join_none
+    b.v <= x;
+    x = 2;
+    #1;
+  endtask
+  initial begin
+    box_both = new;
+    reader_and_nba(box_both);
+    `checkd(seen_both, 2);
+    `checkd(box_both.v, 1);
+  end
+
+  // Test: NBAs in a loop use the loop index when they run, also when a forked process writes it
+  Box box_loop;
+  task automatic nba_loop(Box b);
+    int i;
+    fork
+      #1 i = 7;
+    join_none
+    for (i = 0; i < 3; ++i) b.a[i] <= i + 20;
+    #2;
+  endtask
+  initial begin
+    box_loop = new;
+    nba_loop(box_loop);
+    foreach (box_loop.a[i]) `checkd(box_loop.a[i], i + 20);
+  end
+
   // Test: a process sees the parent's later writes to an object through a handle
   int seen_member;
   task automatic member(Box b);
@@ -268,6 +321,25 @@ module t;
     #100;
     `checkd(got_act.size(), 10);
     foreach (got_act[i]) `checkd(got_act[i], i);
+  end
+
+  // Test: the same, when a forked process writes the variable before the action runs
+  int cyc_w = 0;
+  int got_act_w[$];
+  always @(posedge clk) begin
+    automatic int k;
+    k = cyc_w;
+    cyc_w <= cyc_w + 1;
+    fork
+      k = 99;
+    join_none
+    assert property (never until never)
+    else got_act_w.push_back(k);
+  end
+  initial begin
+    #100;
+    `checkd(got_act_w.size(), 10);
+    foreach (got_act_w[i]) `checkd(got_act_w[i], i);
   end
 
   initial begin
