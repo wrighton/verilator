@@ -49,6 +49,8 @@ static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to dro
 static constexpr int diversitySlotSamples = 4;  // Elements checked for a part dropped for all
 static constexpr int diversitySlotShare = 2;  // Of checks left, 1/this for a part one by one
 static constexpr int diversitySlotFew = 128;  // Of its elements, 1/this conflicting one by one
+// Elements past which a model's array is read whole, one value, rather than by element
+static constexpr int modelWholeRead = 64;
 // Resource limit of each spreading check, in the solver's own units (SMT-LIB 2.6
 // :reproducible-resource-limit): diversityCheckLimit, plus diversityCheckLimitSquare times
 // n^2, n the number of terms spread (variables and array elements, not bits). It bounds
@@ -1262,6 +1264,83 @@ static void parseSMTNum(int obits, WDataOutP owp, const std::string& val) {
     default: _vl_vsss_based(owp, obits, 4, &val[i], 0, val.size() - i); break;
     }
 }
+
+// The elements val, a model's value of a one-dimensional array of bit-vector indices of
+// indexWidth (at most 32) bits and elements of elementWidth bits, sets: the value of each
+// index stored, the outermost store of an index winning as in the array, and the constant
+// array's element for the others. Read as solvers write one, stores into a constant array
+// through lets naming any part of it or any value in it: each let must bind a name of its
+// own, so a name stands for one term, followed once. False for any other form, such as a
+// function as-array, or a value that is no literal of its width.
+static bool smtArrayStores(const std::string& val, int indexWidth, int elementWidth,
+                           std::unordered_map<IData, std::string>& storesr,
+                           std::string& defaultr) {
+    const std::vector<std::string> tokens = smtTokens(val);
+    std::ostringstream sort;
+    sort << "(Array (_ BitVec " << indexWidth << ") (_ BitVec " << elementWidth << "))";
+    const std::vector<std::string> sortTokens = smtTokens(sort.str());
+    size_t end = 0;
+    // Of the sort, with every name it uses bound, so the walk below needs no checks of its own
+    if (!VlSMTValueReader{tokens, sortTokens}.read(end, 0, 0) || end != tokens.size()) {
+        return false;
+    }
+    const std::vector<size_t> ends = smtTermEnds(tokens);
+    const auto tok = [&](size_t i) -> const std::string& { return smtToken(tokens, i); };
+    std::unordered_map<std::string, size_t> bound;  // Let name -> where its term starts
+    for (size_t i = 0; i + 1 < tokens.size(); ++i) {
+        if (tok(i) != "(" || tok(i + 1) != "let") continue;
+        for (size_t b = i + 3; tok(b) == "("; b = ends[b]) {
+            if (!bound.emplace(tok(b + 1), b + 2).second) return false;
+        }
+    }
+    // Where the term a name stands for starts, through names bound to names, or npos for a
+    // chain longer than the names bound. Each name is then bound to where its chain ends, so
+    // a chain is followed once.
+    const auto resolve = [&](size_t i) {
+        std::vector<std::string> chain;
+        for (auto it = bound.find(tok(i)); tok(i) != "(" && it != bound.end();
+             it = bound.find(tok(i))) {
+            if (chain.size() > bound.size()) return std::string::npos;
+            chain.push_back(tok(i));
+            i = it->second;
+        }
+        for (const std::string& name : chain) bound[name] = i;
+        return i;
+    };
+    // The literal of width bits a scalar term at i stands for, through names and lets, and
+    // written as binary if indexed; false if there is none
+    const auto literalAt = [&](size_t i, int width, std::string& literalr) {
+        for (i = resolve(i); i != std::string::npos && tok(i) == "(" && tok(i + 1) == "let";) {
+            i = resolve(ends[i + 2]);  // Its term, after its bindings
+        }
+        if (i == std::string::npos) return false;
+        literalr = tok(i);
+        if (literalr == "(") literalr += tok(i + 1) + ' ' + tok(i + 2) + ' ' + tok(i + 3) + ')';
+        return smtLiteralOfWidth(literalr, static_cast<size_t>(width));
+    };
+    std::string index;
+    std::string value;
+    for (size_t i = 0;;) {
+        i = resolve(i);
+        if (i == std::string::npos) return false;
+        if (tok(i + 1) == "let") {
+            i = ends[i + 2];  // Its term, after its bindings
+        } else if (tok(i + 1) == "store") {
+            const size_t indexAt = ends[i + 2];
+            const bool literals = literalAt(indexAt, indexWidth, index)
+                                  && literalAt(ends[indexAt], elementWidth, value);
+            if (!literals) return false;
+            IData key = 0;
+            parseSMTNum(indexWidth, WDataOutP::external(&key), index);
+            storesr.emplace(key, value);  // Kept if an outer store set the index already
+            i += 2;
+        } else {
+            // ((as const <sort>) <element>)
+            return literalAt(ends[i + 1], elementWidth, defaultr);
+        }
+    }
+}
+
 void VlRandomVar::set(const std::string& idx, const std::string& val) const {
     VlWide<VL_WQ_WORDS_E> qowp;
     VL_SET_WQ(qowp, 0ULL);
@@ -3111,34 +3190,66 @@ void VlRandomizer::reportUnsatCore(VlSolverSession& sess) VL_REQUIRES(sess.m_mut
 
 bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
-    size_t requested = 0;
-    std::stringstream getValueStr;
-    for (const auto& var : m_vars) {
-        // The solve of the array sizes writes only the sizes (parseModel), so asks only them
-        if (m_sizeSolve && !m_sizeVars.count(var.first)) continue;
-        if (var.second->dimension() > 0) {
-            auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
-            var.second->setArrayInfo(arrVarsp);
-            requested += var.second->countMatchingElements(m_arr_vars, var.second->name());
-        } else {
-            ++requested;
+    // Writes the terms asking for the model's values, and returns how many variables and
+    // elements they ask for. A large one-dimensional array is asked whole, into wholep if
+    // given: a solver can take time linear in the array for each of its elements asked
+    const auto emitTerms = [&](std::ostream& termsr, std::unordered_set<std::string>* wholep) {
+        size_t requested = 0;
+        for (const auto& var : m_vars) {
+            // The solve of the array sizes writes only the sizes (parseModel), so asks only them
+            if (m_sizeSolve && !m_sizeVars.count(var.first)) continue;
+            const VlRandomVar& varr = *var.second;
+            if (varr.dimension() > 0) {
+                auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
+                varr.setArrayInfo(arrVarsp);
+                const int count = varr.countMatchingElements(m_arr_vars, varr.name());
+                requested += count;
+                const auto firstIt = m_arr_vars.find({varr.name(), 0});
+                if (wholep && count > modelWholeRead && varr.isArray() && varr.dimension() == 1
+                    && firstIt != m_arr_vars.end()
+                    && firstIt->second->m_idxWidths[0] <= VL_IDATASIZE) {
+                    wholep->insert(varr.name());
+                    termsr << ' ' << varr.name();
+                    continue;
+                }
+            } else {
+                ++requested;
+            }
+            varr.emitGetValue(termsr);
         }
-        var.second->emitGetValue(getValueStr);
-    }
+        return requested;
+    };
+    // Sends a (get-value) of terms and reads its reply; false without one, or on an error
+    const auto ask = [&](const std::string& terms, std::string& replyr) VL_REQUIRES(sess.m_mutex) {
+        os << "(get-value (" << terms << "))\n";
+        if (!sess.readSExpr(replyr)) return false;
+        if (isSolverError(replyr)) {
+            warnSolverReply(replyr);
+            return false;
+        }
+        return true;
+    };
+    std::unordered_set<std::string> whole;  // The arrays asked whole
+    std::stringstream getValueStr;
+    const size_t requested = emitTerms(getValueStr, &whole);
     if (getValueStr.str() == "") {
         // Mark as m_checkOnly to skip generation of any subsequent solver calls
         m_checkOnly = true;
         return true;
     }
-    os << "(get-value (" << getValueStr.str() << "))\n";
     std::string reply;
-    if (!sess.readSExpr(reply)) return false;
-    if (isSolverError(reply)) {
-        warnSolverReply(reply);
-        return false;
-    }
+    if (!ask(getValueStr.str(), reply)) return false;
     std::istringstream is{reply};
-    return parseModel(is, requested);
+    bool fallback = false;
+    const bool parsed = parseModel(is, requested, &whole, &fallback);
+    if (!fallback) return parsed;
+    // An array value of another form: asked by element instead, nothing being written yet
+    VL_DEBUG_IF(VL_DBG_MSGF("- randomize: array model read by element\n"););
+    std::stringstream elemStr;
+    emitTerms(elemStr, nullptr);
+    if (!ask(elemStr.str(), reply)) return false;
+    std::istringstream elemIs{reply};
+    return parseModel(elemIs, requested);
 }
 
 const VlRandomVar* VlRandomizer::sizeVarp(const VlRandomVar& varr) const {
@@ -3188,7 +3299,8 @@ bool VlRandomizer::elementName(const VlRandomVar& varr, std::vector<std::string>
     return true;
 }
 
-bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
+bool VlRandomizer::parseModel(std::istream& is, size_t requested,
+                              const std::unordered_set<std::string>* wholep, bool* fallbackp) {
     // Quasi-parse S-expression of the form ((x #xVALUE) (y #bVALUE) (z #xVALUE))
     char c = 0;
     is >> c;  // The '(' opening the readSExpr-balanced reply
@@ -3196,6 +3308,9 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
     std::vector<std::tuple<const VlRandomVar*, std::string, std::string>> staged;
     // Every requested term must come back exactly once, whether or not it is written
     std::set<std::string> answered;
+    // Array base name -> its registered elements by name, as the reply names them
+    std::unordered_map<std::string, std::unordered_map<std::string, const ArrayInfo*>>
+        elementsByName;
     while (true) {
         if (VL_UNCOVERABLE(!(is >> c))) return false;  // Balanced reply breaks at ')' first
         if (c == ')') break;
@@ -3215,23 +3330,71 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
             return false;
         }
         const VlRandomVar& varr = *it->second;
+        // Not written, though answered and checked like any other
+        bool skipped = false;
+        if (!varr.randModeIdxNone()) {
+            // Static rand vars have their rand_mode in a class-package shared queue,
+            // not the per-instance one.
+            const VlQueue<CData>* const modep
+                = m_staticVars.count(name) ? m_static_randmodep : m_randmodep;
+            skipped = modep && !modep->at(varr.randModeIdx());
+        }
+        skipped
+            = skipped || m_disabledVars.count(name) || (m_sizeSolve && !m_sizeVars.count(name));
+        // An array asked whole (see applyModel): each element registered, from the stores
+        if (wholep && wholep->count(name) && indices.empty()) {
+            std::unordered_map<IData, std::string> stores;
+            std::string base;
+            const auto firstIt = m_arr_vars.find({name, 0});
+            if (firstIt == m_arr_vars.end()
+                || !smtArrayStores(value, firstIt->second->m_idxWidths[0], varr.width(), stores,
+                                   base)) {
+                *fallbackp = true;
+                return false;
+            }
+            for (int k = 0;; ++k) {
+                const auto elemIt = m_arr_vars.find({name, k});
+                if (elemIt == m_arr_vars.end()) break;
+                const ArrayInfo& info = *elemIt->second;
+                if (!answered.insert(info.m_name).second) {
+                    VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                               "Internal: Unable to parse solver's response: repeated variable");
+                    return false;
+                }
+                if (skipped) continue;
+                const auto storeIt = stores.find(info.m_indices[0]);
+                std::ostringstream ss;
+                ss << "#x" << std::hex << std::setw(8) << std::setfill('0') << info.m_index;
+                staged.emplace_back(&varr, ss.str(),
+                                    storeIt == stores.end() ? base : storeIt->second);
+            }
+            continue;
+        }
         smtIndexedToBinary(value, varr.width());
         std::string element = varr.name();
         if (varr.dimension() || !indices.empty()) {
-            const auto matches
-                = [&element](const auto& entry) { return entry.second->m_name == element; };
             // An index within the sort can still name no registered element
-            auto iti = m_arr_vars.end();
+            const ArrayInfo* infop = nullptr;
             if (elementName(varr, indices, element)) {
-                iti = std::find_if(m_arr_vars.begin(), m_arr_vars.end(), matches);
+                // The elements of the array by name, listed once for the reply
+                const std::string base = generateKey(element, 0).first;
+                auto& elems = elementsByName[base];
+                if (elems.empty()) {
+                    for (auto elemIt = m_arr_vars.lower_bound({base, 0});
+                         elemIt != m_arr_vars.end() && elemIt->first.first == base; ++elemIt) {
+                        elems.emplace(elemIt->second->m_name, elemIt->second.get());
+                    }
+                }
+                const auto found = elems.find(element);
+                if (found != elems.end()) infop = found->second;
             }
-            if (iti == m_arr_vars.end()) {
+            if (!infop) {
                 VL_WARN_MT(__FILE__, __LINE__, "randomize",
                            "Internal: Unable to parse solver's response: invalid array index");
                 return false;
             }
             std::ostringstream ss;
-            ss << "#x" << std::hex << std::setw(8) << std::setfill('0') << iti->second->m_index;
+            ss << "#x" << std::hex << std::setw(8) << std::setfill('0') << infop->m_index;
             idx = ss.str();
         }
         // By element, so the same element written in two notations is still a repeat
@@ -3248,15 +3411,7 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
                        "Internal: Unable to parse solver's response: invalid value");
             return false;
         }
-        if (!varr.randModeIdxNone()) {
-            // Static rand vars have their rand_mode in a class-package shared queue,
-            // not the per-instance one.
-            const VlQueue<CData>* const modep
-                = m_staticVars.count(name) ? m_static_randmodep : m_randmodep;
-            if (modep && !modep->at(varr.randModeIdx())) continue;
-        }
-        if (m_disabledVars.count(name)) continue;
-        if (m_sizeSolve && !m_sizeVars.count(name)) continue;
+        if (skipped) continue;
         staged.emplace_back(&varr, idx, value);
     }
     if (answered.size() != requested) {
