@@ -35,16 +35,4 @@
                                        : ... note: In instance 't'
    25 |     && $steady_gclk(signal);
       |        ^~~~~~~~~~~~
-%Error: t/t_property_untyped_bad.v:33:20: Expected numeric type, but got a 'int$[$]' data type
-                                        : ... note: In instance 't'
-   33 |     @(posedge clk) $stable(signal);
-      |                    ^~~~~~~
-%Error: t/t_property_untyped_bad.v:33:20: Expected numeric type, but got a 'string$[0:1]' data type
-                                        : ... note: In instance 't'
-   33 |     @(posedge clk) $stable(signal);
-      |                    ^~~~~~~
-%Error: t/t_property_untyped_bad.v:33:20: Expected numeric type, but got a 'struct t.with_string_t' data type
-                                        : ... note: In instance 't'
-   33 |     @(posedge clk) $stable(signal);
-      |                    ^~~~~~~
 %Error: Exiting due to

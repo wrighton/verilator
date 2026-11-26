@@ -9,8 +9,9 @@
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
-// Sampled value functions of methods, elements and members of dynamic variables, whose default
-// sampled values before the first tick are those of the empty variables
+// Sampled value functions of strings, class handles and dynamic variables, also of their
+// methods, elements and members, whose default sampled values before the first tick are those of
+// the empty variables (IEEE 1800-2023 16.9.3, 16.5.1)
 module t;
   bit clk = 0;
   always #5 clk = ~clk;
@@ -77,6 +78,77 @@ module t;
   end
   assert property (@(posedge clk) $past(q.size()) == hqsize);
   assert property (@(posedge clk) $past(aq[1].size()) == haqsize);
+
+  // Whole strings, class handles and dynamic variables, also as elements or members
+  class C;
+    int v;
+  endclass
+  typedef struct {
+    int a;
+    int q[$];
+  } sq_t;
+  C h;
+  C ha[2];
+  C hnew = new;
+  string sarr[2];
+  sq_t sq;
+  real rq[$];
+  real ra[2];
+  always @(negedge clk) begin
+    if (cyc == 3) h = hnew;
+    if (cyc == 5) ha[1] = hnew;
+    if (cyc % 3 == 0) sarr[cyc%2] = {sarr[cyc%2], "y"};
+    sq.a = cyc;
+    if (cyc % 2 == 0) sq.q.push_back(cyc);
+    if (cyc % 3 == 1) rq.push_back(cyc * 0.5);
+    ra[cyc%2] = cyc * 1.5;
+  end
+  iq_t hq;
+  int hd[];
+  string hs;
+  C hh;
+  C hha[2];
+  string hsarr[2];
+  int haq[3][$];
+  sq_t hsq;
+  sq_t tsq;
+  real hrq[$];
+  real hra[2];
+  always @(posedge clk) begin
+    `checkh($past(q) == hq, 1'b1);
+    `checkh($sampled(q) == q, 1'b1);
+    `checkh($stable(d), d == hd);
+    `checkh($past(s) == hs, 1'b1);
+    `checkh($changed(s), s != hs);
+    `checkh($past(h) == hh, 1'b1);
+    `checkh($changed(h), h != hh);
+    `checkh($past(ha) == hha, 1'b1);
+    `checkh($stable(sarr), sarr == hsarr);
+    `checkh($past(aq) == haq, 1'b1);
+    tsq = $past(sq);
+    `checkh(tsq.a, hsq.a);
+    `checkh(tsq.q == hsq.q, 1'b1);
+    `checkh($past(rq) == hrq, 1'b1);
+    `checkh($stable(rq), rq == hrq);
+    `checkh($past(ra) == hra, 1'b1);
+    `checkh($changed(ra), ra != hra);
+    hq <= q;
+    hd <= d;
+    hs <= s;
+    hh <= h;
+    hha <= ha;
+    hsarr <= sarr;
+    haq <= aq;
+    hsq <= sq;
+    hrq <= rq;
+    hra <= ra;
+  end
+  assert property (@(posedge clk) $past(s) == hs && $stable(h) == (h == hh));
+  property p_stable(x, y);
+    @(posedge clk) $stable(x) == y;
+  endproperty
+  assert property (p_stable(q, q == hq));
+  assert property (p_stable(sarr, sarr == hsarr));
 
   initial begin
     #100;
