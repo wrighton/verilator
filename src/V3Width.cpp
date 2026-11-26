@@ -4736,10 +4736,13 @@ class WidthVisitor final : public VNVisitor {
             // is an element value extended (IEEE 1800-2023 11.8.2)
             AstNodeExpr* const pureExprp
                 = VN_IS(exprp, ExprStmt) ? VN_AS(exprp, ExprStmt)->resultp() : exprp;
+            // A parameter value is folded by V3Const at the common width of value and element
+            const bool integral = memberTypep->isIntegralOrPacked()
+                                  && exprp->dtypep()->skipRefp()->isIntegralOrPacked();
+            const bool folded = m_paramsOnly && integral;
             AstNodeExpr* fitsp = nullptr;
-            if (memberTypep->isIntegralOrPacked()
-                && exprp->dtypep()->skipRefp()->isIntegralOrPacked()
-                && exprp->width() > memberTypep->width() && pureExprp->isPure()) {
+            if (integral && !folded && exprp->width() > memberTypep->width()
+                && pureExprp->isPure()) {
                 FileLine* const flp = nodep->fileline();
                 AstNodeExpr* const lowp
                     = new AstSel{flp, pureExprp->cloneTreePure(false), 0, memberTypep->width()};
@@ -4752,7 +4755,8 @@ class WidthVisitor final : public VNVisitor {
             // Unsupported in parameters
             AstNodeExpr* const inewp = new AstCMethodHard{nodep->fileline(), itemp->unlinkFrBack(),
                                                           VCMethod::ARRAY_INSIDE, exprp};
-            iterateCheckTyped(nodep, "inside value", exprp, itemDtp->subDTypep(), BOTH);
+            if (!folded)
+                iterateCheckTyped(nodep, "inside value", exprp, itemDtp->subDTypep(), BOTH);
             inewp->dtypeSetBit();
             inewp->didWidth(true);
             // The method first, as it evaluates the value
