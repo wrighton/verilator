@@ -95,6 +95,8 @@ public:
     SvaStateVertex* m_andRhsTermp = nullptr;  // RHS sub-NFA terminal vertex
     AstNodeExpr* m_andLhsCondp = nullptr;  // OWNED; LHS final condition (may be nullptr)
     AstNodeExpr* m_andRhsCondp = nullptr;  // OWNED; RHS final condition (may be nullptr)
+    // Both operand matches of one attempt end on the same tick, so no done-latch is needed
+    bool m_andAligned = false;
     // Reject sink for SAnd rejectOnFail wiring; not a state-signal source
     bool m_isRejectSink = false;
     // In-window vertex of a strong s_always[m:n]: if its state is still set at
@@ -338,6 +340,12 @@ class SvaNfaBuilder final {
     // (IEEE 1800-2023 16.12.14 outer-wraps-inner).
     std::vector<AstNodeExpr*> m_outerAbortStack;
     bool m_inUnboundedScope = false;  // Sticky: nodes created after inherit liveness
+    // Sticky: a miss of one candidate rejects the attempt, after a ranged delay that does not
+    // reject once all its candidates miss, a goto repetition, or a repetition without a maximum.
+    // This may count an attempt more than once, but never misses its failure.
+    bool m_candidateMissRejects = false;
+    // Sticky: after an unbounded cycle delay, whose later candidates can still match
+    bool m_afterUnboundedDelay = false;
     bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
     // A cover only records matches, so a pending obligation at $finish is not a failure
     bool m_noEosFailure = false;
@@ -400,11 +408,13 @@ class SvaNfaBuilder final {
     //  - AstSExpr with fixed cycle delay     -> pre + N + body
     //  - AstSExpr with range delay M==N      -> pre + N + body
     //  - AstSThroughout                      -> length of rhsp (the seq)
+    //  - AstSConsRep [*N], N > 0             -> N * (length of exprp + 1) - 1
     // Unsupported (returns -1):
     //  - Range delays with M != N            -> variable
     //  - Unbounded waits ##[M:$]             -> infinite/variable
-    //  - ConsRep / SGotoRep / SAnd / SOr     -> defer (rare in intersect)
+    //  - Ranged or zero ConsRep / SGotoRep / SAnd -> defer (rare in intersect)
     //  - SIntersect nested in SIntersect     -> defer
+    //  - Property operands such as implications
     static int fixedLength(AstNodeExpr* nodep) {
         if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
             AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
@@ -431,6 +441,14 @@ class SvaNfaBuilder final {
         if (AstSThroughout* const throughp = VN_CAST(nodep, SThroughout)) {
             return fixedLength(throughp->rhsp());
         }
+        if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            // IEEE 1800-2023 16.9.2: N back-to-back iterations of exprp; -1 if N is 0 or the
+            // length of exprp varies
+            // cppcheck-suppress knownConditionTrueFalse
+            if (repp->unbounded() || repp->maxCountp()) return -1;
+            const int count = static_cast<int>(getConstUInt(repp->countp()));
+            return count * (fixedLength(repp->exprp()) + 1) - 1;
+        }
         if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
             // Alternatives must share one end cycle; buildSWithin relies on
             // this to pair the OR with an SIntersect.
@@ -446,14 +464,8 @@ class SvaNfaBuilder final {
             if (lhsLen < 0 || rhsLen < 0 || lhsLen > rhsLen) return -1;
             return rhsLen;
         }
-        // LCOV_EXCL_START -- defensive: V3AssertPre rejects composite SVA ops
-        // nested in an intersect arm before fixedLength runs (clock-context
-        // resolution fails). Kept as a guard in case future parser relaxations
-        // permit it.
-        if (nodep->isMultiCycleSva()) return -1;
-        // LCOV_EXCL_STOP
         // Plain boolean expression (no SVA constructs) -- 0 cycles.
-        return 0;
+        return isPlainBoolean(nodep) ? 0 : -1;
     }
 
     // Contiguous match-length range [lo,hi] for an operand whose length varies
@@ -623,6 +635,7 @@ class SvaNfaBuilder final {
             currentp = mergeVtxp;
             currentp->m_isUnbounded = true;  // Liveness, so no reject.
             m_inUnboundedScope = true;
+            m_afterUnboundedDelay = true;
             return true;
         }
         const unsigned maxDelay = getConstUInt(delayp->rhsp());
@@ -651,8 +664,16 @@ class SvaNfaBuilder final {
             // Launch a candidate at every eligible tick. Candidate-local misses are not
             // assertion rejects while a later position can still match.
             if (rangeRejectInfop) {
-                const int rhsLen = fixedLength(rhsExprp);
-                if (rhsLen >= 0) *rangeRejectInfop = {currentp, range, rhsLen};
+                // Not for a consecutive repetition, whose candidates reject on their own
+                // misses, see m_candidateMissRejects
+                const int rhsLen = rhsExprp->exists([](const AstSConsRep*) { return true; })
+                                       ? -1
+                                       : fixedLength(rhsExprp);
+                if (rhsLen >= 0) {
+                    *rangeRejectInfop = {currentp, range, rhsLen};
+                } else {
+                    m_candidateMissRejects = true;
+                }
             }
             SvaStateVertex* const tailp = addDelayChain(currentp, range + 1U, flp, false);
             SvaStateVertex* const mergeVtxp = scopedCreateVertex();
@@ -779,6 +800,11 @@ class SvaNfaBuilder final {
         // position so they all fire the action, not just the merged terminal.
         std::vector<SvaStateVertex*> consMidSources;
 
+        // Only an outermost required step rejects the property. After an unbounded cycle delay
+        // a miss is local to one candidate, as a later one can still match.
+        const bool rejectsOnMiss
+            = isTopLevelStep
+              && (!m_inUnboundedScope || (m_candidateMissRejects && !m_afterUnboundedDelay));
         SvaStateVertex* currentp = entryVtxp;
         for (unsigned i = 0; i < minN; ++i) {
             // Keep the first repetition explicit, collapse all remaining checks into the ring.
@@ -787,7 +813,7 @@ class SvaNfaBuilder final {
                 currentp->m_delayRingClearCondp
                     = new AstLogNot{flp, sampledRefOrClone(hoistVarp, exprp, flp)};
                 currentp->m_replayAbortReject = true;
-                if (isTopLevelStep) {
+                if (rejectsOnMiss) {
                     currentp->m_throughoutConds.push_back(
                         sampledRefOrClone(hoistVarp, exprp, flp));
                 }
@@ -797,9 +823,9 @@ class SvaNfaBuilder final {
             SvaStateVertex* const condVtxp = scopedCreateVertex();
             SvaTransEdge* const linkp
                 = guardedLink(currentp, condVtxp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
-            // Only an outermost required step rejects the property. Its first check is explicit,
-            // later required checks reject through the ring's throughout guard.
-            if (isTopLevelStep && i == 0) linkp->m_rejectOnFail = true;
+            // The first check rejects explicitly, later required checks reject through the
+            // ring's throughout guard.
+            if (rejectsOnMiss && i == 0) linkp->m_rejectOnFail = true;
             currentp = condVtxp;
         }
         // After minN: currentp is the first valid end-of-match position for [*m:n].
@@ -827,6 +853,7 @@ class SvaNfaBuilder final {
             }
             currentp->m_isUnbounded = true;
             m_inUnboundedScope = true;
+            m_candidateMissRejects = true;
         } else if (repp->maxCountp()) {
             const unsigned maxN = getConstUInt(repp->maxCountp());
             SvaStateVertex* const mergeVtxp = scopedCreateVertex();
@@ -954,6 +981,7 @@ class SvaNfaBuilder final {
         if (!hasMax) {
             currentp->m_isUnbounded = true;  // [->N] waits unboundedly
             m_inUnboundedScope = true;
+            m_candidateMissRejects = true;
             return {currentp, nullptr, {}};
         }
 
@@ -972,6 +1000,7 @@ class SvaNfaBuilder final {
         }
         mergeVtxp->m_isUnbounded = true;  // [->M:N] still has unbounded waits between matches
         m_inUnboundedScope = true;
+        m_candidateMissRejects = true;
         return {mergeVtxp, nullptr, {}};
     }
 
@@ -1051,17 +1080,34 @@ class SvaNfaBuilder final {
         return {mergeVtxp, nullptr, {}};
     }
 
-    // Build done-latch combiner for SAnd/SIntersect (IEEE 1800-2023 16.9.5).
+    // Vertex active the given number of ticks after the operand matched
+    SvaStateVertex* delayedMatchVertex(const BuildResult& operand, unsigned ticks, FileLine* flp) {
+        SvaStateVertex* const matchVtxp = scopedCreateVertex();
+        if (operand.finalCondp) {
+            guardedLink(operand.termVertexp, matchVtxp,
+                        sampled(operand.finalCondp->cloneTreePure(false)), flp);
+        } else {
+            guardedLink(operand.termVertexp, matchVtxp, flp);
+        }
+        return addDelayChain(matchVtxp, ticks, flp);
+    }
+
+    // Build combiner for SAnd/SIntersect (IEEE 1800-2023 16.9.5), with done-latches for
+    // operands of variable length.
     BuildResult buildAndCombiner(AstNodeExpr* lhsExprp, AstNodeExpr* rhsExprp,
                                  SvaStateVertex* entryVtxp, FileLine* flp) {
         // Snapshot-restore scope so LHS liveness does not leak into RHS.
         const bool savedScope = m_inUnboundedScope;
+        const bool savedAfterDelay = m_afterUnboundedDelay;
         const BuildResult lhs = buildExpr(lhsExprp, entryVtxp);
         const bool lhsScope = m_inUnboundedScope;
+        const bool lhsAfterDelay = m_afterUnboundedDelay;
         m_inUnboundedScope = savedScope;
+        m_afterUnboundedDelay = savedAfterDelay;
         const BuildResult rhs = buildExpr(rhsExprp, entryVtxp);
         const bool rhsScope = m_inUnboundedScope;
         m_inUnboundedScope = savedScope || lhsScope || rhsScope;
+        m_afterUnboundedDelay = savedAfterDelay || lhsAfterDelay || m_afterUnboundedDelay;
         if (!lhs.valid() || !rhs.valid()) {  // LCOV_EXCL_START -- sub-build fail bail
             freeUnlinkedCondp(lhs.finalCondp);
             freeUnlinkedCondp(rhs.finalCondp);
@@ -1092,10 +1138,24 @@ class SvaNfaBuilder final {
         }
         SvaStateVertex* const combVtxp = scopedCreateVertex();
         combVtxp->m_isAndCombiner = true;
-        combVtxp->m_andLhsTermp = lhs.termVertexp;
-        combVtxp->m_andRhsTermp = rhs.termVertexp;
-        if (lhs.finalCondp) combVtxp->m_andLhsCondp = lhs.finalCondp->cloneTreePure(false);
-        if (rhs.finalCondp) combVtxp->m_andRhsCondp = rhs.finalCondp->cloneTreePure(false);
+        // With fixed lengths, an operand match identifies the start of its attempt, so the
+        // shorter operand's match delayed to the composite end pairs with the longer
+        // operand's match of the same attempt. A done-latch is shared by overlapping attempts.
+        const int lhsLen = fixedLength(lhsExprp);
+        const int rhsLen = fixedLength(rhsExprp);
+        combVtxp->m_andAligned = lhsLen >= 0 && rhsLen >= 0;
+        if (combVtxp->m_andAligned && lhsLen < rhsLen) {
+            combVtxp->m_andLhsTermp = delayedMatchVertex(lhs, rhsLen - lhsLen, flp);
+        } else {
+            combVtxp->m_andLhsTermp = lhs.termVertexp;
+            if (lhs.finalCondp) combVtxp->m_andLhsCondp = lhs.finalCondp->cloneTreePure(false);
+        }
+        if (combVtxp->m_andAligned && rhsLen < lhsLen) {
+            combVtxp->m_andRhsTermp = delayedMatchVertex(rhs, lhsLen - rhsLen, flp);
+        } else {
+            combVtxp->m_andRhsTermp = rhs.termVertexp;
+            if (rhs.finalCondp) combVtxp->m_andRhsCondp = rhs.finalCondp->cloneTreePure(false);
+        }
         if (lhs.termVertexp->m_isUnbounded || rhs.termVertexp->m_isUnbounded) {
             combVtxp->m_isUnbounded = true;
         }
@@ -1645,6 +1705,8 @@ public:
     // consequent too (IEEE 1800-2023 16.12.14).
     void resetScope() {
         m_inUnboundedScope = false;
+        m_candidateMissRejects = false;
+        m_afterUnboundedDelay = false;
         m_temporalGuardStack.clear();
     }
 
@@ -2729,17 +2791,20 @@ class SvaNfaLowering final {
             resolveLinkState(c, rhsTermp, visits, countMatches);
             UASSERT_OBJ(lhsTermp->datap()->stateSigp && rhsTermp->datap()->stateSigp, vtxp,
                         "AndCombiner operand terminal has no state signal");
-            AstNodeExpr* const matchLp
+            AstNodeExpr* matchLp
                 = buildMatchNow(c.flp, lhsTermp->datap()->stateSigp, vtxp->m_andLhsCondp);
-            AstNodeExpr* const matchRp
+            AstNodeExpr* matchRp
                 = buildMatchNow(c.flp, rhsTermp->datap()->stateSigp, vtxp->m_andRhsCondp);
-            AstNodeExpr* const doneLOrp = new AstLogOr{
-                c.flp, new AstVarRef{c.flp, vtxp->datap()->doneLVarp, VAccess::READ}, matchLp};
-            AstNodeExpr* const doneROrp = new AstLogOr{
-                c.flp, new AstVarRef{c.flp, vtxp->datap()->doneRVarp, VAccess::READ}, matchRp};
-            // Both operands matched since the attempt started. The done latches are cleared
-            // once this holds, so they are never both set and one operand matches now.
-            vtxp->datap()->stateSigp = new AstLogAnd{c.flp, doneLOrp, doneROrp};
+            if (!vtxp->m_andAligned) {
+                // Both operands matched since the attempt started. The done latches are
+                // cleared once this holds, so they are never both set and one operand
+                // matches now.
+                matchLp = new AstLogOr{
+                    c.flp, new AstVarRef{c.flp, vtxp->datap()->doneLVarp, VAccess::READ}, matchLp};
+                matchRp = new AstLogOr{
+                    c.flp, new AstVarRef{c.flp, vtxp->datap()->doneRVarp, VAccess::READ}, matchRp};
+            }
+            vtxp->datap()->stateSigp = new AstLogAnd{c.flp, matchLp, matchRp};
             vtxp->datap()->stateCountSigp = new AstExtend{
                 c.flp, vtxp->datap()->stateSigp->cloneTreePure(false), m_u32DTypep->width()};
         } else if (vtxp != c.graph.m_startVertexp && !vtxp->datap()->stateVarp
@@ -3010,6 +3075,7 @@ public:
         m_modp->addStmtsp(killVarp);
         for (int i = 0; i < N; ++i) {
             if (vtx[i]->m_isAndCombiner) {
+                if (vtx[i]->m_andAligned) continue;
                 const std::string base = baseName + "__a" + std::to_string(i);
                 AstVar* const lp = new AstVar{regFlp, VVarType::MODULETEMP, base + "_doneL",
                                               m_modp->findBitDType()};
