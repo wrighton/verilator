@@ -31,4 +31,9 @@
                                                 : ... Suggest provide a clocking event, a default clocking, or a clocked always procedure (IEEE 1800-2023 16.14.6)
    42 |     assert property (a |-> ##1 b);
       |     ^~~~~~
+%Error: t/t_assert_procedural_delay_unsup.v:46:5: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+                                                : ... note: In instance 't'
+                                                : ... Suggest provide a clocking event, a default clocking, or a clocked always procedure (IEEE 1800-2023 16.14.6)
+   46 |     assert property (a |-> ##1 b);
+      |     ^~~~~~
 %Error: Exiting due to

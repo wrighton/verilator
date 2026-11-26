@@ -117,6 +117,21 @@
                                        : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
    25 |   assert property (a ##1 b);
       |   ^~~~~~
+%Error: t/t_assert_unclocked_bad.v:36:10: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+                                        : ... note: In instance 't'
+                                        : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
+   36 |     q <= $past(d);
+      |          ^~~~~
+%Error: t/t_assert_unclocked_bad.v:37:5: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+                                       : ... note: In instance 't'
+                                       : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
+   37 |     assert property (q != d);
+      |     ^~~~~~
+%Error: t/t_assert_unclocked_bad.v:39:36: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+                                        : ... note: In instance 't'
+                                        : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
+   39 |   always @(posedge a or posedge b) assert property (a);
+      |                                    ^~~~~~
 %Error: t/t_assert_unclocked_bad.v:29:12: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
                                         : ... note: In instance 't'
                                         : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context

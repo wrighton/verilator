@@ -97,6 +97,11 @@ public:
     static void reducePlainAlways(AstPropSpec* specp) VL_MT_DISABLED;
     // Clock inferred from an always procedure, or nullptr (IEEE 1800-2023 16.14.6)
     static AstSenItem* inferredClock(const AstAlways* alwaysp) VL_MT_DISABLED;
+    // Statement of an always procedure that prevents inferring its clock, or nullptr
+    // (IEEE 1800-2023 16.14.6). 'taskBlocks' caches whether calling each task blocks.
+    static const AstNode*
+    inferenceBlockerp(const AstAlways* alwaysp,
+                      std::unordered_map<const AstNodeFTask*, bool>& taskBlocks) VL_MT_DISABLED;
 };
 
 // Makes the actions of concurrent assertions run in the Reactive region, after the NBA updates

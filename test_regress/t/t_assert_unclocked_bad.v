@@ -27,4 +27,14 @@ module t;
     a ##1 b;
   endsequence
   always @(s) $display("s");
+  // No clock is inferred from an event control without exactly one edge or event expression
+  // whose variables the procedure does not otherwise use
+  logic clock, reset, d, q;
+  logic [3:0] cnt;
+  always_ff @(clock iff reset == 0 or posedge reset) begin
+    cnt <= reset ? 0 : cnt + 1;
+    q <= $past(d);
+    assert property (q != d);
+  end
+  always @(posedge a or posedge b) assert property (a);
 endmodule
