@@ -2959,6 +2959,20 @@ public:
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
     bool isSystemFunc() const override { return true; }
 };
+class AstStreamWith final : public AstNodeExpr {
+    // Items of an unpacked array selected by 'with [...]' in a stream (IEEE 1800-2023 11.4.14.4)
+    // Replaced with its select in V3Width
+    // @astgen op1 := selp : AstNodePreSel
+public:
+    AstStreamWith(FileLine* fl, AstNodePreSel* selp)
+        : ASTGEN_SUPER_StreamWith(fl) {
+        this->selp(selp);
+    }
+    ASTGEN_MEMBERS_AstStreamWith;
+    string emitVerilog() override { V3ERROR_NA_RETURN(""); }
+    string emitC() override { V3ERROR_NA_RETURN(""); }
+    bool cleanOut() const override { V3ERROR_NA_RETURN(true); }
+};
 class AstStructSel final : public AstNodeExpr {
     // Unpacked struct/union member access
     // Parents: math|stmt

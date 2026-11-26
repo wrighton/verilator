@@ -108,7 +108,6 @@ for s in [
         'Unsupported: repeat event control',
         'Unsupported: static cast to',
         'Unsupported: super',
-        'Unsupported: with[] stream expression',
         'loading other than unpacked-array variable',
         # These are safety limits requiring >1000 bins or >10000 members to trigger
 ]:
