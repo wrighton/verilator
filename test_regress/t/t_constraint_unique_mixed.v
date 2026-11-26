@@ -225,6 +225,15 @@ class States;
   constraint u {unique {st, r, off};}
 endclass
 
+// State arrays are members too, read but never written
+class StateArrays;
+  bit [6:0] a[2];
+  bit [6:0] b[2];
+  rand bit [6:0] r[2];
+  constraint u_state {unique {a, b};}
+  constraint u_rand {unique {a, r};}
+endclass
+
 // A whole array with rand_mode off is a member too
 class ArrMode;
   rand val_t a[3];
@@ -289,6 +298,7 @@ module t;
     automatic Member mb = new;
     automatic Assoc as_ = new;
     automatic States st = new;
+    automatic StateArrays sta = new;
     automatic ArrMode am = new;
     automatic Cond cd = new;
     automatic RandcIndex ri = new;
@@ -458,6 +468,16 @@ module t;
       `checkd(st.off, 2'(n + 1));
       Check#(bit [1:0])::distinct({st.st, st.off, st.r}, `__LINE__);
 
+      sta.a = '{7'(n), 7'(n + 20)};
+      sta.b = '{7'(n + 40), 7'(n + 60)};
+      ok = sta.randomize();
+      `checkd(ok, 1);
+      `checkd(sta.a[0], 7'(n));
+      `checkd(sta.a[1], 7'(n + 20));
+      `checkd(sta.b[0], 7'(n + 40));
+      `checkd(sta.b[1], 7'(n + 60));
+      Check#(bit [6:0])::distinct({sta.a, sta.r}, `__LINE__);
+
       am.a = '{val_t'(n), val_t'(n + 3), val_t'(n + 5)};
       am.a.rand_mode(0);
       ok = am.randomize();
@@ -481,6 +501,16 @@ module t;
       `checkd(ok, 1);
       Check#()::distinct({sx, sarr}, `__LINE__);
     end
+
+    // State arrays sharing a value fail the constraint, and are left as they were
+    sta.a = '{1, 2};
+    sta.b = '{3, 1};
+    ok = sta.randomize();
+    `checkd(ok, 0);
+    `checkd(sta.a[0], 1);
+    `checkd(sta.a[1], 2);
+    `checkd(sta.b[0], 3);
+    `checkd(sta.b[1], 1);
 
     // Three members of one bit cannot be distinct after resizing either
     rz.n = 2;
