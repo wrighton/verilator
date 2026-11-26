@@ -5501,6 +5501,13 @@ private:
             VL_DO_DANGLING(pushDeletep(origp), origp);
         }
     }
+    // The default element of associative array 'arrayp', read when randomize() is called
+    static AstNodeExpr* newAssocDefaultp(AstNodeExpr* arrayp) {
+        AstCMethodHard* const defaultp = new AstCMethodHard{
+            arrayp->fileline(), arrayp->cloneTreePure(false), VCMethod::ARRAY_AT_DEFAULT};
+        defaultp->dtypep(VN_AS(arrayp->dtypep()->skipRefp(), AssocArrayDType)->subDTypep());
+        return defaultp;
+    }
     // Width of an integral array index or key in the solver, that of its C++ type
     static int keySmtWidth(const AstNodeDType* const keyDtp) {
         const int width = keyDtp->width();
@@ -5604,6 +5611,21 @@ private:
             }
         }
         if (newp && m_structSel && newp->name() == "(select %s %s)") { newp->name("%s.%s"); }
+        if (newp && !keyIsRand && origp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            // Randomization creates no key, so an element whose key does not exist reads as the
+            // array's default (IEEE 1800-2023 7.8.6, 18.4)
+            const AstAssocSel* const selp = VN_AS(origp, AssocSel);
+            AstCMethodHard* const existsp
+                = new AstCMethodHard{fl, selp->fromp()->cloneTreePure(false),
+                                     VCMethod::ASSOC_EXISTS, selp->bitp()->cloneTreePure(false)};
+            existsp->dtypeSetInt();
+            VNRelinker handle;
+            newp->unlinkFrBack(&handle);
+            handle.relink(
+                new AstSFormatF{fl, "%s", false,
+                                new AstCond{fl, new AstNeq{fl, existsp, new AstConst{fl, 0}}, newp,
+                                            getConstFormat(newAssocDefaultp(selp->fromp()))}});
+        }
         // The element a random key selects has no current value to hold, as for ARRAY_AT
         if (!newp || keyIsRand || !hoistRandModeOverSelectAndMember(newp, origp)) {
             VL_DO_DANGLING(origp->deleteTree(), origp);
