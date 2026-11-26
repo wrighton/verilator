@@ -2257,13 +2257,13 @@ class ConstraintExprVisitor final : public VNVisitor {
                || VN_IS(dtypep, QueueDType) || VN_IS(dtypep, AssocArrayDType)
                || VN_IS(dtypep, WildcardArrayDType);
     }
-    // Whether every member of 'nodep' is a whole one-dimensional array variable whose
+    // Whether every member of 'nodep' is a whole one-dimensional random array variable whose
     // rand_mode is not used; these the runtime makes distinct together, from the elements
     // they hold at solve time
     static bool isWholeArrayGroup(const AstConstraintUnique* nodep) {
         for (const AstNodeExpr* const itemp : nodep->rangespList()) {
             const AstVarRef* const refp = VN_CAST(itemp, VarRef);
-            if (!refp) return false;
+            if (!refp || !refp->user1()) return false;
             const RandomizeMode randMode = {.asUQuad = refp->varp()->user1()};
             const AstNodeDType* const dtypep = itemp->dtypep()->skipRefp();
             if (randMode.usesMode || VN_IS(dtypep, WildcardArrayDType)
