@@ -47,4 +47,12 @@
                                  : ... note: In instance 't'
    46 |   always {cb1.out, cb3.out3} <= ##1 2'b11;
       |                                 ^~
+%Error: t/t_clocking_bad4.v:54:39: Cannot sample input clockvar with a skew other than #1step (IEEE 1800-2023 16.5.1).
+                                 : ... note: In instance 't'
+   54 |   assert property (@(posedge clk) cb4.in4);
+      |                                       ^~~
+%Error: t/t_clocking_bad4.v:55:39: Cannot sample input clockvar with a skew other than #1step (IEEE 1800-2023 16.5.1).
+                                 : ... note: In instance 't'
+   55 |   always @(posedge clk) if ($rose(cb4.in4)) $display(cb4.in4);
+      |                                       ^~~
 %Error: Exiting due to
