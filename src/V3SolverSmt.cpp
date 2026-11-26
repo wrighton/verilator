@@ -1838,7 +1838,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         FileLine* const fl = nodep->fileline();
         const int width = nodep->widthConst();
         const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const);
-        if (lsbConstp
+        if (lsbConstp && lsbConstp->num().fitsInUInt()
             && static_cast<uint64_t>(lsbConstp->toUInt()) + width
                    <= static_cast<uint64_t>(nodep->fromp()->width())) {
             const uint32_t lsb = lsbConstp->toUInt();
@@ -1860,9 +1860,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         fromp = new AstExtend{fl, fromp, extWidth};
         fromp->user1(true);
-        // V3WidthSel computes a position of 32 or more bits modulo its width, so a negative one
-        // wraps
-        if (lsbp->isSigned() || lsbp->width() >= VL_IDATASIZE) {
+        if (lsbp->isSigned()) {
             lsbp = new AstExtendS{fl, lsbp, extWidth};
         } else {
             lsbp = new AstExtend{fl, lsbp, extWidth};

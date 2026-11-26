@@ -1491,7 +1491,9 @@ class WidthVisitor final : public VNVisitor {
                 nodep->lsbp()->dtypep()->isFourstate());
             userIterateAndNext(nodep->fromp(), WidthVP{SELF, FINAL}.p());
             userIterateAndNext(nodep->lsbp(), WidthVP{SELF, FINAL}.p());
-            if (widthBad(nodep->lsbp(), selwidthDTypep) && nodep->lsbp()->width() != 32) {
+            // A constraint keeps the whole position, and positions it exactly
+            if (widthBad(nodep->lsbp(), selwidthDTypep) && nodep->lsbp()->width() != 32
+                && !m_constraintItem) {
                 if (!nodep->fileline()->warnIsOff(V3ErrorCode::WIDTH)) {
                     nodep->v3widthWarn(
                         (selwidth / elw), (nodep->lsbp()->width() / elw),
@@ -1537,7 +1539,8 @@ class WidthVisitor final : public VNVisitor {
                 }
                 // Extend unless it's a lvalue,
                 // because extending lvalue would lose write access.
-                if (!isWriteSelect) {
+                // A constraint reads bits out of range as zero itself.
+                if (!isWriteSelect && !m_constraintItem) {
                     // Extend it
                     const int extendTo = nodep->msbConst() + 1;
                     AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
@@ -1813,7 +1816,7 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->thsp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
-        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep);
+        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep, m_constraintItem);
         if (selp != nodep) {
             VL_DANGLING(nodep);
             userIterate(selp, m_vup);
@@ -1826,7 +1829,7 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->leftp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->rightp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
-        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep);
+        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep, m_constraintItem);
         if (selp != nodep) {
             nodep = nullptr;
             userIterate(selp, m_vup);
@@ -1838,7 +1841,7 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->widthp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
-        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep);
+        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep, m_constraintItem);
         if (selp != nodep) {
             nodep = nullptr;
             userIterate(selp, m_vup);
@@ -1850,7 +1853,7 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->widthp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
-        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep);
+        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep, m_constraintItem);
         if (selp != nodep) {
             nodep = nullptr;
             userIterate(selp, m_vup);
