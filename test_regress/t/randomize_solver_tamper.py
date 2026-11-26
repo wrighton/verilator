@@ -38,7 +38,9 @@
 #         | short_model | stale_assume | success | unknown_once | unknown_thrice
 #         | unknown_twice
 #         | unknown_var | unsat_recheck | unsupported_once | upper_hex | value_digit
-#         | value_lead | value_narrow | value_wide
+#         | value_lead | value_narrow | value_wide | whole_asarray | whole_chain
+#         | whole_cycle | whole_dup_let | whole_fail | whole_lambda | whole_let_alias
+#         | whole_let_scalar | whole_lets | whole_narrow | whole_twice
 #   bad_base         - replace the Nth model reply with a base character that is not b, o, x or h
 #   bad_digits       - replace the Nth model reply with one value holding digits outside its base
 #   bad_index        - replace the first array model reply with a bad select index
@@ -172,6 +174,17 @@
 #   value_lead       - replace the Nth model reply with an extra digit before a value
 #   value_narrow     - replace the Nth model reply with a value narrower than its variable
 #   value_wide       - replace the Nth model reply with a value wider than its variable
+#   whole_asarray    - replace the value of d in the Nth reply asking d whole with an as-array
+#   whole_chain      - as whole_asarray, with stores written as cvc5 does, binary and no lets
+#   whole_cycle      - as whole_asarray, with lets binding names to each other
+#   whole_dup_let    - as whole_asarray, with lets binding one name twice
+#   whole_fail       - as whole_asarray, then replace the next reply with an unknown variable
+#   whole_lambda     - as whole_asarray, with a lambda
+#   whole_let_alias  - as whole_lets, with a name bound to a let of a value
+#   whole_let_scalar - as whole_lets, with the default, an index and a value in lets
+#   whole_lets       - as whole_asarray, with stores in lets as z3 writes them
+#   whole_narrow     - as whole_asarray, with a store index narrower than the index sort
+#   whole_twice      - answer d twice in the Nth reply asking d whole
 # TAMPER_AT: reply index to act on (default 3)
 # TAMPER_ONCE: file marking that the tamper already acted. The runtime restarts
 #   a solver that died, which starts this wrapper again, so without the file a
@@ -204,6 +217,39 @@ SELECT_MODES = ("bad_index", "diversity_model", "select_arity", "select_carry", 
                 "select_dup", "select_empty", "select_extra", "select_lead", "select_narrow",
                 "select_octal", "select_prefix", "select_scalar", "select_unknown", "select_whole",
                 "select_wide")
+# Modes replacing the value of the array d of 100 8-bit elements, in the Nth reply asking it
+# whole: d[5] is 0x0b, d[6] 3 and the others 7 in the store forms, which also store into d[5]
+# under the outer store and past the size
+WA = "((as const (Array (_ BitVec 32) (_ BitVec 8))) #x07)"
+WHOLE_MODES = {
+    "whole_asarray":
+    "(_ as-array k!0)",
+    "whole_chain":
+    "(store (store (store ((as const (Array (_ BitVec 32) (_ BitVec 8)))"
+    " #b00000111) #b" + "0" * 29 + "101 #b00001001) #x00000006 #x03) #x00000005 #x0b)",
+    "whole_cycle":
+    "(let ((a!1 a!2) (a!2 a!1)) (store " + WA + " #x00000005 a!1))",
+    "whole_dup_let":
+    "(let ((a!1 " + WA + ")) (let ((a!1 (store a!1 #x00000005 #x09))) a!1))",
+    "whole_fail":
+    "(_ as-array k!0)",
+    "whole_lambda":
+    "(lambda ((x!1 (_ BitVec 32))) #x07)",
+    "whole_let_alias":
+    "(let ((a!1 (let ((w (_ bv3 8))) w))) (store (store " + WA +
+    " #x00000006 a!1) #x00000005 #x0b))",
+    "whole_let_scalar":
+    "(store (store (store ((as const (Array (_ BitVec 32) (_ BitVec 8)))"
+    " (let ((d0 #x07)) d0)) #x00000005 #x09) #x00000006 (let ((d6 (_ bv3 8))) d6))"
+    " (let ((i5 (_ bv5 32))) i5) #x0b)",
+    "whole_lets":
+    "(let ((a!1 (store " + WA + " #x00000005 #x09))) (let ((a!2 (_ bv3 8)))"
+    " (store (store (store a!1 #x00000006 a!2) #x000000c8 #x01) #x00000005 #x0b)))",
+    "whole_narrow":
+    "(store " + WA + " #x005 #x09)",
+    "whole_twice":
+    "",
+}
 # Modes acting on a status found from the push scopes of the commands
 CELL_MODES = ("err_cell", )
 # Modes acting on the status the solver sends after answering unsat
@@ -435,6 +481,8 @@ replies = 0
 seen_unsat = False
 done = bool(once) and os.path.exists(once)
 marker_next = False  # err_marker: the next status follows an error holding the marker
+junk_next = False  # whole_fail: the next reply is replaced too
+whole_seen = 0  # Replies asking d whole
 sat_scope = None  # err_cell: the scope of the last sat
 depth = 0  # Paren depth of the reply being forwarded, so wrapped ones stay intact
 inside = False  # Inside an SMT string literal, where parens do not nest
@@ -471,6 +519,8 @@ for line in proc.stdout:
         counted = at_reply_start and line.startswith("((x")
     elif mode in PHASE_VALUE_MODES:
         counted = at_reply_start and line.startswith(PHASE_VALUE_MODES[mode][0])
+    elif mode in WHOLE_MODES:
+        counted = at_reply_start and line.startswith("((__Vd_size")
     elif mode in ASSUME_MODES:
         counted = at_reply_start and re.match(r"\(__Va\d", line) is not None
     elif mode in CORE_MODES:
@@ -486,6 +536,37 @@ for line in proc.stdout:
         emit('(error "injected command rejected, then')
         emit("vl_resync")
         emit('in its text")')
+    # The Nth reply asking d whole, among the replies answering its size
+    if mode in WHOLE_MODES and counted and not done:
+        whole_text = "\n".join(read_full(line))
+        depth, inside = 0, False
+        start = whole_text.find("(d ")
+        whole_seen += start >= 0
+        if start < 0 or whole_seen < at:
+            emit(whole_text)
+            continue
+        done = True
+        end = start
+        nest = 0
+        for end in range(start, len(whole_text)):
+            nest += {"(": 1, ")": -1}.get(whole_text[end], 0)
+            if nest == 0:
+                break
+        entry = whole_text[start:end + 1]
+        if mode == "whole_twice":
+            entry += " " + entry
+        else:
+            entry = "(d " + WHOLE_MODES[mode] + ")"
+        emit(whole_text[:start] + entry + whole_text[end + 1:])
+        junk_next = mode == "whole_fail"
+        continue
+    # whole_fail: the reply asking d by element after the one replaced
+    if junk_next and at_reply_start and line.startswith("(("):
+        junk_next = False
+        swallow(line)
+        depth, inside = 0, False
+        emit("((__Vd_size #x00000064) (zz #x00))")
+        continue
     acting = counted and replies >= at and not done and mode not in STREAM_MODES
     if not acting:
         forward(line, at_reply_start)
