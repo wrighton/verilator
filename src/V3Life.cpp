@@ -204,15 +204,16 @@ public:
     }
     void clearReplaced() { m_replacedVref = false; }
     bool replaced() const { return m_replacedVref; }
-    void varUsageReplace(AstVarScope* nodep, AstVarRef* varrefp) {
-        // Variable rvalue.  If it references a constant, we can replace it
+    void varUsageReplace(AstVarScope* nodep, AstVarRef* varrefp, bool sampled) {
+        // Variable rvalue.  If it references a constant, we can replace it, unless the value read
+        // is sampled, so from before the time slot (IEEE 1800-2023 16.5.1)
         LifeVarEntry& entr = entry(nodep);
         if (entr.isNew()) {
             entr.init(false);
         } else {
             if (AstConst* const constp = entr.constNodep()) {
-                if (!varrefp->varp()->isSigPublic() && !varrefp->varp()->isWrittenByDpi()
-                    && !varrefp->varp()->isVirtIface()) {
+                if (!sampled && !varrefp->varp()->isSigPublic()
+                    && !varrefp->varp()->isWrittenByDpi() && !varrefp->varp()->isVirtIface()) {
                     // Aha, variable is constant; substitute in.
                     // We'll later constant propagate
                     UINFO(4, "     replaceconst: " << varrefp);
@@ -320,6 +321,7 @@ class LifeVisitor final : public VNVisitor {
     bool m_sideEffect = false;  // Side effects discovered in assign RHS
     bool m_noopt = false;  // Disable optimization of variables in this block
     bool m_tracingCall = false;  // Iterating into a CCall to a CFunc
+    bool m_inSampled = false;  // Under AstSampled
     LifeBlock* m_lifep = nullptr;  // Current active lifetime map for current scope
 
     // METHODS
@@ -365,8 +367,18 @@ class LifeVisitor final : public VNVisitor {
             m_sideEffect = true;  // $sscanf etc may have RHS vars that are lvalues
             m_lifep->complexAssign(vscp);
         } else {
-            VL_DO_DANGLING(m_lifep->varUsageReplace(vscp, nodep), nodep);
+            // The sampled value of an automatic or function-local variable is its current value
+            // (IEEE 1800-2023 16.5.1). A function's variables are temporaries once inlined.
+            const AstVar* const varp = nodep->varp();
+            const bool sampled = m_inSampled && !varp->lifetime().isAutomatic()
+                                 && !varp->isFuncLocal() && !varp->isTemp();
+            VL_DO_DANGLING(m_lifep->varUsageReplace(vscp, nodep, sampled), nodep);
         }
+    }
+    void visit(AstSampled* nodep) override {
+        VL_RESTORER(m_inSampled);
+        m_inSampled = true;
+        iterateChildren(nodep);
     }
     void visit(AstNodeAssign* nodep) override {
         if (nodep->isTimingControl() || VN_IS(nodep, AssignForce)) {
