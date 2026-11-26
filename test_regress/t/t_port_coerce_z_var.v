@@ -13,7 +13,7 @@
 interface pas_if (
     input logic v
 );
-  logic den_v = 1'bz;
+  logic den_v = {$bits(den_v){1'bz}};
   // verilator lint_off ASSIGNIN
   assign v = den_v;
   // verilator lint_on ASSIGNIN
@@ -175,6 +175,8 @@ module t;
   // Test: a variable never written holds its z initial value
   logic nz = 1'bz;
   logic [6:0] nz7 = 7'bz;
+  logic [6:0] nz7r = {7{1'bz}};
+  logic [6:0] nz7c = {3'bz, {2{2'bz}}};
   // Other reads of such a variable keep it
   logic zx = 1'bz;
   logic xa = 1'b1;
@@ -195,6 +197,8 @@ module t;
     #(HALF * 3);
     `checkh(nz === 1'bz, 1'b1);
     `checkh(nz7 === 7'bz, 1'b1);
+    `checkh(nz7r === 7'bz, 1'b1);
+    `checkh(nz7c === 7'bz, 1'b1);
     `checkh(pz === 1'bz, 1'b1);
     `checkh(wz, 1'b1);
     `checkh(zi.zv, 1'b1);

@@ -51,11 +51,21 @@ endmodule
 
 bind dut drv u_drv ();
 
-// Drives only z, which drives nothing
-module zstub (
+// Drives only z, which drives nothing, written in different ways
+module zstub #(
+    parameter int KIND = 0
+) (
     output logic v
 );
-  assign v = 1'bz;
+  if (KIND == 0) begin : g_bit
+    assign v = 1'bz;
+  end else if (KIND == 1) begin : g_rep
+    assign v = {$bits(v){1'bz}};
+  end else if (KIND == 2) begin : g_cat
+    assign v = {1'bz};
+  end else begin : g_fill
+    assign v = 'z;
+  end
 endmodule
 
 // Output only driven by z, through one and two levels of output ports
@@ -173,6 +183,17 @@ module t;
       .v(zv),
       .seen(zseen)
   );
+  // Other forms of z
+  wire [2:0] zkv;
+  logic [2:0] zkseen;
+  for (genvar k = 1; k <= 3; ++k) begin : g_zk
+    zstub #(.KIND(k)) u_zs (.v(zkv[k-1]));
+    dut u_z (
+        .clk,
+        .v(zkv[k-1]),
+        .seen(zkseen[k-1])
+    );
+  end
   wire zrv;
   wire zrv2;
   logic zrseen;
@@ -224,6 +245,8 @@ module t;
     `checkh(mv, 1'b1);
     `checkh(zseen, 1'b1);
     `checkh(zv, 1'b1);
+    `checkh(zkseen, 3'b111);
+    `checkh(zkv, 3'b111);
     `checkh(zrseen, 1'b1);
     `checkh(zrv, 1'b1);
     `checkh(zrseen2, 1'b1);
