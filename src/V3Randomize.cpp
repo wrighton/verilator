@@ -371,6 +371,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
         m_handleHolders;  // Classes holding a rand class handle of each class
     bool m_handleHoldersBuilt = false;  // m_handleHolders is complete
     std::vector<AstClass*> m_classps;  // All classes, in tree order
+    // The inline constraints of the randomize() calls of each class
+    std::unordered_map<const AstClass*, std::vector<const AstWith*>> m_inlineWithps;
     AstClass* m_classp = nullptr;  // Current class
     AstNode* m_constraintExprGenp = nullptr;  // Current constraint or constraint if expression
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -792,11 +794,17 @@ class RandomizeMarkVisitor final : public VNVisitor {
         while (VN_IS(dtypep, UnpackArrayDType)) dtypep = dtypep->subDTypep()->skipRefp();
         return VN_IS(dtypep, ClassRefDType);
     }
-    // Whether refp is a reference to the same member as pathp, through the same objects
+    // Whether refp is a reference to the same member as pathp, through the same objects. In
+    // inline constraints, a member of the object randomized is selected from its lambda
+    // argument, as pathp's root member variable is referenced directly.
     static bool samePath(const AstNodeExpr* refp, const AstNodeExpr* pathp) {
         while (true) {
             const AstMemberRef* const selp = VN_CAST(refp, MemberRef);
             const AstMemberRef* const pathSelp = VN_CAST(pathp, MemberRef);
+            if (selp && !pathSelp && VN_IS(selp->fromp(), LambdaArgRef)) {
+                const AstVarRef* const pathRefp = VN_CAST(pathp, VarRef);
+                return pathRefp && pathRefp->varp() == selp->varp();
+            }
             if (!selp || !pathSelp) break;
             if (selp->varp() != pathSelp->varp()) return false;
             refp = selp->fromp();
@@ -820,14 +828,22 @@ class RandomizeMarkVisitor final : public VNVisitor {
         const AstClassRefDType* const elemDtp
             = VN_AS(RandomizeUtil::arrayElementDTypep(arrVarp->dtypep()), ClassRefDType);
         // Not counting the size, which is a separate solver variable
+        const auto referencesp = [&](const AstNode* nodep) {
+            return nodep->exists([&](const AstNodeExpr* refp) {
+                const AstCMethodHard* const methodp = VN_CAST(refp->backp(), CMethodHard);
+                return samePath(refp, arrRefp)
+                       && !(methodp && methodp->method() == VCMethod::DYN_SIZE);
+            });
+        };
+        // Also by the inline constraints of a randomize() call of the class, which solves
+        // the elements' variables with the class's constraints (IEEE 1800-2023 18.7)
+        const auto withIt = m_inlineWithps.find(targetClassp);
         const bool referenced
             = targetClassp->existsMember([&](const AstClass*, const AstConstraint* constrp) {
-                  return constrp->exists([&](const AstNodeExpr* refp) {
-                      const AstCMethodHard* const methodp = VN_CAST(refp->backp(), CMethodHard);
-                      return samePath(refp, arrRefp)
-                             && !(methodp && methodp->method() == VCMethod::DYN_SIZE);
-                  });
-              });
+                  return referencesp(constrp);
+              })
+              || (withIt != m_inlineWithps.end()
+                  && std::any_of(withIt->second.begin(), withIt->second.end(), referencesp));
         if (!referenced) return;
         // A constraint of a derived class overrides the one of the same name of a base class
         // (IEEE 1800-2023 18.5.2), which is visited first
@@ -1350,6 +1366,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
         }
         if (const AstMethodCall* const callp = VN_CAST(nodep->backp(), MethodCall)) {
             m_withClassp = VN_AS(callp->fromp()->dtypep()->skipRefp(), ClassRefDType)->classp();
+            m_inlineWithps[m_withClassp].push_back(nodep);
+        } else if (m_classp && VN_IS(nodep->backp(), FuncRef) && !m_stdRandCallp) {
+            m_inlineWithps[m_classp].push_back(nodep);  // this.randomize() with
         }
         if (m_stdRandCallp && nodep == m_stdRandCallp->withp()) m_inStdWith = true;
         iterateChildrenConst(nodep);
