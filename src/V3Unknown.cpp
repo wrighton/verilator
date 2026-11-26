@@ -647,31 +647,28 @@ class UnknownVisitor final : public VNVisitor {
             VL_DO_DANGLING(V3Const::constifyEdit(nodep), nodep);
             return;
         } else {
-            AstNodeExpr* const lhsp = nodep->lhsp()->unlinkFrBack();
-            AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
-            AstNodeExpr* newp;
-            if (!VN_IS(rhsp, Const)) {
-                if (rhsp->dtypep()->isFourstate()) {
-                    nodep->v3warn(
-                        E_UNSUPPORTED,
-                        "Unsupported: RHS of ==? or !=? is fourstate but not a constant");
-                }
-                newp = new AstEq{nodep->fileline(), lhsp, rhsp};
-            } else {
+            AstNodeExpr* lhsp = nodep->lhsp()->unlinkFrBack();
+            AstNodeExpr* rhsp = nodep->rhsp()->unlinkFrBack();
+            if (const AstConst* const constp = VN_CAST(rhsp, Const)) {
                 // X or Z's become mask, ala case statements.
                 V3Number nummask{rhsp, rhsp->width()};
-                nummask.opBitsNonXZ(VN_AS(rhsp, Const)->num());
+                nummask.opBitsNonXZ(constp->num());
                 V3Number numval{rhsp, rhsp->width()};
-                numval.opBitsOne(VN_AS(rhsp, Const)->num());
-                AstNodeExpr* const and1p = new AstAnd{nodep->fileline(), lhsp,
-                                                      new AstConst{nodep->fileline(), nummask}};
-                AstNodeExpr* const and2p = new AstConst{nodep->fileline(), numval};
-                if (VN_IS(nodep, EqWild)) {
-                    newp = new AstEq{nodep->fileline(), and1p, and2p};
-                } else {
-                    newp = new AstNeq{nodep->fileline(), and1p, and2p};
-                }
+                numval.opBitsOne(constp->num());
+                lhsp = new AstAnd{nodep->fileline(), lhsp,
+                                  new AstConst{nodep->fileline(), nummask}};
+                AstNodeExpr* const valp = new AstConst{nodep->fileline(), numval};
                 VL_DO_DANGLING(rhsp->deleteTree(), rhsp);
+                rhsp = valp;
+            } else if (rhsp->dtypep()->isFourstate()) {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: RHS of ==? or !=? is fourstate but not a constant");
+            }
+            AstNodeExpr* newp;
+            if (VN_IS(nodep, EqWild)) {
+                newp = new AstEq{nodep->fileline(), lhsp, rhsp};
+            } else {
+                newp = new AstNeq{nodep->fileline(), lhsp, rhsp};
             }
             nodep->replaceWith(newp);
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
