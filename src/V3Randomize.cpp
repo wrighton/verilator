@@ -512,6 +512,12 @@ class RandomizeMarkVisitor final : public VNVisitor {
     ClonedConstraints& m_cloneObjps;  // Constraints made by cloning
     std::unordered_set<AstVar*>& m_elemModeArrays;  // Arrays with per-element rand_mode()
     AstClass* m_withClassp = nullptr;  // Class of obj in the current obj.randomize() with
+    using ConstraintNames = std::unordered_map<const AstClass*, std::unordered_set<std::string>>;
+    // Names of the constraints of each class, not its base classes, found when first needed and
+    // updated as constraints are cloned into it, see cloneObjectConstraint, which is the only
+    // place this visitor adds a constraint to a class. Only looked up.
+    ConstraintNames m_constraintNames;
+    VDouble0 m_statConstraintNameSteps;  // Constraints and classes searched for a name
 
     // METHODS
     // Mark the rand variables, except handles, of the class of a globally constrained member
@@ -1074,20 +1080,34 @@ class RandomizeMarkVisitor final : public VNVisitor {
         return exprp;
     }
 
+    // Find the names of the constraints of the class, not of its base classes
+    ConstraintNames::iterator addConstraintNames(const AstClass* classp) {
+        std::unordered_set<std::string> names;
+        for (const AstNode* const itemp : classp->memberspList()) {
+            ++m_statConstraintNameSteps;
+            if (VN_IS(itemp, Constraint)) names.insert(itemp->name());
+        }
+        return m_constraintNames.emplace(classp, std::move(names)).first;
+    }
+    // Whether the class or a base class has a constraint of the name
+    bool hasConstraintNamed(const AstClass* classp, const std::string& name) {
+        ++m_statConstraintNameSteps;
+        auto it = m_constraintNames.find(classp);
+        if (it == m_constraintNames.end()) it = addConstraintNames(classp);
+        const AstClassExtends* const extendsp = classp->extendsp();
+        return it->second.count(name)
+               || (extendsp && hasConstraintNamed(extendsp->classp(), name));
+    }
+
     // Clone constraint constrp of the object objp, nullptr if targetClassp already has the clone
     AstConstraint* cloneObjectConstraint(AstConstraint* const constrp, AstNodeExpr* objp,
                                          const std::string& pathPrefix, AstClass* targetClassp) {
         const std::string newName = pathPrefix + GLOBAL_CONSTRAINT_SEPARATOR + constrp->name();
 
-        // Check if this constraint already exists in the target class
-        bool isDuplicate = false;
-        targetClassp->foreachMember([&](AstClass* const, AstConstraint* const existingConstrp) {
-            if (existingConstrp->name() == newName) {
-                // Multiple paths lead to same constraint - unsupported pattern
-                isDuplicate = true;
-            }
-        });
-        if (isDuplicate) return nullptr;
+        // Check if this constraint already exists in the target class, as when multiple paths
+        // lead to the same constraint - unsupported pattern. Looked up by name, as searching
+        // the class for each constraint cloned into it would be quadratic.
+        if (hasConstraintNamed(targetClassp, newName)) return nullptr;
 
         AstConstraint* const cloneConstrp = constrp->cloneTree(false);
         cloneConstrp->name(newName);
@@ -1130,6 +1150,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
                              AstConstraint* origp, AstNodeExpr* objp) {
         m_cloneObjps.emplace(cloneConstrp, ClonedConstraint{objp->cloneTree(false), origp});
         targetClassp->addMembersp(cloneConstrp);
+        // Its names were found by hasConstraintNamed
+        const bool inserted
+            = m_constraintNames.at(targetClassp).insert(cloneConstrp->name()).second;
+        UASSERT_OBJ(inserted, cloneConstrp, "Constraint name already in class");
         // Immediately iterate to set user1 marks, as a constraint of the target class
         VL_RESTORER(m_classp);
         m_classp = targetClassp;
@@ -1871,6 +1895,7 @@ public:
     ~RandomizeMarkVisitor() override {
         V3Stats::addStat("Randomize, static rand member reachability steps", m_staticReachSteps);
         V3Stats::addStatSum("Randomize, Element index nodes visited", m_statElementIndexNodes);
+        V3Stats::addStat("Randomize, Constraint name search steps", m_statConstraintNameSteps);
     }
 };
 
