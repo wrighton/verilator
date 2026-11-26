@@ -26,7 +26,8 @@ if test.vlt_all:
     test.file_grep(test.stats,
                    r'Timing, event controls on interface events through handles\s+(\d+)', 1)
 if test.vltmt:
-    # Only the MTask killing processes runs alone, not the one writing a handle
-    test.file_grep(test.stats, r'Scheduling, MTasks with process control\s+(\d+)', 1)
+    # The block killing processes is a suspendable process, and the one writing a handle is
+    # MTask logic that does not control processes
+    test.file_grep_not(test.stats, r'Scheduling, MTasks with process control')
 
 test.passes()

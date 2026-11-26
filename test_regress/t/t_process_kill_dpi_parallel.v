@@ -9,13 +9,11 @@
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
-// A clocked block, which may be in its own parallel MTask, calls a context DPI import whose C
-// code calls a DPI export that kills two processes (IEEE 1800-2023 9.7, 35.5.3). Each kill ends
-// the join a parent waits on, and the parent runs on in that MTask: one fires an event and
-// waits on a delay, the other waits on a class event that another block fires in the same
-// cycles. Only the process control orders these blocks. Unordered, the fire in the MTask of the
-// import races with the fire of the class event in the other block; the delay and the class
-// event wait check the behavior only.
+// A clocked block calls a context DPI import whose C code calls a DPI export that kills two
+// processes (IEEE 1800-2023 9.7, 35.5.3). Each kill ends the join a parent waits on, and the
+// parent runs on: one fires an event and waits on a delay, the other waits on a class event that
+// another block fires in the same cycles. The fire after the import must not race with the fire
+// of the class event in the other block; the delay and the class event wait check the behavior.
 module t;
   timeunit 1ns; timeprecision 1ps;
 
