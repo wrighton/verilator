@@ -134,8 +134,10 @@ class SampledVisitor final : public VNVisitor {
     }
     void visit(AstVarRef* nodep) override {
         iterateChildren(nodep);
-        // The sampled value of an automatic variable is its current value (IEEE 1800-2023 16.5.1)
-        if (m_inSampled && !nodep->varp()->isFuncLocal() && !nodep->user1SetOnce()) {
+        // The sampled value of an automatic variable, and of the triggered method of an event,
+        // is its current value (IEEE 1800-2023 16.5.1)
+        if (m_inSampled && !nodep->varp()->isFuncLocal() && !nodep->isEvent()
+            && !nodep->user1SetOnce()) {
             UASSERT_OBJ(nodep->access().isReadOnly(), nodep, "Should have failed in V3Access");
             AstVarScope* const vscp = nodep->varScopep();
             if (!vscp->user1p()) {
