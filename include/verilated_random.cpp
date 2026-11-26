@@ -530,6 +530,30 @@ static void finishErrorReply(std::istream& is, std::string& liner) {
     }
 }
 
+void VlRandomizer::fail_pending(const std::string& msg, const char* filename, uint32_t linenum,
+                                bool warned) {
+    if (failed()) return;
+    m_failPending = msg;
+    m_failFilename = filename;
+    m_failLinenum = linenum;
+    m_failWarned = warned;
+}
+
+bool VlRandomizer::array_size_ok(IData size, const char* name, const char* filename,
+                                 uint32_t linenum) {
+    // Unsigned, as a solved size of 2**31 or more is not a small negative one
+    const IData maxSize = static_cast<IData>(Verilated::threadContextp()->randArrayMax());
+    if (VL_LIKELY(size <= maxSize)) return true;
+    const std::string msg = "randomize() returns 0: the constraints give '" + std::string{name}
+                            + "' " + std::to_string(size) + " elements, over the "
+                            + std::to_string(maxSize)
+                            + " of +verilator+rand+array+max+<n>; constrain its size, or raise"
+                              " the limit.";
+    VL_WARN_MT(filename, linenum, "", msg.c_str());
+    fail_pending(msg, filename, linenum, true);
+    return false;
+}
+
 static void warnSolverReply(const std::string& reply) {
     static bool s_warned = false;
     if (s_warned) return;
@@ -1897,11 +1921,11 @@ int VlRandomizer::nextFast(VlRNG& rngr) {
 }
 
 bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
-    if (VL_UNLIKELY(!m_nullRead.empty())) {
+    if (VL_UNLIKELY(failed())) {
         static bool s_warned = false;
-        if (!s_warned) {
+        if (!m_failWarned && !s_warned) {
             s_warned = true;
-            VL_WARN_MT(m_nullReadFilename, m_nullReadLinenum, "", m_nullRead.c_str());
+            VL_WARN_MT(m_failFilename, m_failLinenum, "", m_failPending.c_str());
         }
         return false;
     }
@@ -3200,7 +3224,7 @@ void VlRandomizer::clear_nested(const std::string& path) {
 
 void VlRandomizer::nullReadCheck(const std::string& constraint, const char* filename,
                                  uint32_t linenum) {
-    if (!m_nullRead.empty()) return;
+    if (failed()) return;
     for (const auto& nameRead : m_nullReads) {
         // The solver name as a whole term, not a prefix of a longer one
         for (size_t pos = constraint.find(nameRead.first); pos != std::string::npos;
@@ -3209,11 +3233,10 @@ void VlRandomizer::nullReadCheck(const std::string& constraint, const char* file
             if (end != constraint.size() && constraint[end] != ' ' && constraint[end] != ')') {
                 continue;
             }
-            m_nullRead = "randomize() constraint reads '" + nameRead.second
-                         + "', a member of a null handle, so randomize() returns 0 (IEEE "
-                           "1800-2023 18.5.12); warned once";
-            m_nullReadFilename = filename;
-            m_nullReadLinenum = linenum;
+            fail_pending("randomize() constraint reads '" + nameRead.second
+                             + "', a member of a null handle, so randomize() returns 0 (IEEE "
+                               "1800-2023 18.5.12); warned once",
+                         filename, linenum);
             return;
         }
     }
@@ -3226,8 +3249,8 @@ std::string VlRandomizer::null_read(const std::string& name, const std::string& 
 
 void VlRandomizer::clearConstraints() {
     m_nullReads.clear();
-    m_nullRead.clear();
-    m_nullReadFilename = nullptr;
+    m_failPending.clear();
+    m_failFilename = nullptr;
     m_fastConstraints.clear();
     m_fastDisabled = false;
     m_constraints.clear();
