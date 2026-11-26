@@ -1,0 +1,13 @@
+%Error: t/t_hier_block_ftask_bad.v:64:23: Cannot access non-port symbols inside hierarchical block
+                                        : ... note: In instance 't'
+   64 |   assign out = u_leaf.add1(w);
+      |                       ^~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_hier_block_ftask_bad.v:65:18: Cannot access non-port symbols inside hierarchical block
+                                        : ... note: In instance 't'
+   65 |   initial u_leaf.show();
+      |                  ^~~~
+%Error: t/t_hier_block_ftask_bad.v:68:32: Cannot access scope inside hierarchical block
+   68 |   assign two = u_leaf.u_nested.nf(w);
+      |                                ^~
+%Error: Exiting due to
