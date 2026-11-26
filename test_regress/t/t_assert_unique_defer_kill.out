@@ -1,0 +1,3 @@
+[1] %Error: t_assert_unique_defer_kill.v:21: Assertion failed in t.not_killed_assertkill: unique case, but multiple matches found for '1'h1'
+[2] %Error: t_assert_unique_defer_kill.v:33: Assertion failed in t.not_killed_other_type: unique case, but multiple matches found for '1'h1'
+*-* All Finished *-*
