@@ -341,6 +341,21 @@ module t;
     forced_arg = 2'b01;
     #1;
     `checkh(forced_calls, 8);
+    // A force of a concatenation follows its value only while a part within the net is forced
+    force {concat_net[9], concat_net[0]} = forced_value(forced_arg);
+    force {concat_net[10], concat_net[8]} = forced_value(forced_arg);
+    `checkh(forced_calls, 10);
+    #1;
+    `checkh(concat_net, 8'h09);
+    forced_arg = 2'b10;
+    #1;
+    `checkh(concat_net, 8'h08);
+    `checkh(forced_calls, 11);
+    release {concat_net[9], concat_net[0]};
+    release {concat_net[10], concat_net[8]};
+    forced_arg = 2'b01;
+    #1;
+    `checkh(forced_calls, 11);
     // A select of an element outside the net, within a part, has no storage bits either
     force nested_net[5][0] = 1'b1;
     release nested_net[5][0];

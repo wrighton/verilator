@@ -959,6 +959,41 @@ public:
         return stmtsp;
     }
 
+    // For each block temporary, the forces whose RHS reads it, each with the information of the
+    // variable that force targets
+    using ForceReaders
+        = std::unordered_map<const AstVarScope*,
+                             std::vector<std::pair<const VarForceInfo*, const ForceInfo*>>>;
+    // Whether force 'finfo' of 'info' still owns some of its range
+    static AstNodeExpr* newOwnsRangep(FileLine* flp, const VarForceInfo& info,
+                                      const ForceInfo& finfo) {
+        AstCMethodHard* const hasp
+            = new AstCMethodHard{flp, new AstVarRef{flp, info.m_forceVecVscp, VAccess::READ},
+                                 VCMethod::FORCE_HAS, makeConst32(flp, finfo.m_forceId)};
+        hasp->addPinsp(makeConst32(flp, finfo.m_rangeLsb));
+        hasp->addPinsp(makeConst32(flp, finfo.m_rangeMsb));
+        hasp->dtypeSetBit();
+        return hasp;
+    }
+    // Whether the live RHS of force 'finfo' of 'info' is evaluated: while the force owns some of
+    // its range, as its RHS then acts as a continuous assignment (IEEE 1800-2023 10.6). A forced
+    // block temporary holds the value of a concatenation split into forces of its parts that
+    // read it (V3Const), so its value is also only needed while one of those owns some bits.
+    static AstNodeExpr* newActivep(FileLine* flp, const VarForceInfo& info, const ForceInfo& finfo,
+                                   const ForceReaders& readers) {
+        AstNodeExpr* const ownsp = newOwnsRangep(flp, info, finfo);
+        if (info.m_varp->varType() != VVarType::BLOCKTEMP) return ownsp;
+        AstNodeExpr* readp = new AstConst{flp, AstConst::BitFalse{}};
+        const auto it = readers.find(info.m_varVscp);
+        if (it != readers.end()) {
+            for (const auto& reader : it->second) {
+                readp
+                    = new AstLogOr{flp, readp, newOwnsRangep(flp, *reader.first, *reader.second)};
+            }
+        }
+        return new AstLogAnd{flp, ownsp, readp};
+    }
+
     void finalizeRhsVars() {
         if (!doingAssign()) {
             for (VarForceInfo& info : m_varInfos) createForceOwners(info);
@@ -967,6 +1002,16 @@ public:
                 if (!vpiVarp) continue;
                 info.m_forceVpiVscp = new AstVarScope{vpiVarp->fileline(), info.m_scopep, vpiVarp};
                 info.m_scopep->addVarsp(info.m_forceVpiVscp);
+            }
+        }
+        ForceReaders readers;
+        for (const VarForceInfo& info : m_varInfos) {
+            for (const ForceInfo* const finfop : forceInfosInIdOrder(info)) {
+                finfop->m_rhsExprp->foreach([&](const AstVarRef* refp) {
+                    if (refp->varp()->varType() == VVarType::BLOCKTEMP) {
+                        readers[refp->varScopep()].emplace_back(&info, finfop);
+                    }
+                });
             }
         }
         for (VarForceInfo& info : m_varInfos) {
@@ -1003,14 +1048,9 @@ public:
                 // The RHS expression may call a method on a receiver that only exists
                 // while the force owns some of its original range.
                 if (finfo.m_activeVscp) {
-                    AstCMethodHard* const hasp = new AstCMethodHard{
-                        flp, new AstVarRef{flp, info.m_forceVecVscp, VAccess::READ},
-                        VCMethod::FORCE_HAS, makeConst32(flp, finfo.m_forceId)};
-                    hasp->addPinsp(makeConst32(flp, finfo.m_rangeLsb));
-                    hasp->addPinsp(makeConst32(flp, finfo.m_rangeMsb));
-                    hasp->dtypeSetBit();
                     AstAssign* const activeAssignp = new AstAssign{
-                        flp, new AstVarRef{flp, finfo.m_activeVscp, VAccess::WRITE}, hasp};
+                        flp, new AstVarRef{flp, finfo.m_activeVscp, VAccess::WRITE},
+                        newActivep(flp, info, finfo, readers)};
                     AstActive* const activep = new AstActive{
                         flp, "force-rhs-active",
                         new AstSenTree{flp, new AstSenItem{flp, AstSenItem::Combo{}}}};

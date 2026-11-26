@@ -202,4 +202,106 @@ module t;
     #1 $finish;
   end
 
+  // A force of a concatenation follows its value while any of its parts is forced
+  int concat_calls = 0;
+  logic [1:0] concat_arg = 2'b01;
+  function automatic logic [1:0] concat_value(logic [1:0] value);
+    ++concat_calls;
+    return value;
+  endfunction
+  wire [3:0] concat_net = '0;
+  initial begin
+    #1;
+    force {concat_net[3], concat_net[0]} = concat_value(concat_arg);
+    `checkh(concat_calls, 1);
+    #1;
+    `checkh(concat_net, 4'h1);
+    concat_arg = 2'b10;
+    #1;
+    `checkh(concat_net, 4'h8);
+    `checkh(concat_calls, 2);
+    release concat_net[3];
+    concat_arg = 2'b01;
+    #1;
+    `checkh(concat_net, 4'h1);
+    `checkh(concat_calls, 3);
+    release concat_net[0];
+    concat_arg = 2'b11;
+    #1;
+    `checkh(concat_net, 4'h0);
+    `checkh(concat_calls, 3);
+  end
+
+  // A force in a task follows its value only from the call that executed it
+  int task_calls = 0;
+  logic [1:0] task_arg = 2'b01;
+  function automatic logic [1:0] task_value(logic [1:0] value);
+    ++task_calls;
+    return value;
+  endfunction
+  wire [3:0] task_net = '0;
+  bit task_never = 0;
+  task automatic task_force();
+    force {task_net[3], task_net[0]} = task_value(task_arg);
+  endtask
+  initial begin
+    #1;
+    task_force();
+    `checkh(task_calls, 1);
+    #1;
+    task_arg = 2'b10;
+    #1;
+    `checkh(task_net, 4'h8);
+    `checkh(task_calls, 2);
+    release task_net;
+    task_arg = 2'b11;
+    #1;
+    `checkh(task_net, 4'h0);
+    `checkh(task_calls, 2);
+  end
+  initial begin
+    #2;
+    if (task_never) task_force();
+  end
+
+  // A force in a task called from two processes follows the value of the call owning the bits
+  int shared_calls = 0;
+  logic [1:0] shared_arg = 2'b01;
+  function automatic logic [1:0] shared_value(logic [1:0] value);
+    ++shared_calls;
+    return value;
+  endfunction
+  wire [3:0] shared_net = '0;
+  task automatic shared_force();
+    force {shared_net[3], shared_net[0]} = shared_value(shared_arg);
+  endtask
+  initial begin
+    #1;
+    shared_force();
+    `checkh(shared_calls, 1);
+    #1;
+    `checkh(shared_net, 4'h1);
+    release {shared_net[3], shared_net[0]};
+    shared_arg = 2'b10;
+    #1;
+    `checkh(shared_net, 4'h0);
+    `checkh(shared_calls, 1);
+  end
+  initial begin
+    #4;
+    shared_force();
+    `checkh(shared_calls, 2);
+    #1;
+    `checkh(shared_net, 4'h8);
+    shared_arg = 2'b11;
+    #1;
+    `checkh(shared_net, 4'h9);
+    `checkh(shared_calls, 3);
+    release {shared_net[3], shared_net[0]};
+    shared_arg = 2'b00;
+    #1;
+    `checkh(shared_net, 4'h0);
+    `checkh(shared_calls, 3);
+  end
+
 endmodule
