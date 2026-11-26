@@ -1923,6 +1923,7 @@ class AstPin final : public AstNode {
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
     bool m_explicitModport = false;  // Actual expression explicitly selected a modport
     bool m_returnWrittenInput = false;  // Width-proved original net destination for Tristate
+    bool m_eventExpr = false;  // Connected to an event expression, which is not kept
 public:
     AstPin(FileLine* fl, int pinNum, const string& name, AstNode* exprp)
         : ASTGEN_SUPER_Pin(fl)
@@ -1965,6 +1966,8 @@ public:
     void explicitModport(bool flag) { m_explicitModport = flag; }
     void setReturnWrittenInput() { m_returnWrittenInput = true; }
     bool returnWrittenInput() const { return m_returnWrittenInput; }
+    bool eventExpr() const { return m_eventExpr; }
+    void eventExpr(bool flag) { m_eventExpr = flag; }
 };
 class AstPort final : public AstNode {
     // A port (in/out/inout) on a module

@@ -3478,12 +3478,33 @@ instPinItemE<pinp>:             // IEEE: named_port_connection + empty
         |       '.' idAny '(' expr ')'
                         { $$ = new AstPin{$<fl>2, PINNUMINC(), *$2, $4};
                           $$->svDotName(true); }
+        //                      // IEEE: property_actual_arg of a checker port connection
+        |       '.' idAny '(' instPinEvent ')'
+                        { $$ = new AstPin{$<fl>2, PINNUMINC(), *$2, nullptr};
+                          $$->svDotName(true);
+                          $$->eventExpr(true);
+                          DEL($4); }
+        |       '.' idAny '(' instPinEvent ',' event_expression ')'
+                        { $$ = new AstPin{$<fl>2, PINNUMINC(), *$2, nullptr};
+                          $$->svDotName(true);
+                          $$->eventExpr(true);
+                          DEL($4); DEL($6); }
         //UNSUP '.' idAny '(' pev_expr ':' expr ')'     { }
         //UNSUP '.' idAny '(' pev_expr ':' expr ':' expr ')' { }
         //
         |       expr                                    { $$ = new AstPin{FILELINE_OR_CRE($1), PINNUMINC(), "", $1}; }
+        //                      // IEEE: property_actual_arg of a checker port connection
+        |       instPinEvent
+                        { $$ = new AstPin{$1->fileline(), PINNUMINC(), "", nullptr};
+                          $$->eventExpr(true);
+                          DEL($1); }
         //UNSUP expr ':' expr                           { }
         //UNSUP expr ':' expr ':' expr                  { }
+        ;
+
+instPinEvent<senItemp>:  // IEEE: event_expression of a property_actual_arg, led by an edge
+                senitemEdge                             { $$ = $1; }
+        |       instPinEvent yOR senitem                { $$ = addNextNull($1, $3); }
         ;
 
 //************************************************
