@@ -434,6 +434,8 @@ class VlRandomizer VL_NOT_FINAL {
                           const std::vector<std::string>* layerVarsp = nullptr);
     // Fetch the model and write it into the registered variables.
     bool applyModel(VlSolverSession& sess);
+    // The variable holding an array's size when the size is random, else nullptr
+    const VlRandomVar* sizeVarp(const VlRandomVar& varr) const;
     // The element name a select of varr with these index terms names, as ArrayInfo names it
     bool elementName(const VlRandomVar& varr, std::vector<std::string> indices,
                      std::string& elementr) const;

@@ -63,7 +63,7 @@ endclass
 // array with no element, which arrives as a whole array value
 class PhasedArr;
   rand bit [4:0] w[2];
-  rand bit [4:0] e[];
+  rand bit [4:0] e[];  // No size constraint, so pinned whole: the phase_whole_* modes
   rand bit [3:0] k;
   constraint order_c {
     solve w before k;
