@@ -30,6 +30,7 @@
 #include <vector>
 
 class SenExprBuilder;
+class SenTreeFinder;
 
 //============================================================================
 
@@ -93,8 +94,19 @@ void foreachLogicAccess(AstNode* nodep, const LogicAccessFunc& f);
 // Call 'f' on each access of a non-local variable in the function 'callp' calls, if a logic
 // callee, and in the logic callees it calls, as foreachLogicAccess
 void foreachCallAccess(const AstCCall* callp, const LogicAccessFunc& f);
-// Compute the implicit sensitivities of the given combinational process
-std::unordered_set<const AstVarScope*> computeImplicitSensitivities(AstNodeProcedure* procp);
+// The sensitivity tree, from 'finder', of a hybrid process run by a change of any of 'vscps',
+// in the order 'procp' reads them
+AstSenTree* changeSenTree(SenTreeFinder& finder, AstNodeProcedure* procp,
+                          const std::unordered_set<const AstVarScope*>& vscps);
+
+// The only process writing each variable, or nullptr if it has other writers
+using SoleWriterMap = std::unordered_map<const AstVarScope*, const AstNodeProcedure*>;
+SoleWriterMap computeSoleWriters(AstNetlist* netlistp);
+// Compute the implicit sensitivities of the given combinational process. 'excludedr' counts
+// the variables excluded as written by a user's always_comb.
+std::unordered_set<const AstVarScope*>
+computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleWriters,
+                             size_t& excludedr);
 // Whether the node accesses state of the runtime that processes share, other than variables:
 // output streams and files ($display, $fopen, $fgets, ...), the time format ($timeformat, and
 // '%t' formatting reading it), random number generators, the command line arguments (C code
@@ -214,6 +226,7 @@ struct LogicClasses final {
     ProcessList m_comb;  // Combinational logic (logic with implicit sensitivities)
     ProcessList m_clocked;  // Clocked (or sequential) logic (logic with explicit sensitivities)
     ProcessList m_hybrid;  // Hybrid logic (combinational logic with some explicit sensitivities)
+    ProcessList m_changed;  // Hybrid logic run only by changes, not settled in 'stl'
     ProcessList m_postponed;  // Postponed logic ($strobe)
     ProcessList m_observed;  // Observed logic (contains AstAlwaysObserved)
     ProcessList m_reactive;  // Reactive logic (contains AstAlwaysReactive)

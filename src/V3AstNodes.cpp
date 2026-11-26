@@ -789,9 +789,11 @@ void AstAddrOfCFunc::dump(std::ostream& str) const {
 void AstAlways::dump(std::ostream& str) const {
     Super::dump(str);
     if (keyword() != VAlwaysKwd::ALWAYS) str << " [" << keyword().ascii() << "]";
+    if (userComb()) str << " [UCOMB]";
 }
 void AstAlways::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "keyword", keyword().ascii());
+    dumpJsonBoolFuncIf(str, userComb);
     dumpJsonGen(str);
 }
 void AstAlwaysReactive::dump(std::ostream& str) const {

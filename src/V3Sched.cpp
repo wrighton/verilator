@@ -47,6 +47,7 @@
 #include "V3EmitV.h"
 #include "V3Order.h"
 #include "V3SenExprBuilder.h"
+#include "V3SenTree.h"
 #include "V3Stats.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -214,6 +215,9 @@ bool isReNbaCommit(const AstNetlist* netlistp, const AstNodeProcedure* procp) {
 LogicClasses gatherLogicClasses(AstNetlist* netlistp) {
     LogicClasses result;
     VNDeleter deleter;  // Deletes the AstActives once their processes are moved
+    const util::SoleWriterMap soleWriters = util::computeSoleWriters(netlistp);
+    size_t selfWritten = 0;  // Variables excluded from the sensitivity of their always_comb
+    SenTreeFinder finder{netlistp};
 
     netlistp->foreach([&](AstScope* scopep) {
         scopep->foreach([&](AstActive* activep) {
@@ -258,13 +262,50 @@ LogicClasses gatherLogicClasses(AstNetlist* netlistp) {
                 // Only combinational logic has implicit sensitivities
                 std::unordered_set<const AstVarScope*> implicitSensitivities;
                 if (senTreep->hasCombo()) {
-                    implicitSensitivities = util::computeImplicitSensitivities(procp);
+                    const size_t excludedBefore = selfWritten;
+                    implicitSensitivities
+                        = util::computeImplicitSensitivities(procp, soleWriters, selfWritten);
+                    const AstAlways* const alwaysp = VN_CAST(procp, Always);
+                    // Whether changes of what it is sensitive to can be detected, and are not
+                    // of variables whose writes scheduling ignores, or of public variables, as
+                    // logic reading those, which may be written from outside the model, runs as
+                    // the 'ico' region decides
+                    const bool triggerable
+                        = std::all_of(implicitSensitivities.begin(), implicitSensitivities.end(),
+                                      [](const AstVarScope* vscp) {
+                                          return SenExprBuilder::isSupportedDType(vscp->dtypep())
+                                                 && !vscp->varp()->ignoreSchedWrite()
+                                                 && !vscp->varp()->isSigPublic();
+                                      });
+                    // Otherwise it stays combinational logic, which may run more often
+                    if (alwaysp && alwaysp->userComb() && selfWritten != excludedBefore
+                        && triggerable) {
+                        // An always_comb reading what it writes runs once at time zero, and then
+                        // once per change of what it is sensitive to (IEEE 1800-2023
+                        // 9.2.2.2.2). Comb logic may run more often, as its result does not
+                        // depend on that, but this one's does. So make it hybrid logic run by
+                        // changes only, which also run once at time zero, when the 'act' region
+                        // first runs; it is not settled in 'stl', which would run it again. One
+                        // sensitive to nothing runs at time zero only.
+                        if (implicitSensitivities.empty()) {
+                            result.m_initial.add({scopep, senTreep, procp, {}});
+                        } else {
+                            result.m_changed.add(
+                                {scopep,
+                                 util::changeSenTree(finder, procp, implicitSensitivities),
+                                 procp,
+                                 {}});
+                        }
+                        continue;
+                    }
                 }
                 logicClassp->add({scopep, senTreep, procp, std::move(implicitSensitivities)});
             }
             VL_DO_DANGLING(deleter.pushDeletep(activep->unlinkFrBack()), activep);
         });
     });
+
+    V3Stats::addStat("Scheduling, always_comb self-written sensitivities", selfWritten);
 
     return result;
 }
@@ -2127,6 +2168,8 @@ void schedule(AstNetlist* netlistp) {
     createSettle(netlistp, staticp, senExprBuilder, logicClasses, cgRefBindings,
                  virtIfaceTriggers.m_clockedReads);
     if (v3Global.opt.stats()) V3Stats::statsStage("sched-settle");
+    for (Process& process : logicClasses.m_changed) logicClasses.m_hybrid.add(std::move(process));
+    logicClasses.m_changed = ProcessList{};
 
     // Step 7: Partition the clocked and combinational (including hybrid) logic into pre/act/nba.
     // All clocks (signals referenced in an AstSenTree) generated via a blocking assignment
