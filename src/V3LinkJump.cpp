@@ -75,6 +75,7 @@ class LinkJumpVisitor final : public VNVisitor {
         m_taskDisableItems;  // Per-task process wrappers
     std::unordered_map<const AstBegin*, AstForkItem*>
         m_beginDisableItems;  // Per-begin process wrappers
+    V3UniqueNames m_disableCountNames{"__VdisableCount"};  // Names for disable counts
 
     // METHODS
     // Get (and create if necessary) the JumpBlock for this statement
@@ -364,6 +365,40 @@ class LinkJumpVisitor final : public VNVisitor {
         m_forkDisableQueues.emplace(forkp, processQueuep);
         return processQueuep;
     }
+    static bool isDeferredAssertion(const AstNode* nodep) {
+        const AstNodeCoverOrAssert* const assertp = VN_CAST(nodep, NodeCoverOrAssert);
+        return assertp
+               && assertp->userType().containsAny(VAssertType::OBSERVED_DEFERRED_IMMEDIATE
+                                                  | VAssertType::FINAL_DEFERRED_IMMEDIATE);
+    }
+    // Count the disables of a block that may own deferred assertion reports: the outermost
+    // scope of a process, or the label of a deferred assertion. V3Assert drops the reports
+    // pending at a disable of either (IEEE 1800-2023 16.4.4).
+    void countDisable(AstDisable* const nodep, AstBegin* const beginp, bool outermost) {
+        if (!beginp->disableCountp()) {
+            const bool label = beginp->stmtLabel() && isDeferredAssertion(beginp->stmtsp());
+            const auto isDeferred
+                = [](const AstNodeCoverOrAssert* np) { return isDeferredAssertion(np); };
+            if (!label && !(outermost && beginp->exists(isDeferred))) return;
+            // Packages and classes have no process with such reports
+            AstNodeModule* const ownerp = findOwnerModulep(beginp);
+            if (VN_IS(ownerp, Package) || VN_IS(ownerp, Class)) return;
+            FileLine* const fl = beginp->fileline();
+            AstVar* const countp
+                = new AstVar{fl, VVarType::MODULETEMP, m_disableCountNames.get(beginp->name()),
+                             beginp->findUInt32DType()};
+            countp->lifetime(VLifetime::STATIC_EXPLICIT);
+            countp->setIgnoreSchedWrite();
+            ownerp->addStmtsp(countp);
+            beginp->disableCountp(countp);
+        }
+        FileLine* const fl = nodep->fileline();
+        AstVar* const countp = beginp->disableCountp();
+        const std::string dotted = targetInstancePath(nodep);
+        nodep->addHereThisAsNext(new AstAssign{
+            fl, newQueueRefp(fl, countp, VAccess::WRITE, dotted),
+            new AstAdd{fl, newQueueRefp(fl, countp, VAccess::READ, dotted), new AstConst{fl, 1}}});
+    }
     AstStmtExpr* insertKillStmtp(AstDisable* const nodep, AstVar* const processQueuep) {
         FileLine* const fl = nodep->fileline();
         AstStmtExpr* const killStmtp
@@ -601,14 +636,15 @@ class LinkJumpVisitor final : public VNVisitor {
             // A block directly under a procedure or fork item may be a process's outermost
             // scope. Wrap its body before the disable is lowered below, so later passes can tell
             // whether the block ran to its end.
-            if (!beginp->user4SetOnce() && beginp->stmtsp()) {
-                const AstNode* const abovep = beginp->aboveLoopp();
-                // A disable wrapper runs part of the enclosing process
-                const AstForkItem* const itemp = VN_CAST(abovep, ForkItem);
-                if (VN_IS(abovep, NodeProcedure) || (itemp && !itemp->disableWrapper())) {
-                    beginp->addStmtsp(new AstDisableTargetBody{
-                        beginp->fileline(), beginp->stmtsp()->unlinkFrBackWithNext()});
-                }
+            const AstNode* const abovep = beginp->aboveLoopp();
+            // A disable wrapper runs part of the enclosing process
+            const AstForkItem* const itemp = VN_CAST(abovep, ForkItem);
+            const bool outermost
+                = VN_IS(abovep, NodeProcedure) || (itemp && !itemp->disableWrapper());
+            if (beginp->stmtsp()) countDisable(nodep, beginp, outermost);
+            if (outermost && beginp->stmtsp() && !beginp->user4SetOnce()) {
+                beginp->addStmtsp(new AstDisableTargetBody{
+                    beginp->fileline(), beginp->stmtsp()->unlinkFrBackWithNext()});
             }
             if (existsBlockAbove(beginp->name())) {
                 if (!beginp->user3()) {

@@ -3587,7 +3587,7 @@ stmtList<nodeStmtp>:
 stmt<nodeStmtp>:                    // IEEE: statement + statement_or_null + seq_block + par_block
                 statement_item                          { $$ = $1; }
         //                      // S05 block creation rule
-        |       id/*block_identifier*/ ':' statement_item       { $$ = new AstBegin{$<fl>1, *$1, $3, false}; }
+        |       id/*block_identifier*/ ':' statement_item       { $$ = new AstBegin{$<fl>1, *$1, $3, false, true}; }
         //                      // from _or_null
         |       ';'                                     { $$ = nullptr; }
         //                      // labeled par_block/seq_block with leading ':'
@@ -6490,7 +6490,7 @@ assertion_item<nodep>:          // ==IEEE: assertion_item
 deferred_immediate_assertion_item<nodeStmtp>:       // ==IEEE: deferred_immediate_assertion_item
                 deferred_immediate_assertion_statement  { $$ = $1; }
         |       id/*block_identifier*/ ':' deferred_immediate_assertion_statement
-                        { $$ = new AstBegin{$<fl>1, *$1, $3, true}; }
+                        { $$ = new AstBegin{$<fl>1, *$1, $3, true, true}; }
         ;
 
 procedural_assertion_statement<nodeStmtp>:  // ==IEEE: procedural_assertion_statement

@@ -358,6 +358,7 @@ class AssertVisitor final : public VNVisitor {
     AstNodeStmt* m_obsFlushp = nullptr;  // Clears the current process's pending deferred calls
     AstVar* m_obsDoneVarp = nullptr;  // Set when the outermost scope ends without a disable
     std::vector<AstNode*> m_obsWaitsp;  // Current process waits, flushed if it has pending calls
+    std::vector<AstVar*> m_disableCountps;  // Disable counts of the blocks around (V3LinkJump)
     bool m_inSpawnedFork = false;  // Under a fork...join_any or fork...join_none
     AstVar* m_obsEventp = nullptr;  // Current module event to run deferred calls
     AstAlwaysReactive* m_obsReactivep = nullptr;  // Current module block running deferred calls
@@ -892,10 +893,15 @@ class AssertVisitor final : public VNVisitor {
             m_obsFlushp,
             new AstAssign{flp, new AstVarRef{flp, killedp, VAccess::WRITE}, new AstConst{flp, 0}});
         const auto newKillCount = [&]() {
-            return new AstCExpr{flp, AstCExpr::Pure{},
-                                V3AssertCommon::assertCtlGetCall(
-                                    "ASSERT_CTL_KILL", assertp->userType(), assertp->directive()),
-                                32};
+            AstNodeExpr* countp
+                = new AstCExpr{flp, AstCExpr::Pure{},
+                               V3AssertCommon::assertCtlGetCall(
+                                   "ASSERT_CTL_KILL", assertp->userType(), assertp->directive()),
+                               32};
+            // A disable of a block around the call drops it as a kill does (IEEE 1800-2023 16.4.4)
+            for (AstVar* const varp : m_disableCountps)
+                countp = new AstAdd{flp, countp, new AstVarRef{flp, varp, VAccess::READ}};
+            return countp;
         };
         const auto newKillCheck = [&]() {
             AstNodeStmt* const stmtsp
@@ -1850,7 +1856,9 @@ class AssertVisitor final : public VNVisitor {
         // because V3Assert is called before V3Begin
         VL_RESTORER(m_beginp);
         m_beginp = nodep;
+        if (nodep->disableCountp()) m_disableCountps.push_back(nodep->disableCountp());
         iterateChildren(nodep);
+        if (nodep->disableCountp()) m_disableCountps.pop_back();
         // If the body is a single assertOn check, bubble it up for combining
         if (!nodep->declsp()) {
             if (AstIf* const ifp = VN_CAST(nodep->stmtsp(), If)) {

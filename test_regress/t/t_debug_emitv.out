@@ -641,11 +641,26 @@ module t;
     end
     always  begin
         begin : assert_observed_deferred_immediate
-            assert #0 (1'h0) begin
+            fork
+            begin
+                __VprocessQueue_assert_observed_deferred_immediate__0.push_back(
+                                                                                self());
+
+                ???? // DISABLETARGETBODY
+                assert #0 (1'h0) begin
+                end
+                else begin
+                end
             end
-            else begin
-            end
+            join
         end
+    end
+    initial begin
+        __VdisableCount_assert_observed_deferred_immediate__0 = (
+                                                                 __VdisableCount_assert_observed_deferred_immediate__0 
+                                                                 + 
+                                                                 32'h1);
+        killQueue(__VprocessQueue_assert_observed_deferred_immediate__0);
     end
     always  begin
         begin : assert_observed_deferred_immediate_else
@@ -1541,6 +1556,8 @@ module t;
         end
     end
     Iface bound_iface ();
+    IData __VdisableCount_assert_observed_deferred_immediate__0;
+    process __VprocessQueue_assert_observed_deferred_immediate__0[$];
     enum logic [2:0] {
         ZERO = 3'h0,
         ONE = 3'h1

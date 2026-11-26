@@ -530,6 +530,7 @@ module t (/*AUTOARG*/
   end
 
   assert_observed_deferred_immediate: assert #0 (0);
+  initial disable assert_observed_deferred_immediate;
   assert_observed_deferred_immediate_else: assert #0 (0) else $display("fail");
   assert_observed_deferred_immediate_stmt: assert #0 (0) $display("pass");
   assert_observed_deferred_immediate_stmt_else: assert #0 (0) $display("pass"); else $display("fail");
