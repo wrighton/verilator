@@ -2711,7 +2711,7 @@ class ConstVisitor final : public VNVisitor {
     void replaceWLhsBool(AstNodeBiop* nodep) { replaceWChildBool(nodep, nodep->lhsp()); }
     void replaceWRhsBool(AstNodeBiop* nodep) { replaceWChildBool(nodep, nodep->rhsp()); }
     // Replace a LogAnd/LogOr with the equivalent And/Or
-    void replaceLogicWithBitwise(AstNodeBiop* nodep) {
+    AstNodeBiop* replaceOneLogicWithBitwise(AstNodeBiop* nodep) {
         AstNodeExpr* const lhsp = nodep->lhsp()->unlinkFrBack();
         AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
         FileLine* const flp = nodep->fileline();
@@ -2722,11 +2722,29 @@ class ConstVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         m_pureBitwisep = newp;
         m_pureBitwiseEditCnt = AstNode::editCountGbl();
-        // The iterator revisits newp next to apply its rules (the conversion is only done in
-        // the global pass, where no LogAnd/LogOr is visited by a direct iterate()). Its
-        // operands are already simplified, so tell iterateBitwiseOperands not to walk them
-        // again, which on a long chain of operators would be quadratic.
+        // newp is iterated next to apply its rules. Its operands are already simplified, so
+        // tell iterateBitwiseOperands not to walk them again, which on a long chain of
+        // operators would be quadratic.
         m_bitwiseFromLogicp = newp;
+        return newp;
+    }
+    // Replace the LogAnds/LogOrs of the chain rooted at nodep that can be bitwise with the
+    // equivalent And/Or
+    void replaceLogicWithBitwise(AstNodeBiop* nodep) {
+        const std::vector<std::pair<AstNodeBiop*, int>> chain = logicChain(nodep);
+        // Decide all before any edit, which clears the cached purities, so the purity of the
+        // chain is computed once. Each is decided as on its node on its own, as converting an
+        // operand keeps its width and purity.
+        std::vector<bool> converts;
+        converts.reserve(chain.size());
+        for (const auto& itr : chain) converts.push_back(logicToBitwiseOk(itr.first));
+        // Operands first, as on each node on its own
+        for (size_t i = chain.size(); --i;) {
+            // No iterator is on a node below nodep, so apply its replacement's rules here
+            if (converts[i]) iterate(replaceOneLogicWithBitwise(chain[i].first));
+        }
+        // The iterator revisits the replacement of nodep next
+        if (converts[0]) replaceOneLogicWithBitwise(nodep);
     }
     void replaceAsv(AstNodeBiop* nodep) {
         // BIASV(CONSTa, BIASV(CONSTb, c)) -> BIASV( BIASV_CONSTED(a,b), c)
@@ -3773,13 +3791,36 @@ class ConstVisitor final : public VNVisitor {
         m_statLogicPurities += VIsCached::setCntGbl() - purityCnt;
         return match;
     }
-    bool matchBiopToBitwise(AstNodeBiop* const nodep) {
-        if (!m_convertLogicToBit) return false;
+    // Whether a LogAnd/LogOr can be the equivalent And/Or
+    bool logicToBitwiseOk(AstNodeBiop* const nodep) {
         if (!nodep->lhsp()->width1()) return false;
         if (!nodep->rhsp()->width1()) return false;
         if (!isPureLogic(nodep)) return false;
         if (containsMemberAccessRecurse(nodep)) return false;
         return true;
+    }
+    // The LogAnds/LogOrs of the type of nodep connected to it through their operands, nodep
+    // first, each after its parent, with the index of its parent (-1 for nodep)
+    static std::vector<std::pair<AstNodeBiop*, int>> logicChain(AstNodeBiop* const nodep) {
+        std::vector<std::pair<AstNodeBiop*, int>> chain{{nodep, -1}};
+        for (size_t i = 0; i < chain.size(); ++i) {
+            for (AstNodeExpr* const opp : {chain[i].first->lhsp(), chain[i].first->rhsp()}) {
+                if (opp->type() == nodep->type()) {
+                    chain.emplace_back(VN_AS(opp, NodeBiop), static_cast<int>(i));
+                }
+            }
+        }
+        return chain;
+    }
+    // Its root converts each node of a chain of LogAnds or LogOrs, see replaceLogicWithBitwise
+    bool matchBiopToBitwise(AstNodeBiop* const nodep) {
+        if (!m_convertLogicToBit) return false;
+        const AstNode* const abovep = nodep->firstAbovep();
+        if (abovep && abovep->type() == nodep->type()) return false;
+        for (const auto& itr : logicChain(nodep)) {
+            if (logicToBitwiseOk(itr.first)) return true;
+        }
+        return false;
     }
     bool matchConcatRand(AstConcat* nodep) {
         //    CONCAT(RAND, RAND) - created by Chisel code
