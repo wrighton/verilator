@@ -1917,7 +1917,9 @@ public:
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return false; }  // NA
     // Create AstAnd(AstGte(...), AstLte(...))
-    AstNodeExpr* newAndFromInside(AstNodeExpr* exprp, AstNodeExpr* lhsp, AstNodeExpr* rhsp);
+    // With typed, the operands have their final types, and are extended as the comparisons do
+    AstNodeExpr* newAndFromInside(AstNodeExpr* exprp, AstNodeExpr* lhsp, AstNodeExpr* rhsp,
+                                  bool typed = false);
 };
 class AstLambdaArgRef final : public AstNodeExpr {
     // Lambda argument usage
