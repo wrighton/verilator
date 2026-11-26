@@ -590,7 +590,7 @@
             {"type":"SFORMATF","name":"(ite (__Vbool (__Vbv (bvule #x%x #x0000000000000002))) (__Vbv (= length #x%x)) (ite (__Vbool (__Vbv (bvule #x%x #x0000000000000004))) (__Vbv (= length #x%x)) (ite (__Vbool (__Vbv (bvule #x%x #x000000000000000a))) (__Vbv (= length #x00000006)) (ite (__Vbool (__Vbv (bvule #x%x #x0000000000000014))) (__Vbv (= length #x00000007)) (__Vbv (= length #x00000001))))))","addr":"(TL)","loc":"d,25:12,25:16","dtypep":"(HB)",
              "exprsp": [
               {"type":"VARREF","name":"__Vdist_bucket0","addr":"(UL)","loc":"d,25:12,25:16","dtypep":"(CG)","access":"RD","varp":"(DG)"},
-              {"type":"CCAST","addr":"(VL)","loc":"d,25:12,25:16","dtypep":"(V)","size":32,
+              {"type":"CCAST","addr":"(VL)","loc":"d,25:12,25:16","dtypep":"(T)","size":32,
                "lhsp": [
                 {"type":"AND","addr":"(WL)","loc":"d,25:12,25:16","dtypep":"(CG)",
                  "lhsp": [
@@ -601,9 +601,9 @@
                 ]}
               ]},
               {"type":"VARREF","name":"__Vdist_bucket0","addr":"(ZL)","loc":"d,25:12,25:16","dtypep":"(CG)","access":"RD","varp":"(DG)"},
-              {"type":"ADD","addr":"(AM)","loc":"d,25:12,25:16","dtypep":"(V)",
+              {"type":"ADD","addr":"(AM)","loc":"d,25:12,25:16","dtypep":"(T)",
                "lhsp": [
-                {"type":"CONST","name":"32'sh2","addr":"(BM)","loc":"d,25:27,25:28","dtypep":"(V)"}
+                {"type":"CONST","name":"32'h2","addr":"(BM)","loc":"d,25:12,25:16","dtypep":"(T)"}
               ],
                "rhsp": [
                 {"type":"CCAST","addr":"(CM)","loc":"d,25:12,25:16","dtypep":"(T)","size":32,
