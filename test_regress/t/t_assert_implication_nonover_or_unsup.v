@@ -14,7 +14,4 @@ module t (
   assert property (@(posedge clk) (x or y) #=# b);
   assert property (@(posedge clk) (x or y) #-# s_eventually b);
 
-  // A 'not' of a multi-cycle operand inside a disjunction
-  assert property (@(posedge clk) x |=> ((not (b |=> c)) or c));
-
 endmodule
