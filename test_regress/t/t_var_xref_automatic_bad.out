@@ -1,0 +1,11 @@
+%Error: t/t_var_xref_automatic_bad.v:31:17: Hierarchical reference to automatic variable 'w' from outside its scope (IEEE 1800-2023 6.21).
+   31 |     seen = t.ob.w;
+      |                 ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_var_xref_automatic_bad.v:21:32: Hierarchical reference to automatic variable 'payload' from outside its scope (IEEE 1800-2023 6.21).
+   21 |       result = $root.t.v.frame.payload;
+      |                                ^~~~~~~
+%Error: t/t_var_xref_automatic_bad.v:61:15: Hierarchical reference to automatic variable 'w' from outside its scope (IEEE 1800-2023 6.21).
+   61 |       r3 = ob.w;
+      |               ^
+%Error: Exiting due to
