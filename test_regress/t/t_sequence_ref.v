@@ -55,6 +55,18 @@ module t (
   endsequence
   cover property (@(posedge clk) seq_cycle_ab ##1 seq_cycle_bc);
 
+  // A sequence instance in another sequence, passed a sequence instance as its actual argument.
+  // No cyclic dependency (IEEE 1800-2023 16.8). Each match ends where 'b' is low.
+  int nested_fails = 0;
+  sequence seq_then_c(sig);
+    sig ##1 c;
+  endsequence
+  sequence seq_nested;
+    seq_then_c(seq_ab);
+  endsequence
+  assert property (@(posedge clk) seq_nested |-> b)
+  else nested_fails++;
+
   // Formal arguments used as cycle delays, whose actual arguments are elaboration-time
   // constants (IEEE 1800-2023 16.8): of a sequence, also as range bounds, and of a property,
   // passing it on to a sequence. Each matches 'e' after 'd' with its delay, and fails once with
@@ -128,6 +140,7 @@ module t (
       `checkd(range_other_fails, 1)
       `checkd(upto_other_fails, 1)
       `checkd(prop_other_fails, 1)
+      `checkd(nested_fails, 2)
       $write("*-* All Finished *-*\n");
       $finish;
     end
