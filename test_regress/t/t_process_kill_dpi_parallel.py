@@ -14,10 +14,10 @@ test.scenarios('vlt_all')
 flags = ["--binary", "--stats", test.pli_filename]
 if test.vltmt:
     # Unordered process control is a genuine data race, but whether it changes the results in
-    # any one run depends on timing, so use ThreadSanitizer to detect it. That needs the static
-    # thread assignment to put the block calling the import and some other block on different
-    # threads, as it does without the fix. --no-threads-coarsen keeps the blocks in separate
-    # MTasks, and a zero serial cost makes them run in parallel.
+    # any one run depends on timing, so use ThreadSanitizer to detect it. The block calling the
+    # import is a suspendable process, as the export kills processes, so it runs outside the
+    # MTasks; --no-threads-coarsen keeps the other blocks in separate MTasks, and a zero serial
+    # cost makes them run in parallel with each other.
     test.enable_tsan()
     flags += ["--no-threads-coarsen", "-CFLAGS", "-DVL_THREADS_SERIAL_COST=0"]
 
@@ -26,7 +26,8 @@ test.compile(verilator_flags2=flags, threads=(2 if test.vltmt else 1))
 test.execute()
 
 if test.vltmt:
-    # The block calling the import runs alone, as the export may control processes
-    test.file_grep(test.stats, r'Scheduling, MTasks with process control\s+(\d+)', 1)
+    # The block calling the import is a suspendable process, as the export kills a process,
+    # so it is not MTask logic
+    test.file_grep_not(test.stats, r'Scheduling, MTasks with process control')
 
 test.passes()

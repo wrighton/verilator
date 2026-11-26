@@ -26,7 +26,8 @@ test.compile(verilator_flags2=flags, threads=(2 if test.vltmt else 1))
 test.execute()
 
 if test.vltmt:
-    # The ten blocks controlling processes, each run alone
-    test.file_grep(test.stats, r'Scheduling, MTasks with process control\s+(\d+)', 10)
+    # The blocks controlling processes run alone; blocks calling kill() are suspendable
+    # processes rather than MTask logic
+    test.file_grep(test.stats, r'Scheduling, MTasks with process control\s+(\d+)', 2)
 
 test.passes()

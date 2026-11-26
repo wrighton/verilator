@@ -17,9 +17,10 @@ interface kill_if;
   endfunction
 endinterface
 
-// Pairs of clocked blocks, which may be in different parallel MTasks, control processes in the
-// same cycles (IEEE 1800-2023 9.3.2, 9.6.2, 9.7). Each block only uses its own state and the
-// cycle count, so only the process control orders them.
+// Pairs of clocked blocks control processes in the same cycles (IEEE 1800-2023 9.3.2, 9.6.2,
+// 9.7). The blocks that kill processes are suspendable processes; the others may be in
+// different parallel MTasks. Each block only uses its own state and the cycle count, so only the
+// process control orders them.
 module t;
   timeunit 1ns; timeprecision 1ps;
 

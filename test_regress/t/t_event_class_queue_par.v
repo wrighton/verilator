@@ -15,7 +15,8 @@ module t;
   logic clk = 1'b0;
   always #5 clk = ~clk;
   // Each block only uses its own state, so they may be in different parallel MTasks. The
-  // blocks that kill processes, or start them through a class task, run alone.
+  // blocks that kill processes are suspendable processes; the block that starts processes
+  // through a class task runs alone.
   event e1;
   event e2;
   event ek;

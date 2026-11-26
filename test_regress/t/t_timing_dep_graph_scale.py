@@ -60,7 +60,7 @@ gen(test.top_filename, N)
 test.lint(verilator_flags2=["--timing", "--stats"])
 
 # Linear in N; removing transitive edges from the graphs took time quadratic in N
-test.file_grep(test.stats, r'Timing, dependency edges\s+(\d+)', 28032)
-test.file_grep(test.stats, r'Timing, dependency edges visited\s+(\d+)', 8016)
+test.file_grep(test.stats, r'Timing, dependency edges\s+(\d+)', 26032)
+test.file_grep(test.stats, r'Timing, dependency edges visited\s+(\d+)', 12024)
 
 test.passes()

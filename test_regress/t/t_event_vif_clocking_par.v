@@ -77,7 +77,13 @@ module t;
   endclass
 
   Waiter ws[4];
+`ifdef VERILATOR
+  // The block changing the handles also kills processes, so it resumes as a process, after the
+  // clocking block wake it races with in the same time slot
+  localparam int WS_N[4] = '{50, 50, 50, 50};
+`else
   localparam int WS_N[4] = '{51, 50, 50, 50};
+`endif
 `ifdef VERILATOR
   Waiter walias;
 `endif
@@ -86,7 +92,7 @@ module t;
   Waiter wpar;
   int cyc = 0;
   always @(posedge clk) if (cyc % 5 == 2 && wpar != null) wpar.set_vif(vifs[(cyc / 5) % 4]);
-  // Changes the handles, so it runs alone
+  // Changes the handles and kills processes, so it is a suspendable process
   always @(posedge clk) begin
     cyc <= cyc + 1;
     if (cyc % 7 == 3) ws[cyc % 4].m_vif = vifs[(cyc / 7) % 4];

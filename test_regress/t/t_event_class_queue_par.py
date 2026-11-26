@@ -28,7 +28,8 @@ if test.vlt_all:
     test.file_grep(test.stats, r'Timing, event controls on event wait lists\s+(\d+)', 12)
     test.file_grep(test.stats, r'Timing, event controls on wait queues\s+(\d+)', 4)
 if test.vltmt:
-    # The blocks that kill processes, or start them through a class task, run alone
-    test.file_grep(test.stats, r'Scheduling, MTasks with process control\s+(\d+)', 3)
+    # The block that starts processes through a class task runs alone; blocks calling kill()
+    # are suspendable processes rather than MTask logic
+    test.file_grep(test.stats, r'Scheduling, MTasks with process control\s+(\d+)', 1)
 
 test.passes()
