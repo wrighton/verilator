@@ -5,7 +5,12 @@
 // SPDX-License-Identifier: CC0-1.0
 
 // verilog_format: off
-module top (input A, input OE, output X, output Y, output Z);
+module top (input A, input OE, input tri1 B, input tri0 C, output X, output Y, output Z,
+            output U, output V);
+
+  // Top-level pulled inputs have the values written
+  assign U = B;
+  assign V = C;
 
   pullup p1(Z);
   assign Z = OE ? A : 1'bz;
