@@ -22,6 +22,8 @@ endfunction
 
 module t;
   int pos = 1;
+  int big = 32'sh7fff_ffff;
+  int least = 32'sh8000_0000;
   int calls = 0;
   function int pos_call();
     ++calls;
@@ -225,10 +227,44 @@ module t;
         `checkp(ri, "'{'ha}");
         ri = iq[sp-:2];
         `checkp(ri, "'{'hb, 'hc}");
+        ri = d[p3-:2];
+        `checkp(ri, "'{'h0, 'h14}");
       end
       d = '{20, 21, 22, 23};
       d = d[1:2];
       `checkp(d, "'{'h15, 'h16}");
+      // A dynamic array slice keeps its size, reading the default value past either end
+      d = '{20, 21};
+      ri = d[1:2];
+      `checkp(ri, "'{'h15, 'h0}");
+      ri = d[pos+:2];
+      `checkp(ri, "'{'h15, 'h0}");
+      begin
+        int p0;
+        p0 = 0;
+        ri = d[p0-:2];
+        `checkp(ri, "'{'h0, 'h14}");
+      end
+      ri = d[big+:2];
+      `checkp(ri, "'{'h0, 'h0}");
+      ri = d[big-1+:2];
+      `checkp(ri, "'{'h0, 'h0}");
+      ri = d[least-:2];
+      `checkp(ri, "'{'h0, 'h0}");
+      d = '{20, 21};
+      // A slice of variable size is limited to the array
+      ri = d[pos-1:pos+999999999];
+      `checkp(ri, "'{'h14, 'h15}");
+      // Writing a dynamic array slice skips the indexes outside the array
+      d = '{11, 22, 33};
+      d[pos-:3] = '{50, 51, 52};
+      `checkp(d, "'{'h33, 'h34, 'h21}");
+      d[2+:3] = '{60, 61, 62};
+      `checkp(d, "'{'h33, 'h34, 'h3c}");
+      d[1:3] = '{70, 71, 72};
+      `checkp(d, "'{'h33, 'h46, 'h47}");
+      d[-1:1] = '{80, 81, 82};
+      `checkp(d, "'{'h51, 'h52, 'h47}");
       q = '{"a", "b", "c"};
       q = q[pos+:2];
       `checkp(q, "'{\"b\", \"c\"}");
