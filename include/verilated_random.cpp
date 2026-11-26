@@ -1918,6 +1918,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
     for (const auto& pin : m_frozenPins) {
         if (m_vars.count(pin.first)) uniqueExprs.push_back(pin.second);
     }
+    addAliasExprs(uniqueExprs);
 
     // Randc exclusion-based cycling: exclude previously used values per randc var.
     // When solver returns unsat (all values exhausted), clear history for new cycle.
@@ -1958,6 +1959,29 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
     m_sizeSolve = false;
     m_sizeSolved = sizeSolve && result;
     return result;
+}
+
+void VlRandomizer::addAliasExprs(std::vector<std::string>& exprsr) const {
+    // A variable or array registered under several names, as through two handles to one
+    // object, has one value
+    std::unordered_map<const void*, const std::string*> namesByData;
+    for (const auto& pair : m_vars) {
+        // The storage of a variable, or of the first element an array holds now
+        const void* datap = nullptr;
+        if (pair.second->dimension()) {
+            const auto elemIt = m_arr_vars.find({pair.first, 0});
+            if (elemIt == m_arr_vars.end()) continue;
+            datap = elemIt->second->m_datap;
+        } else {
+            datap = pair.second->datap(0);
+        }
+        const auto it = namesByData.emplace(datap, &pair.first);
+        if (!it.second) exprsr.push_back(aliasExpr(*it.first->second, pair.first));
+    }
+}
+
+std::string VlRandomizer::aliasExpr(const std::string& name, const std::string& otherName) {
+    return "(__Vbv (= " + name + " " + otherName + "))";
 }
 
 std::vector<std::string> VlRandomizer::buildUniqueExprs() const {
