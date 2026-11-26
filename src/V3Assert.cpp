@@ -3731,17 +3731,15 @@ class AssertVisitor final : public VNVisitor {
                            : static_cast<AstNodeExpr*>(new AstOneHot{nodep->fileline(), propp}));
                 const VAssertType assertType
                     = nodep->uniquePragma() ? VAssertType::UNIQUE : VAssertType::UNIQUE0;
-                // Move, not clone, as the branches might declare referenced variables
-                VNRelinker relinker;
-                nodep->unlinkFrBack(&relinker);
                 AstIf* const checkifp
                     = new AstIf{nodep->fileline(), new AstLogNot{nodep->fileline(), ohotp},
                                 newFireAssert(nodep, VAssertDirectiveType::VIOLATION_IF,
-                                              assertType, "'unique if' statement violated"),
-                                nodep};
+                                              assertType, "'unique if' statement violated")};
                 checkifp->isBoundsCheck(true);  // To avoid LATCH warning
                 checkifp->branchPred(VBranchPred::BP_UNLIKELY);
-                relinker.relink(checkifp);
+                // The statement runs also after a violation (IEEE 1800-2023 12.4.2)
+                nodep->replaceWith(checkifp);
+                checkifp->addNextHere(nodep);
                 return;
             }
         }
