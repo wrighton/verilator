@@ -520,14 +520,25 @@ class WidthVisitor final : public VNVisitor {
         return VN_IS(m_procedurep, InitialStatic) ? "a static variable initializer" : "";
     }
 
-    // Report a dynamically sized operand of a stream with several operands
+    // Whether an operand of a stream with several operands is a dynamic array or queue, which
+    // such a stream takes through a queue of the bits of all its operands
+    static bool isDynamicStreamItem(const AstNodeExpr* nodep) {
+        // Also a stream of one, e.g. '{<<8{dyn}}'
+        if (const AstNodeStream* const streamp = VN_CAST(nodep, NodeStream)) {
+            return isDynamicStreamItem(streamp->lhsp());
+        }
+        const AstNodeDType* const dtypep = nodep->dtypep()->skipRefp();
+        return (VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, QueueDType))
+               && dtypep->subDTypep()->skipRefp()->isIntegralOrPacked();
+    }
+    // Report another dynamically sized operand of a stream with several operands
     static void warnDynamicStreamOperand(const AstNodeExpr* nodep) {
         // Also an unpacked array of dynamically sized arrays
         const AstNodeDType* elemDTypep = nodep->dtypep()->skipRefp();
         while (const AstUnpackArrayDType* const adtypep = VN_CAST(elemDTypep, UnpackArrayDType)) {
             elemDTypep = adtypep->subDTypep()->skipRefp();
         }
-        if (elemDTypep->isDynamicallySized()) {
+        if (elemDTypep->isDynamicallySized() && !isDynamicStreamItem(nodep)) {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: Streaming concatenation with multiple "
                                          "operands, of which one is dynamically sized: "
                                              << nodep->dtypep()->prettyDTypeNameQ());
@@ -1049,6 +1060,8 @@ class WidthVisitor final : public VNVisitor {
         //   LHS, RHS is self-determined
         //   signed: Unsigned  (11.8.1)
         //   width: LHS + RHS
+        // A stream takes the operands of a concatenation with a dynamically sized one
+        if (VN_IS(nodep->dtypep(), StreamDType)) return;
         AstNodeDType* const vdtypep = m_vup->dtypeNullSkipRefp();
         userIterate(vdtypep, WidthVP{SELF, BOTH}.p());
         // Conversions
@@ -1087,6 +1100,15 @@ class WidthVisitor final : public VNVisitor {
                     if (!m_castStreamOperand) {
                         warnDynamicStreamOperand(nodep->lhsp());
                         warnDynamicStreamOperand(nodep->rhsp());
+                        // The stream takes the operands, so a concatenation with a dynamically
+                        // sized one has no packed value
+                        if (isDynamicStreamItem(nodep->lhsp())
+                            || isDynamicStreamItem(nodep->rhsp())
+                            || VN_IS(nodep->lhsp()->dtypep(), StreamDType)
+                            || VN_IS(nodep->rhsp()->dtypep(), StreamDType)) {
+                            nodep->dtypeSetStream();
+                            return;
+                        }
                     }
                     packIfUnpacked(nodep->lhsp());
                     packIfUnpacked(nodep->rhsp());
@@ -1446,8 +1468,27 @@ class WidthVisitor final : public VNVisitor {
                 pushDeletep(nodep->rhsp()->unlinkFrBack());
                 nodep->rhsp(new AstConst{nodep->fileline(), 1});
             }
+            // A stream target is lowered with its assignment, a cast reports its operand
+            if (VN_IS(nodep->lhsp()->dtypep(), StreamDType)
+                && currentStreamUse() != STREAM_USE_CAST) {
+                if (nested || (m_writerp && !VN_IS(m_writerp, Assign))) {
+                    nodep->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: Streaming concatenation with a dynamically sized"
+                                  " operand among several, "
+                                      << (nested ? "in another streaming concatenation"
+                                                 : "as the target of other than a blocking"
+                                                   " assignment"));
+                    AstNodeExpr* const lhsp = nodep->lhsp();
+                    lhsp->replaceWith(
+                        new AstConst{lhsp->fileline(), AstConst::BitFalseErroring{}});
+                    VL_DO_DANGLING(pushDeletep(lhsp), lhsp);
+                } else if (!m_writerp) {
+                    packDynamicOperands(nodep);
+                }
+            }
             const AstNodeDType* const lhsDtypep = nodep->lhsp()->dtypep()->skipRefToEnump();
             if (VN_IS(lhsDtypep, DynArrayDType) || VN_IS(lhsDtypep, QueueDType)
+                || VN_IS(lhsDtypep, StreamDType)
                 || (VN_IS(lhsDtypep, UnpackArrayDType) && lhsDtypep->isStreamableFixedAggregate())
                 || (VN_IS(lhsDtypep, NodeUOrStructDType)
                     && !VN_AS(lhsDtypep, NodeUOrStructDType)->packed()
@@ -4370,6 +4411,253 @@ class WidthVisitor final : public VNVisitor {
         if (dtypep->isStreamableFixedAggregate()) return StreamBits::FIXED;
         if (otherDtpp) *otherDtpp = dtypep;
         return StreamBits::OTHER;
+    }
+    // Dynamically sized stream operands among several (IEEE 1800-2023 11.4.14): the stream
+    // takes the bits of its operands, the 'items', through a queue of them, whose elements of
+    // 'width' bits divide every item and slice, so each item, a group of adjacent fixed-size
+    // operands or a dynamically sized one, is streamed to or from whole elements of the queue
+    struct DynamicStream final {
+        std::vector<AstNodeExpr*> m_itemps;  // Items, leftmost first
+        int m_width = VL_QUADSIZE;  // Width of the queue elements, at most of a QData
+        bool m_fourstate = false;  // Whether any item is 4-state
+        AstQueueDType* m_queueDTypep = nullptr;  // Type of the queue of the stream
+        AstNodeStmt* m_stmtsp = nullptr;  // Statements streaming the items
+    };
+    // Make the width of the queue elements of 'stream' also divide 'nbits'
+    static void divideDynamicStream(DynamicStream& stream, int nbits) {
+        while (nbits) {
+            const int remainder = stream.m_width % nbits;
+            stream.m_width = nbits;
+            nbits = remainder;
+        }
+    }
+    // Append the items of a stream concatenation to 'stream'
+    void addDynamicStreamItems(AstNodeExpr* const valuep, DynamicStream& stream) {
+        if (AstConcat* const concatp = VN_CAST(valuep, Concat)) {
+            addDynamicStreamItems(concatp->lhsp()->unlinkFrBack(), stream);
+            addDynamicStreamItems(concatp->rhsp()->unlinkFrBack(), stream);
+            VL_DO_DANGLING(pushDeletep(concatp), concatp);
+            return;
+        }
+        stream.m_fourstate |= valuep->dtypep()->isFourstate();
+        if (isDynamicStreamItem(valuep)) {
+            divideDynamicStream(stream, dynamicStreamElemWidth(valuep));
+            stream.m_itemps.push_back(valuep);
+            return;
+        }
+        if (!stream.m_itemps.empty() && !isDynamicStreamItem(stream.m_itemps.back())) {
+            // Group adjacent fixed-size operands
+            AstNodeExpr* const groupp = stream.m_itemps.back();
+            stream.m_itemps.back() = new AstConcat{groupp->fileline(), groupp, valuep};
+            const int width = dynamicStreamGroupWidth(groupp) + valuep->dtypep()->widthStream();
+            stream.m_itemps.back()->dtypeSetBitOrLogicUnsized(width, width, VSigning::UNSIGNED,
+                                                              stream.m_fourstate);
+        } else {
+            stream.m_itemps.push_back(valuep);
+        }
+    }
+    // Width of the elements of a dynamically sized item, or of the one a stream of it streams
+    static int dynamicStreamElemWidth(const AstNodeExpr* nodep) {
+        while (const AstNodeStream* const streamp = VN_CAST(nodep, NodeStream)) {
+            nodep = streamp->lhsp();
+        }
+        return nodep->dtypep()->skipRefp()->subDTypep()->width();
+    }
+    // Width of the bits of a group of fixed-size items
+    static int dynamicStreamGroupWidth(const AstNodeExpr* const groupp) {
+        return VN_IS(groupp, Concat) ? groupp->width() : groupp->dtypep()->widthStream();
+    }
+    // Set up 'stream' for the operands of 'streamp', the value 'otherp' assigned to it if any,
+    // and its slice size if '<<'
+    void initDynamicStream(AstNodeStream* const streamp, const AstNodeExpr* const otherp,
+                           DynamicStream& stream) {
+        addDynamicStreamItems(streamp->lhsp()->unlinkFrBack(), stream);
+        for (const AstNodeExpr* const itemp : stream.m_itemps) {
+            if (!isDynamicStreamItem(itemp)) {
+                divideDynamicStream(stream, dynamicStreamGroupWidth(itemp));
+            }
+        }
+        if (otherp) {
+            stream.m_fourstate |= otherp->dtypep()->isFourstate();
+            divideDynamicStream(stream, isDynamicStreamItem(otherp)
+                                            ? dynamicStreamElemWidth(otherp)
+                                            : otherp->dtypep()->widthStream());
+        }
+        if (VN_IS(streamp, StreamL)) {
+            divideDynamicStream(stream, VN_AS(streamp->rhsp(), Const)->toSInt());
+        }
+        AstNodeDType* const elemDTypep = streamp->findBitOrLogicDType(
+            stream.m_width, stream.m_width, VSigning::UNSIGNED, stream.m_fourstate);
+        stream.m_queueDTypep = queueDTypeIndexedBy(elemDTypep);
+    }
+    // Return a new temporary for the stream 'streamp', of 'dtypep', or else of its queue
+    AstVar* newDynamicStreamTemp(AstNodeStream* const streamp, const DynamicStream& stream,
+                                 AstNodeDType* const dtypep = nullptr) {
+        return makeTempVarp(m_bitstreamTempNames.get(streamp), streamp,
+                            dtypep ? dtypep : stream.m_queueDTypep);
+    }
+    // Return a new temporary for the packed value of a group of fixed-size items
+    AstVar* newDynamicStreamGroupTemp(AstNodeStream* const streamp, const DynamicStream& stream,
+                                      const AstNodeExpr* const groupp) {
+        const int width = dynamicStreamGroupWidth(groupp);
+        return newDynamicStreamTemp(
+            streamp, stream,
+            groupp->findBitOrLogicDType(width, width, VSigning::UNSIGNED, stream.m_fourstate));
+    }
+    // Add a statement assigning 'rhsp' to 'lhsp' to 'stream'
+    static void addDynamicStreamAssign(DynamicStream& stream, AstNodeExpr* const lhsp,
+                                       AstNodeExpr* const rhsp) {
+        stream.m_stmtsp
+            = AstNode::addNext(stream.m_stmtsp, new AstAssign{lhsp->fileline(), lhsp, rhsp});
+    }
+    // Return the statements of 'stream' widthed
+    AstNodeStmt* widthDynamicStream(FileLine* const fl, DynamicStream& stream) {
+        // Width the statements under a holder, as iterating requires a node with a parent
+        AstBegin* const holderp = new AstBegin{fl, "[EditWrapper]", stream.m_stmtsp, false};
+        userIterateAndNext(holderp->stmtsp(), nullptr);
+        AstNodeStmt* const stmtsp = holderp->stmtsp()->unlinkFrBackWithNext();
+        VL_DO_DANGLING(holderp->deleteTree(), holderp);
+        return stmtsp;
+    }
+    // Return the stream of the bits of a dynamically sized item or group of fixed-size items,
+    // which is the item itself if a stream
+    static AstNodeExpr* newDynamicStreamOf(AstNodeExpr* const itemp) {
+        if (VN_IS(itemp, NodeStream)) return itemp;
+        return new AstStreamR{itemp->fileline(), itemp, new AstConst{itemp->fileline(), 1}};
+    }
+    // Replace the operands of a stream, among which a dynamically sized one, by a queue of their
+    // bits, which each operand is streamed into, so the stream has one dynamically sized operand
+    void packDynamicOperands(AstNodeStream* const nodep) {
+        FileLine* const fl = nodep->fileline();
+        DynamicStream stream;
+        initDynamicStream(nodep, nullptr, stream);
+        AstNodeExpr* bitsp = nullptr;
+        for (AstNodeExpr* itemp : stream.m_itemps) {
+            if (!isDynamicStreamItem(itemp)) {
+                // Fixed-size operands stream as their packed value
+                AstVar* const packedVarp = newDynamicStreamGroupTemp(nodep, stream, itemp);
+                addDynamicStreamAssign(stream, new AstVarRef{fl, packedVarp, VAccess::WRITE},
+                                       new AstStreamR{fl, itemp, new AstConst{fl, 1}});
+                itemp = new AstVarRef{fl, packedVarp, VAccess::READ};
+            }
+            AstVar* const varp = newDynamicStreamTemp(nodep, stream);
+            addDynamicStreamAssign(stream, new AstVarRef{fl, varp, VAccess::WRITE},
+                                   newDynamicStreamOf(itemp));
+            AstNodeExpr* const refp = new AstVarRef{fl, varp, VAccess::READ};
+            bitsp = bitsp ? new AstConcat{fl, bitsp, refp} : refp;
+        }
+        AstVar* const varp = newDynamicStreamTemp(nodep, stream);
+        addDynamicStreamAssign(stream, new AstVarRef{fl, varp, VAccess::WRITE}, bitsp);
+        AstExprStmt* const newp = new AstExprStmt{fl, widthDynamicStream(fl, stream),
+                                                  new AstVarRef{fl, varp, VAccess::READ}};
+        newp->dtypeFrom(varp);
+        nodep->lhsp(newp);
+    }
+    // Return the slice by 'method' of the queue 'varp' of 'stream', from 'first' to 'last'
+    AstNodeExpr* newDynamicStreamSlice(FileLine* const fl, AstVar* const varp,
+                                       const DynamicStream& stream, VCMethod method, int first,
+                                       int last) {
+        AstCMethodHard* const slicep
+            = new AstCMethodHard{fl, new AstVarRef{fl, varp, VAccess::READ}, method};
+        slicep->addPinsp(new AstConst{fl, AstConst::Signed32{}, first});
+        slicep->addPinsp(new AstConst{fl, AstConst::Signed32{}, last});
+        slicep->dtypep(stream.m_queueDTypep);
+        slicep->didWidth(true);
+        slicep->protect(false);
+        return slicep;
+    }
+    // Add statements streaming the elements of a slice into a group of fixed-size items
+    void addDynamicStreamGroup(AstNodeStream* const streamp, DynamicStream& stream,
+                               AstNodeExpr* const groupp, AstNodeExpr* const slicep) {
+        FileLine* const fl = groupp->fileline();
+        AstVar* const varp = newDynamicStreamGroupTemp(streamp, stream, groupp);
+        addDynamicStreamAssign(stream, new AstVarRef{fl, varp, VAccess::WRITE},
+                               new AstStreamR{fl, slicep, new AstConst{fl, 1}});
+        addDynamicStreamAssign(stream, new AstStreamR{fl, groupp, new AstConst{fl, 1}},
+                               new AstVarRef{fl, varp, VAccess::READ});
+    }
+    // Replace an assignment to a stream of operands, among which a dynamically sized one, by
+    // assignments of the stream of its value to a queue of bits, and of these bits to each
+    // operand: the first dynamically sized one takes all bits but those of the fixed-size
+    // operands after it, any later one none, and a value without the bits of the fixed-size
+    // operands is an error (IEEE 1800-2023 11.4.14.3)
+    void unpackDynamicOperands(AstNodeAssign* const nodep) {
+        FileLine* const fl = nodep->fileline();
+        AstNodeStream* const streamp = VN_AS(nodep->lhsp(), NodeStream);
+        AstNodeExpr* const srcp = nodep->rhsp()->unlinkFrBack();
+        DynamicStream stream;
+        initDynamicStream(streamp, srcp, stream);
+        const int elemWidth = stream.m_width;
+        AstVar* const varp = newDynamicStreamTemp(streamp, stream);
+        AstNodeExpr* const slicep = streamp->rhsp()->unlinkFrBack();
+        AstNodeExpr* const srcStreamp
+            = VN_IS(streamp, StreamL)
+                  ? static_cast<AstNodeExpr*>(new AstStreamL{fl, srcp, slicep})
+                  : static_cast<AstNodeExpr*>(new AstStreamR{fl, srcp, slicep});
+        addDynamicStreamAssign(stream, new AstVarRef{fl, varp, VAccess::WRITE}, srcStreamp);
+        AstNodeStmt* const fillp = stream.m_stmtsp;
+        stream.m_stmtsp = nullptr;
+        // Elements taken by the fixed-size items before and after the first dynamic one
+        size_t dynIdx = 0;
+        int before = 0;
+        for (; !isDynamicStreamItem(stream.m_itemps[dynIdx]); ++dynIdx) {
+            before += dynamicStreamGroupWidth(stream.m_itemps[dynIdx]) / elemWidth;
+        }
+        int after = 0;
+        for (size_t i = dynIdx + 1; i < stream.m_itemps.size(); ++i) {
+            if (!isDynamicStreamItem(stream.m_itemps[i])) {
+                after += dynamicStreamGroupWidth(stream.m_itemps[i]) / elemWidth;
+            }
+        }
+        if (before) {
+            addDynamicStreamGroup(
+                streamp, stream, stream.m_itemps[0],
+                newDynamicStreamSlice(fl, varp, stream, VCMethod::DYN_SLICE, 0, before - 1));
+        }
+        addDynamicStreamAssign(stream, newDynamicStreamOf(stream.m_itemps[dynIdx]),
+                               newDynamicStreamSlice(fl, varp, stream,
+                                                     VCMethod::DYN_SLICE_FRONT_BACK, before,
+                                                     after));
+        int left = after;
+        for (size_t i = dynIdx + 1; i < stream.m_itemps.size(); ++i) {
+            AstNodeExpr* const itemp = stream.m_itemps[i];
+            if (isDynamicStreamItem(itemp)) {
+                // Empty its array, also through a stream of it
+                AstNodeExpr* arrayp = itemp;
+                while (AstNodeStream* const innerp = VN_CAST(arrayp, NodeStream)) {
+                    arrayp = innerp->lhsp()->unlinkFrBack();
+                    VL_DO_DANGLING(pushDeletep(innerp), innerp);
+                }
+                addDynamicStreamAssign(stream, arrayp, new AstEmptyQueue{fl});
+            } else {
+                const int elems = dynamicStreamGroupWidth(itemp) / elemWidth;
+                addDynamicStreamGroup(streamp, stream, itemp,
+                                      newDynamicStreamSlice(fl, varp, stream,
+                                                            VCMethod::DYN_SLICE_BACK_BACK,
+                                                            left - 1, left - elems));
+                left -= elems;
+            }
+        }
+        if (before + after) {
+            // Assign the operands only if the value has the bits of the fixed-size ones
+            AstCMethodHard* const sizep = new AstCMethodHard{
+                fl, new AstVarRef{fl, varp, VAccess::READ}, VCMethod::DYN_SIZE};
+            sizep->dtypeSetInt();
+            sizep->didWidth(true);
+            sizep->protect(false);
+            AstDisplay* const errorp = new AstDisplay{
+                fl, VDisplayType::DT_ERROR,
+                "Streaming concatenation value has fewer bits than its fixed-size operands"
+                " (IEEE 1800-2023 11.4.14.3)",
+                nullptr, nullptr};
+            errorp->fmtp()->timeunit(m_modep->timeunit());
+            stream.m_stmtsp = new AstIf{
+                fl, new AstGteS{fl, sizep, new AstConst{fl, AstConst::Signed32{}, before + after}},
+                stream.m_stmtsp, errorp};
+        }
+        stream.m_stmtsp = AstNode::addNext(fillp, stream.m_stmtsp);
+        nodep->replaceWith(widthDynamicStream(fl, stream));
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     // Replace the operand of a stream of fixed-size values, some unpacked, with a concatenation
     // of their bits, so the stream has their packed width, e.g. in a cast or another stream
@@ -8997,6 +9285,12 @@ class WidthVisitor final : public VNVisitor {
             // UINFOTREE(1, nodep, "", "assrhs");
             userIterateAndNext(nodep->rhsp(), WidthVP{nodep->dtypep(), PRELIM}.p());
             //
+            if (const AstNodeStream* const streamp = VN_CAST(nodep->lhsp(), NodeStream)) {
+                if (VN_IS(streamp->lhsp()->dtypep(), StreamDType)) {
+                    VL_DO_DANGLING(unpackDynamicOperands(nodep), nodep);
+                    return;
+                }
+            }
             // UINFOTREE(1, nodep, "", "assign");
             streamAssignLower(nodep);
             AstNodeDType* const lhsDTypep = nodep->lhsp()->dtypep();
