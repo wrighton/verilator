@@ -620,10 +620,20 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
 }
 
 bool V3AssertCommon::isSampledType(const AstNodeDType* dtypep) {
-    // An integral type, or an unpacked array or structure of such types (IEEE 1800-2023 16.9.3).
+    // An integral or real type, a string, a class handle, or an unpacked, dynamic or queue array
+    // or an unpacked structure of such types (IEEE 1800-2023 16.9.3).
     dtypep = dtypep->skipRefp();
-    if (dtypep->isIntegralOrPacked()) return true;
+    if (dtypep->isIntegralOrPacked() || dtypep->isDouble() || dtypep->isString()
+        || VN_IS(dtypep, ClassRefDType)) {
+        return true;
+    }
     if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        return isSampledType(arrayp->subDTypep());
+    }
+    if (const AstQueueDType* const arrayp = VN_CAST(dtypep, QueueDType)) {
+        return isSampledType(arrayp->subDTypep());
+    }
+    if (const AstDynArrayDType* const arrayp = VN_CAST(dtypep, DynArrayDType)) {
         return isSampledType(arrayp->subDTypep());
     }
     const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
@@ -1765,6 +1775,22 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         constp->dtypep(dtypep);
         return constp;
     }
+    // Whether a constant can have the default value of 'dtypep': not if it is, or has elements
+    // or members of, a dynamically sized type or a class
+    static bool hasConstant(const AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        if (dtypep->isDynamicallySized() || VN_IS(dtypep, ClassRefDType)) return false;
+        if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+            return hasConstant(arrayp->subDTypep());
+        }
+        const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+        if (!structp) return true;
+        for (const AstMemberDType* memberp = structp->membersp(); memberp;
+             memberp = VN_AS(memberp->nextp(), MemberDType)) {
+            if (!hasConstant(memberp->subDTypep())) return false;
+        }
+        return true;
+    }
     static bool hasDefaultValue(const AstVar* varp) {
         return !varp->isParam()
                && (varp->isNet() || !varp->lifetime().isStatic() || !varp->hasUserInit());
@@ -1784,8 +1810,8 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         while (AstNodeExpr* const fromp = selectFromp(basep)) basep = fromp;
         const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
         bool isDefault = refp && hasDefaultValue(refp->varp());
-        // As for a whole variable, a dynamically sized selection keeps reading the variable
-        if (isDefault && nodep->dtypep()->skipRefp()->isDynamicallySized()) return;
+        // As for a whole variable, a selection with no constant keeps reading the variable
+        if (isDefault && !hasConstant(nodep->dtypep())) return;
         if (!isDefault) {
             AstNodeExpr* selp = nodep;
             for (; selectFromp(selp); selp = selectFromp(selp)) {
@@ -1839,9 +1865,9 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
         }
-        // No constant has a dynamically sized type, but before any process runs the variable
-        // has the default value of its type
-        if (nodep->dtypep()->skipRefp()->isDynamicallySized()) return;
+        // No constant may have its value, but before any process runs the variable has the
+        // default value of its type
+        if (!hasConstant(nodep->dtypep())) return;
         nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }

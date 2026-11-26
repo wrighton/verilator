@@ -13447,8 +13447,7 @@ class WidthVisitor final : public VNVisitor {
         VL_RESTORER(m_underSampledArg);
         m_underSampledArg = true;
         underp = userIterateSubtreeReturnEdits(underp, WidthVP{SELF, PRELIM}.p());
-        if (underp->dtypep()->skipRefp()->isDouble()
-            || V3AssertCommon::isSampledType(underp->dtypep())) {
+        if (V3AssertCommon::isSampledType(underp->dtypep())) {
             iterateCheck(parentp, "LHS", underp, SELF, FINAL, underp->dtypep(), EXTEND_EXP);
         } else {
             iterateCheckSizedSelf(parentp, "LHS", underp, SELF, FINAL, /* deferUntyped */ true);
