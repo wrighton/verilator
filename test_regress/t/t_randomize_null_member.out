@@ -1,0 +1,5 @@
+%Warning: t/t_randomize_null_member.v:19: randomize() constraint reads 'q[2].v', a member of a null handle, so randomize() returns 0 (IEEE 1800-2023 18.5.12); warned once per constraint
+%Warning: t/t_randomize_null_member.v:32: randomize() constraint reads 'q[2].v', a member of a null handle, so randomize() returns 0 (IEEE 1800-2023 18.5.12); warned once per constraint
+%Warning: t/t_randomize_null_member.v:47: randomize() constraint reads 'q[1].v', a member of a null handle, so randomize() returns 0 (IEEE 1800-2023 18.5.12); warned once per constraint
+%Warning: t/t_randomize_null_member.v:60: randomize() constraint reads 'q[1].v', a member of a null handle, so randomize() returns 0 (IEEE 1800-2023 18.5.12); warned once per constraint
+*-* All Finished *-*
