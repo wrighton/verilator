@@ -109,6 +109,16 @@ module t;
     gen_sel = 2'b01;
   end
 
+  initial begin : priority_if_none
+    logic [6:0] v;
+    int n;
+    #9;
+    v = 7'd3;
+    priority if (v == 7'd1) n = 1;
+    else if (v == 7'd2) n = 2;
+    $display("[%0t] priority_if_none: after the check", $time);
+  end
+
   // Where a report cannot be pending, it is made at the check
   function automatic void check_in_function(logic [1:0] sel);
     unique case (1'b1)

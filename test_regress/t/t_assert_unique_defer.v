@@ -126,6 +126,22 @@ module t;
     `checkh(pc_y, 1'b1);
   end
 
+  // No match of a priority if
+  logic pi_a = 1'b1, pi_b = 1'b0;
+  logic [1:0] pi_z;
+  always_comb begin : priority_if_glitch
+    pi_z = 2'd0;
+    priority if (pi_a) pi_z = 2'd1;
+    else if (pi_b) pi_z = 2'd2;
+  end
+  initial begin
+    #1;
+    pi_a = 1'b0;
+    pi_b <= 1'b1;
+    #1;
+    `checkh(pi_z, 2'd2);
+  end
+
   // An always procedure resumed from its event control flushes its pending reports
   logic [1:0] at_sel = 2'b01;
   logic at_y;
