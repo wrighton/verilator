@@ -3223,10 +3223,12 @@ class LinkDotParamVisitor final : public VNVisitor {
         // That defparam, if kept for V3Param to give the pin's value, or to check its target
         AstDefParam* defParamp;
         const VSymEnt* defSymp;  // Symbol of the scope of that defparam
+        AstDefParam* ownValuep;  // Else that defparam, kept in case a later one drops it
     };
     // Defparam pins made, by cell, parameter and recorded path
     std::map<std::tuple<const AstCell*, std::string, const AstVar*, std::string>, DefParamPin>
         m_defParamPins;
+    std::vector<AstDefParam*> m_ownValueDefParams;  // Defparams kept as ownValuep
     std::unordered_map<const VSymEnt*, int> m_defParamScopeIds;  // Scopes of defparams, IDs
     // Current module or generate block, where implicit nets are declared (IEEE 1800-2023 6.10)
     const AstNode* m_scopep = nullptr;
@@ -3682,7 +3684,13 @@ class LinkDotParamVisitor final : public VNVisitor {
                 const bool oneBelow = below != prevBelow && prevr.defSymp != defSymp;
                 if (prevr.pinp && !oneBelow && (!bothSelect || prevr.defSymp == defSymp)) {
                     VL_DO_DANGLING(prevr.pinp->unlinkFrBack()->deleteTree(), prevr.pinp);
-                    if (prevr.defParamp) {
+                    // Its value must still be constant, which V3Param checks; not its target
+                    AstDefParam* const checkp
+                        = prevr.ownValuep ? prevr.ownValuep : prevr.defParamp;
+                    if (checkp && VN_IS(checkp->rhsp(), NodeExpr)) {
+                        checkp->checkTarget(false);
+                        checkp->valueCheck(true);
+                    } else if (prevr.defParamp) {
                         VL_DO_DANGLING(pushDeletep(prevr.defParamp->unlinkFrBack()),
                                        prevr.defParamp);
                     }
@@ -3699,9 +3707,7 @@ class LinkDotParamVisitor final : public VNVisitor {
                 // so V3Param keys the value apart from a parameter of the same name elsewhere
                 const string scopePath
                     = cellSymp != foundp ? path.substr(cellPath.size() + 1) : "";
-                AstNode* const exprp = below         ? nullptr
-                                       : checkTarget ? nodep->rhsp()->cloneTree(false)
-                                                     : nodep->rhsp()->unlinkFrBack();
+                AstNode* const exprp = below ? nullptr : nodep->rhsp()->cloneTree(false);
                 UINFO(9, "Defparam cell " << path << "." << nodep->name() << " attach-to " << cellp
                                           << "  <= " << exprp);
                 // Don't need to check the name of the defparam exists.  V3Param does.
@@ -3719,7 +3725,7 @@ class LinkDotParamVisitor final : public VNVisitor {
                 pinp->modVarp(scopedVarp);
                 cellp->addParamsp(pinp);
                 prevr = DefParamPin{pinp, cellSymp, exprp && !checkTarget ? nullptr : nodep,
-                                    defSymp};
+                                    defSymp, exprp && !checkTarget ? nodep : nullptr};
                 if (!exprp) {
                     pushDeletep(nodep->pathp()->unlinkFrBack());
                     targetp->replaceWith(new AstVarXRef{targetp->fileline(), name,
@@ -3739,6 +3745,12 @@ class LinkDotParamVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(targetp), targetp);
                     return;
                 }
+                pushDeletep(nodep->pathp()->unlinkFrBack());
+                targetp->replaceWith(
+                    new AstVarXRef{targetp->fileline(), name, cellPath, VAccess::WRITE});
+                VL_DO_DANGLING(pushDeletep(targetp), targetp);
+                m_ownValueDefParams.push_back(nodep);
+                return;
             }
         }
         VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
@@ -3867,6 +3879,9 @@ public:
         : m_statep{statep} {
         UINFO(4, __FUNCTION__ << ": ");
         iterate(rootp);
+        for (AstDefParam* const nodep : m_ownValueDefParams) {
+            if (!nodep->valueCheck()) VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+        }
     }
     ~LinkDotParamVisitor() override = default;
 };
