@@ -15,6 +15,6 @@ test.compile(verilator_flags2=['--binary', '--assert', '--no-stop-fail', '--stat
 
 test.execute(expect_filename=test.golden_filename)
 
-test.file_grep(test.stats, r'Assertions, deferred violation reports\s+(\d+)', 10)
+test.file_grep(test.stats, r'Assertions, deferred violation reports\s+(\d+)', 11)
 
 test.passes()
