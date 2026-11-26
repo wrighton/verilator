@@ -48,6 +48,8 @@ module t (
   localparam bit NAN_GTE = NAN >= NAN;
   localparam bit NAN_LT = NAN < NAN;
   localparam bit NAN_LTE = NAN <= NAN;
+  localparam real NAN_PAYLOAD = $bitstoreal(64'h7ff8_0000_0000_1234);
+  localparam real NAN_NEG_PAYLOAD = $bitstoreal(64'hfff8_0000_0000_0042);
 
   sub_cast_bug374 sub (
       .cyc5(cyc[4:0]),
@@ -62,6 +64,11 @@ module t (
     if (NAN_GTE) $stop;
     if (NAN_LT) $stop;
     if (NAN_LTE) $stop;
+    // A NaN constant keeps its sign and payload
+    r = $test$plusargs("never_given") ? 1.0 : NAN_PAYLOAD;
+    if ($realtobits(r) != 64'h7ff8_0000_0000_1234) $stop;
+    r = $test$plusargs("never_given") ? 1.0 : NAN_NEG_PAYLOAD;
+    if ($realtobits(r) != 64'hfff8_0000_0000_0042) $stop;
     // rtoi truncates
     if ($rtoi(36.7) != 36) $stop;
     if ($rtoi(36.5) != 36) $stop;

@@ -1040,6 +1040,16 @@ string V3Number::emitC() const VL_MT_STABLE {
             if (std::signbit(dnum)) result += '-';
             result += "std::numeric_limits<double>::infinity()";
         } else if (std::isnan(dnum)) {
+            const double quiet = std::numeric_limits<double>::quiet_NaN();
+            uint64_t bits;
+            uint64_t quietBits;
+            std::memcpy(&bits, &dnum, sizeof(bits));
+            std::memcpy(&quietBits, &quiet, sizeof(quietBits));
+            if ((bits & ~(1ULL << 63)) != quietBits) {
+                // Another NaN keeps its payload by its bits
+                (void)VL_SNPRINTF(sbuf, bufsize, "VL_CVT_D_Q(0x%016" PRIx64 "ULL)", bits);
+                return sbuf;
+            }
             if (std::signbit(dnum)) result += '-';
             result += "std::numeric_limits<double>::quiet_NaN()";
         } else {
