@@ -1995,6 +1995,10 @@ class CaptureVisitor final : public VNVisitor {
             // Keeping classOrPackagep will cause a broken link after inlining
             nodep->classOrPackagep(nullptr);  // AstScope will figure this out
         }
+        // A static member of another class is then a variable of the caller, so a state value
+        if (VN_IS(nodep->varp()->user2p(), Class) && nodep->varp()->lifetime().isStatic()) {
+            nodep->user1(false);
+        }
         nodep->varp(newVarp);
         if (!newCapture) return;
         if (hasFlags(capModeFlags, CaptureMode::CAP_F_XREF)) {
