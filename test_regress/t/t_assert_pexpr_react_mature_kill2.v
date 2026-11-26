@@ -14,6 +14,8 @@
 // flushes only instances not yet matured. The Kill at 8, then On at 9, between the instance of 6
 // maturing and the clock at 15, leaves it to begin at 15.
 module t;
+  // Procedural assertion after a delay: no clock inference (IEEE 1800-2023 16.14.6)
+  // verilator lint_off NONSTD
   bit clk = 0;
   int cyc = 0;
   bit p = 1;
