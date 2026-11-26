@@ -30,6 +30,7 @@
 #include <vector>
 
 class SenExprBuilder;
+class SenTreeFinder;
 
 //============================================================================
 
@@ -81,8 +82,20 @@ inline void collectForceReadEdgeIgnores(const AstNodeProcedure* nodep, VarScopeS
     });
 }
 
-// Compute the implicit sensitivities of the given combinational process
-std::unordered_set<const AstVarScope*> computeImplicitSensitivities(const AstNodeProcedure* procp);
+// The sensitivity tree, from 'finder', of a hybrid process run by a change of any of 'vscps',
+// in the order 'procp' reads them
+AstSenTree* changeSenTree(SenTreeFinder& finder, const AstNodeProcedure* procp,
+                          const std::unordered_set<const AstVarScope*>& vscps);
+
+// The only process writing each variable, or nullptr if it has other writers
+using SoleWriterMap = std::unordered_map<const AstVarScope*, const AstNodeProcedure*>;
+SoleWriterMap computeSoleWriters(AstNetlist* netlistp);
+
+// Compute the implicit sensitivities of the given combinational process. 'excludedr' counts
+// the variables excluded as written by a user's always_comb.
+std::unordered_set<const AstVarScope*>
+computeImplicitSensitivities(const AstNodeProcedure* procp, const SoleWriterMap& soleWriters,
+                             size_t& excludedr);
 }  // namespace util
 
 //============================================================================
@@ -176,6 +189,7 @@ struct LogicClasses final {
     ProcessList m_comb;  // Combinational logic (logic with implicit sensitivities)
     ProcessList m_clocked;  // Clocked (or sequential) logic (logic with explicit sensitivities)
     ProcessList m_hybrid;  // Hybrid logic (combinational logic with some explicit sensitivities)
+    ProcessList m_changed;  // Hybrid logic run only by changes, not settled in 'stl'
     ProcessList m_postponed;  // Postponed logic ($strobe)
     ProcessList m_observed;  // Observed logic (contains AstAlwaysObserved)
     ProcessList m_reactive;  // Reactive logic (contains AstAlwaysReactive)

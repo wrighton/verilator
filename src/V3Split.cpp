@@ -274,10 +274,28 @@ class SplitVisitor final : public VNVisitor {
         return result;
     }
 
+    // Whether the block reads a variable it writes before writing it
+    static bool readsWrittenBeforeWrite(const AstAlways* nodep) {
+        std::unordered_set<const AstVar*> written;
+        std::unordered_set<const AstVar*> readFirst;
+        nodep->foreach([&](const AstNodeVarRef* refp) {
+            const AstVar* const varp = refp->varp();
+            if (refp->access().isReadOrRW() && !written.count(varp)) readFirst.emplace(varp);
+            if (refp->access().isWriteOrRW()) written.emplace(varp);
+        });
+        for (const AstVar* const varp : readFirst) {
+            if (written.count(varp)) return true;
+        }
+        return false;
+    }
+
     // VISITORS
     void visit(AstAlways* nodep) override {
         // Skip blocks created below
         if (nodep->user3()) return;
+        // An always_comb reading what it writes runs on changes of the rest of what it reads (see
+        // V3Sched), so a part without such reads must not be split off
+        if (nodep->userComb() && readsWrittenBeforeWrite(nodep)) return;
 
         UASSERT_OBJ(!m_graphp, nodep, "AstAlways should not nest");
         VL_RESTORER(m_graphp);
@@ -332,6 +350,7 @@ class SplitVisitor final : public VNVisitor {
             AstNodeStmt* const stmtsp = lists[i];
             UASSERT_OBJ(stmtsp, nodep, "Color with no statements");
             AstAlways* const newp = new AstAlways{flp, kwd, nullptr, stmtsp};
+            newp->userComb(nodep->userComb());
             newp->user3(1);  // Do not split again
             lastp->addNextHere(newp);
             lastp = newp;

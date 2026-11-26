@@ -2742,7 +2742,10 @@ always_construct<nodep>:        // IEEE: == always_construct
                 yALWAYS       stmt                 { $$ = new AstAlways{$1, VAlwaysKwd::ALWAYS, nullptr, $2}; }
         |       yALWAYS_FF    stmt                 { $$ = new AstAlways{$1, VAlwaysKwd::ALWAYS_FF, nullptr, $2}; }
         |       yALWAYS_LATCH stmt                 { $$ = new AstAlways{$1, VAlwaysKwd::ALWAYS_LATCH, nullptr, $2}; }
-        |       yALWAYS_COMB  stmt                 { $$ = new AstAlways{$1, VAlwaysKwd::ALWAYS_COMB, nullptr, $2}; }
+        |       yALWAYS_COMB  stmt
+                        { AstAlways* const alwaysp = new AstAlways{$1, VAlwaysKwd::ALWAYS_COMB, nullptr, $2};
+                          alwaysp->userComb(true);
+                          $$ = alwaysp; }
         ;
 
 continuous_assign<nodep>:       // IEEE: continuous_assign
@@ -6486,7 +6489,9 @@ assertion_item_declaration<nodep>:  // ==IEEE: assertion_item_declaration
 assertion_item<nodep>:          // ==IEEE: assertion_item
                 concurrent_assertion_item               { $$ = $1; }
         |       deferred_immediate_assertion_item
-                        { $$ = $1 ? new AstAlways{$1->fileline(), VAlwaysKwd::ALWAYS_COMB, nullptr, $1} : nullptr; }
+                        { AstAlways* const alwaysp = $1 ? new AstAlways{$1->fileline(), VAlwaysKwd::ALWAYS_COMB, nullptr, $1} : nullptr;
+                          if (alwaysp) alwaysp->userComb(true);
+                          $$ = alwaysp; }
         ;
 
 deferred_immediate_assertion_item<nodeStmtp>:       // ==IEEE: deferred_immediate_assertion_item

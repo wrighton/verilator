@@ -54,17 +54,6 @@ private:
 
     V3UniqueNames m_prevNames{"__Vtrigprevexpr"};  // For generating unique temporary names
 
-    static bool isSupportedDType(AstNodeDType* dtypep) {
-        dtypep = dtypep->skipRefp();
-        if (VN_IS(dtypep, BasicDType)) return true;
-        if (VN_IS(dtypep, PackArrayDType)) return true;
-        if (VN_IS(dtypep, UnpackArrayDType)) return isSupportedDType(dtypep->subDTypep());
-        if (VN_IS(dtypep, NodeUOrStructDType)) return true;  // All are packed at the moment
-        // Per IEEE, detects reference object pointer changes, not contents of the class changes
-        if (VN_IS(dtypep, ClassRefDType)) return true;
-        return false;
-    }
-
     static bool isSimpleExpr(const AstNode* const exprp) {
         return exprp->forall([](const AstNode* const nodep) {
             return VN_IS(nodep, Const) || VN_IS(nodep, NodeVarRef) || VN_IS(nodep, Sel)
@@ -366,6 +355,18 @@ public:
     // CONSTRUCTOR
     explicit SenExprBuilder(AstScope* scopep)
         : m_scopep{scopep} {}
+
+    // Whether changes of a value of the type can be detected
+    static bool isSupportedDType(AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        if (VN_IS(dtypep, BasicDType)) return true;
+        if (VN_IS(dtypep, PackArrayDType)) return true;
+        if (VN_IS(dtypep, UnpackArrayDType)) return isSupportedDType(dtypep->subDTypep());
+        if (VN_IS(dtypep, NodeUOrStructDType)) return true;  // All are packed at the moment
+        // Per IEEE, detects reference object pointer changes, not contents of the class changes
+        if (VN_IS(dtypep, ClassRefDType)) return true;
+        return false;
+    }
 };
 
 #endif  // Guard
