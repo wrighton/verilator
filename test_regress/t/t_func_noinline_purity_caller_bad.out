@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_func_noinline_purity_caller_bad.v:44:12: Unsupported: Impure function calls in sensitivity lists
+   44 |   always @(W3(sig)) o = sig;   
+      |            ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
