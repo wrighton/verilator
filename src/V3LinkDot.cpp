@@ -3568,17 +3568,73 @@ class LinkDotParamVisitor final : public VNVisitor {
         }
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
-    // Whether a generate block may not be built: in a generate if or case, or a loop's
-    static bool maybeUnbuilt(const AstGenBlock* blockp) {
-        if (blockp->genforp()) return true;
-        const AstNode* const abovep = blockp->aboveLoopp();
-        return VN_IS(abovep, GenIf) || VN_IS(abovep, GenCaseItem);
+    // Whether a localparam's value is constp unchanged: with no type or range, or a 1-bit or
+    // integer type the value fits, not yet known otherwise
+    static bool fitsUnchanged(const AstVar* varp, const AstConst* constp) {
+        const AstNodeDType* const dtypep = varp->childDTypep();
+        if (!dtypep) return true;
+        const AstBasicDType* const basicp = VN_CAST(dtypep, BasicDType);
+        if (!basicp || basicp->rangep()) return false;
+        const int width = constp->num().widthToFit();
+        switch (basicp->keyword()) {
+        case VBasicDTypeKwd::LOGIC_IMPLICIT: return true;
+        case VBasicDTypeKwd::BIT:
+        case VBasicDTypeKwd::LOGIC: return width <= 1;
+        case VBasicDTypeKwd::INT:
+        case VBasicDTypeKwd::INTEGER: return width <= 31;
+        default: return false;
+        }
     }
-    // Whether symp is in a generate block not also containing targetp, which may not be built
-    static bool underGenBlock(const VSymEnt* symp, const VSymEnt* targetp) {
+    // Return the value of a generate if condition, if a literal without X or Z bits, or a
+    // localparam of such a value found from symp, so known before parameters are
+    static const AstConst* literalCond(const AstNodeExpr* condp, VSymEnt* symp) {
+        if (const AstConst* const constp = VN_CAST(condp, Const)) {
+            return constp->num().isAnyXZ() ? nullptr : constp;
+        }
+        const AstParseRef* const refp = VN_CAST(condp, ParseRef);
+        if (!refp) return nullptr;
+        for (; symp; symp = symp->parentp()) {
+            if (const VSymEnt* const foundp = symp->findIdFlatNoRef(refp->name())) {
+                const AstVar* const varp = VN_CAST(foundp->nodep(), Var);
+                if (!varp || varp->varType() != VVarType::LPARAM) return nullptr;
+                const AstConst* const constp = VN_CAST(varp->valuep(), Const);
+                if (!constp || constp->num().isAnyXZ() || !fitsUnchanged(varp, constp)) {
+                    return nullptr;
+                }
+                return constp;
+            }
+        }
+        return nullptr;
+    }
+    // Whether a generate block, with symbol symp, is built: yes if not in a loop, generate if or
+    // case, or if in a generate if whose condition is known to build it; no if known not to;
+    // else unknown, as parameters are not known yet
+    enum class Built : uint8_t { YES, NO, UNKNOWN };
+    static Built genBuilt(const AstGenBlock* blockp, VSymEnt* symp) {
+        if (blockp->genforp()) return Built::UNKNOWN;
+        const AstNode* const abovep = blockp->aboveLoopp();
+        if (const AstGenIf* const ifp = VN_CAST(abovep, GenIf)) {
+            const AstConst* const constp = literalCond(ifp->condp(), symp->parentp());
+            if (!constp) return Built::UNKNOWN;
+            bool inThen = false;
+            for (const AstNode* np = ifp->thensp(); np; np = np->nextp()) inThen |= np == blockp;
+            return constp->isZero() == inThen ? Built::NO : Built::YES;
+        }
+        return VN_IS(abovep, GenCaseItem) ? Built::UNKNOWN : Built::YES;
+    }
+    // Whether symp is in a generate block known not to be built
+    static bool inUnbuilt(VSymEnt* symp) {
         for (; symp; symp = symp->parentp()) {
             const AstGenBlock* const blockp = VN_CAST(symp->nodep(), GenBlock);
-            if (!blockp || !maybeUnbuilt(blockp)) continue;
+            if (blockp && genBuilt(blockp, symp) == Built::NO) return true;
+        }
+        return false;
+    }
+    // Whether symp is in a generate block not also containing targetp, which may not be built
+    static bool underGenBlock(VSymEnt* symp, const VSymEnt* targetp) {
+        for (; symp; symp = symp->parentp()) {
+            const AstGenBlock* const blockp = VN_CAST(symp->nodep(), GenBlock);
+            if (!blockp || genBuilt(blockp, symp) == Built::YES) continue;
             const VSymEnt* abovep = targetp;
             while (abovep && abovep != symp) abovep = abovep->parentp();
             if (!abovep) return true;
@@ -3622,10 +3678,12 @@ class LinkDotParamVisitor final : public VNVisitor {
                              const AstCell* cellp, const std::vector<VSymEnt*>& instScopes) {
         std::unordered_set<const VSymEnt*> given;  // Instances given the value
         for (const VSymEnt* const cellSymp : m_statep->cellInstSyms(cellp)) {
+            if (inUnbuilt(cellSymp->parentp())) continue;
             if (anchoredNames(anchoredPath, cellSymp)) given.emplace(cellSymp);
         }
         std::unordered_set<const VSymEnt*> namedBuilt;  // Instances named from a built scope
         for (VSymEnt* const instSymp : instScopes) {
+            if (inUnbuilt(instSymp)) continue;
             string baddot;
             VSymEnt* okSymp = nullptr;
             const VSymEnt* otherp = m_statep->findDotted(nodep->fileline(), instSymp, lookupPath,
