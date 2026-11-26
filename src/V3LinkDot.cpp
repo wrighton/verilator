@@ -974,7 +974,11 @@ public:
             if (lookupSymp) {
                 if (const AstCell* const cellp = VN_CAST(lookupSymp->nodep(), Cell)) {
                     if (const AstNodeModule* const modp = cellp->modp()) {
-                        if (modp->hierBlock() && !leftname.empty()) {
+                        // Not when the scopes are made, where the blocks of this run are
+                        // libraries, whose scopes hold their ports alone, and in a run not
+                        // Verilating the blocks they are ordinary modules, whose contents the
+                        // passes before the scopes report the references into
+                        if (modp->hierBlock() && !leftname.empty() && !forScopeCreation()) {
                             refLocationp->v3error("Cannot access scope inside hierarchical block");
                         } else if (VN_IS(modp, NotFoundModule)) {
                             refLocationp->v3error("Dotted reference to instance that refers to "
