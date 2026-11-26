@@ -2082,6 +2082,9 @@ void VlRandomizer::emitDefines(std::ostream& os) const {
 }
 
 void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
+    for (const std::string& name : m_freshVars) {
+        os << "(declare-fun " << name << " () (_ BitVec 32))\n";
+    }
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) {
             auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
@@ -3233,6 +3236,12 @@ void VlRandomizer::merge_nested(const VlRandomizer& from, const std::string& pat
         bindings += " (" + pair.first + " " + name + ")";
         renames.emplace(pair.first, name);
     }
+    // Its fresh constants (see fresh_const()) are constants of their own here
+    for (const std::string& fresh : from.m_freshVars) {
+        const std::string name = "__Vf" + std::to_string(m_freshVars.size());
+        m_freshVars.push_back(name);
+        bindings += " (" + fresh + " " + name + ")";
+    }
     const std::string letBegin = bindings.empty() ? "" : "(let (" + bindings + ") ";
     const std::string letEnd = bindings.empty() ? "" : ")";
     for (size_t i = 0; i < from.m_constraints.size(); ++i) {
@@ -3352,6 +3361,11 @@ std::string VlRandomizer::null_read(const std::string& name, const std::string& 
     return smtName;
 }
 
+std::string VlRandomizer::fresh_const() {
+    m_freshVars.emplace_back("__Vf" + std::to_string(m_freshVars.size()));
+    return m_freshVars.back();
+}
+
 void VlRandomizer::clearConstraints() {
     m_nullReads.clear();
     m_nullRead.clear();
@@ -3359,6 +3373,7 @@ void VlRandomizer::clearConstraints() {
     m_fastConstraints.clear();
     m_fastDisabled = false;
     m_constraints.clear();
+    m_freshVars.clear();
     m_constraintVarNames.clear();
     m_constraintVarEnds.clear();
     m_constraints_line.clear();

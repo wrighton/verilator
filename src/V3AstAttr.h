@@ -1096,6 +1096,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_FAST_DIST_PICK,          "fast_dist_pick",         false,  CLEAN,  false,      "mr", "") \
     macro(RANDOMIZER_FAST_QUEUE,              "fast_queue",             false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_FAST_RANGE,              "fast_range",             false,  CLEAN,  false,      "rrrr", "") \
+    macro(RANDOMIZER_FRESH_CONST,             "fresh_const",            false,  CLEAN,  false,      "", "") \
     macro(RANDOMIZER_FUNC_ARGS_READY,         "func_args_ready",        false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_FUNC_ROUND_END,          "func_round_end",         false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_FUNC_ROUND_FINAL,        "func_round_final",       false,  CLEAN,  false,      "", "") \
