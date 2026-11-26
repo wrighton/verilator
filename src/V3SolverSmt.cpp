@@ -1609,6 +1609,12 @@ private:
     AstNode* m_firstExpressionInsideIndexp = nullptr;
     AstBegin* m_foreachBodyp = nullptr;  // Holder of the body of the innermost constraint-foreach
     std::set<const AstVar*> m_foreachIdxVars;  // Index vars of all enclosing constraint-foreaches
+    struct ForeachDim final {
+        const AstNodeExpr* arrayp;  // Array the foreach iterates
+        int dim;  // Dimension of it the index iterates
+    };
+    // Dimensions the index vars of all enclosing constraint-foreaches iterate
+    std::unordered_map<const AstVar*, ForeachDim> m_foreachDims;
     // Solver variables named by constraints folded into a single expression (m_wantSingle)
     // by a top-level if; empty except between that fold and m_foldTakerp taking them over
     std::set<std::string> m_constraintVars;
@@ -5891,6 +5897,96 @@ private:
             newp->exprsp()->nextp()->name(objectElem ? "%0x" : elemFormat);
         }
     }
+    // True if the element of 'fromp' at 'indexp' is one an enclosing constraint-foreach visits,
+    // which it expands over as the elements are when randomized, so is in range
+    bool isForeachElement(const AstNodeExpr* fromp, const AstNodeExpr* indexp) const {
+        const AstVarRef* const refp = VN_CAST(indexp, VarRef);
+        if (!refp || !m_foreachDims.count(refp->varp())) return false;
+        const ForeachDim& foreachDim = m_foreachDims.at(refp->varp());
+        for (int dim = foreachDim.dim; dim > 0; --dim) {
+            if (const AstArraySel* const selp = VN_CAST(fromp, ArraySel)) {
+                fromp = selp->fromp();
+            } else if (const AstCMethodHard* const atp = VN_CAST(fromp, CMethodHard)) {
+                fromp = atp->fromp();
+            } else {
+                return false;
+            }
+        }
+        return fromp->sameTree(foreachDim.arrayp);
+    }
+    // Width an element index of 'width' bits is extended to, so its range check cannot wrap
+    static int guardedIndexWidth(int width) { return std::max(width, VL_IDATASIZE) + 1; }
+    // Non-random element index 'indexp' extended to guardedIndexWidth
+    static AstNodeExpr* newGuardedIndexp(AstNodeExpr* indexp) {
+        FileLine* const fl = indexp->fileline();
+        const int width = guardedIndexWidth(indexp->width());
+        if (indexp->isSigned()) return new AstExtendS{fl, indexp, width};
+        return new AstExtend{fl, indexp, width};
+    }
+    // Number of elements of queue or dynamic array 'arrayp', as a 'width' bit solver term: its
+    // size variable if its size is constrained, as that is solved with the elements
+    AstNodeExpr* newArraySizeTextp(AstVarRef* arrayp, int width) {
+        FileLine* const fl = arrayp->fileline();
+        if (AstVar* const sizeVarp = VN_CAST(arrayp->varp()->user4p(), Var)) {
+            AstVarRef* const sizeRefp = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule),
+                                                      sizeVarp, VAccess::READ};
+            sizeRefp->user1(true);
+            AstExtend* const extendp = new AstExtend{fl, sizeRefp, width};
+            extendp->user1(true);
+            return VN_AS(iterateSubtreeReturnEdits(extendp), NodeExpr);
+        }
+        AstCMethodHard* const sizep
+            = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
+        sizep->dtypeSetInt();
+        return getConstFormat(new AstExtend{fl, sizep, width});
+    }
+    // Make the translated element select 'selp' of 'width' bits read zero unless 'guardp', a
+    // solver term, holds
+    void editSmtInRange(AstSFormatF* selp, AstNodeExpr* guardp, int width) {
+        FileLine* const fl = selp->fileline();
+        VNRelinker handle;
+        selp->unlinkFrBack(&handle);
+        AstSFormatF* const newp = new AstSFormatF{fl, "(ite %s %s %s)", false, guardp};
+        newp->addExprsp(selp);
+        newp->addExprsp(getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, 0}));
+        handle.relink(newp);
+    }
+    // Make the translated element select 'selp' of 'width' bits read zero unless 'condp',
+    // evaluated when randomize() is called, holds
+    void editStateInRange(AstSFormatF* selp, AstNodeExpr* condp, int width) {
+        FileLine* const fl = selp->fileline();
+        VNRelinker handle;
+        selp->unlinkFrBack(&handle);
+        handle.relink(new AstSFormatF{
+            fl, "%s", false,
+            new AstCond{fl, condp, selp,
+                        getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, 0})}});
+    }
+    // Condition, evaluated when randomize() is called, that the non-random indices of select
+    // chain 'nodep' are in range, or nullptr
+    AstNodeExpr* newStateIndexInRangep(const AstArraySel* nodep) const {
+        AstNodeExpr* condp = nullptr;
+        for (const AstArraySel* selp = nodep; selp; selp = VN_CAST(selp->fromp(), ArraySel)) {
+            AstNodeExpr* const bitp = selp->bitp();
+            const uint32_t elements
+                = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+            const int width = bitp->width();
+            const AstConst* const constp = VN_CAST(bitp, Const);
+            // A constant index in range, or a narrow unsigned one, is always in range
+            if (isRandIndex(bitp)
+                || (constp && width <= VL_IDATASIZE && constp->toUInt() < elements)
+                || isForeachElement(selp->fromp(), bitp)
+                || (!bitp->isSigned() && width < VL_IDATASIZE && (1ULL << width) <= elements)) {
+                continue;
+            }
+            FileLine* const fl = selp->fileline();
+            AstNodeExpr* const ltp = new AstLt{
+                fl, newGuardedIndexp(bitp->cloneTreePure(false)),
+                new AstConst{fl, AstConst::WidthedValue{}, guardedIndexWidth(width), elements}};
+            condp = condp ? new AstLogAnd{fl, condp, ltp} : ltp;
+        }
+        return condp;
+    }
     // Return SMT condition that the rand indices of select chain 'nodep' are in range, or nullptr
     static AstNodeExpr* newIndexInRangep(const AstArraySel* nodep) {
         AstNodeExpr* condp = nullptr;
@@ -5929,11 +6025,19 @@ private:
                 return;
             }
         }
+        const bool indexIsRand = isRandIndex(nodep->bitp());
+        // The range check of the non-random indices of a translated select, before they are
+        // truncated below. An unpacked array has no zero to read instead, nor a named element.
+        const int elemWidth = nodep->width();
+        AstNodeExpr* const stateInRangep
+            = !m_structSel && !m_nestedAccessp && nodep->dtypep()->skipRefp()->isIntegralOrPacked()
+                      && (!indexIsRand || nodep->fromp()->user1())
+                  ? newStateIndexInRangep(nodep)
+                  : nullptr;
         // Of an array of objects, or of arrays of them
         const bool objectElem
             = VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType);
         VNRelinker handle;
-        const bool indexIsRand = isRandIndex(nodep->bitp());
         const std::string elemFormat
             = m_structSel && !objectElem && !indexIsRand
                   ? structArrayIndexFormat(
@@ -5998,6 +6102,7 @@ private:
             handle.relink(indexp);
             AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
             renameArrayExpr(newp, objectElem);
+            if (newp && stateInRangep) editStateInRange(newp, stateInRangep, elemWidth);
         } else {
             // Index is constant or non-rand -- format as hex literal.
             // Keep a pre-edit clone for the rand_mode hoist below.
@@ -6007,6 +6112,7 @@ private:
             handle.relink(indexp);
             AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
             renameArrayExpr(newp, objectElem, elemFormat);
+            if (newp && stateInRangep) editStateInRange(newp, stateInRangep, elemWidth);
             if (!newp || !hoistRandModeOverSelectAndMember(newp, origp)) {
                 VL_DO_DANGLING(origp->deleteTree(), origp);
             }
@@ -6560,8 +6666,14 @@ private:
         // Registrations referencing the index are appended to the holder of the body
         VL_RESTORER(m_foreachBodyp);
         VL_RESTORER_COPY(m_foreachIdxVars);
+        VL_RESTORER_COPY(m_foreachDims);
+        int dim = 0;
         for (AstNode* const elemp : nodep->headerp()->elementspList()) {
-            if (const AstVar* const varp = VN_CAST(elemp, Var)) m_foreachIdxVars.insert(varp);
+            if (const AstVar* const varp = VN_CAST(elemp, Var)) {
+                m_foreachIdxVars.insert(varp);
+                m_foreachDims.emplace(varp, ForeachDim{nodep->headerp()->fromp(), dim});
+            }
+            ++dim;
         }
 
         if (!nodep->bodyp()) {
@@ -7316,6 +7428,50 @@ private:
                     = m_structSel ? new AstCMethodHard{fl, nodep->fromp()->cloneTreePure(false),
                                                        VCMethod::DYN_SIZE}
                                   : nullptr;
+                // An element select out of range reads zero. The size of an array selected from
+                // another, or reached through a class handle, is not known here.
+                AstNodeExpr* smtGuardp = nullptr;
+                AstNodeExpr* stateGuardp = nullptr;
+                const bool guarded = !m_structSel && !m_nestedAccessp
+                                     && nodep->dtypep()->skipRefp()->isIntegralOrPacked()
+                                     && VN_IS(nodep->fromp(), VarRef)
+                                     && !isForeachElement(nodep->fromp(), nodep->pinsp());
+                AstNodeExpr* sizeTextp = nullptr;  // For a solved index, after translation
+                if (guarded) {
+                    AstVarRef* const arrayp = VN_AS(nodep->fromp(), VarRef);
+                    AstNodeExpr* const indexp = nodep->pinsp();
+                    const int guardWidth = guardedIndexWidth(indexp->width());
+                    if (indexIsRand || VN_IS(arrayp->varp()->user4p(), Var)) {
+                        // A solved size is a solver term, and the index may be one with it:
+                        // below the size in the solver's 32-bit index sort, see newSmtIndexp
+                        sizeTextp = newArraySizeTextp(arrayp, guardedIndexWidth(VL_IDATASIZE));
+                        if (!indexIsRand && indexp->width() > VL_IDATASIZE) {
+                            // Not in that sort
+                            AstConst* const limitp
+                                = new AstConst{fl, AstConst::WidthedValue{}, guardWidth, 0};
+                            limitp->num().setBit(VL_IDATASIZE, 1);
+                            stateGuardp = new AstLt{
+                                fl, newGuardedIndexp(indexp->cloneTreePure(false)), limitp};
+                        }
+                    } else {
+                        AstCMethodHard* const dynSizep = new AstCMethodHard{
+                            fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
+                        dynSizep->dtypeSetInt();
+                        stateGuardp = new AstLt{fl, newGuardedIndexp(indexp->cloneTreePure(false)),
+                                                new AstExtend{fl, dynSizep, guardWidth}};
+                    }
+                    // In the solver's 32-bit index sort, in range when selected
+                    if (!indexIsRand && indexp->width() > VL_IDATASIZE) {
+                        nodep->addPinsp(new AstSel{fl, indexp->unlinkFrBack(), 0, VL_IDATASIZE});
+                    } else if (!indexIsRand && indexp->width() < VL_IDATASIZE) {
+                        indexp->unlinkFrBack();
+                        nodep->addPinsp(indexp->isSigned()
+                                            ? static_cast<AstNodeExpr*>(
+                                                  new AstExtendS{fl, indexp, VL_IDATASIZE})
+                                            : new AstExtend{fl, indexp, VL_IDATASIZE});
+                    }
+                }
+                const int elemWidth = nodep->width();
                 // A copy, as formatting the index may replace and delete it
                 AstNodeExpr* const originalPinp
                     = m_structSel ? nodep->pinsp()->cloneTreePure(false) : nullptr;
@@ -7359,10 +7515,19 @@ private:
                     VL_DO_DANGLING(originalPinp->deleteTree(), originalPinp);
                     newp = new AstSFormatF{fl, "%s.%s", false, argsp};
                 } else {
+                    if (sizeTextp) {
+                        AstSFormatF* const guardp
+                            = new AstSFormatF{fl, "(bvult ((_ zero_extend 1) %s) %s)", false,
+                                              pinp->cloneTreePure(false)};
+                        guardp->addExprsp(sizeTextp);
+                        smtGuardp = guardp;
+                    }
                     newp = createSolverArrDerefp(fl, nodep->fromp()->unlinkFrBack(), pinp);
                 }
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                if (smtGuardp) editSmtInRange(newp, smtGuardp, elemWidth);
+                if (stateGuardp) editStateInRange(newp, stateGuardp, elemWidth);
                 if (origp && !hoistRandModeOverSelectAndMember(newp, origp)) {
                     VL_DO_DANGLING(origp->deleteTree(), origp);
                 }
