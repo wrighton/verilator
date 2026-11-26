@@ -1660,7 +1660,7 @@ class AssertPastSplitVisitor final : public VNVisitor {
     // TYPES
     struct Operand final {
         AstNodeExpr* nodep;  // The operand
-        bool automatic;  // Reads an automatic variable
+        bool automatic;  // Reads a current value: an automatic variable or a const cast
         bool reads;  // Reads a variable
     };
 
@@ -1703,6 +1703,8 @@ class AssertPastSplitVisitor final : public VNVisitor {
     void visit(AstNodeVarRef* nodep) override {
         m_operands.push_back({nodep, nodep->varp()->lifetime().isAutomatic(), true});
     }
+    // The past value of a const cast is also its current value (IEEE 1800-2023 16.5.1)
+    void visit(AstConstCast* nodep) override { m_operands.push_back({nodep, true, true}); }
     void visit(AstNodeExpr* nodep) override {
         const size_t first = m_operands.size();
         iterateChildren(nodep);
@@ -3450,22 +3452,20 @@ class AssertVisitor final : public VNVisitor {
         std::unordered_set<const AstVar*> localps;
         nodep->foreach([&](const AstVar* varp) { localps.insert(varp); });
         for (AstConstCast* const castp : castps) {
-            AstNodeExpr* const exprp = castp->lhsp()->unlinkFrBack();
+            AstNodeExpr* const exprp = castp->lhsp();
             const bool local = exprp->exists([&](const AstNode* np) {
                 const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef);
                 return VN_IS(np, LambdaArgRef) || (refp && localps.count(refp->varp()));
             });
-            if (m_procedurep && !nodep->immediate() && !local) {
-                FileLine* const castFlp = castp->fileline();
-                AstVar* const varp
-                    = newModuleTemp(castFlp, m_actionNames.get("Const"), exprp->dtypep(), m_modp);
-                varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-                nodep->addHereThisAsNext(
-                    new AstAssign{castFlp, new AstVarRef{castFlp, varp, VAccess::WRITE}, exprp});
-                castp->replaceWith(new AstVarRef{castFlp, varp, VAccess::READ});
-            } else {
-                castp->replaceWith(exprp);
-            }
+            // Otherwise visit(AstConstCast) takes the current value of the expression
+            if (!m_procedurep || nodep->immediate() || local) continue;
+            FileLine* const castFlp = castp->fileline();
+            AstVar* const varp
+                = newModuleTemp(castFlp, m_actionNames.get("Const"), exprp->dtypep(), m_modp);
+            varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            nodep->addHereThisAsNext(new AstAssign{
+                castFlp, new AstVarRef{castFlp, varp, VAccess::WRITE}, exprp->unlinkFrBack()});
+            castp->replaceWith(new AstVarRef{castFlp, varp, VAccess::READ});
             VL_DO_DANGLING(pushDeletep(castp), castp);
         }
 
@@ -4320,10 +4320,11 @@ class AssertVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void visit(AstConstCast* nodep) override {
-        // Moved out of its assertion by V3AssertPre; only the expression
+        // Only the expression, whose sampled value is its current value (IEEE 1800-2023 16.5.1)
         AstNodeExpr* const lhsp = nodep->lhsp()->unlinkFrBack();
         nodep->replaceWith(lhsp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        lhsp->foreach([](AstNodeVarRef* refp) { refp->user2(1); });
         iterate(lhsp);
     }
     void visit(AstPExpr* nodep) override {
