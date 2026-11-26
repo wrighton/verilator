@@ -5084,6 +5084,54 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstConstraintUnique* nodep) override {
         userIterateAndNext(nodep->rangesp(), WidthVP{SELF, BOTH}.p());
+        // IEEE 1800-2023 18.5.4: the singular members and the leaf elements of the array
+        // members shall be of equivalent type, and no randc variable shall be a member
+        const AstNodeDType* firstDtp = nullptr;
+        for (const AstNodeExpr* const itemp : nodep->rangespList()) {
+            // The variable the member is, or is an element of; an index is not a member
+            const AstNodeExpr* rootp = itemp;
+            while (true) {
+                if (const AstNodeSel* const selp = VN_CAST(rootp, NodeSel)) {
+                    rootp = selp->fromp();
+                } else if (const AstSliceSel* const selp = VN_CAST(rootp, SliceSel)) {
+                    rootp = selp->fromp();
+                } else if (const AstCMethodHard* const callp = VN_CAST(rootp, CMethodHard)) {
+                    if (!callp->method().isDynElementAccess()) break;
+                    rootp = callp->fromp();
+                } else {
+                    break;
+                }
+            }
+            const AstVar* rootVarp = nullptr;
+            if (const AstMemberRef* const refp = VN_CAST(rootp, MemberRef))
+                rootVarp = refp->varp();
+            if (const AstNodeVarRef* const refp = VN_CAST(rootp, NodeVarRef))
+                rootVarp = refp->varp();
+            if (rootVarp && rootVarp->isRandC()) {
+                itemp->v3error("Unique constraint member references randc variable "
+                               << rootVarp->prettyNameQ() << " (IEEE 1800-2023 18.5.4).");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
+            }
+            const AstNodeDType* leafDtp = itemp->dtypep()->skipRefToEnump();
+            while (leafDtp->isNonPackedArray()) leafDtp = leafDtp->subDTypep()->skipRefToEnump();
+            if (!firstDtp) {
+                firstDtp = leafDtp;
+                continue;
+            }
+            // An enum is equivalent only to itself (IEEE 1800-2023 6.22.1, 6.22.2)
+            const bool equivalent = VN_IS(firstDtp, EnumDType) || VN_IS(leafDtp, EnumDType)
+                                        ? leafDtp == firstDtp
+                                        : isEquivalentDType(firstDtp, leafDtp);
+            if (!equivalent) {
+                itemp->v3error("Unique constraint member's type "
+                               << leafDtp->prettyDTypeNameQ(true)
+                               << " is not equivalent to the first member's type "
+                               << firstDtp->prettyDTypeNameQ(true) << " (IEEE 1800-2023 18.5.4).");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
+            }
+        }
     }
     void visit(AstDistItem* nodep) override {
         userIterate(nodep->rangep(), m_vup);

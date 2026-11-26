@@ -1,0 +1,26 @@
+%Error: t/t_constraint_unique_type_bad.v:36:34: Unique constraint member's type 'bit[7:0]' is not equivalent to the first member's type 'bit[3:0]' (IEEE 1800-2023 18.5.4).
+   36 |   constraint width_c {unique {a, w};}
+      |                                  ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_constraint_unique_type_bad.v:38:34: Unique constraint member's type 'byte' is not equivalent to the first member's type 'bit[7:0]' (IEEE 1800-2023 18.5.4).
+   38 |   constraint sign_c {unique {u8, s8};}
+      |                                  ^~
+%Error: t/t_constraint_unique_type_bad.v:39:39: Unique constraint member's type 'bit signed[7:0]' is not equivalent to the first member's type 'bit[7:0]' (IEEE 1800-2023 18.5.4).
+   39 |   constraint sign_bits_c {unique {u8, sb8};}
+      |                                       ^~~
+%Error: t/t_constraint_unique_type_bad.v:41:34: Unique constraint member's type 'logic[3:0]' is not equivalent to the first member's type 'bit[3:0]' (IEEE 1800-2023 18.5.4).
+   41 |   constraint state_c {unique {a, l4};}
+      |                                  ^~
+%Error: t/t_constraint_unique_type_bad.v:43:35: Unique constraint member's type 'bit[7:0]' is not equivalent to the first member's type 'bit[3:0]' (IEEE 1800-2023 18.5.4).
+   43 |   constraint leaf_c {unique {arr, q};}
+      |                                   ^
+%Error: t/t_constraint_unique_type_bad.v:44:43: Unique constraint member's type 'bit[3:0]' is not equivalent to the first member's type 'bit[7:0]' (IEEE 1800-2023 18.5.4).
+   44 |   constraint leaf_scalar_c {unique {w, arr[0:1]};}
+      |                                           ^
+%Error: t/t_constraint_unique_type_bad.v:46:34: Unique constraint member's type 'enum $unit::f_t' is not equivalent to the first member's type 'enum $unit::e_t' (IEEE 1800-2023 18.5.4).
+   46 |   constraint enum_c {unique {e1, f};}
+      |                                  ^
+%Error: t/t_constraint_unique_type_bad.v:47:38: Unique constraint member's type 'int' is not equivalent to the first member's type 'enum $unit::e_t' (IEEE 1800-2023 18.5.4).
+   47 |   constraint enum_int_c {unique {e1, i};}
+      |                                      ^
+%Error: Exiting due to
