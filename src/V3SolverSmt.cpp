@@ -1487,6 +1487,7 @@ private:
     AstVar* const m_genp;  // VlRandomizer variable of the class
     AstVar* m_randModeVarp;  // Relevant randmode state variable
     bool m_wantSingle = false;  // Whether to merge constraint expressions with LOGAND
+    bool m_ignoreConstraint = false;  // Current constraint is ignored, as unsupported
     bool m_inSoftItem = false;  // Keep soft payload/name grouping when deferring array layouts
     AstNodeExpr* m_layoutRootp = nullptr;  // Positive hard conjunct currently allowed to split
     VMemberMap& m_memberMap;  // Member names cached for fast lookup
@@ -3892,11 +3893,13 @@ private:
             } else {
                 nodep->v3warn(CONSTRAINTIGN,
                               "Unsupported: Power (**) expression with non-2 base in constraint");
+                m_ignoreConstraint = true;
             }
         } else {
             nodep->v3warn(
                 CONSTRAINTIGN,
                 "Unsupported: Power (**) expression with non-constant exponent in constraint");
+            m_ignoreConstraint = true;
         }
     }
     void visit(AstPow* nodep) override { handlePow(nodep); }
@@ -6607,10 +6610,20 @@ private:
         }
         VL_RESTORER(m_sizeGatep);
         VL_RESTORER(m_layoutRootp);
+        VL_RESTORER(m_ignoreConstraint);
         m_sizeGatep = nullptr;
         m_layoutRootp = nodep->isSoft() ? nullptr : nodep->exprp();
+        m_ignoreConstraint = false;
         nodep->exprp(formatValueRegion(nodep->exprp()));
         m_layoutRootp = nullptr;
+        if (m_ignoreConstraint) {
+            if (!m_wantSingle) {
+                m_funcArgNames.clear();
+                m_itemVarNames.clear();
+            }
+            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+            return;
+        }
         // Before any size gate is added around the payload
         if (!foldTaker && nodep->isSoft()) {
             softVars = vars;
