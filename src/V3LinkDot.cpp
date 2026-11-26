@@ -7244,6 +7244,9 @@ void V3LinkDot::linkDotGuts(AstNetlist* rootp, VLinkDotStep step) {
     state.dumpSelf("linkdot-done");
     if (v3Global.opt.stats()) {
         V3Stats::addStatSum("LinkDot, Imported symbols", state.symsp()->importedCount());
+        static const char* const stepNames[] = {"primary", "paramed", "scoped"};
+        V3Stats::addStat("LinkDot, Interface symbols imported, "s + stepNames[step],
+                         state.symsp()->ifaceImports());
     }
 }
 
