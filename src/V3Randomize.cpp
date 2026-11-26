@@ -491,6 +491,23 @@ class RandomizeMarkVisitor final : public VNVisitor {
         iterateConst(cloneConstrp);
     }
 
+    // The constraints of classp, declared or inherited, a constraint of a derived class
+    // replacing the one of the same name of a base class (IEEE 1800-2023 18.5.2)
+    static std::vector<AstConstraint*> classConstraints(AstClass* classp) {
+        std::vector<AstConstraint*> constrps;
+        std::unordered_map<std::string, size_t> nameIndex;  // Index in constrps of each name
+        // Base classes are visited first
+        classp->foreachMember([&](AstClass* const, AstConstraint* const constrp) {
+            const auto pair = nameIndex.emplace(constrp->name(), constrps.size());
+            if (pair.second) {
+                constrps.push_back(constrp);
+            } else {
+                constrps[pair.first->second] = constrp;
+            }
+        });
+        return constrps;
+    }
+
     // Clone constraints from nested rand class members.
     void cloneNestedConstraintsRecurse(AstVarRef* rootVarRefp, AstClass* classp,
                                        const std::vector<AstVar*>& pathToClass,
@@ -510,10 +527,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
             newPath.push_back(memberVarp);
             // Replace all variable references inside the cloned constraint with proper
             // member selections
-            nestedClassp->foreachMember(
-                [&](AstClass* const containingClassp, AstConstraint* const constrp) {
-                    processNestedConstraint(constrp, rootVarRefp, newPath, targetClassp);
-                });
+            for (AstConstraint* const constrp : classConstraints(nestedClassp)) {
+                processNestedConstraint(constrp, rootVarRefp, newPath, targetClassp);
+            }
             cloneNestedConstraintsRecurse(rootVarRefp, nestedClassp, newPath, targetClassp,
                                           activeClasses);
             activeClasses.erase(nestedClassp);
@@ -757,9 +773,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 AstVarRef* rootVarRefp = new AstVarRef{nodep->fileline(), containingClassp,
                                                        memberVarp, VAccess::READ};
                 std::vector<AstVar*> emptyPath;
-                memberClassp->foreachMember([&](AstClass* const, AstConstraint* const constrp) {
+                for (AstConstraint* const constrp : classConstraints(memberClassp)) {
                     processNestedConstraint(constrp, rootVarRefp, emptyPath, classp);
-                });
+                }
                 // The owning class is seeded so a cycle back to it is not cloned again
                 ActiveSet activeClasses{classp, memberClassp};
                 cloneNestedConstraintsRecurse(rootVarRefp, memberClassp, emptyPath, classp,
