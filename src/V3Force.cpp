@@ -975,13 +975,13 @@ public:
         hasp->dtypeSetBit();
         return hasp;
     }
-    // Whether the live RHS of force 'finfo' of 'info' is evaluated: while the force owns some of
-    // its range, as its RHS then acts as a continuous assignment (IEEE 1800-2023 10.6). A forced
-    // block temporary holds the value of a concatenation split into forces of its parts that
-    // read it (V3Const), so its value is also only needed while one of those owns some bits.
-    static AstNodeExpr* newActivep(FileLine* flp, const VarForceInfo& info, const ForceInfo& finfo,
+    // Whether the live RHS of the forces of 'info' that 'ownsp' tests is evaluated: while one of
+    // them owns some of its range, as its RHS then acts as a continuous assignment (IEEE 1800-2023
+    // 10.6). A forced block temporary holds the value of a concatenation split into forces of its
+    // parts that read it (V3Const), so its value is also only needed while one of those owns some
+    // bits. Takes 'ownsp'.
+    static AstNodeExpr* newActivep(FileLine* flp, const VarForceInfo& info, AstNodeExpr* ownsp,
                                    const ForceReaders& readers) {
-        AstNodeExpr* const ownsp = newOwnsRangep(flp, info, finfo);
         if (info.m_varp->varType() != VVarType::BLOCKTEMP) return ownsp;
         AstNodeExpr* readp = new AstConst{flp, AstConst::BitFalse{}};
         const auto it = readers.find(info.m_varVscp);
@@ -992,6 +992,35 @@ public:
             }
         }
         return new AstLogAnd{flp, ownsp, readp};
+    }
+
+    // Replace the reads of each variable of 'enableps' by the processes of its scope with its
+    // expression; 'enableIds' is the index of each variable in 'enableps'
+    static void
+    replaceEnableReads(const std::vector<std::pair<AstVarScope*, AstNodeExpr*>>& enableps,
+                       const std::unordered_map<const AstVarScope*, size_t>& enableIds) {
+        std::vector<AstScope*> scopeps;
+        std::unordered_set<const AstScope*> seenps;
+        for (const auto& it : enableps) {
+            if (seenps.emplace(it.first->scopep()).second) scopeps.push_back(it.first->scopep());
+        }
+        for (AstScope* const scopep : scopeps) {
+            std::vector<AstVarRef*> refps;
+            for (AstNode* blockp = scopep->blocksp(); blockp; blockp = blockp->nextp()) {
+                const AstActive* const activep = VN_CAST(blockp, Active);
+                if (!activep || !activep->procsp()) continue;
+                activep->procsp()->foreachAndNext([&](AstVarRef* refp) {
+                    if (refp->access().isReadOnly() && enableIds.count(refp->varScopep())) {
+                        refps.push_back(refp);
+                    }
+                });
+            }
+            for (AstVarRef* const refp : refps) {
+                const size_t id = enableIds.at(refp->varScopep());
+                refp->replaceWith(enableps[id].second->cloneTreePure(false));
+                VL_DO_DANGLING(refp->deleteTree(), refp);
+            }
+        }
     }
 
     void finalizeRhsVars() {
@@ -1005,6 +1034,11 @@ public:
             }
         }
         ForceReaders readers;
+        // The variable enabling each live function RHS (V3Task) with its expression, and the
+        // index of each variable
+        std::vector<std::pair<AstVarScope*, AstNodeExpr*>> enableps;
+        std::unordered_map<const AstVarScope*, size_t> enableIds;
+        std::vector<const VarForceInfo*> enableInfops;  // The forced variable of each enable
         for (const VarForceInfo& info : m_varInfos) {
             for (const ForceInfo* const finfop : forceInfosInIdOrder(info)) {
                 finfop->m_rhsExprp->foreach([&](const AstVarRef* refp) {
@@ -1046,18 +1080,18 @@ public:
                 scopep->addVarsp(finfo.m_rhsVarVscp);
 
                 // The RHS expression may call a method on a receiver that only exists
-                // while the force owns some of its original range.
+                // while the force owns some of its original range. The copies of a force
+                // statement unrolled from a loop share the updater of its RHS.
                 if (finfo.m_activeVscp) {
-                    AstAssign* const activeAssignp = new AstAssign{
-                        flp, new AstVarRef{flp, finfo.m_activeVscp, VAccess::WRITE},
-                        newActivep(flp, info, finfo, readers)};
-                    AstActive* const activep = new AstActive{
-                        flp, "force-rhs-active",
-                        new AstSenTree{flp, new AstSenItem{flp, AstSenItem::Combo{}}}};
-                    activep->senTreeStorep(activep->sentreep());
-                    activep->addProcsp(
-                        new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr, activeAssignp});
-                    scopep->addBlocksp(activep);
+                    AstNodeExpr* const ownsp = newOwnsRangep(flp, info, finfo);
+                    const auto pair = enableIds.emplace(finfo.m_activeVscp, enableps.size());
+                    if (pair.second) {
+                        enableps.emplace_back(finfo.m_activeVscp, ownsp);
+                        enableInfops.push_back(&info);
+                    } else {
+                        AstNodeExpr*& exprp = enableps[pair.first->second].second;
+                        exprp = new AstLogOr{flp, exprp, ownsp};
+                    }
                 }
 
                 // always_comb forceRHS[id] = rhsExpr;
@@ -1159,6 +1193,27 @@ public:
                 }
             }
         }
+        for (size_t i = 0; i < enableps.size(); ++i) {
+            AstNodeExpr*& exprp = enableps[i].second;
+            exprp = newActivep(exprp->fileline(), *enableInfops[i], exprp, readers);
+        }
+        for (const auto& it : enableps) {
+            FileLine* const flp = it.first->fileline();
+            AstActive* const activep
+                = new AstActive{flp, "force-rhs-active",
+                                new AstSenTree{flp, new AstSenItem{flp, AstSenItem::Combo{}}}};
+            activep->senTreeStorep(activep->sentreep());
+            activep->addProcsp(
+                new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr,
+                              new AstAssign{flp, new AstVarRef{flp, it.first, VAccess::WRITE},
+                                            it.second->cloneTreePure(false)}});
+            it.first->scopep()->addBlocksp(activep);
+        }
+        // The updater of the RHS (V3Task) can run before the block above after a release in the
+        // same time step, so it computes the enable itself; the variable stays for the
+        // sensitivities reading it
+        replaceEnableReads(enableps, enableIds);
+        for (const auto& it : enableps) it.second->deleteTree();
     }
 
     AstNode* createRhsUpdatesForWrite(FileLine* flp, AstVar* writtenVarp) const {

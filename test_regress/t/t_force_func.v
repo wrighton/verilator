@@ -304,4 +304,136 @@ module t;
     `checkh(shared_calls, 3);
   end
 
+  // A released force does not follow a change of its value in the same time step, also when it
+  // is executed in a loop
+  int step_calls = 0;
+  logic [1:0] step_arg = 2'b01;
+  function automatic logic [1:0] step_value(logic [1:0] value);
+    ++step_calls;
+    return value;
+  endfunction
+  wire [3:0] step_net = '0;
+  wire [3:0] step_concat = '0;
+  task automatic step_force();
+    force step_net[1:0] = step_value(step_arg);
+  endtask
+  initial begin
+    #1;
+    force step_net[1:0] = step_value(step_arg);
+    force {step_concat[3], step_concat[0]} = step_value(step_arg);
+    `checkh(step_calls, 2);
+    #0;
+    release step_net;
+    release step_concat;
+    step_arg = 2'b10;
+    #1;
+    `checkh(step_calls, 2);
+    for (int i = 0; i < 3; ++i) step_force();
+    `checkh(step_calls, 5);
+    step_arg = 2'b01;
+    #1;
+    `checkh(step_net, 4'h1);
+    `checkh(step_calls, 6);
+    #0;
+    release step_net;
+    step_arg = 2'b10;
+    #1;
+    `checkh(step_net, 4'h0);
+    `checkh(step_calls, 6);
+  end
+
+  // A force executed only by the first copy of a loop follows its value until released
+  int first_calls = 0;
+  logic [1:0] first_arg = 2'b01;
+  function automatic logic [1:0] first_value(logic [1:0] value);
+    ++first_calls;
+    return value;
+  endfunction
+  wire [3:0] first_net = '0;
+  wire [3:0] first_concat = '0;
+  int first_copy = 0;
+  task automatic first_force();
+    force first_net[1:0] = first_value(first_arg);
+    force {first_concat[2], first_concat[0]} = first_value(first_arg);
+  endtask
+  initial begin
+    #1;
+    for (int i = 0; i < 4; ++i) if (i == first_copy) first_force();
+    `checkh(first_calls, 2);
+    `checkh(first_net, 4'h1);
+    `checkh(first_concat, 4'h1);
+    #1;
+    first_arg = 2'b11;
+    #1;
+    `checkh(first_net, 4'h3);
+    `checkh(first_concat, 4'h5);
+    `checkh(first_calls, 4);
+    #0;
+    release first_net[0];
+    release first_concat[0];
+    first_arg = 2'b10;
+    #1;
+    `checkh(first_net, 4'h2);
+    `checkh(first_concat, 4'h4);
+    `checkh(first_calls, 6);
+    #0;
+    release first_net;
+    release first_concat;
+    first_arg = 2'b01;
+    #1;
+    `checkh(first_net, 4'h0);
+    `checkh(first_concat, 4'h0);
+    `checkh(first_calls, 6);
+  end
+
+  // A force executed by some copies of a loop under a condition follows its value until released
+  int cond_calls = 0;
+  logic [1:0] cond_arg = 2'd3;
+  bit cond_enable[4] = '{1, 0, 1, 0};
+  function automatic logic [1:0] cond_value(logic [1:0] value);
+    ++cond_calls;
+    return value;
+  endfunction
+  wire [3:0] cond_net = '0;
+  wire [3:0] cond_concat = '0;
+  task automatic cond_force();
+    force {cond_concat[3], cond_concat[0]} = cond_value(cond_arg);
+  endtask
+  initial begin
+    #1;
+    for (int i = 0; i < 4; ++i) if (cond_enable[i]) force cond_net[3:2] = cond_value(cond_arg);
+    `checkh(cond_calls, 2);
+    `checkh(cond_net, 4'hc);
+    #1;
+    cond_arg = 2'd1;
+    #1;
+    `checkh(cond_net, 4'h4);
+    `checkh(cond_calls, 3);
+    release cond_net;
+    cond_arg = 2'd2;
+    #1;
+    `checkh(cond_net, 4'h0);
+    `checkh(cond_calls, 3);
+    cond_arg = 2'b01;
+    for (int i = 0; i < 4; ++i) if (cond_enable[i]) cond_force();
+    `checkh(cond_calls, 5);
+    #1;
+    `checkh(cond_concat, 4'h1);
+    cond_arg = 2'b10;
+    #1;
+    `checkh(cond_concat, 4'h8);
+    `checkh(cond_calls, 6);
+    release cond_concat[0];
+    cond_arg = 2'b11;
+    #1;
+    `checkh(cond_concat, 4'h8);
+    `checkh(cond_calls, 7);
+    #0;
+    release cond_concat[3];
+    cond_arg = 2'b01;
+    #1;
+    `checkh(cond_concat, 4'h0);
+    `checkh(cond_calls, 7);
+  end
+
 endmodule
