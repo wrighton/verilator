@@ -132,6 +132,17 @@ class SizeMember;
   endfunction
 endclass
 
+// Only some sizes of the queue of a member object leave a value for each member
+class SizeMemberTight;
+  rand SizeSub s;
+  rand bit [1:0] x, y;
+  int lo;
+  constraint c {s.q.size() inside {[lo:4]}; unique {s.q, x, y};}
+  function new;
+    s = new;
+  endfunction
+endclass
+
 // Members named as solver reserved words
 class Reserved;
   rand val_t select[3];
@@ -290,6 +301,7 @@ module t;
     automatic SizeRangeMultiDim srm = new;
     automatic SizeRangeEnum sre = new;
     automatic SizeMember smb = new;
+    automatic SizeMemberTight smt = new;
     automatic Reserved rsv = new;
     automatic SizeRangeInt sri = new;
     automatic Small sm = new;
@@ -416,6 +428,24 @@ module t;
       `checkd(ok, 1);
       `checkd(smb.s.q.size() inside {[1:3]}, 1);
       Check#(bit [1:0])::distinct({smb.x, smb.s.q}, `__LINE__);
+
+      smt.lo = 1;
+      smt.s.q = '{0, 0, 0, 0, 0};
+      ok = smt.randomize();
+      `checkd(ok, 1);
+      `checkd(smt.s.q.size() inside {[1:2]}, 1);
+      Check#(bit [1:0])::distinct({smt.x, smt.y, smt.s.q}, `__LINE__);
+
+      smt.s.q = '{0};
+      ok = smt.randomize();
+      `checkd(ok, 1);
+      `checkd(smt.s.q.size() inside {[1:2]}, 1);
+      Check#(bit [1:0])::distinct({smt.x, smt.y, smt.s.q}, `__LINE__);
+
+      smt.lo = 3;
+      smt.s.q = '{0};
+      ok = smt.randomize();
+      `checkd(ok, 0);
 
       ok = rsv.randomize();
       `checkd(ok, 1);

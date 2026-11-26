@@ -2141,6 +2141,38 @@ private:
         handle.relink(m_inGuardPredicate ? formatStateGuardValue(nodep) : getConstFormat(nodep));
         return true;
     }
+    // The size proxy of 'memberRefp', an array of a member object, if this solve resizes it
+    AstVar* memberSizeVarp(const AstMemberRef* memberRefp) const {
+        // Only a member select chain from a variable has a path; an array element of
+        // objects, e.g. objs[i].q, is not gated
+        const AstNodeExpr* rootp = memberRefp;
+        while (const AstMemberRef* const ownerp = VN_CAST(rootp, MemberRef)) {
+            rootp = ownerp->fromp();
+        }
+        if (!VN_IS(rootp, VarRef)) return nullptr;
+        const auto it = m_memberSizeVars.find(memberRefp->varp());
+        if (it == m_memberSizeVars.end()) return nullptr;
+        // A type's size proxy is used only for the particular instances this solve resizes.
+        const std::string path = buildMemberPath(memberRefp);
+        return m_sizedMemberPaths.count(path) ? it->second : nullptr;
+    }
+    // A read of 'sizeVarp', the size proxy of 'memberRefp' (see memberSizeVarp), whose array
+    // is then resized between the solves
+    AstMemberRef* newMemberSizeRefp(const AstMemberRef* memberRefp, AstVar* sizeVarp) {
+        FileLine* const fl = memberRefp->fileline();
+        if (m_gatedMemberPathsp) {
+            const std::string path = buildMemberPath(memberRefp);
+            if (!m_gatedMemberPathsp->count(path)) {
+                m_gatedMemberPathsp->emplace(
+                    path, new AstMemberRef{fl, memberRefp->fromp()->cloneTreePure(false),
+                                           memberRefp->varp()});
+            }
+        }
+        AstMemberRef* const refp
+            = new AstMemberRef{fl, memberRefp->fromp()->cloneTreePure(false), sizeVarp};
+        refp->access(VAccess::READ);
+        return refp;
+    }
     // Make the current constraint hold only while a solver-sized array keeps its size
     void gateOnCurrentSize(AstNodeExpr* arrayp) {
         // A reduction of the array, or an 'inside' it, is expanded over the elements the array
@@ -2161,29 +2193,9 @@ private:
             sizeRefp = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp,
                                      VAccess::READ};
         } else if (const AstMemberRef* const memberRefp = VN_CAST(arrayp, MemberRef)) {
-            // Only a member select chain from a variable has a path; an array element of
-            // objects, e.g. objs[i].q, is not gated
-            const AstNodeExpr* rootp = memberRefp;
-            while (const AstMemberRef* const ownerp = VN_CAST(rootp, MemberRef))
-                rootp = ownerp->fromp();
-            if (!VN_IS(rootp, VarRef)) return;
-            const auto it = m_memberSizeVars.find(memberRefp->varp());
-            // A type's size proxy is used only for the particular instances this solve resizes.
-            if (it == m_memberSizeVars.end()
-                || !m_sizedMemberPaths.count(buildMemberPath(memberRefp)))
-                return;
-            sizeVarp = it->second;
-            if (m_gatedMemberPathsp) {
-                const std::string path = buildMemberPath(memberRefp);
-                if (!m_gatedMemberPathsp->count(path))
-                    m_gatedMemberPathsp->emplace(
-                        path, new AstMemberRef{fl, memberRefp->fromp()->cloneTreePure(false),
-                                               memberRefp->varp()});
-            }
-            AstMemberRef* const refp
-                = new AstMemberRef{fl, memberRefp->fromp()->cloneTreePure(false), sizeVarp};
-            refp->access(VAccess::READ);
-            sizeRefp = refp;
+            sizeVarp = memberSizeVarp(memberRefp);
+            if (!sizeVarp) return;
+            sizeRefp = newMemberSizeRefp(memberRefp, sizeVarp);
             ownersActivep = newHandlesActivep(m_memberMap, memberRefp->fromp(), false, true);
         } else {
             return;
@@ -6882,11 +6894,32 @@ private:
         }
         return true;
     }
-    // The size variable of 'exprp' if it is a dynamic array or queue whose size is solved
-    static AstVar* solvedSizeVarp(const AstNodeExpr* exprp) {
-        const AstVarRef* const refp = VN_CAST(exprp, VarRef);
-        if (!refp || VN_IS(exprp->dtypep()->skipRefp(), AssocArrayDType)) return nullptr;
-        return VN_CAST(refp->varp()->user4p(), Var);
+    // The size variable of 'exprp' if it is a dynamic array or queue whose size is solved: of
+    // the class, or of a member object that this solve resizes (see memberSizeVarp)
+    AstVar* solvedSizeVarp(const AstNodeExpr* exprp) const {
+        if (VN_IS(exprp->dtypep()->skipRefp(), AssocArrayDType)) return nullptr;
+        if (const AstVarRef* const refp = VN_CAST(exprp, VarRef)) {
+            return VN_CAST(refp->varp()->user4p(), Var);
+        }
+        const AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef);
+        return memberRefp ? memberSizeVarp(memberRefp) : nullptr;
+    }
+    // The text of the size of 'exprp', whose size variable is 'sizeVarp' (see
+    // solvedSizeVarp), in the solver; the array is then resized between the solves, even if
+    // it has no element yet
+    AstNodeExpr* newSolvedSizeTextp(const AstNodeExpr* exprp, AstVar* sizeVarp) {
+        AstNodeExpr* sizeRefp;
+        if (const AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef)) {
+            sizeRefp = newMemberSizeRefp(memberRefp, sizeVarp);
+        } else {
+            if (m_sizeConstrainedArraysp) {
+                m_sizeConstrainedArraysp->insert(VN_AS(exprp, VarRef)->varp());
+            }
+            sizeRefp = new AstVarRef{exprp->fileline(), VN_AS(sizeVarp->user2p(), NodeModule),
+                                     sizeVarp, VAccess::READ};
+        }
+        sizeRefp->user1(true);
+        return VN_AS(iterateSubtreeReturnEdits(sizeRefp), NodeExpr);
     }
     // Listing of the leaf elements of a uniqueness constraint
     struct UniqueLeaves final {
@@ -6897,13 +6930,6 @@ private:
         int tagWidth = 0;
         AstVar* fixedVarp = nullptr;  // If tagged, number of terms not beyond a solved size
     };
-    // The text of the variable 'varp' in the solver
-    AstNodeExpr* newSolverVarTextp(FileLine* fl, AstVar* varp) {
-        AstVarRef* const refp
-            = new AstVarRef{fl, VN_AS(varp->user2p(), NodeModule), varp, VAccess::READ};
-        refp->user1(true);
-        return VN_AS(iterateSubtreeReturnEdits(refp), NodeExpr);
-    }
     // Statements appending the SMT terms of the leaf elements of 'exprp', a member of a
     // uniqueness constraint, to 'leaves'; 'inRangep' is the text of the condition for them to
     // be within the solved size of the array they are in, if any
@@ -6919,14 +6945,7 @@ private:
         }
         if (isUniqueArrayDType(dtypep)) {
             AstVar* const sizeVarp = leaves.tagWidth ? solvedSizeVarp(exprp) : nullptr;
-            if (sizeVarp) {
-                // Solve twice even if the array has no element yet
-                if (m_sizeConstrainedArraysp) {
-                    m_sizeConstrainedArraysp->insert(VN_AS(exprp, VarRef)->varp());
-                }
-            } else {
-                gateOnCurrentSize(exprp);
-            }
+            if (!sizeVarp) gateOnCurrentSize(exprp);
             const AstAssocArrayDType* const adtypep = VN_CAST(dtypep, AssocArrayDType);
             AstNodeDType* const idxDtypep = adtypep ? adtypep->keyDTypep() : exprp->findIntDType();
             AstVar* const idxVarp
@@ -6955,7 +6974,7 @@ private:
                 inRangep = new AstSFormatF{fl, "(bvult #x%8x %s)", false,
                                            AstNode::addNext<AstNodeExpr, AstNodeExpr>(
                                                new AstVarRef{fl, idxVarp, VAccess::READ},
-                                               newSolverVarTextp(fl, sizeVarp))};
+                                               newSolvedSizeTextp(exprp, sizeVarp))};
             }
             return new AstForeach{fl, headerp, newUniqueLeafAppendsp(selp, leaves, inRangep)};
         }
@@ -7051,7 +7070,7 @@ private:
             if (itemp->dtypep()->skipRefp()->subDTypep()->isNonPackedArray()) continue;
             sizeSump = new AstSFormatF{fl, "(bvadd %s ((_ zero_extend 32) %s))", false,
                                        AstNode::addNext<AstNodeExpr, AstNodeExpr>(
-                                           sizeSump, newSolverVarTextp(fl, sizeVarp))};
+                                           sizeSump, newSolvedSizeTextp(itemp, sizeVarp))};
         }
         for (AstVar* const varp : {leaves.countVarp, leaves.fixedVarp}) {
             if (!varp) continue;
