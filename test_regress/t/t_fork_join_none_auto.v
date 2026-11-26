@@ -175,8 +175,9 @@ module t;
   initial begin
     for (int i = 0; i < N; i++) begin
       fork
-        add(i);
-        add(i + 10);
+        automatic int k = i;
+        add(k);
+        add(k + 10);
       join_none
       fork
         add(i + 100);
@@ -184,6 +185,60 @@ module t;
     end
     #1;
     `checkd(add_sum, 2 * (3 * (N * (N - 1) / 2) + 110 * N));
+  end
+
+  // Test: processes started in a loop share a variable of their parent, and each has its own
+  // copy of the fork's variable, also when it waits on a nested fork
+  int shared_seen[N];
+  int own_seen[N];
+  initial begin
+    automatic int gen = 0;
+    for (int i = 0; i < N; i++) begin
+      fork
+        automatic int id = i;
+        begin
+          fork
+            #1;
+          join
+          own_seen[id] = id + 1;
+          shared_seen[id] = gen;
+        end
+      join_none
+      gen = i;
+    end
+    gen = 100;
+    #2;
+    for (int i = 0; i < N; i++) begin
+      `checkd(own_seen[i], i + 1);
+      `checkd(shared_seen[i], 100);
+    end
+  end
+
+  // Test: concurrent calls of a task each share their own variable with the process they start
+  int stage_seen[N];
+  task automatic stage_after(int idx);
+    int stage = 0;
+    fork
+      begin
+        fork
+          #1;
+          #2;
+        join_any
+        stage_seen[idx] = stage;
+      end
+    join_none
+    stage = idx + 1;
+    #3;
+  endtask
+  initial begin
+    for (int i = 0; i < N; i++) begin
+      fork
+        automatic int k = i;
+        stage_after(k);
+      join_none
+    end
+    #4;
+    for (int i = 0; i < N; i++) `checkd(stage_seen[i], i + 1);
   end
 
   initial begin

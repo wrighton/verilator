@@ -18,7 +18,7 @@
 //
 // Each module:
 //      Look for FORKs [JOIN_NONE]/[JOIN_ANY]
-//          VARREF(var) -> MEMBERREF(var->name, VARREF(dynscope)) (for write/RW refs)
+//          VARREF(var) -> MEMBERREF(var->name, VARREF(dynscope)) (for refs a copy can't serve)
 //          FORK(stmts) -> TASK(stmts), FORK(TASKREF(inits))
 //
 // FORKs that spawn tasks which might outlive their parents require those
@@ -46,6 +46,7 @@
 
 #include "V3AstNodeExpr.h"
 #include "V3MemberMap.h"
+#include "V3Stats.h"
 
 #include <limits>
 #include <set>
@@ -241,6 +242,45 @@ private:
 };
 
 //######################################################################
+// Find the variables that can change after their initialization, which forked processes
+// therefore cannot copy (see DynScopeVisitor::shareWrittenVars)
+
+class ForkWrittenVisitor final : public VNVisitorConst {
+    // NODE STATE
+    // AstVar::user4()          -> bool.  Written other than by its initialization (set here)
+
+    // VISITORS
+    void visit(AstInitialAutomaticStmt* nodep) override {
+        for (AstNodeStmt* const stmtp : nodep->stmtspList()) {
+            AstNodeAssign* const assignp = VN_CAST(stmtp, NodeAssign);
+            if (assignp && VN_IS(assignp->lhsp(), VarRef)) {
+                // Initializes the variable on entry to its block, before any fork in it
+                iterateAndNextConstNull(assignp->rhsp());
+            } else {
+                iterateConst(stmtp);
+            }
+        }
+    }
+    void visit(AstMemberRef* nodep) override {
+        // A write to a member of an object changes the object, not the variable with its handle
+        AstNodeExpr* fromp = nodep->fromp();
+        while (const AstNodeSel* const selp = VN_CAST(fromp, NodeSel)) {
+            iterateAndNextConstNull(selp->bitp());
+            fromp = selp->fromp();
+        }
+        if (!VN_IS(fromp, VarRef)) iterateAndNextConstNull(fromp);
+    }
+    void visit(AstVarRef* nodep) override {
+        if (nodep->access().isWriteOrRW()) nodep->varp()->user4(true);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit ForkWrittenVisitor(AstNetlist* nodep) { iterateConst(nodep); }
+};
+
+//######################################################################
 // Dynamic scope visitor, creates classes and objects for dynamic scoping of variables and
 // replaces references to variables that need a dynamic scope with references to object's
 // members
@@ -249,12 +289,15 @@ class DynScopeVisitor final : public VNVisitor {
     // NODE STATE
     // AstVar::user1()          -> uint64_t.  timing-control fork nesting level of that variable
     // AstVar::user3()          -> uint64_t.  surviving fork nesting level of that variable
-    // AstVarRef::user2()       -> bool. Node is a class handle reference. The handle gets
-    //                                       modified in the context of this reference.
+    // AstVar::user2()          -> bool.  A process of a fork that captures values refers to it
+    // AstVar::user4()          -> bool.  Written other than by its initialization
+    //                                    (ForkWrittenVisitor)
+    // AstVarRef::user2()       -> bool.  Reads in a process of a fork, which may use a copy
     // AstAssignDly::user2()    -> bool.  Already visited
     const VNUser1InUse m_inuser1;
     const VNUser2InUse m_inuser2;
     const VNUser3InUse m_inuser3;
+    const VNUser4InUse m_inuser4;
 
     // STATE
     AstNodeModule* m_modp = nullptr;  // Module we are currently under
@@ -267,6 +310,8 @@ class DynScopeVisitor final : public VNVisitor {
                                         // i.e. not immediately followed by 'disable fork'
     bool m_afterTimingControl = false;  // A timing control might've be executed in the current
                                         // process
+    uint64_t m_capturesDepth = 0;  // m_forkDepth in the innermost fork that captures values
+    VDouble0 m_statVars;  // Statistic tracking: variables in dynamic scopes
     bool m_inNbaLhs = false;  // Under the destination of an NBA, diagnosed by V3WidthCommit
     size_t m_id = 0;  // Unique ID for a frame
     size_t m_class_id = 0;  // Unique ID for a frame class
@@ -320,17 +365,45 @@ class DynScopeVisitor final : public VNVisitor {
         auto r = m_frames.emplace(nodep, framep);
         if (r.second) m_frameOrder.push_back(nodep);
     }
+
+    // Whether the reference is in a process of a fork in the scope of its automatic variable
+    bool inForkProcess(const AstVarRef* refp) const {
+        return m_forkDepth > refp->varp()->user1() && refp->varp()->lifetime().isAutomatic();
+    }
+    // Whether a fork between the variable and the reference captures values
+    bool inCapturingFork(const AstVarRef* refp) const {
+        return m_capturesDepth > refp->varp()->user1();
+    }
+    // Whether the reference needs the variable itself, through the dynamic scope, rather than a
+    // copy made when its process is spawned: to write it, or, conservatively, to read a variable
+    // of a task or function after a timing control or call. A process of a fork that captures
+    // values, which runs an NBA or an assertion action, uses the values when it is spawned, and
+    // refers to a variable of a task or function, which can end before the process, only to
+    // write it.
     bool needsDynScope(const AstVarRef* refp) const {
-        const AstVar* const varp = refp->varp();
-        return
-            // Can this variable escape the scope
-            ((m_forkDepth > varp->user1()) && varp->isFuncLocal())
-            && varp->lifetime().isAutomatic()
-            && (
-                // Is it mutated
-                (varp->isClassHandleValue() ? refp->user2() : refp->access().isWriteOrRW())
-                // Or is it after a timing-control event
-                || m_afterTimingControl);
+        if (!inForkProcess(refp)) return false;
+        const bool funcLocal = refp->varp()->isFuncLocal();
+        if (inCapturingFork(refp)) return funcLocal && refp->access().isWriteOrRW();
+        return refp->access().isWriteOrRW() || (funcLocal && m_afterTimingControl);
+    }
+
+    // A process of a fork shares the variables of its parent (IEEE 1800-2023 6.21). One that only
+    // reads a variable uses a copy made when it is spawned if that surely holds the same value:
+    // the variable has no write other than its initialization, which runs on entry to its block,
+    // before any fork in it. A write elsewhere can come before the read, as a join_none process
+    // starts only once its parent blocks (IEEE 1800-2023 9.3.2), and a loop can reach the read
+    // again. A process of a fork that captures values would read the variable late through the
+    // dynamic scope, so a variable it refers to keeps being copied.
+    void shareWrittenVars() {
+        for (AstNode* const orderp : m_frameOrder) {
+            const AstVarRef* const refp = VN_CAST(orderp, VarRef);
+            if (!refp || !refp->user2()) continue;
+            AstVar* const varp = refp->varp();
+            if (!varp->user4() || varp->user2()) continue;
+            ForkDynScopeFrame* const framep = frameOf(varp);
+            if (!framep->instance().initialized()) framep->createInstancePrototype();
+            framep->captureVarInsert(varp);
+        }
     }
 
     // VISITORS
@@ -356,13 +429,7 @@ class DynScopeVisitor final : public VNVisitor {
     void visit(AstFork* nodep) override {
         VL_RESTORER(m_forkDepth);
         VL_RESTORER(m_survivingForkDepth);
-        if (!nodep->joinType().join()) {
-            ++m_forkDepth;
-            // A following 'disable fork' kills the children before the enclosing process
-            // continues, so they cannot outlive the task
-            if (!VN_IS(nodep->nextp(), DisableFork)) ++m_survivingForkDepth;
-        }
-
+        VL_RESTORER(m_capturesDepth);
         const bool oldAfterTimingControl = m_afterTimingControl;
 
         ForkDynScopeFrame* framep = nullptr;
@@ -380,8 +447,16 @@ class DynScopeVisitor final : public VNVisitor {
                 bindNodeToDynScope(varp, framep);
             }
         }
+        // The parent runs the initializations of the fork's variables, before the spawns
         iterateAndNextNull(nodep->stmtsp());
 
+        if (!nodep->joinType().join()) {
+            ++m_forkDepth;
+            // A following 'disable fork' kills the children before the enclosing process
+            // continues, so they cannot outlive the task
+            if (!VN_IS(nodep->nextp(), DisableFork)) ++m_survivingForkDepth;
+            if (nodep->capturesValues()) m_capturesDepth = m_forkDepth;
+        }
         for (AstNode* const stmtp : nodep->forkspList()) {
             m_afterTimingControl = false;
             iterate(stmtp);
@@ -404,7 +479,6 @@ class DynScopeVisitor final : public VNVisitor {
         bindNodeToDynScope(nodep, framep);
     }
     void visit(AstVarRef* nodep) override {
-        if (nodep->access().isWriteOrRW() && nodep->isClassHandleValue()) nodep->user2(true);
         ForkDynScopeFrame* const framep = frameOf(nodep->varp());
         if (!framep) return;
         if (needsDynScope(nodep)) {
@@ -437,6 +511,12 @@ class DynScopeVisitor final : public VNVisitor {
             }
             if (!framep->instance().initialized()) framep->createInstancePrototype();
             framep->captureVarInsert(nodep->varp());
+        } else if (inForkProcess(nodep)) {
+            if (inCapturingFork(nodep)) {
+                nodep->varp()->user2(true);
+            } else {
+                nodep->user2(true);
+            }
         }
         bindNodeToDynScope(nodep, framep);
     }
@@ -450,6 +530,8 @@ class DynScopeVisitor final : public VNVisitor {
             // Put it in a fork to prevent lifetime issues with the local
             FileLine* const flp = nodep->fileline();
             AstFork* const forkp = new AstFork{flp, VJoinType::JOIN_NONE};
+            // The NBA uses the values variables have when it runs
+            forkp->capturesValues(true);
             nodep->replaceWith(forkp);
             forkp->addForksp(new AstForkItem{flp, nodep});
             UINFO(9, "assign new fork " << forkp);
@@ -472,8 +554,11 @@ class DynScopeVisitor final : public VNVisitor {
 public:
     // CONSTRUCTORS
     explicit DynScopeVisitor(AstNetlist* nodep) {
+        { ForkWrittenVisitor{nodep}; }
         // Create Dynamic scope class prototypes and objects
         visit(nodep);
+
+        shareWrittenVars();
 
         // Commit changes to AST
         bool typesAdded = false;
@@ -490,12 +575,15 @@ public:
             }
             if (AstVarRef* const refp = VN_CAST(frameIt->first, VarRef)) {
                 if (framep->captured(refp->varp())) replaceWithMemberRef(refp, framep->instance());
+            } else if (AstVar* const varp = VN_CAST(frameIt->first, Var)) {
+                if (framep->captured(varp)) ++m_statVars;
             }
         }
 
         if (typesAdded) v3Global.rootp()->typeTablep()->repairCache();
     }
     ~DynScopeVisitor() override {
+        V3Stats::addStat("Fork, variables in dynamic scopes", m_statVars);
         std::set<ForkDynScopeFrame*> frames;
         for (auto node_frame : m_frames) frames.insert(node_frame.second);
         for (auto* framep : frames) delete framep;

@@ -2461,10 +2461,12 @@ void AstFork::dump(std::ostream& str) const {
     Super::dump(str);
     str << " [" << joinType() << "]";
     if (immediateStart()) str << " [IMMEDIATE]";
+    if (capturesValues()) str << " [CAPTURES]";
 }
 void AstFork::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "joinType", joinType().ascii());
     dumpJsonBoolFuncIf(str, immediateStart);
+    dumpJsonBoolFuncIf(str, capturesValues);
     dumpJsonGen(str);
 }
 void AstForkItem::dump(std::ostream& str) const {
