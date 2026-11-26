@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2026 PlanV GmbH
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 // Test: System functions ($onehot, $onehot0, $countbits, $clog2) inside
 // constraint blocks (IEEE 1800-2023 18.5.12)
 
@@ -25,6 +30,12 @@ endclass
 class test_countbits_zeros;
   rand bit [7:0] value;
   constraint c_bits {$countbits(value, '0) == 6;}  // 6 zeros = 2 ones
+endclass
+
+class test_countbits_all;
+  rand bit [6:0] value;
+  rand int count;
+  constraint c_bits {count == $countbits(value, '0, '1);}
 endclass
 
 class test_clog2;
@@ -88,6 +99,17 @@ module t;
         $display("FAIL: $clog2 data_width=%0d, addr_bits=%0d, expected=%0d", cl.data_width,
                  cl.addr_bits, $clog2(cl.data_width));
         ok = 1'b0;
+      end
+    end
+
+    // Test $countbits counting every bit
+    begin
+      automatic test_countbits_all cba = new;
+      int randomize_result;
+      repeat (20) begin
+        randomize_result = cba.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(cba.count, $countbits(cba.value, '0, '1));
       end
     end
 
