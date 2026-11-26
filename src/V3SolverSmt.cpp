@@ -2128,9 +2128,10 @@ private:
         return exprp;
     }
     AstSFormatF* editSMT(AstNodeExpr* nodep, AstNodeExpr* lhsp = nullptr,
-                         AstNodeExpr* rhsp = nullptr, AstNodeExpr* thsp = nullptr) {
+                         AstNodeExpr* rhsp = nullptr, AstNodeExpr* thsp = nullptr,
+                         std::string smtExpr = "") {
         // Replace incomputable (result-dependent) expression with SMT expression
-        std::string smtExpr = nodep->emitSMT();  // Might need child width (AstExtend)
+        if (smtExpr.empty()) smtExpr = nodep->emitSMT();  // Might need child width (AstExtend)
         if (smtExpr == "") {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported expression inside constraint");
             return nullptr;
@@ -3948,6 +3949,42 @@ private:
     void visit(AstShiftL* nodep) override { handleShift(nodep); }
     void visit(AstShiftR* nodep) override { handleShift(nodep); }
     void visit(AstShiftRS* nodep) override { handleShift(nodep); }
+    // Division and modulus by zero give x (IEEE 1800-2023 11.4.3), which as a 2-state value is
+    // 0 (11.3.4), as in procedural code, while SMT-LIB defines other results. The operands are
+    // bound by a let, so the divisor is encoded once but read twice, and no operand is read in
+    // the scope of the let's names.
+    void handleDivMod(AstNodeBiop* nodep) {
+        if (editFormat(nodep)) return;
+        // A nonzero constant divisor needs no guard, and the plain operation stays linear. A
+        // computable divisor, as a negated literal or a parameter, is folded first, and used
+        // folded only if it gives a 2-state constant.
+        if (!VN_IS(nodep->rhsp(), Const) && !nodep->rhsp()->user1()) {
+            AstNodeExpr* const foldedp
+                = V3Const::constifyEdit(nodep->rhsp()->cloneTreePure(false));
+            const AstConst* const foldedConstp = VN_CAST(foldedp, Const);
+            if (foldedConstp && !foldedConstp->num().isAnyXZ()) {
+                pushDeletep(nodep->rhsp()->unlinkFrBack());
+                nodep->rhsp(foldedp);
+            } else {
+                VL_DO_DANGLING(pushDeletep(foldedp), foldedp);
+            }
+        }
+        const AstConst* const constp = VN_CAST(nodep->rhsp(), Const);
+        if (constp && !constp->num().isEqZero()) {
+            editSMT(nodep, nodep->lhsp(), nodep->rhsp());
+            return;
+        }
+        const std::string zero = "(_ bv0 " + cvtToStr(nodep->width()) + ")";
+        const std::string opExpr = VString::replaceSubstr(
+            VString::replaceSubstr(nodep->emitSMT(), "%l", "__Vdividend"), "%r", "__Vdivisor");
+        editSMT(nodep, nodep->lhsp(), nodep->rhsp(), nullptr,
+                "(let ((__Vdividend %l) (__Vdivisor %r)) (ite (= __Vdivisor " + zero + ") " + zero
+                    + " " + opExpr + "))");
+    }
+    void visit(AstDiv* nodep) override { handleDivMod(nodep); }
+    void visit(AstDivS* nodep) override { handleDivMod(nodep); }
+    void visit(AstModDiv* nodep) override { handleDivMod(nodep); }
+    void visit(AstModDivS* nodep) override { handleDivMod(nodep); }
     AstNodeExpr* lowerLayoutOperand(AstNodeExpr* operandp) {
         VL_RESTORER(m_layoutRootp);
         VL_RESTORER(m_conditionp);
