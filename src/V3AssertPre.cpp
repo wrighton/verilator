@@ -251,6 +251,13 @@ private:
         V3AssertCommon::checkSampledDType(nodep, exprp->dtypep(), allowUnpacked);
     }
 
+    // The current operand of a value change function is sampled, also in a procedure
+    // (IEEE 1800-2023 16.9.3)
+    static AstSampled* newSampledClone(AstNodeExpr* exprp) {
+        return new AstSampled{exprp->fileline(), exprp->cloneTreePure(false), exprp->dtypep(),
+                              true};
+    }
+
     AstSenTree* newSenTree(AstNode* nodep, AstSenTree* useTreep = nullptr,
                            AstNodeCoverOrAssert* cassertp = nullptr) {
         // Create sentree based on clocked or default clock
@@ -814,7 +821,7 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstAnd{fl, pastp, new AstNot{fl, exprp->cloneTreePure(false)}};
+        exprp = new AstAnd{fl, pastp, new AstNot{fl, newSampledClone(exprp)}};
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -909,7 +916,7 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstAnd{fl, new AstNot{fl, pastp}, exprp->cloneTreePure(false)};
+        exprp = new AstAnd{fl, new AstNot{fl, pastp}, newSampledClone(exprp)};
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -1049,7 +1056,7 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstEq{fl, pastp, exprp->cloneTreePure(false)};
+        exprp = new AstEq{fl, pastp, newSampledClone(exprp)};
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
