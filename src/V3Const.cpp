@@ -3128,10 +3128,27 @@ class ConstVisitor final : public VNVisitor {
                     }
                     nodep->rhsp(srcp);
                     VL_DO_DANGLING(pushDeletep(streamp), streamp);
-                } else {
+                } else if (VN_IS(srcDTypep, UnpackArrayDType)) {
                     streamp->lhsp(new AstCvtArrayToPacked{srcp->fileline(), srcp->unlinkFrBack(),
                                                           dstDTypep});
                     streamp->dtypeFrom(dstDTypep);
+                } else {
+                    // Reverse the blocks of the stream of its run-time size, then left-justify
+                    // it in the target (IEEE 1800-2023 11.4.14)
+                    FileLine* const flp = srcp->fileline();
+                    const int elemWidth = srcDTypep->subDTypep()->width();
+                    AstNodeDType* const queueDTypep = srcp->dtypep();
+                    AstNodeExpr* const reversedp
+                        = new AstCvtArrayToArray{flp,
+                                                 srcp->unlinkFrBack(),
+                                                 queueDTypep,
+                                                 true,
+                                                 VN_AS(streamp->rhsp(), Const)->toSInt(),
+                                                 elemWidth,
+                                                 elemWidth};
+                    streamp->unlinkFrBack();
+                    nodep->rhsp(new AstCvtArrayToPacked{flp, reversedp, dstDTypep});
+                    VL_DO_DANGLING(pushDeletep(streamp), streamp);
                 }
             }
         } else if (m_doV && replaceAssignMultiSel(nodep)) {
