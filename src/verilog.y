@@ -8077,6 +8077,9 @@ checker_or_generate_item<nodep>:  // ==IEEE: checker_or_generate_item
         |       always_construct                        { $$ = $1; }
         |       final_construct                         { $$ = $1; }
         |       assertion_item                          { $$ = $1; }
+        //                      // IEEE: concurrent_assertion_item: checker_instantiation
+        //                      // Like in a module, also parses other instances, rejected later
+        |       etcInst                                 { $$ = $1; }
         |       continuous_assign                       { $$ = $1; }
         |       checker_generate_item                   { $$ = $1; }
         ;

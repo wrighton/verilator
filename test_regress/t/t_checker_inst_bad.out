@@ -1,0 +1,8 @@
+%Error: t/t_checker_inst_bad.v:14:7: Instance of module 'sub' in a checker, which can instantiate only checkers (IEEE 1800-2023 17.2).
+   14 |   sub u_sub ();   
+      |       ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_checker_inst_bad.v:15:7: Instance of interface 'ifc' in a checker, which can instantiate only checkers (IEEE 1800-2023 17.2).
+   15 |   ifc u_ifc ();   
+      |       ^~~~~
+%Error: Exiting due to
