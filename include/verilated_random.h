@@ -377,7 +377,9 @@ class VlRandomizer VL_NOT_FINAL {
         QData lo;
         QData hi;
         QData weight;
-        QData divisor;  // Original range size for :/, otherwise 1
+        // Per value: the original :/ size dividing the weight, else 1. Range
+        // mass: the original := size multiplying the weight, else 1; 0 is 2^64.
+        QData scale;
     };
     using FastRanges = std::vector<FastRange>;
     struct FastConstraint final {
@@ -386,6 +388,7 @@ class VlRandomizer VL_NOT_FINAL {
         bool isSigned;
         bool isSoft;
         bool isDist;
+        bool rangeMass = false;  // IEEE 1800-2023 dist: each item weighs as a whole
         bool isEnum;  // This item supplies the complete enum domain
         FastRanges ranges;
         int viewLsb = 0;  // Constant extraction offset in physical storage
@@ -568,19 +571,21 @@ public:
     // METHODS
     /// Start one original, univariate constraint, bound to the actual SV storage.
     template <typename T>
-    void fast_begin(T& var, int width, bool isSigned, bool isSoft, bool isDist, bool isEnum,
-                    int viewLsb, int viewWidth) {
-        m_fastConstraints.push_back({&var, width, isSigned, isSoft, isDist, isEnum, {}});
+    void fast_begin(T& var, int width, bool isSigned, bool isSoft, bool isDist, bool rangeMass,
+                    bool isEnum, int viewLsb, int viewWidth) {
+        m_fastConstraints.push_back(
+            {&var, width, isSigned, isSoft, isDist, rangeMass, isEnum, {}});
         m_fastConstraints.back().viewLsb = viewLsb;
         m_fastConstraints.back().viewWidth = viewWidth;
     }
-    /// Add an interval and its per-value rational weight to the current constraint.
-    void fast_range(QData lo, QData hi, QData weight, QData divisor) {
+    /// Add an interval, its weight and the weight's scale to the current constraint.
+    void fast_range(QData lo, QData hi, QData weight, QData scale) {
         if (lo <= hi && weight) {
-            if (!divisor) {
+            FastConstraint& constraint = m_fastConstraints.back();
+            if (!scale && !constraint.rangeMass) {
                 m_fastDisabled = true;  // An original :/ cardinality of 2^64
             } else {
-                m_fastConstraints.back().ranges.push_back({lo, hi, weight, divisor});
+                constraint.ranges.push_back({lo, hi, weight, scale});
             }
         }
     }

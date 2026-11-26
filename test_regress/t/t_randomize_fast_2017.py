@@ -10,12 +10,10 @@
 import vltest_bootstrap
 
 test.scenarios('vlt')
-if not test.have_solver:
-    test.skip('No constraint solver installed')
+test.top_filename = 't/t_randomize_fast.v'
 
-test.compile()
-solver_log = test.obj_dir + '/solver.log'
-test.execute(all_run_flags=['+verilator+solver+file+' + solver_log])
-# Falling back is required, rather than approximating the dist weights.
-test.file_grep(solver_log, r'\(check-sat\)')
+# IEEE 1800-2017 gives each value of a partly excluded dist range its weight
+test.compile(verilator_flags2=['--default-language 1800-2017', '+define+TEST_1800_2017'])
+test.execute(run_env='VERILATOR_SOLVER=/bin/false', all_run_flags=['+verilator+wno+unsatconstr+1'])
+
 test.passes()

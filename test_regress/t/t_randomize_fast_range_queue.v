@@ -64,10 +64,8 @@ module t_range_queue;
         default: `stop;
       endcase
     end
-    // Original band sizes205/1638/205 give per-value weights1638:205:1638.
-    `check_range(counts[0], 1638 * N / 3481 - 200, 1638 * N / 3481 + 200);
-    `check_range(counts[1], 205 * N / 3481 - 200, 205 * N / 3481 + 200);
-    `check_range(counts[2], 1638 * N / 3481 - 200, 1638 * N / 3481 + 200);
+    // The three :/ bands keep their whole range weights after filtering.
+    foreach (counts[i]) `check_range(counts[i], N / 3 - 200, N / 3 + 200);
     busy.delete();
     `checkd(picker.pick(value, busy, 0), 1);
     `check_range(value, 0, 2047);
