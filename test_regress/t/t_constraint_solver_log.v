@@ -14,6 +14,26 @@ class Packet;
   constraint a {one > 0 && one < 2;}
 endclass
 
+// A product of two random variables
+class Factors;
+  rand bit [15:0] factor_a;
+  rand bit [15:0] factor_b;
+  constraint c {
+    factor_a * factor_b == 32'd391;
+    factor_a > 16'd1;
+    factor_b > 16'd1;
+  }
+endclass
+
+// Products of a random variable and a literal
+class Tripled;
+  rand bit [7:0] tripled;
+  constraint c {
+    tripled * 8'd3 == 8'd9;
+    8'd5 * tripled == 8'd15;
+  }
+endclass
+
 // Operators over the elements of a one-element container: SMT-LIB 2.6 has no
 // single-operand application of a bit-vector operator, so each is the element's term
 class Single;
@@ -69,6 +89,21 @@ module t;
     v = p.randomize();
     `checkd(v, 1);
     `checkd(p.one, 1);
+
+    begin
+      automatic Factors f = new;
+      v = f.randomize();
+      `checkd(v, 1);
+      `checkd(f.factor_a * f.factor_b, 391);
+    end
+
+    begin
+      automatic Tripled t = new;
+      v = t.randomize();
+      `checkd(v, 1);
+      `checkd(t.tripled, 3);
+    end
+
     begin
       Long l;
       l = new;

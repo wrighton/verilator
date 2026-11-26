@@ -3322,13 +3322,34 @@ bool VlRandomizer::solveBeforeBits(const SolveBeforeRef& ref, SolveBeforeBits& b
     return true;
 }
 
+// Whether a term multiplies, divides or takes the remainder of two operands neither of
+// which is a literal. Either logic is sound, so a term this misreads only costs speed.
+static bool smtHasNonlinear(const std::string& term) {
+    for (const char* const opp :
+         {"(bvmul ", "(bvudiv ", "(bvurem ", "(bvsdiv ", "(bvsrem ", "(bvsmod "}) {
+        const std::string op{opp};
+        for (size_t pos = term.find(op); pos != std::string::npos; pos = term.find(op, pos + 1)) {
+            size_t i = pos + op.size();
+            if (term[i] == '#') continue;
+            // Past the first operand, an atom or a parenthesized term, to the second
+            for (int depth = 0; i < term.size() && (depth || term[i] != ' '); ++i) {
+                if (term[i] == '(') ++depth;
+                if (term[i] == ')') --depth;
+            }
+            if (i + 1 < term.size() && term[i + 1] != '#') return true;
+        }
+    }
+    return false;
+}
+
 const char* VlRandomizer::solverLogic() const {
     if (constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)) {
         return "ALL";
     }
     // Without arrays, QF_BV lets z3 answer the incremental checks of the sampling with
     // its bit-blasting SAT solver, which is several times faster than the SMT core it
-    // uses for QF_ABV. Phased solves keep phasedLogic(): their XOR rounds solve slower
+    // uses for QF_ABV, but many times slower once a product or quotient of variables has
+    // to be inverted. Phased solves keep phasedLogic(): their XOR rounds solve slower
     // with QF_BV.
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) return "QF_ABV";
@@ -3337,6 +3358,7 @@ const char* VlRandomizer::solverLogic() const {
     for (const auto* const constraintsp : {&m_constraints, &m_softConstraints}) {
         for (const std::string& constraint : *constraintsp) {
             if (constraint.find("(Array ") != std::string::npos) return "QF_ABV";
+            if (smtHasNonlinear(constraint)) return "QF_ABV";
         }
     }
     return "QF_BV";
