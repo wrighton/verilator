@@ -1806,6 +1806,7 @@ class AstPin final : public AstNode {
     bool m_param = false;  // Pin connects to parameter
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
+    bool m_eventExpr = false;  // Connected to an event expression, which is not kept
 public:
     AstPin(FileLine* fl, int pinNum, const string& name, AstNode* exprp)
         : ASTGEN_SUPER_Pin(fl)
@@ -1835,6 +1836,8 @@ public:
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }
     void svImplicit(bool flag) { m_svImplicit = flag; }
+    bool eventExpr() const { return m_eventExpr; }
+    void eventExpr(bool flag) { m_eventExpr = flag; }
 };
 class AstPort final : public AstNode {
     // A port (in/out/inout) on a module

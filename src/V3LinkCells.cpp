@@ -730,7 +730,19 @@ class LinkCellsVisitor final : public VNVisitor {
                     pinp->v3error("Mixing positional and .*/named instantiation connection"
                                   " (IEEE 1800-2023 23.3.2)");
                 }
-                if (!pinp->exprp()) {
+                if (pinp->eventExpr()) {
+                    // Only a checker port may be connected to an event expression
+                    // (IEEE 1800-2023 17.3, 23.3.2)
+                    const AstModule* const modp = VN_CAST(nodep->modp(), Module);
+                    if (modp && modp->isChecker()) {
+                        pinp->v3warn(E_UNSUPPORTED, "Unsupported: event expression as an"
+                                                    " instance port connection"
+                                                    " (IEEE 1800-2023 17.3).");
+                    } else {
+                        pinp->v3error("Event expression is not a legal port connection of a"
+                                      " module instance (IEEE 1800-2023 23.3.2).");
+                    }
+                } else if (!pinp->exprp()) {
                     if (pinp->name().substr(0, 11) == "__pinNumber") {
                         pinp->v3warn(PINNOCONNECT,
                                      "Instance pin is not connected: " << pinp->prettyNameQ());
