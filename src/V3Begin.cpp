@@ -56,6 +56,9 @@ class BeginVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Current module
     AstCellInline* m_inlinesp = nullptr;  // AstCellInlines to add to m_modp
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
+    std::string m_ftaskName;  // Current function/task's name, as declared
+    // Blocks of the current function/task each of its variables is declared in
+    std::unordered_map<const AstVar*, std::string> m_ftaskVarScopes;
     AstNodeProcedure* m_procedurep = nullptr;  // Current procedure
     AstNode* m_liftedp = nullptr;  // Local nodes we are lifting into m_ftaskp
     string m_displayScope;  // Name of %m in $display/AstScopeName
@@ -156,6 +159,9 @@ class BeginVisitor final : public VNVisitor {
     void visit(AstNodeFTask* nodep) override {
         if (nodep->user1SetOnce()) return;
         UINFO(8, "  " << nodep);
+        VL_RESTORER_COPY(m_ftaskName);
+        m_ftaskName = nodep->name();
+        VL_RESTORER_CLEAR(m_ftaskVarScopes);
         // Rename it
         if (m_unnamedScope != "") {
             nodep->name(dot(m_unnamedScope, nodep->name()));
@@ -249,6 +255,7 @@ class BeginVisitor final : public VNVisitor {
     }
     void visit(AstVar* nodep) override {
         if (nodep->user1SetOnce()) return;
+        if (m_ftaskp) m_ftaskVarScopes.emplace(nodep, m_unnamedScope);
         // If static variable, move it outside a function.
         if (nodep->lifetime().isStatic() && m_ftaskp) {
             const std::string newName
@@ -348,8 +355,36 @@ class BeginVisitor final : public VNVisitor {
         if (nodep->user1SetOnce()) return;
         if (nodep->varp()->isParam()) m_paramRefps.push_back(nodep);
     }
+    // Whether a reference in a function/task is to one of its variables by a path from within:
+    // a tail of its name and the variable's blocks
+    bool isFTaskLocalPath(const AstVarXRef* refp) const {
+        const auto it = m_ftaskVarScopes.find(refp->varp());
+        if (it == m_ftaskVarScopes.end()) return false;
+        // An automatic variable's blocks enclose the reference, so it is of the current
+        // activation; a static variable is the same one from anywhere (IEEE 1800-2023 6.21)
+        const std::string& varScope = it->second;
+        if (refp->varp()->lifetime().isAutomatic() && !varScope.empty()
+            && m_unnamedScope != varScope
+            && !VString::startsWith(m_unnamedScope, varScope + "__DOT__")) {
+            return false;
+        }
+        // The path is a tail of the function/task's name and the variable's blocks
+        const std::string path = VString::replaceSubstr(
+            VString::dot(m_ftaskName, "__DOT__", varScope), "__DOT__", ".");
+        const std::string& dotted = refp->dotted();
+        return path == dotted || VString::endsWith(path, "." + dotted);
+    }
     void visit(AstVarXRef* nodep) override {
         if (nodep->user1SetOnce()) return;
+        if (m_ftaskp && isFTaskLocalPath(nodep)) {
+            // The variable itself, as it is in the same function/task
+            AstVarRef* const newp
+                = new AstVarRef{nodep->fileline(), nodep->varp(), nodep->access()};
+            newp->user1(true);
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         if (nodep->varp()->isParam()) m_paramRefps.push_back(nodep);
         const std::string& scope = m_ftaskp ? m_ftaskNamedScope : m_namedScope;
         if (scope != "" && nodep->inlinedDots() == "") nodep->inlinedDots(scope);
