@@ -1,0 +1,14 @@
+%Error: t/t_constraint_unique_randc_bad.v:20:35: Unique constraint member references randc variable 'r' (IEEE 1800-2023 18.5.4).
+   20 |   constraint scalar_c {unique {x, r, y};}
+      |                                   ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_constraint_unique_randc_bad.v:21:36: Unique constraint member references randc variable 'ra' (IEEE 1800-2023 18.5.4).
+   21 |   constraint array_c {unique {arr, ra};}
+      |                                    ^~
+%Error: t/t_constraint_unique_randc_bad.v:22:38: Unique constraint member references randc variable 'ra' (IEEE 1800-2023 18.5.4).
+   22 |   constraint element_c {unique {x, ra[1]};}
+      |                                      ^
+%Error: t/t_constraint_unique_randc_bad.v:23:34: Unique constraint member references randc variable 'rc' (IEEE 1800-2023 18.5.4).
+   23 |   constraint member_c {unique {s.rc, y};}
+      |                                  ^~
+%Error: Exiting due to
