@@ -1,0 +1,72 @@
+%Error: t/t_sequence_match_item_empty_bad.v:16:19: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   16 |     a ##1 (b[*0:1], v = 1) ##1 c |-> v == 1;
+      |                   ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sequence_match_item_empty_bad.v:22:25: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   22 |     (b[*0:2] ##1 c[*0:1], v = 1) |-> v == 1;
+      |                         ^
+%Error: t/t_sequence_match_item_empty_bad.v:28:29: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   28 |     (b[*0:1] ##[0:1] c[*0:3], v = 1) |-> v == 1;
+      |                             ^
+%Error: t/t_sequence_match_item_empty_bad.v:34:26: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   34 |     (b[*0:1] ##[0:$] c[*], v = 1) |-> v == 1;
+      |                          ^
+%Error: t/t_sequence_match_item_empty_bad.v:40:18: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   40 |     (b[*0:1] or c, v = 1) |-> v == 1;
+      |                  ^
+%Error: t/t_sequence_match_item_empty_bad.v:46:26: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   46 |     (a throughout b[*0:2], v = 1) |-> v == 1;
+      |                          ^
+%Error: t/t_sequence_match_item_empty_bad.v:52:25: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   52 |     (b[*0:1] and c[*0:2], v = 1) |-> v == 1;
+      |                         ^
+%Error: t/t_sequence_match_item_empty_bad.v:58:31: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   58 |     (b[*0:1] intersect c[*0:2], v = 1) |-> v == 1;
+      |                               ^
+%Error: t/t_sequence_match_item_empty_bad.v:64:28: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   64 |     (b[*0:1] within c[*0:2], v = 1) |-> v == 1;
+      |                            ^
+%Error: t/t_sequence_match_item_empty_bad.v:70:21: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   70 |     ((b ##1 c)[*0:2], v = 1) |-> v == 1;
+      |                     ^
+%Error: t/t_sequence_match_item_empty_bad.v:76:21: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   76 |     (##[0:2] b[*0:1], v = 1) |-> v == 1;
+      |                     ^
+%Error: t/t_sequence_match_item_empty_bad.v:83:14: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   83 |     ((b[*0:1], v = 1), w = 2) |-> v == w;
+      |              ^
+%Error: t/t_sequence_match_item_empty_bad.v:93:11: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   93 |     (s_opt, v = 1) |-> v == 1;
+      |           ^
+%Error: t/t_sequence_match_item_empty_bad.v:98:48: Match item attached to a sequence that admits an empty match (IEEE 1800-2023 16.11).
+                                                 : ... note: In instance 't'
+                                                 : ... Suggest attaching it to an enclosing sequence that has no empty match.
+   98 |   cover sequence (@(posedge clk) a ##1 (b[*0:1], $display("matched")) ##1 c);
+      |                                                ^
+%Error: Exiting due to
