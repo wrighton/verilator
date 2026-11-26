@@ -1,0 +1,46 @@
+%Error: t/t_sequence_recursive_bad.v:18:11: Sequence instance 's_ifc' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                          : ... note: In instance 't.i'
+                                          : ... Cycle: 's_ifc' -> 's_ifc'
+   18 |     a ##1 s_ifc;
+      |           ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sequence_recursive_bad.v:9:11: Sequence instance 's_pkg' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                         : ... Cycle: 's_pkg' -> 's_pkg'
+    9 |     x ##1 s_pkg(x);
+      |           ^~~~~
+%Error: t/t_sequence_recursive_bad.v:30:11: Sequence instance 's_self' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                          : ... note: In instance 't'
+                                          : ... Cycle: 's_self' -> 's_self'
+   30 |     a ##1 s_self;
+      |           ^~~~~~
+%Error: t/t_sequence_recursive_bad.v:36:11: Sequence instance 's_unused' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                          : ... note: In instance 't'
+                                          : ... Cycle: 's_unused' -> 's_unused'
+   36 |     a ##1 s_unused;
+      |           ^~~~~~~~
+%Error: t/t_sequence_recursive_bad.v:44:27: Sequence instance 's1' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                          : ... note: In instance 't'
+                                          : ... Cycle: 's1' -> 's2' -> 's1'
+   44 |     @(posedge clk) (b ##1 s1);
+      |                           ^~
+%Error: t/t_sequence_recursive_bad.v:53:18: Sequence instance 's_arg' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                          : ... note: In instance 't'
+                                          : ... Cycle: 's_arg' -> 's_arg'
+   53 |     a ##1 s_pass(s_arg);
+      |                  ^~~~~
+%Error: t/t_sequence_recursive_bad.v:63:26: Sequence instance 's_event' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                          : ... note: In instance 't'
+                                          : ... Cycle: 's_event' -> 's_event'
+   63 |     @(posedge clk) a ##1 s_event;
+      |                          ^~~~~~~
+%Error: t/t_sequence_recursive_bad.v:68:23: Sequence instance 's_dflt' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                          : ... note: In instance 't'
+                                          : ... Cycle: 's_dflt' -> 's_dflt'
+   68 |   sequence s_dflt(x = s_dflt);
+      |                       ^~~~~~
+%Error: t/t_sequence_recursive_bad.v:79:14: Sequence instance 's_typed1' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                          : ... note: In instance 't'
+                                          : ... Cycle: 's_typed1' -> 's_typed2' -> 's_typed1'
+   79 |     y[1] ##1 s_typed1(y);
+      |              ^~~~~~~~
+%Error: Exiting due to
