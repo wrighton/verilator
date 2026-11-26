@@ -453,6 +453,9 @@ class VlRandomizer VL_NOT_FINAL {
     bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly, bool sizeSolve = false);
     // "(distinct ...)" expression per unique-constrained array
     std::vector<std::string> buildUniqueExprs() const;
+    // Add constraints that the names of a variable registered under several have one value
+    void addAliasExprs(std::vector<std::string>& exprsr) const;
+    static std::string aliasExpr(const std::string& name, const std::string& otherName);
     void emitDefines(std::ostream& os) const;
     void emitDeclares(std::ostream& os, bool pinCurrent) const;
     void emitAsserts(std::ostream& os, const std::vector<std::string>& extras, bool named) const;
