@@ -3035,8 +3035,10 @@ class AssertNfaVisitor final : public VNVisitor {
         AstNodeStmt* splitsp = nullptr;
 
         if (!parts.isFollowedBy) {
-            AstNodeExpr* const vacuousp
-                = new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))};
+            // A vacuous success is of the attempt starting on this tick
+            AstNodeExpr* const vacuousp = new AstLogAnd{
+                flp, assertOnCond(flp, assertp->userType(), assertp->directive()),
+                new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))}};
             AstNodeStmt* const vacuousBodyp = passsp->cloneTree(true);
             splitsp = newPassOnIf(flp, vacuousp, vacuousBodyp, assertp->userType(),
                                   assertp->directive(), /*vacuous=*/true);
@@ -3214,14 +3216,23 @@ class AssertNfaVisitor final : public VNVisitor {
         if (splitsImplicationPasssp(assertp, parts)) {
             splitImplicationPassActions(assertAssertp, parts, matchp);
         } else {
-            attachActionHandlers(assertAssertp, matchp,
+            attachActionHandlers(assertAssertp, parts.hasImplication ? nullptr : matchp,
                                  threadFailCountp ? senTreep->cloneTree(false) : nullptr,
                                  threadFailCountp);
+            if (matchp && parts.hasImplication) {
+                // Without a match per attempt, the pass of a delayed antecedent follows from no
+                // rejection. After Off, only the attempts already executing still pass.
+                AstNodeStmt* const passsp = assertAssertp->passsp()->unlinkFrBackWithNext();
+                AstNodeExpr* const onp
+                    = assertOnCond(flp, assertp->userType(), assertp->directive());
+                assertAssertp->addPasssp(new AstIf{flp, new AstLogOr{flp, onp, matchp}, passsp});
+            }
         }
 
         AstNode* const innerPropp = propp->propp();
         innerPropp->replaceWith(outputExprp);
         VL_DO_DANGLING(pushDeletep(innerPropp), innerPropp);
+        assertp->nfaLowered(true);
     }
 
     // Replace one VarRef to a captured local var with $past(rhs, K)
@@ -3491,9 +3502,7 @@ class AssertNfaVisitor final : public VNVisitor {
         }
 
         AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
-        const bool splitImplicationPasssp = splitsImplicationPasssp(assertp, parts);
-        const bool needMatch = assertAssertp && assertAssertp->passsp()
-                               && (!parts.hasImplication || splitImplicationPasssp);
+        const bool needMatch = assertAssertp && assertAssertp->passsp();
 
         const bool needsThreadFailReplay
             = assertAssertp && assertAssertp->failsp() && !parts.hasImplication;

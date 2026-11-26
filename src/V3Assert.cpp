@@ -1423,8 +1423,11 @@ class AssertVisitor final : public VNVisitor {
         }
         AstNodeStmt* bodysp = assertBody(nodep, propExprp, passsp, failsp);
         if (disablep) bodysp = new AstIf{flp, new AstLogNot{flp, disablep}, bodysp};
-        // Add assertOn check last, for better combining
-        if (!seqEvent) bodysp = newIfAssertOn(bodysp, nodep->directive(), nodep->userType());
+        // Add assertOn check last, for better combining. V3AssertNfa gates the start of each
+        // attempt, as Off leaves the attempts already executing (IEEE 1800-2023 20.11).
+        if (!seqEvent && !nodep->nfaLowered()) {
+            bodysp = newIfAssertOn(bodysp, nodep->directive(), nodep->userType());
+        }
         bodysp->foreach([](AstNodeVarRef* nodep) {
             nodep->fileline()->modifyWarnOff(V3ErrorCode::SYNCASYNCNET, true);
         });
