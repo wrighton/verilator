@@ -564,6 +564,8 @@ class VlRandomizer VL_NOT_FINAL {
         uint64_t skips = 0;  // Calls since the last trials that rebuilt the phase without them
     };
     std::unordered_map<std::string, PhaseSampleStats> m_phaseSampleStats;
+    // The key a part of a variable or element is named by, or empty for another term
+    std::string partTermKey(const std::string& term) const;
     // The variable or element a phase term names, with its key, or nullptr
     const VlRandomVar* phaseTermKey(const std::string& term, std::string& keyr) const;
     bool readPhaseValues(VlSolverSession& sess, const std::string& terms,
