@@ -922,6 +922,11 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras) con
     for (const auto& elem : m_arr_vars) {
         h ^= std::hash<std::string>{}(elem.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
     }
+    // Which names are one variable changes with the handles, so solutions cached for one call
+    // are not reused for another
+    for (const std::string& assertion : aliasAsserts()) {
+        h ^= std::hash<std::string>{}(assertion) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    }
     return h;
 }
 
@@ -1076,16 +1081,32 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
             os << "))\n";
         }
     }
+    for (const std::string& assertion : aliasAsserts()) os << assertion << '\n';
+}
+
+std::vector<std::string> VlRandomizer::aliasAsserts() const {
     // Variables registered by different paths to the same object, as through two handles to it,
-    // are one variable
+    // are one variable, and so are arrays, by the storage of the array that their elements were
+    // recorded from at this call
+    std::vector<std::string> asserts;
     std::unordered_map<const void*, const VlRandomVar*> scalars;
+    std::unordered_map<const void*, const VlRandomVar*> arrays;
     for (const auto& var : m_vars) {
-        if (var.second->dimension()) continue;
-        const auto pair = scalars.emplace(var.second->datap(0), var.second.get());
+        const void* datap;
+        if (var.second->dimension()) {
+            const auto elemIt = m_arr_vars.find(generateKey(var.first, 0));
+            if (elemIt == m_arr_vars.end()) continue;  // Empty
+            datap = elemIt->second->m_datap;
+        } else {
+            datap = var.second->datap(0);
+        }
+        auto& sameKind = var.second->dimension() ? arrays : scalars;
+        const auto pair = sameKind.emplace(datap, var.second.get());
         if (!pair.second) {
-            os << "(assert (= " << pair.first->second->name() << ' ' << var.first << "))\n";
+            asserts.push_back("(assert (= " + pair.first->second->name() + ' ' + var.first + "))");
         }
     }
+    return asserts;
 }
 
 void VlRandomizer::emitAsserts(std::ostream& os, const std::vector<std::string>& extras,

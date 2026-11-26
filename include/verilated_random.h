@@ -318,6 +318,8 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<std::string> buildUniqueExprs() const;
     void emitDefines(std::ostream& os) const;
     void emitDeclares(std::ostream& os, bool pinCurrent) const;
+    // Assertions that the names of a variable registered under several are one variable
+    std::vector<std::string> aliasAsserts() const;
     void emitAsserts(std::ostream& os, const std::vector<std::string>& extras, bool named) const;
     bool nextFlat(VlRNG& rngr, VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
 
