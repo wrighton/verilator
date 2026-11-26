@@ -1009,6 +1009,8 @@ public:
     std::string name() const override VL_MT_STABLE { return m_name; }
     bool isDefault() const { return m_isDefault; }
     bool isGlobal() const { return m_isGlobal; }
+    // Another name of a global clocking's event, by which instances below find it
+    static string globalEventName() { return "__Vclocking_global"; }
     AstVar* ensureEventp(bool childDType = false);
     void makeDefault() { m_isDefault = true; }
 };
@@ -2603,6 +2605,7 @@ class AstVar final : public AstNode {
     bool m_isIfaceArraySplit : 1;  // Interface array that was split into element variables by
                                    // V3Param, until V3Width removes it
     bool m_isInternal : 1;  // Internal state, don't add to method pinter
+    bool m_isGlobalClockingEvent : 1;  // Event of a global clocking
     bool m_isIfaceParam : 1;  // Parameter belongs to an interface/modport
     bool m_isDpiOpenArray : 1;  // DPI import open array
     bool m_isHideLocal : 1;  // Verilog local
@@ -2680,6 +2683,7 @@ class AstVar final : public AstNode {
         m_isIfaceParent = false;
         m_isIfaceArraySplit = false;
         m_isInternal = false;
+        m_isGlobalClockingEvent = false;
         m_isIfaceParam = false;
         m_isDpiOpenArray = false;
         m_isHideLocal = false;
@@ -2859,6 +2863,7 @@ public:
     void isIfaceParent(bool flag) { m_isIfaceParent = flag; }
     void isIfaceArraySplit(bool flag) { m_isIfaceArraySplit = flag; }
     void isInternal(bool flag) { m_isInternal = flag; }
+    void isGlobalClockingEvent(bool flag) { m_isGlobalClockingEvent = flag; }
     void isIfaceParam(bool flag) { m_isIfaceParam = flag; }
     void funcLocal(bool flag) {
         m_funcLocal = flag;
@@ -2980,6 +2985,7 @@ public:
     uint32_t assertCtlMask() const { return m_assertCtlMask; }
     void assertCtlMask(uint32_t mask) { m_assertCtlMask = mask; }
     bool isInternal() const { return m_isInternal; }
+    bool isGlobalClockingEvent() const { return m_isGlobalClockingEvent; }
     bool isIfaceParam() const { return m_isIfaceParam; }
     bool isSignal() const VL_MT_SAFE { return varType().isSignal(); }
     bool isNet() const { return varType().isNet(); }
