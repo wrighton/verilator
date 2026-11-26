@@ -1,0 +1,8 @@
+%Error: t/t_property_event_arg_use_bad.v:13:25: Formal 'ev' with an event expression actual is referenced where an event expression cannot be written (IEEE 1800-2023 16.8.1).
+   13 |     @(posedge clk) x == ev;
+      |                         ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_event_arg_use_bad.v:16:7: Formal 'ev' with an event expression actual is referenced where an event expression cannot be written (IEEE 1800-2023 16.8.1).
+   16 |     @(ev iff a) x;
+      |       ^~
+%Error: Exiting due to
