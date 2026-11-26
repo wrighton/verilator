@@ -264,6 +264,99 @@ public:
 };
 
 //######################################################################
+// Replace reads of variables holding only an all-z initial value with that value
+
+class WidthZVarVisitor final : public VNVisitor {
+    // A variable whose only write is an all-z initializer holds z forever, but Verilator does
+    // not keep a z in a variable, so its reads as a whole continuous assignment value or port
+    // connection become the constant, which drives nothing, as a z has no strength (IEEE
+    // 1800-2023 28.12). Other reads keep the variable, as V3Tristate resolves it. Not for
+    // a variable written in any other way, or that may be written unseen: a port, a public or
+    // forceable variable, a class member, or a member of an interface used as a virtual
+    // interface type.
+    struct ZInit final {
+        const AstConst* const constp;  // The initial value
+        const AstNodeModule* const modp;  // Module declaring the variable
+        ZInit(const AstConst* constp, const AstNodeModule* modp)
+            : constp{constp}
+            , modp{modp} {}
+    };
+    std::unordered_map<const AstVar*, ZInit> m_zInits;  // Candidates, by their initializer
+    std::unordered_set<const AstVar*> m_writtenps;  // Variables written otherwise
+    std::unordered_set<const AstNodeModule*> m_vifModps;  // Interfaces of virtual interfaces
+    std::vector<AstNodeVarRef*> m_readps;  // Reads that are a whole driving value
+    const AstNodeModule* m_modp = nullptr;  // Current module
+    bool m_written = false;  // Under what may write every variable it references
+
+    void visit(AstNodeModule* nodep) override {
+        VL_RESTORER(m_modp);
+        m_modp = nodep;
+        iterateChildren(nodep);
+    }
+    void visit(AstInitialStatic* nodep) override {
+        const AstAssign* const assp = VN_CAST(nodep->stmtsp(), Assign);
+        const AstVarRef* const lhsp = assp ? VN_CAST(assp->lhsp(), VarRef) : nullptr;
+        const AstConst* const constp = assp ? VN_CAST(assp->rhsp(), Const) : nullptr;
+        if (!lhsp || assp->nextp() || !constp || !constp->num().isAllZ() || VN_IS(m_modp, Class)
+            || constp->width() != lhsp->varp()->width()) {
+            iterateChildren(nodep);
+            return;
+        }
+        const AstVar* const varp = lhsp->varp();
+        if (varp->isIO() || varp->isSigPublic() || varp->isSigUserRWPublic() || varp->isForceable()
+            || !varp->dtypep()->isFourstate()
+            || !m_zInits.emplace(varp, ZInit{constp, m_modp}).second) {
+            m_writtenps.emplace(varp);
+        }
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        if (m_written || nodep->access().isWriteOrRW()) m_writtenps.emplace(nodep->varp());
+        iterateChildren(nodep);
+    }
+    void visitDriving(AstNode* nodep, AstNode* valuep) {
+        AstNodeVarRef* const refp = VN_CAST(valuep, NodeVarRef);
+        if (refp && !m_written && refp->access().isReadOnly()) m_readps.push_back(refp);
+        iterateChildren(nodep);
+    }
+    void visit(AstAssignW* nodep) override { visitDriving(nodep, nodep->rhsp()); }
+    void visit(AstPin* nodep) override { visitDriving(nodep, nodep->exprp()); }
+    void visitWritten(AstNode* nodep) {
+        VL_RESTORER(m_written);
+        m_written = true;
+        iterateChildren(nodep);
+    }
+    // Arguments may be outputs or references, also of system functions
+    void visit(AstArg* nodep) override { visitWritten(nodep); }
+    void visit(AstNodeFTaskRef* nodep) override { visitWritten(nodep); }
+    void visit(AstAssignForce* nodep) override { visitWritten(nodep); }
+    void visit(AstRelease* nodep) override { visitWritten(nodep); }
+    void visit(AstAlias* nodep) override { visitWritten(nodep); }
+    void visit(AstClockingItem* nodep) override { visitWritten(nodep); }
+    void visit(AstIfaceRefDType* nodep) override {
+        if (nodep->isVirtual() && nodep->ifaceViaCellp())
+            m_vifModps.emplace(nodep->ifaceViaCellp());
+        iterateChildren(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+public:
+    explicit WidthZVarVisitor(AstNetlist* nodep) {
+        iterate(nodep);
+        for (AstNodeVarRef* const refp : m_readps) {
+            const auto it = m_zInits.find(refp->varp());
+            if (it == m_zInits.end() || m_writtenps.count(refp->varp())
+                || m_vifModps.count(it->second.modp)) {
+                continue;
+            }
+            AstConst* const constp = new AstConst{refp->fileline(), it->second.constp->num()};
+            constp->dtypeFrom(refp);
+            refp->replaceWith(constp);
+            VL_DO_DANGLING(pushDeletep(refp), refp);
+        }
+    }
+};
+
+//######################################################################
 
 #define accept in_WidthVisitor_use_AstNode_iterate_instead_of_AstNode_accept
 
@@ -15063,6 +15156,9 @@ public:
         std::unordered_set<const AstVar*> drivenps;  // Variables with a driver
         // Lvalues not driving: of force and release, of a constant z, and of output connections
         std::unordered_set<const AstNode*> undrivingRefps;
+        std::unordered_set<const AstNode*> zRefps;  // Lvalues of a constant z
+        std::unordered_set<const AstVar*> zWrittenps;  // Variables so written
+        std::unordered_set<const AstVar*> otherWrittenps;  // Variables written otherwise
         std::vector<AstPin*> netPinps;  // Input connections, driving if their net is driven
         // Variables driven if the key is: ports connected to a net, nets connected to an output
         std::unordered_map<const AstVar*, std::vector<const AstVar*>> netPortps;
@@ -15073,8 +15169,9 @@ public:
             // Pre-order, so a force is seen before the references in it
             modp->foreach([&](AstNode* np) {
                 if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
-                    if (refp->access().isWriteOrRW() && !undrivingRefps.count(refp)) {
-                        drivenps.emplace(refp->varp());
+                    if (refp->access().isWriteOrRW()) {
+                        (zRefps.count(refp) ? zWrittenps : otherWrittenps).emplace(refp->varp());
+                        if (!undrivingRefps.count(refp)) drivenps.emplace(refp->varp());
                     }
                 } else if (VN_IS(np, AssignForce) || VN_IS(np, Release)) {
                     AstNode* const lhsp = VN_IS(np, Release) ? VN_AS(np, Release)->lhsp()
@@ -15085,8 +15182,10 @@ public:
                     // A z has no strength, so drives nothing (IEEE 1800-2023 28.12)
                     const AstConst* const constp = VN_CAST(assp->rhsp(), Const);
                     if (constp && constp->num().isAllZ()) {
-                        assp->lhsp()->foreach(
-                            [&](const AstNodeVarRef* refp) { undrivingRefps.emplace(refp); });
+                        assp->lhsp()->foreach([&](const AstNodeVarRef* refp) {
+                            undrivingRefps.emplace(refp);
+                            zRefps.emplace(refp);
+                        });
                     }
                 } else if (const AstPull* const pullp = VN_CAST(np, Pull)) {
                     pullp->lhsp()->foreach(
@@ -15130,6 +15229,19 @@ public:
                 }
             });
         }
+        // A port written only by continuous assignments of a z, with no other driver (e.g. a
+        // pull), drives nothing, so is not coerced, nor drives its connections
+        const auto zOnly = [&](const AstVar* varp) {
+            return zWrittenps.count(varp) && !otherWrittenps.count(varp) && !drivenps.count(varp);
+        };
+        for (auto it = m_coercedPortps.begin(); it != m_coercedPortps.end();) {
+            it = zOnly(*it) ? m_coercedPortps.erase(it) : std::next(it);
+        }
+        writtenPinps.erase(std::remove_if(writtenPinps.begin(), writtenPinps.end(),
+                                          [&](const std::pair<AstCell*, AstPin*>& cellPin) {
+                                              return zOnly(cellPin.second->modVarp());
+                                          }),
+                           writtenPinps.end());
         // A port connected to a net drives it only if the net has a driver, as they collapse
         // into one net (IEEE 1800-2023 23.3.3.7)
         for (AstPin* const pinp : netPinps) {
@@ -15549,6 +15661,7 @@ void V3Width::width(AstNetlist* nodep) {
         const VDTypeNameScopes scopes{nodep};
         WidthVisitor visitor{false, false};
         (void)visitor.mainAcceptEdit(nodep);
+        WidthZVarVisitor{nodep};
         visitor.coercePorts(nodep);
         WidthRemoveVisitor rvisitor;
         (void)rvisitor.mainAcceptEdit(nodep);
