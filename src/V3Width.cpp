@@ -16008,7 +16008,7 @@ public:
             VL_DO_DANGLING(pushDeletep(declp->unlinkFrBack()), declp);
         }
         // Many visitors width a single parameter, so only report a count
-        if (m_statIfaceMemberSteps) {
+        if (m_statIfaceMemberSteps > 0.0) {
             V3Stats::addStatSum("Width, Interface member lookup steps", m_statIfaceMemberSteps);
         }
     }
