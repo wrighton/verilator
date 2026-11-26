@@ -433,7 +433,11 @@ class VlRandomizer VL_NOT_FINAL {
     // The element name a select of varr with these index terms names, as ArrayInfo names it
     bool elementName(const VlRandomVar& varr, std::vector<std::string> indices,
                      std::string& elementr) const;
-    bool parseModel(std::istream& is, size_t requested);
+    // Reads a (get-value) reply answering requested elements and variables, the arrays in
+    // wholep asked whole. One of a value of a form not read sets *fallbackp, writing nothing
+    bool parseModel(std::istream& is, size_t requested,
+                    const std::unordered_set<std::string>* wholep = nullptr,
+                    bool* fallbackp = nullptr);
     // Keep each lower 32-bit key word intact and pad to the stored key width.
     static std::string assocStructKeySuffix(const std::vector<size_t>& words, size_t idxWidth) {
         std::ostringstream oss;
