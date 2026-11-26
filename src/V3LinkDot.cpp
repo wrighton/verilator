@@ -160,7 +160,8 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     // Shared targets of all sites below each top module (see wholeModelSet)
     std::unordered_map<const AstNodeModule*, AstAssertCtlTargetSet*> m_wholeModelSets;
     // Identical absolute subtrees at the same depth limit share one early target list.
-    std::unordered_map<string, std::unordered_map<uint32_t, AstAssertCtlTargetSet*>> m_absoluteScopes;
+    std::unordered_map<string, std::unordered_map<uint32_t, AstAssertCtlTargetSet*>>
+        m_absoluteScopes;
     std::vector<AstAssertCtlTargetSet*> m_pendingSets;
     // Interned structural occurrences, independent of lexical blocks and flattened names.
     std::unordered_map<const VSymEnt*, AstAssertCtlCaller*> m_callers;
@@ -390,12 +391,12 @@ public:
 void LinkDotAssertCtlSites::shareAbsoluteScope(AstNode* scopep, AstAssertCtlArgs* argsp,
                                                const string& instancePath,
                                                const string& childPath) {
-    const auto entry = m_absoluteScopes[childPath].try_emplace(assertCtlTraversalLimit(argsp),
-                                                              nullptr);
+    const auto entry
+        = m_absoluteScopes[childPath].try_emplace(assertCtlTraversalLimit(argsp), nullptr);
     if (entry.second) {
         std::unordered_map<string, AstAssertCtlTarget*> targets;
-        AssertControlTargetVisitor{*this, scopep, argsp, instancePath, childPath, targets, false,
-                                   true};
+        AssertControlTargetVisitor{*this,     scopep,  argsp, instancePath,
+                                   childPath, targets, false, true};
         if (argsp->targetsp()) {
             AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
                 argsp->fileline(), argsp->targetsp()->unlinkFrBackWithNext()};
@@ -423,8 +424,8 @@ void LinkDotAssertCtlSites::rememberCompoundScope(const string& key, AstAssertCt
         if (!refp || !refp->assertCtlAbsolute() || refp->assertCtlOptional()) return;
     }
     if (!argsp->targetsp()) return;
-    AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
-        argsp->fileline(), argsp->targetsp()->unlinkFrBackWithNext()};
+    AstAssertCtlTargetSet* const setp
+        = new AstAssertCtlTargetSet{argsp->fileline(), argsp->targetsp()->unlinkFrBackWithNext()};
     m_pendingSets.push_back(setp);
     m_absoluteScopes[key].emplace(assertCtlTraversalLimit(argsp), setp);
     argsp->sharedp(setp);
@@ -1507,7 +1508,11 @@ public:
                             *assertCtlBoundarypp = cellp;
                             return nullptr;
                         }
-                        if (modp->hierBlock() && !leftname.empty()) {
+                        // Not when the scopes are made, where the blocks of this run are
+                        // libraries, whose scopes hold their ports alone, and in a run not
+                        // Verilating the blocks they are ordinary modules, whose contents the
+                        // passes before the scopes report the references into
+                        if (modp->hierBlock() && !leftname.empty() && !forScopeCreation()) {
                             refLocationp->v3error("Cannot access scope inside hierarchical block");
                         } else if (VN_IS(modp, NotFoundModule)) {
                             refLocationp->v3error("Dotted reference to instance that refers to "
@@ -6381,8 +6386,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                    && VN_IS(m_ds.m_dotp->lhsp(), SchemaRef)
                    && VN_IS(VN_AS(m_ds.m_dotp->lhsp(), SchemaRef)->schemap(), Sequence)) {
             // A sequence instance with arguments
-            replaceSequenceTriggered(nodep,
-                                     VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), SchemaRef));
+            replaceSequenceTriggered(nodep, VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), SchemaRef));
         } else if (m_ds.m_dotPos == DP_MEMBER) {
             // Found a Var, everything following is membership.  {scope}.{var}.HERE {member}
             if (m_ds.m_dotErr) {
@@ -6511,7 +6515,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
             }
             if (first && m_argDefaultSymp && lookupSymp == m_ds.m_dotSymp
-                && m_ds.m_dotSymp == m_curSymp && m_argDefaultSymp->findIdFallback(nodep->name())) {
+                && m_ds.m_dotSymp == m_curSymp
+                && m_argDefaultSymp->findIdFallback(nodep->name())) {
                 // An argument's default value is evaluated in the scope containing the
                 // subroutine (IEEE 1800-2023 13.5.3). Names only found inside the subroutine,
                 // such as its earlier arguments as used by UVM, are still accepted.
@@ -6885,9 +6890,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (cellScope.empty()) {
                         newp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
                     } else {
-                        AstVarXRef* const xrefp
-                            = new AstVarXRef{nodep->fileline(), ifaceRefVarp, cellScope,
-                                             VAccess::READ};
+                        AstVarXRef* const xrefp = new AstVarXRef{nodep->fileline(), ifaceRefVarp,
+                                                                 cellScope, VAccess::READ};
                         xrefp->containsGenBlock(m_ds.m_genBlk);
                         newp = xrefp;
                     }
@@ -9824,8 +9828,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             childPath = assertionScopePath(foundp);
             absolute = true;
         }
-        if (absolute && !v3Global.opt.hierarchical() && argsp->itemsp() == itemp
-            && !itemp->nextp() && VString::startsWith(path, "$root.")
+        if (absolute && !v3Global.opt.hierarchical() && argsp->itemsp() == itemp && !itemp->nextp()
+            && VString::startsWith(path, "$root.")
             && (VN_IS(targetp, Cell) || VN_IS(targetp, GenBlock))) {
             m_statep->assertCtlSites().shareAbsoluteScope(targetp, argsp, instancePath, childPath);
             return;
