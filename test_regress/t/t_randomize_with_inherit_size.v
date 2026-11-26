@@ -28,6 +28,17 @@ class Leaf extends Mid;
   rand bit [2:0] x;
 endclass
 
+// A base class only sizing an array, by a range, and not randomized itself
+class RBase;
+  rand int q[$];
+  constraint c_q { q.size() > 5; q.size() < 9; }
+endclass
+
+class RDer extends RBase;
+  rand int x;
+  constraint c_x { x inside {[0:9]}; }
+endclass
+
 class PBase #(int N = 2);
   rand bit [3:0] q[$];
   constraint c_q { q.size() == N; }
@@ -48,6 +59,7 @@ module t;
     automatic Mid md = new;
     automatic InMod im = new;
     automatic PDer pd = new;
+    automatic RDer rd = new;
     automatic int randomize_result;
     repeat (10) begin
       randomize_result = lf.randomize() with { x == 3; };
@@ -72,6 +84,9 @@ module t;
       randomize_result = pd.randomize();
       `checkd(randomize_result, 1);
       `checkd(pd.q.size(), 3);
+      randomize_result = rd.randomize();
+      `checkd(randomize_result, 1);
+      if (rd.q.size() < 6 || rd.q.size() > 8 || rd.x > 9) `stop;
     end
     $write("*-* All Finished *-*\n");
     $finish;
