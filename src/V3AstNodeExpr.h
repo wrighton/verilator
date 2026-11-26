@@ -1291,9 +1291,10 @@ public:
     static AstConst* parseParamLiteral(FileLine* fl, const string& literal);
 };
 class AstConstCast final : public AstNodeExpr {
-    // A const cast, const'(expr). In a concurrent assertion, kept for V3Assert to take the value
-    // of a procedural assertion's when queued (IEEE 1800-2023 16.14.6.1), otherwise only the
-    // expression
+    // A const cast, const'(expr). In a concurrent assertion or the expression of a sampled value
+    // function, kept for V3Assert to take its sampled value, the current value of the expression
+    // (IEEE 1800-2023 16.5.1), or the value of a procedural assertion's when queued
+    // (IEEE 1800-2023 16.14.6.1); otherwise only the expression
     // @astgen op1 := lhsp : AstNodeExpr
 public:
     AstConstCast(FileLine* fl, AstNodeExpr* lhsp)
@@ -1302,6 +1303,7 @@ public:
     }
     ASTGEN_MEMBERS_AstConstCast;
     string emitVerilog() override { return "const'(%l)"; }
+    // Never emitted as C++: V3Assert replaces every const cast with its expression
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { V3ERROR_NA_RETURN(true); }
 };
