@@ -671,6 +671,49 @@ class RandomizeMarkVisitor final : public VNVisitor {
             if (classp->user1()) markDerived(classp);
         }
     }
+    // Add the handles through which the constraints of classp select members of elements of
+    // arrays of class handles
+    static void addSelectedElemHandles(const AstClass* classp,
+                                       std::unordered_set<const AstVar*>& handlesr) {
+        for (AstNode* const memberp : classp->memberspList()) {
+            const AstConstraint* const constrp = VN_CAST(memberp, Constraint);
+            if (!constrp) continue;
+            constrp->foreach([&](const AstMemberRef* refp) {
+                if (isHandleElemMember(refp)) addSelectHandles(refp->fromp(), handlesr);
+            });
+        }
+    }
+    // Whether refp selects a member of an element of an array of class handles
+    static bool isHandleElemMember(const AstMemberRef* refp) {
+        const AstNodeExpr* arrp = nullptr;
+        if (const AstArraySel* const selp = VN_CAST(refp->fromp(), ArraySel)) {
+            arrp = selp->fromp();
+        } else if (const AstCMethodHard* const methodp = VN_CAST(refp->fromp(), CMethodHard)) {
+            arrp = methodp->fromp();
+        }
+        return arrp && VN_IS(RandomizeUtil::arrayElementDTypep(arrp->dtypep()), ClassRefDType);
+    }
+    // Add the class handles a chain of member and element selects selects through
+    static void addSelectHandles(const AstNodeExpr* exprp,
+                                 std::unordered_set<const AstVar*>& handlesr) {
+        for (; exprp; exprp = selectFromp(exprp)) {
+            const AstNodeVarRef* const varRefp = VN_CAST(exprp, NodeVarRef);
+            const AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef);
+            const AstVar* const varp = varRefp      ? varRefp->varp()
+                                       : memberRefp ? memberRefp->varp()
+                                                    : nullptr;
+            if (varp && VN_IS(varp->dtypep()->skipRefp(), ClassRefDType)) handlesr.insert(varp);
+        }
+    }
+    // What a member or element select selects from, else nullptr
+    static const AstNodeExpr* selectFromp(const AstNodeExpr* exprp) {
+        if (const AstMemberRef* const refp = VN_CAST(exprp, MemberRef)) return refp->fromp();
+        if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) return selp->fromp();
+        if (const AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
+            return methodp->fromp();
+        }
+        return nullptr;
+    }
     // Mark the globally constrained members, and clone the constraints of their objects
     void cloneMemberConstraints() {
         // __VBasicRand does not randomize the solver variables of such an object, so every
@@ -683,6 +726,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         }
         std::vector<std::pair<AstClass*, AstVar*>> handles;  // Owner class and handle
+        // Handles through which a constraint selects members of array elements
+        std::unordered_set<const AstVar*> selectedElemHandleps;
+        for (const AstClass* const classp : m_classps)
+            addSelectedElemHandles(classp, selectedElemHandleps);
         for (AstClass* const classp : m_classps) {
             for (AstNode* const memberp : classp->memberspList()) {
                 AstVar* const varp = VN_CAST(memberp, Var);
@@ -690,7 +737,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 const AstClassRefDType* const classRefp
                     = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
                 if (!classRefp) continue;
-                if (selectsElementMembersByIndex(classRefp->classp())) {
+                // Unless another class's constraint selects the members of its arrays' objects,
+                // which must be solved with it: then the clone reports the select unsupported
+                if (selectsElementMembersByIndex(classRefp->classp())
+                    && !selectedElemHandleps.count(varp)) {
                     varp->globalConstrained(false);
                     continue;
                 }
