@@ -1619,6 +1619,9 @@ private:
     GuardItem* m_guardItemp = nullptr;  // Shared by nested formatting within one item
     // Residual guard predicates validate reduction receivers after their iterators are bound.
     bool m_inGuardPredicate = false;
+    bool m_inGuardCondition = false;  // Lowering the condition of a constraint guard
+    // Lowering the elements an index the solver picks may select, whose nulls read as zero
+    bool m_inRandIndexElems = false;
     AstVar* m_foldErrorVarp = nullptr;  // Error status taken over with m_foldTakerp
     // Where the variable references being lowered record their solver names. Set by
     // visit(AstConstraintExpr*), the only visit reaching a variable reference: the other
@@ -2806,6 +2809,8 @@ private:
     }
     // Return an SMT array of the value of exprp at each element of the array selp selects
     AstSFormatF* newIndexedArrayp(AstNodeExpr* exprp, AstNodeExpr* selp) {
+        VL_RESTORER(m_inRandIndexElems);
+        m_inRandIndexElems = true;
         // Element i is exprp with the random index of selp replaced by i, so it may read
         // members of the array element and depend on other random variables. Missing entries
         // use the selected value's type/declaration default (IEEE 1800-2023 7.4.5, Table 7-1).
@@ -4819,7 +4824,9 @@ private:
         GuardResult result;
         {
             VL_RESTORER(m_allowFieldStaging);
+            VL_RESTORER(m_inGuardCondition);
             m_allowFieldStaging = false;
+            m_inGuardCondition = true;
             result = newGuardResult(nodep->condp(), blockp, flags);
             AstNodeExpr* const predicatep = nodep->condp()->unlinkFrBack();
             nodep->condp(formatGuardPredicate(predicatep, flags));
@@ -5484,6 +5491,8 @@ private:
     // member read through a null handle or out of range is an error, not a default value, so
     // the comparison reading it also requires k to select an object: (or (= k 0) ...).
     void lowerRandIndexedObjectMember(AstMemberRef* const nodep) {
+        VL_RESTORER(m_inRandIndexElems);
+        m_inRandIndexElems = true;
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* const selp = nodep->fromp();
         AstAssocSel* const assocSelp = VN_CAST(selp, AssocSel);
@@ -6053,6 +6062,66 @@ private:
         VL_DO_DANGLING(pushDeletep(newp), newp);
         return true;
     }
+    // Append to fmtr and argspr the source name of the object objp selects, for a message
+    static void addPathName(AstNodeExpr* objp, std::string& fmtr, AstNodeExpr*& argspr) {
+        AstNodeExpr* fromp = nullptr;
+        AstNodeExpr* idxp = nullptr;
+        if (AstMemberRef* const selp = VN_CAST(objp, MemberRef)) {
+            addPathName(selp->fromp(), fmtr, argspr);
+            fmtr += "." + selp->prettyName();
+            return;
+        } else if (AstNodeSel* const nodeSelp = VN_CAST(objp, NodeSel)) {
+            fromp = nodeSelp->fromp();
+            idxp = nodeSelp->bitp();
+        } else if (AstCMethodHard* const atp = VN_CAST(objp, CMethodHard)) {
+            fromp = atp->fromp();
+            idxp = atp->pinsp();
+        }
+        if (!fromp) {
+            fmtr += objp->prettyName();
+            return;
+        }
+        addPathName(fromp, fmtr, argspr);
+        if (idxp && idxp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            fmtr += "[%0d]";
+            argspr = AstNode::addNext(argspr, idxp->cloneTreePure(false));
+        } else {
+            fmtr += "[]";
+        }
+    }
+    // Text of a read of member nodep, whose text is textp, through handles that are null unless
+    // nonNullp: recorded where the value region prepares the read, so the text stays a pure
+    // expression, as an evaluation error that fails randomize() if a constraint has the read,
+    // not kept out by a guard (IEEE 1800-2023 18.5.12)
+    AstNodeExpr* newNullCheckedReadp(AstMemberRef* nodep, AstNodeExpr* nonNullp,
+                                     AstNodeExpr* textp) {
+        if (!nonNullp) return textp;
+        // An object handle is read by the read of its member, which checks it. Guards sift
+        // their reads themselves, and an array of a null object reads as empty.
+        if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked() || !m_valuePreparationp
+            || m_inGuardCondition || m_inRandIndexElems) {
+            VL_DO_DANGLING(nonNullp->deleteTree(), nonNullp);
+            return textp;
+        }
+        FileLine* const fl = nodep->fileline();
+        std::string fmt;
+        AstNodeExpr* argsp = nullptr;
+        addPathName(nodep, fmt, argsp);
+        AstSFormatF* const namep = new AstSFormatF{fl, fmt, false, argsp};
+        namep->dtypeSetString();
+        AstCMethodHard* const readp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_NULL_READ, namep};
+        // The solver name, also of a field of an inactive handle's object
+        const AstCond* const activeCondp = VN_CAST(textp, Cond);
+        readp->addPinsp((activeCondp ? activeCondp->thenp() : textp)->cloneTree(false));
+        readp->dtypeSetString();
+        AstNodeExpr* nullp = new AstLogNot{fl, nonNullp};
+        // A nonexistent element, like an index out of bounds, is not read, see m_conditionp
+        if (m_conditionp) nullp = new AstLogAnd{fl, m_conditionp->cloneTree(false), nullp};
+        m_valuePreparationp->addStmtsp(new AstIf{fl, nullp, readp->makeStmt()});
+        return textp;
+    }
     void visit(AstMemberRef* nodep) override {
         if (isRandObjIndexRead(nodep)) {
             // A soft constraint, unlike a hard one, would just be dropped for an invalid k
@@ -6134,6 +6203,9 @@ private:
                         = isSimple ? newHandlesActivep(m_memberMap, selArrayp, true, false)
                                    : nullptr;
                     const bool stateField = isStateElemField(nodep);  // Before formatting
+                    AstNodeExpr* const nonNullp
+                        = newHandlesActivep(m_memberMap, nodep->fromp(), false, true);
+                    AstMemberRef* const namep = nodep->cloneTree(false);
                     iterateChildren(nodep);
                     AstSFormatF* const newp = new AstSFormatF{fl, "%s." + nodep->name(), false,
                                                               nodep->fromp()->unlinkFrBack()};
@@ -6142,12 +6214,13 @@ private:
                         AstCond* const condp
                             = new AstCond{fl, activep, newp, getConstFormat(origp)};
                         condp->user1(true);  // Mark as formatted
-                        nodep->replaceWith(condp);
+                        nodep->replaceWith(newNullCheckedReadp(namep, nonNullp, condp));
                     } else {
-                        nodep->replaceWith(newp);
+                        nodep->replaceWith(newNullCheckedReadp(namep, nonNullp, newp));
                         if (!hoistRandModeOverSelectAndMember(newp, origp))
                             VL_DO_DANGLING(origp->deleteTree(), origp);
                     }
+                    VL_DO_DANGLING(namep->deleteTree(), namep);
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     VL_DO_DANGLING(delete m_nestedAccessp, m_nestedAccessp);
                     return;
@@ -6158,14 +6231,21 @@ private:
                 AstVar* const constrainedVarp = varRefp->varp();
                 if (constrainedVarp->globalConstrained()) {
                     bool const beforeIterate = m_nestedAccessp;
+                    AstNodeExpr* const nonNullp
+                        = newHandlesActivep(m_memberMap, nodep->fromp(), false, true);
+                    AstMemberRef* const namep = nodep->cloneTree(false);
                     // Global constraint - unwrap the MemberRef
                     iterateChildren(nodep);
                     if (beforeIterate) {
-                        nodep->replaceWith(new AstSFormatF{fl, "%s." + nodep->name(), false,
-                                                           nodep->fromp()->unlinkFrBack()});
+                        nodep->replaceWith(
+                            newNullCheckedReadp(namep, nonNullp,
+                                                new AstSFormatF{fl, "%s." + nodep->name(), false,
+                                                                nodep->fromp()->unlinkFrBack()}));
                     } else {
-                        nodep->replaceWith(nodep->fromp()->unlinkFrBack());
+                        nodep->replaceWith(
+                            newNullCheckedReadp(namep, nonNullp, nodep->fromp()->unlinkFrBack()));
                     }
+                    VL_DO_DANGLING(namep->deleteTree(), namep);
                     VL_DO_DANGLING(nodep->deleteTree(), nodep);
                     return;
                 }
@@ -6198,6 +6278,9 @@ private:
                     = newHandlesActivep(m_memberMap, cmethodp->fromp(), true, false);
                 AstNodeExpr* const origp = activep ? nodep->cloneTree(false) : nullptr;
                 const bool stateField = isStateElemField(nodep);  // Before formatting
+                AstNodeExpr* const nonNullp
+                    = newHandlesActivep(m_memberMap, nodep->fromp(), false, true);
+                AstMemberRef* const namep = nodep->cloneTree(false);
                 iterateChildren(nodep);
                 FileLine* const fl = nodep->fileline();
                 AstNodeExpr* newp = nullptr;
@@ -6217,7 +6300,8 @@ private:
                     newp = new AstCond{fl, activep, newp, getConstFormat(origp)};
                     newp->user1(true);  // Mark as formatted
                 }
-                nodep->replaceWith(newp);
+                nodep->replaceWith(newNullCheckedReadp(namep, nonNullp, newp));
+                VL_DO_DANGLING(namep->deleteTree(), namep);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 if (!hoistRandModeOverSelectAndMember(newp, origp)) {
                     VL_DO_DANGLING(pushDeletep(origp), origp);
@@ -10094,8 +10178,10 @@ public:
         std::set<std::string> inlineMemberPaths;  // Sized by this with-block, so always active
         for (const auto& memberArray : memberArrays) inlineMemberPaths.insert(memberArray.first);
         addResizedArrays(classp, pinnedArrays, memberArrays);
-        // Arrays of member objects are resized only in the size phase
-        const bool needsSizePhase = !pinnedArrays.empty() || !memberArrays.empty();
+        // Arrays of member objects are resized only in the size phase, as are those this
+        // with-block sizes, so that the class constraints see their new elements
+        const bool needsSizePhase
+            = !pinnedArrays.empty() || !memberArrays.empty() || !inlineSizedArrays.empty();
         AstVar* const retVarp = randomizeFuncp->fvarp();
         // Arrays whose size this call solves; each is pinned when frozen and for the final solve
         VInsertionSet<AstVar*> sizedArrays = pinnedArrays;
