@@ -51,6 +51,7 @@
 #include "V3File.h"
 #include "V3MemberMap.h"
 #include "V3Randomize.h"
+#include "V3Stats.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
 
@@ -170,6 +171,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                                           // (nullptr == always defined)
     AstNodeFTask* m_prepareConstrainedArraysp = nullptr;  // Grow arrays for indexed struct access
     uint32_t* m_uniqueConstraintIdp = nullptr;  // Current ID of unique call
+    VDouble0 m_statUniqueTerms;  // Statistic tracking
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
     std::vector<AstVar*> m_rangeConstrainedEnums;  // Enums that are already range-constrained
     // First expression found under an inside index
@@ -642,7 +644,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         // similar to V3WidthSel.cpp
         // skipRefp() unwraps typedef wrappers (AstRefDType) so the dtype kind
         // checks below recognize types spelled as `typedef <scalar> <name>[$]`.
-        AstNodeDType* const arrDtp = arrayp->unlinkFrBack()->dtypep()->skipRefp();
+        if (arrayp->backp()) arrayp->unlinkFrBack();
+        AstNodeDType* const arrDtp = arrayp->dtypep()->skipRefp();
         AstNodeExpr* selp = nullptr;
         if (VN_IS(arrDtp, QueueDType) || VN_IS(arrDtp, DynArrayDType))
             selp = new AstCMethodHard{fl, arrayp, VCMethod::ARRAY_AT, idxp};
@@ -2246,7 +2249,241 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
     }
+    // Whether 'dtypep' is an unpacked array of any kind, whose elements are members of a
+    // uniqueness constraint naming it
+    static bool isUniqueArrayDType(const AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        return VN_IS(dtypep, UnpackArrayDType) || VN_IS(dtypep, DynArrayDType)
+               || VN_IS(dtypep, QueueDType) || VN_IS(dtypep, AssocArrayDType)
+               || VN_IS(dtypep, WildcardArrayDType);
+    }
+    // Whether every member of 'nodep' is a whole one-dimensional array variable whose
+    // rand_mode is not used; these the runtime makes distinct together, from the elements
+    // they hold at solve time
+    static bool isWholeArrayGroup(const AstConstraintUnique* nodep) {
+        for (const AstNodeExpr* const itemp : nodep->rangespList()) {
+            const AstVarRef* const refp = VN_CAST(itemp, VarRef);
+            if (!refp) return false;
+            const RandomizeMode randMode = {.asUQuad = refp->varp()->user1()};
+            const AstNodeDType* const dtypep = itemp->dtypep()->skipRefp();
+            if (randMode.usesMode || VN_IS(dtypep, WildcardArrayDType)
+                || !isUniqueArrayDType(dtypep) || isUniqueArrayDType(dtypep->subDTypep())) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // The size variable of 'exprp' if it is a dynamic array or queue whose size is solved
+    static AstVar* solvedSizeVarp(const AstNodeExpr* exprp) {
+        const AstVarRef* const refp = VN_CAST(exprp, VarRef);
+        if (!refp || VN_IS(exprp->dtypep()->skipRefp(), AssocArrayDType)) return nullptr;
+        return VN_CAST(refp->varp()->user4p(), Var);
+    }
+    // Listing of the leaf elements of a uniqueness constraint
+    struct UniqueLeaves final {
+        AstVar* const textVarp;  // Terms listed
+        AstVar* const countVarp;  // Number of terms listed
+        // When a member's size is solved, every term is tagged to this width plus one bit, so
+        // that an element beyond the solved size is replaced by a value no other term can take
+        int tagWidth = 0;
+        AstVar* fixedVarp = nullptr;  // If tagged, number of terms not beyond a solved size
+    };
+    // The text of the variable 'varp' in the solver
+    AstNodeExpr* newSolverVarTextp(FileLine* fl, AstVar* varp) {
+        AstVarRef* const refp
+            = new AstVarRef{fl, VN_AS(varp->user2p(), NodeModule), varp, VAccess::READ};
+        refp->user1(true);
+        return VN_AS(iterateSubtreeReturnEdits(refp), NodeExpr);
+    }
+    // Statements appending the SMT terms of the leaf elements of 'exprp', a member of a
+    // uniqueness constraint, to 'leaves'; 'inRangep' is the text of the condition for them to
+    // be within the solved size of the array they are in, if any
+    AstNodeStmt* newUniqueLeafAppendsp(AstNodeExpr* exprp, const UniqueLeaves& leaves,
+                                       AstNodeExpr* inRangep = nullptr) {
+        FileLine* const fl = exprp->fileline();
+        const AstNodeDType* const dtypep = exprp->dtypep()->skipRefp();
+        if (VN_IS(dtypep, WildcardArrayDType)) {
+            exprp->v3warn(CONSTRAINTIGN,
+                          "Unsupported: Unique constraint on " << dtypep->prettyDTypeName(false));
+            VL_DO_DANGLING(pushDeletep(exprp), exprp);
+            return nullptr;
+        }
+        if (isUniqueArrayDType(dtypep)) {
+            AstVar* const sizeVarp = leaves.tagWidth ? solvedSizeVarp(exprp) : nullptr;
+            const AstAssocArrayDType* const adtypep = VN_CAST(dtypep, AssocArrayDType);
+            AstNodeDType* const idxDtypep = adtypep ? adtypep->keyDTypep() : exprp->findIntDType();
+            AstVar* const idxVarp
+                = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vunique"), idxDtypep};
+            AstForeachHeader* const headerp
+                = new AstForeachHeader{fl, exprp->cloneTreePure(false), idxVarp};
+            AstNodeExpr* idxp = new AstVarRef{fl, idxVarp, VAccess::READ};
+            const bool randArray = exprp->user1();
+            AstNodeExpr* selp;
+            if (AstSliceSel* const slicep = VN_CAST(exprp, SliceSel)) {
+                // A slice's loop goes over its positions in the array it selects from
+                selp = new AstArraySel{fl, slicep->fromp()->unlinkFrBack(), idxp};
+                selp->dtypep(dtypep->subDTypep());
+                VL_DO_DANGLING(pushDeletep(slicep), slicep);
+            } else {
+                // A fixed-size array's loop goes over its declared indices
+                const AstUnpackArrayDType* const udtypep = VN_CAST(dtypep, UnpackArrayDType);
+                if (udtypep && udtypep->lo()) {
+                    idxp = new AstSub{fl, idxp,
+                                      new AstConst{fl, AstConst::WidthedValue{}, 32,
+                                                   static_cast<uint32_t>(udtypep->lo())}};
+                }
+                selp = newSel(fl, exprp, idxp);
+            }
+            selp->user1(randArray);
+            if (sizeVarp) {
+                inRangep = new AstSFormatF{fl, "(bvult #x%8x %s)", false,
+                                           AstNode::addNext<AstNodeExpr, AstNodeExpr>(
+                                               new AstVarRef{fl, idxVarp, VAccess::READ},
+                                               newSolverVarTextp(fl, sizeVarp))};
+            }
+            return new AstForeach{fl, headerp, newUniqueLeafAppendsp(selp, leaves, inRangep)};
+        }
+        ++m_statUniqueTerms;
+        const int width = exprp->width();
+        AstNodeExpr* termp = VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
+        AstNodeStmt* const stmtsp
+            = new AstAssign{fl, new AstVarRef{fl, leaves.countVarp, VAccess::WRITE},
+                            new AstAdd{fl, new AstVarRef{fl, leaves.countVarp, VAccess::READ},
+                                       new AstConst{fl, AstConst::WidthedValue{}, 32, 1}}};
+        if (leaves.tagWidth) {
+            const std::string valueFmt = "(concat #b0 ((_ zero_extend "
+                                         + std::to_string(leaves.tagWidth - width) + ") %s))";
+            if (inRangep) {
+                // Beyond the solved size the term is the tagged number of the term
+                const std::string otherFmt = "(concat #b1 ((_ zero_extend "
+                                             + std::to_string(leaves.tagWidth - 32) + ") #x%8x))";
+                termp = new AstSFormatF{
+                    fl, "(ite %s " + valueFmt + " " + otherFmt + ")", false,
+                    AstNode::addNext<AstNodeExpr, AstNodeExpr>(
+                        AstNode::addNext<AstNodeExpr, AstNodeExpr>(inRangep, termp),
+                        new AstVarRef{fl, leaves.countVarp, VAccess::READ})};
+            } else {
+                termp = new AstSFormatF{fl, valueFmt, false, termp};
+                if (leaves.fixedVarp) {
+                    stmtsp->addNext(new AstAssign{
+                        fl, new AstVarRef{fl, leaves.fixedVarp, VAccess::WRITE},
+                        new AstAdd{fl, new AstVarRef{fl, leaves.fixedVarp, VAccess::READ},
+                                   new AstConst{fl, AstConst::WidthedValue{}, 32, 1}}});
+                }
+            }
+        }
+        AstNodeStmt* const appendp = newTermAppendp(fl, leaves.textVarp, termp);
+        appendp->addNext(stmtsp);
+        return appendp;
+    }
+    // Lower 'nodep' to one SMT 'distinct' over the leaf elements of its members, listed when
+    // the constraint is set up; fewer than two members are trivially distinct
+    void lowerUniqueLeaves(AstConstraintUnique* nodep) {
+        FileLine* const fl = nodep->fileline();
+        UniqueLeaves leaves{newTextVarp(nodep), new AstVar{fl, VVarType::BLOCKTEMP, "__Vcount",
+                                                           nodep->findUInt32DType()}};
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
+        blockp->addDeclsp(leaves.textVarp);
+        blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, leaves.textVarp, VAccess::WRITE},
+                                        new AstConst{fl, AstConst::String{}, ""}});
+        // Recorded for the constraint replacing this one (or for the fold it is part of)
+        VL_RESTORER(m_constraintVarsp);
+        m_constraintVarsp = &m_constraintVars;
+        // A dynamic array or queue with a size constraint is solved first for its new size
+        // while it still holds its previous elements, then resized and solved with the size
+        // pinned (IEEE 1800-2023 18.5.8.1). Its elements listed here are members only within
+        // the solved size, and its elements beyond those listed, which have no constraint
+        // in the first solve, are only counted: the members are distinct when the listed
+        // ones are, and the leaf type has a value for each member.
+        AstNodeExpr* sizeSump = nullptr;
+        uint64_t leafValues = 0;  // Number of values of the leaf type
+        for (const AstNodeExpr* const itemp : nodep->rangespList()) {
+            AstVar* const sizeVarp = solvedSizeVarp(itemp);
+            if (!sizeVarp) continue;
+            if (!leaves.tagWidth) {
+                const AstNodeDType* leafDtp = itemp->dtypep()->skipRefToEnump();
+                while (leafDtp->isNonPackedArray()) {
+                    leafDtp = leafDtp->subDTypep()->skipRefToEnump();
+                }
+                leaves.tagWidth = std::max(leafDtp->width(), 32);
+                // An enum has its named values; for another type all its values are counted,
+                // even if other constraints exclude some of them
+                if (const AstEnumDType* const enump = VN_CAST(leafDtp, EnumDType)) {
+                    for (const AstNode* enumItemp = enump->itemsp(); enumItemp;
+                         enumItemp = enumItemp->nextp()) {
+                        ++leafValues;
+                    }
+                } else if (leafDtp->width() < 32) {
+                    leafValues = 1ULL << leafDtp->width();
+                } else {
+                    break;  // Too many values for any size to exhaust
+                }
+                leaves.fixedVarp
+                    = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfixed", nodep->findUInt32DType()};
+                sizeSump = new AstSFormatF{fl, "#x00000000%8x", false,
+                                           new AstVarRef{fl, leaves.fixedVarp, VAccess::READ}};
+            }
+            if (itemp->dtypep()->skipRefp()->subDTypep()->isNonPackedArray()) continue;
+            sizeSump = new AstSFormatF{fl, "(bvadd %s ((_ zero_extend 32) %s))", false,
+                                       AstNode::addNext<AstNodeExpr, AstNodeExpr>(
+                                           sizeSump, newSolverVarTextp(fl, sizeVarp))};
+        }
+        for (AstVar* const varp : {leaves.countVarp, leaves.fixedVarp}) {
+            if (!varp) continue;
+            varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            blockp->addDeclsp(varp);
+            blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE},
+                                            new AstConst{fl, AstConst::WidthedValue{}, 32, 0}});
+        }
+        while (AstNodeExpr* const itemp = nodep->rangesp()) {
+            blockp->addStmtsp(newUniqueLeafAppendsp(itemp->unlinkFrBack(), leaves));
+        }
+        AstNodeExpr* fewp;
+        AstNodeExpr* distinctp;
+        if (sizeSump) {
+            // At most one member for each value of the leaf type
+            std::ostringstream valuesHex;
+            valuesHex << std::hex << std::setw(16) << std::setfill('0') << leafValues;
+            AstSFormatF* const countp
+                = new AstSFormatF{fl, "(bvule %s #x" + valuesHex.str() + ")", false, sizeSump};
+            fewp = new AstSFormatF{fl, "(__Vbv %s)", false, countp->cloneTreePure(false)};
+            distinctp
+                = new AstSFormatF{fl, "(__Vbv (and (distinct%s) %s))", false,
+                                  AstNode::addNext<AstNodeExpr, AstNodeExpr>(
+                                      new AstVarRef{fl, leaves.textVarp, VAccess::READ}, countp)};
+        } else {
+            fewp = new AstConst{fl, AstConst::String{}, "#b1"};
+            distinctp
+                = new AstConcatN{fl, new AstConst{fl, AstConst::String{}, "(__Vbv (distinct"},
+                                 new AstVarRef{fl, leaves.textVarp, VAccess::READ}};
+            distinctp = new AstConcatN{fl, distinctp, new AstConst{fl, AstConst::String{}, "))"}};
+        }
+        AstNodeExpr* const resultp
+            = new AstCond{fl,
+                          new AstLt{fl, new AstVarRef{fl, leaves.countVarp, VAccess::READ},
+                                    new AstConst{fl, AstConst::WidthedValue{}, 32, 2}},
+                          fewp, distinctp};
+        AstNodeExpr* newp = new AstSFormatF{fl, "%s", false, new AstExprStmt{fl, blockp, resultp}};
+        newp->dtypeSetBit();  // The text of a boolean
+        if (m_wantSingle) {
+            nodep->replaceWith(newp);
+        } else {
+            // Iterated next, and takes over the recorded names
+            AstConstraintExpr* const exprp = new AstConstraintExpr{fl, newp};
+            nodep->replaceWith(exprp);
+            m_foldTakerp = exprp;
+        }
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstConstraintUnique* nodep) override {
+        // IEEE 1800-2023 18.5.4: the members are the singular variables and the leaf elements
+        // of the arrays named. Under a condition the distinctness is part of the guarded
+        // expression, which needs the members listed when the constraint is set up.
+        if (m_wantSingle || !isWholeArrayGroup(nodep)) {
+            lowerUniqueLeaves(nodep);
+            return;
+        }
         FileLine* const fl = nodep->fileline();
 
         AstBegin* initp;
@@ -2283,145 +2520,67 @@ class ConstraintExprVisitor final : public VNVisitor {
         // Registration calls emitted where the unique statement stood, so they end up
         // in the constraint setup task and re-run on every randomize()
         AstNode* setupStmtsp = nullptr;
-        // Under a condition the distinctness must instead become part of the guarded
-        // constraint expression, which needs an element count known at verilation time
-        std::vector<std::string> smtExprs;
         for (AstNodeExpr* const itemp : nodep->rangespList()) {
-            if (AstVarRef* const varRefp = VN_CAST(itemp, VarRef)) {
-                AstVar* const varp = varRefp->varp();
-                AstNodeModule* const varModp = VN_AS(varp->user2p(), NodeModule);
-                UASSERT_OBJ(varModp, nodep, "varp has no NodeModule set");
-                AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+            AstVar* const varp = VN_AS(itemp, VarRef)->varp();
+            AstNodeModule* const varModp = VN_AS(varp->user2p(), NodeModule);
+            UASSERT_OBJ(varModp, nodep, "varp has no NodeModule set");
+            AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
 
-                const static auto dynDTypeSupported
-                    = [](const AstNodeDType* const dtypep) -> bool {
-                    return VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, QueueDType)
-                           || VN_IS(dtypep, AssocArrayDType);
-                };
-
-                // Establish it is an array before asking for its element type
-                uint64_t elemWidth;
-                uint32_t staticSize = 0;  // Element count, zero when only known at run time
-                if (const AstUnpackArrayDType* const up = VN_CAST(dtypep, UnpackArrayDType)) {
-                    const AstRange* const rangep = up->rangep();
-                    UASSERT_OBJ(rangep && VN_IS(rangep->leftp(), Const)
-                                    && VN_IS(rangep->rightp(), Const),
-                                nodep, "Unpack array does not have a constant range");
-                    staticSize = up->elementsConst();
-                    if (staticSize > 100) {
-                        nodep->v3warn(
-                            CONSTRAINTIGN,
-                            "Unsupported: Unique constraint on static arrays of size > 100");
-                        continue;
-                    }
-                    elemWidth = static_cast<uint64_t>(varp->dtypep()->width());
-                } else if (dynDTypeSupported(dtypep)) {
-                    elemWidth = static_cast<uint64_t>(dtypep->subDTypep()->width());
-                } else {
-                    nodep->v3warn(CONSTRAINTIGN, "Unsupported: Unique constraint on "
-                                                     << dtypep->prettyDTypeName(false));
-                    continue;
-                }
-
-                // Ensure it is ONLY 1-D by checking that the element type is not an array/queue
-                const AstNodeDType* const subp = dtypep->subDTypep()->skipRefp();
-                if (VN_IS(subp, NodeArrayDType) || VN_IS(subp, QueueDType)
-                    || VN_IS(subp, DynArrayDType) || VN_IS(subp, AssocArrayDType)
-                    || VN_IS(subp, WildcardArrayDType)) {
-                    nodep->v3warn(CONSTRAINTIGN,
-                                  "Unsupported: Unique constraint on multidimensional arrays");
-                    continue;
-                }
-
-                if (m_wantSingle && !staticSize) {
-                    nodep->v3warn(CONSTRAINTIGN,
-                                  "Unsupported: Unique constraint on dynamically sized array "
-                                  "inside conditional constraint");
-                    continue;
-                }
-
-                // A with{}-block's own registration must use the per-instance
-                // m_inlineWrittenVars (fresh for each ConstraintExprVisitor pass), not
-                // the permanent, compile-time-once AstVar::user3() -- otherwise a
-                // unique{} target that isn't itself size-constrained (so the two-phase
-                // solve's manual refresh loop doesn't cover it) never gets write_var'd
-                // again on the second pass, once the class generator copy in between
-                // has dropped its first-pass registration. This mirrors the general
-                // (non-unique) write_var dedup a few hundred lines up, which already
-                // makes exactly this distinction.
-                const bool alreadyWritten = m_inlineInitBlockp
-                                                ? m_inlineWrittenVars.count(varp->name()) > 0
-                                                : varp->user3();
-                if (!alreadyWritten) {
-                    varp->user3(true);  // Solver owns it; __VBasicRand must not overwrite
-                    if (m_inlineInitBlockp) m_inlineWrittenVars.insert(varp->name());
-                    // Convert to C string
-                    AstNodeExpr* const varnamep = new AstCExpr{
-                        fl, AstCExpr::Pure{}, "\"" + varp->name() + "\"", varp->width()};
-
-                    AstCMethodHard* const writeVarCallp = new AstCMethodHard{
-                        fl, genVarRefp(VAccess::READ), VCMethod::RANDOMIZER_WRITE_VAR};
-                    AstVarRef* const argVarRefp = new AstVarRef{fl, varp, VAccess::READ};
-                    if (m_classp) argVarRefp->classOrPackagep(varModp);
-                    writeVarCallp->addPinsp(argVarRefp);
-                    writeVarCallp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, elemWidth});
-                    writeVarCallp->addPinsp(varnamep);
-                    writeVarCallp->addPinsp(new AstConst{fl, 1});  // Dimension
-                    const RandomizeMode randMode = {.asUQuad = varp->user1()};
-                    if (randMode.usesMode) {
-                        writeVarCallp->addPinsp(
-                            new AstConst{fl, AstConst::Unsized64{}, randMode.index});
-                    }
-                    writeVarCallp->dtypeSetVoid();
-                    initp->addStmtsp(new AstStmtExpr{fl, writeVarCallp});
-                }
-
-                // A solver-sized container is resized between solve passes; joining the
-                // size-constrained set gets its element table refreshed in between
-                if (varp->user4p() && m_sizeConstrainedArraysp) {
-                    m_sizeConstrainedArraysp->insert(varp);
-                }
-
-                if (m_wantSingle) {
-                    // Fewer than two elements are trivially distinct
-                    if (staticSize < 2) continue;
-                    // Named in the text below, so the folded constraint must record it too.
-                    // Visited from the if's fold, outside any constraint expression, so
-                    // m_constraintVarsp is not set: add to the fold's names directly
-                    m_constraintVars.insert(varp->name());
-                    std::string exprStr = "(__Vbv (distinct";
-                    for (uint32_t i = 0; i < staticSize; ++i) {
-                        exprStr += " (select " + varp->name() + " #x";
-                        for (int shift = 28; shift >= 0; shift -= 4) {
-                            exprStr += "0123456789abcdef"[(i >> shift) & 0xf];
-                        }
-                        exprStr += ')';
-                    }
-                    smtExprs.emplace_back(exprStr + "))");
-                    continue;
-                }
-
-                AstNodeExpr* const namep = new AstConst{fl, AstConst::String{}, varp->name()};
-                AstCMethodHard* const randUniqueCallp = new AstCMethodHard{
-                    fl, genVarRefp(VAccess::READ), VCMethod::RANDOMIZER_UNIQUE, namep};
-                randUniqueCallp->dtypep(nodep->findVoidDType());
-                randUniqueCallp->addPinsp(new AstConst{fl, *m_uniqueConstraintIdp});
-                setupStmtsp = AstNode::addNext(setupStmtsp, new AstStmtExpr{fl, randUniqueCallp});
+            uint64_t elemWidth;
+            if (const AstUnpackArrayDType* const up = VN_CAST(dtypep, UnpackArrayDType)) {
+                const AstRange* const rangep = up->rangep();
+                UASSERT_OBJ(rangep && VN_IS(rangep->leftp(), Const)
+                                && VN_IS(rangep->rightp(), Const),
+                            nodep, "Unpack array does not have a constant range");
+                elemWidth = static_cast<uint64_t>(varp->dtypep()->width());
+            } else {
+                elemWidth = static_cast<uint64_t>(dtypep->subDTypep()->width());
             }
+
+            // A with{}-block's own registration must use the per-instance
+            // m_inlineWrittenVars (fresh for each ConstraintExprVisitor pass), not
+            // the permanent, compile-time-once AstVar::user3() -- otherwise a
+            // unique{} target that isn't itself size-constrained (so the two-phase
+            // solve's manual refresh loop doesn't cover it) never gets write_var'd
+            // again on the second pass, once the class generator copy in between
+            // has dropped its first-pass registration. This mirrors the general
+            // (non-unique) write_var dedup a few hundred lines up, which already
+            // makes exactly this distinction.
+            const bool alreadyWritten
+                = m_inlineInitBlockp ? m_inlineWrittenVars.count(varp->name()) > 0 : varp->user3();
+            if (!alreadyWritten) {
+                varp->user3(true);  // Solver owns it; __VBasicRand must not overwrite
+                if (m_inlineInitBlockp) m_inlineWrittenVars.insert(varp->name());
+                // Convert to C string
+                AstNodeExpr* const varnamep = new AstCExpr{
+                    fl, AstCExpr::Pure{}, "\"" + varp->name() + "\"", varp->width()};
+
+                AstCMethodHard* const writeVarCallp = new AstCMethodHard{
+                    fl, genVarRefp(VAccess::READ), VCMethod::RANDOMIZER_WRITE_VAR};
+                AstVarRef* const argVarRefp = new AstVarRef{fl, varp, VAccess::READ};
+                if (m_classp) argVarRefp->classOrPackagep(varModp);
+                writeVarCallp->addPinsp(argVarRefp);
+                writeVarCallp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, elemWidth});
+                writeVarCallp->addPinsp(varnamep);
+                writeVarCallp->addPinsp(new AstConst{fl, 1});  // Dimension
+                writeVarCallp->dtypeSetVoid();
+                initp->addStmtsp(new AstStmtExpr{fl, writeVarCallp});
+            }
+
+            // A solver-sized container is resized between solve passes; joining the
+            // size-constrained set gets its element table refreshed in between
+            if (varp->user4p() && m_sizeConstrainedArraysp) {
+                m_sizeConstrainedArraysp->insert(varp);
+            }
+
+            AstNodeExpr* const namep = new AstConst{fl, AstConst::String{}, varp->name()};
+            AstCMethodHard* const randUniqueCallp = new AstCMethodHard{
+                fl, genVarRefp(VAccess::READ), VCMethod::RANDOMIZER_UNIQUE, namep};
+            randUniqueCallp->dtypep(nodep->findVoidDType());
+            randUniqueCallp->addPinsp(new AstConst{fl, *m_uniqueConstraintIdp});
+            setupStmtsp = AstNode::addNext(setupStmtsp, new AstStmtExpr{fl, randUniqueCallp});
         }
         ++(*m_uniqueConstraintIdp);
-        if (m_wantSingle && !smtExprs.empty()) {
-            std::string exprStr = smtExprs.front();
-            if (smtExprs.size() > 1) {
-                exprStr = "(bvand";
-                for (const std::string& oneExprp : smtExprs) exprStr += " " + oneExprp;
-                exprStr += ')';
-            }
-            AstSFormatF* const newp = new AstSFormatF{fl, exprStr, false, nullptr};
-            nodep->replaceWith(newp);
-            VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return;
-        }
         if (setupStmtsp) nodep->addHereThisAsNext(setupStmtsp);
         nodep->unlinkFrBack();
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -3075,6 +3234,9 @@ public:
         }
         iterateAndNextNull(nodep);
     }
+    ~ConstraintExprVisitor() override {
+        V3Stats::addStatSum("Randomize, Unique constraint term appends", m_statUniqueTerms);
+    }
 };
 
 //######################################################################
@@ -3098,63 +3260,6 @@ class SolverSmtLowering final : public V3SolverLowering {
         return RandModeVars::constraintModeVarp(classp);
     }
 
-    // Expand unique{a,b,c} with explicit elements into pairwise != constraints.
-    // Whole-array unique{arr} is left for ConstraintExprVisitor's rand_unique handling.
-    // Recurses into conditional and foreach bodies, so that the pairwise
-    // constraints stay under the guard they were written under.
-    static void expandUniqueElementList(AstNode* itemsp) {
-        for (AstNode* const itemp : VNList<AstNode>{itemsp}) {
-            if (const AstConstraintIf* const ifp = VN_CAST(itemp, ConstraintIf)) {
-                expandUniqueElementList(ifp->thensp());
-                expandUniqueElementList(ifp->elsesp());
-                continue;
-            }
-            if (const AstConstraintForeach* const foreachp = VN_CAST(itemp, ConstraintForeach)) {
-                expandUniqueElementList(foreachp->bodyp());
-                continue;
-            }
-            AstConstraintUnique* const uniquep = VN_CAST(itemp, ConstraintUnique);
-            if (!uniquep) continue;
-
-            std::vector<AstNodeExpr*> exprItems;
-            bool hasArrayVarRef = false;
-            for (AstNodeExpr* const rp : uniquep->rangespList()) {
-                if (const AstVarRef* const vrp = VN_CAST(rp, VarRef)) {
-                    // A container's elements are made distinct by rand_unique, not pairwise
-                    const AstNodeDType* const dtypep = vrp->varp()->dtypep()->skipRefp();
-                    if (VN_IS(dtypep, NodeArrayDType) || VN_IS(dtypep, QueueDType)
-                        || VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, AssocArrayDType)
-                        || VN_IS(dtypep, WildcardArrayDType)) {
-                        hasArrayVarRef = true;
-                        continue;
-                    }
-                }
-                exprItems.push_back(rp);
-            }
-
-            if (exprItems.size() >= 2) {
-                FileLine* const fl = uniquep->fileline();
-                for (size_t i = 0; i < exprItems.size(); i++) {
-                    for (size_t j = i + 1; j < exprItems.size(); j++) {
-                        AstNodeExpr* const lhsp = exprItems[i]->cloneTree(false);
-                        AstNodeExpr* const rhsp = exprItems[j]->cloneTree(false);
-                        AstNeq* const neqp = new AstNeq{fl, lhsp, rhsp};
-                        neqp->user1(true);
-                        AstConstraintExpr* const cexprp = new AstConstraintExpr{fl, neqp};
-                        uniquep->addNextHere(cexprp);
-                    }
-                }
-                if (!hasArrayVarRef) {
-                    uniquep->unlinkFrBack();
-                    VL_DO_DANGLING(uniquep->deleteTree(), uniquep);
-                }
-            } else if (exprItems.size() == 1 && !hasArrayVarRef) {
-                // A set of one element is unique whatever that element holds
-                uniquep->unlinkFrBack();
-                VL_DO_DANGLING(uniquep->deleteTree(), uniquep);
-            }
-        }
-    }
     void createRandomGenerator(AstClass* const classp) {
         if (classp->user3p()) return;
         if (classp->extendsp()) {
@@ -4120,7 +4225,6 @@ public:
                     resizeAllTaskp->addStmtsp(resizeTaskRefp->makeStmt());
                 }
 
-                if (constrp->itemsp()) expandUniqueElementList(constrp->itemsp());
                 if (constrp->itemsp()) {
                     lowerDistConstraints(taskp, constrp->itemsp(), randModeVarp);
                 }
@@ -4396,7 +4500,6 @@ public:
         // ConstraintExprVisitor::visit(AstConstraintUnique). Merged below with any
         // class-level size-constrained arrays.
         VInsertionSet<AstVar*> allSizeArrays;
-        expandUniqueElementList(holderp->declsp());
         ConstraintExprVisitor{
             classp,        m_memberMap,  holderp->declsp(), setupBlockp,
             localGenp,     randModeVarp, m_writtenVars,     &m_uniqueConstraintId,
@@ -4541,7 +4644,6 @@ public:
                 randomizeFuncp->addStmtsp(methodp->makeStmt());
             }
 
-            expandUniqueElementList(capturedClonep->declsp());
             AstBegin* const elementSetupBlockp
                 = new AstBegin{fl, "__Vsetup_constraints", capturedClonep, true};
             randomizeFuncp->addStmtsp(elementSetupBlockp);
@@ -4600,7 +4702,6 @@ public:
         AstBegin* const setupBlockp = new AstBegin{fl, "__Vsetup_constraints", holderp, true};
         randomizeFuncp->addStmtsp(setupBlockp);
         {
-            expandUniqueElementList(holderp->declsp());
             ConstraintExprVisitor{
                 nullptr, m_memberMap,   holderp->declsp(),     setupBlockp,   stdrandp,
                 nullptr, m_writtenVars, &m_uniqueConstraintId, m_uniqueNames, nullptr};

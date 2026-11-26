@@ -9,8 +9,14 @@
 
 import vltest_bootstrap
 
-test.scenarios('vlt')
+test.scenarios('simulator')
 
-test.lint(fails=test.vlt_all, expect_filename=test.golden_filename)
+if not test.have_solver:
+    test.skip("No constraint solver installed")
+
+test.compile()
+
+# A randomize() that cannot satisfy its constraints is expected
+test.execute(all_run_flags=['+verilator+wno+unsatconstr+1'])
 
 test.passes()
