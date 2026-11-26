@@ -49,6 +49,7 @@
 #include "V3Stats.h"
 
 #include <limits>
+#include <map>
 #include <set>
 #include <unordered_map>
 
@@ -653,6 +654,107 @@ public:
 //######################################################################
 // Fork visitor, transforms asynchronous blocks into separate tasks
 
+// Rescope hierarchical references moved into a fork branch task, called in the recorded scope
+// 'callScope'. BeginXRefScopeVisitor recorded in them the named blocks above, which V3Begin keeps
+// as scopes only outside of tasks; of the blocks moved into the task, those with static variables
+// were kept at the call (see ForkVisitor::keepStaticBlocks). So each reference is resolved in the
+// innermost of the kept blocks it was in, or the call's scope, as are those in the tasks of forks
+// nested in it, which moved with it.
+class ForkXRefRescope final {
+    // STATE
+    const std::string& m_callScope;  // Recorded scope of the call of the task
+    const std::set<std::string>& m_keptPaths;  // Paths of kept blocks, below m_callScope
+    std::unordered_set<const AstTask*> m_taskps;  // Tasks rescoped, each once
+
+    // METHODS
+    static bool isForkTask(const AstNodeFTask* taskp) {
+        return VN_IS(taskp, Task) && VString::startsWith(taskp->name(), "__VforkTask_");
+    }
+    std::string rescope(const std::string& dots) const {
+        std::string below;  // Recorded path below the call's scope
+        if (m_callScope.empty()) {
+            below = dots;
+        } else if (VString::startsWith(dots, m_callScope + "__DOT__")) {
+            below = dots.substr(m_callScope.size() + std::strlen("__DOT__"));
+        } else {
+            return dots;  // At or above the call's scope, which remains
+        }
+        // Innermost kept block
+        std::string kept;
+        std::string path;
+        size_t pos = 0;
+        while (pos != std::string::npos) {
+            const size_t next = below.find("__DOT__", pos);
+            const std::string name
+                = below.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
+            path = VString::dot(path, "__DOT__", name);
+            if (!m_keptPaths.count(path)) break;
+            kept = path;
+            pos = next == std::string::npos ? next : next + std::strlen("__DOT__");
+        }
+        return VString::dot(m_callScope, "__DOT__", kept);
+    }
+    void rescopeTask(AstTask* taskp) {
+        const bool newTask = m_taskps.emplace(taskp).second;
+        UASSERT_OBJ(newTask, taskp, "Fork branch task called from more than one place");
+        taskp->foreach([&](AstNode* nodep) {
+            if (AstVarXRef* const refp = VN_CAST(nodep, VarXRef)) {
+                refp->inlinedDots(rescope(refp->inlinedDots()));
+            } else if (AstNodeFTaskRef* const refp = VN_CAST(nodep, NodeFTaskRef)) {
+                if (!refp->dotted().empty()) refp->inlinedDots(rescope(refp->inlinedDots()));
+                AstTask* const calleep = VN_CAST(refp->taskp(), Task);
+                if (calleep && isForkTask(calleep)) rescopeTask(calleep);
+            }
+        });
+    }
+
+    // CONSTRUCTORS
+    ForkXRefRescope(AstTask* taskp, const std::string& callScope,
+                    const std::set<std::string>& keptPaths)
+        : m_callScope{callScope}
+        , m_keptPaths{keptPaths} {
+        rescopeTask(taskp);
+    }
+
+public:
+    static void apply(AstTask* taskp, const std::string& callScope,
+                      const std::set<std::string>& keptPaths) {
+        ForkXRefRescope{taskp, callScope, keptPaths};
+    }
+};
+
+// Collect the static variables of blocks moved into a fork branch task, with the names of the
+// blocks above them in the task
+class ForkStaticVarsVisitor final : public VNVisitorConst {
+    // STATE
+    std::vector<std::string> m_blocks;  // Named blocks above
+    std::vector<std::pair<AstVar*, std::vector<std::string>>> m_varps;  // Found
+
+    // VISITORS
+    void visit(AstNodeBlock* nodep) override {
+        if (nodep->name().empty()) {
+            iterateChildrenConst(nodep);
+            return;
+        }
+        m_blocks.push_back(nodep->name());
+        iterateChildrenConst(nodep);
+        m_blocks.pop_back();
+    }
+    void visit(AstVar* nodep) override {
+        if (!m_blocks.empty() && !nodep->lifetime().isAutomatic()) {
+            m_varps.emplace_back(nodep, m_blocks);
+        }
+    }
+    void visit(AstNodeExpr*) override {}  // Accelerate
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    explicit ForkStaticVarsVisitor(AstTask* taskp) { iterateChildrenConst(taskp); }
+    const std::vector<std::pair<AstVar*, std::vector<std::string>>>& varps() const {
+        return m_varps;
+    }
+};
+
 class ForkVisitor final : public VNVisitor {
     // NODE STATE
     // AstVarRef::user2()       -> bool, 1 = Node is a class handle reference. The handle gets
@@ -669,6 +771,7 @@ class ForkVisitor final : public VNVisitor {
     bool m_hasNestedFork = false;  // Branch being taskified contains a nested fork
     bool m_inInitStmt = false;  // Traversal in InitialStaticStmt/InitialAutomaticStmt
     AstNodeFTask* m_ftaskp = nullptr;  // Enclosing function/task
+    std::string m_scope;  // Named blocks above in module code, as BeginXRefScopeVisitor records
     std::set<AstVar*> m_forkLocalsp;  // Variables local to a given fork
     AstVar* m_capturedVarsp = nullptr;  // Local copies of captured variables
     AstArg* m_capturedArgsp = nullptr;  // References to captured variables (as args)
@@ -691,6 +794,52 @@ class ForkVisitor final : public VNVisitor {
         AstArg* const argp = new AstArg{flp, refp->name(), refp->cloneTree(false)};
         m_capturedArgsp = AstNode::addNext(m_capturedArgsp, argp);
         return varp;
+    }
+
+    // Move the static variables of named blocks moved into the given fork branch task into
+    // blocks of the same names before its call
+    std::set<std::string> keepStaticBlocks(AstTask* taskp, AstNodeStmt* callStmtp) {
+        const ForkStaticVarsVisitor varsVisitor{taskp};
+        std::map<std::vector<std::string>, AstBegin*> blockps;  // Made, by path
+        std::set<std::string> paths;  // Their recorded paths, below the call's scope
+        for (const auto& varBlocks : varsVisitor.varps()) {
+            AstVar* const varp = varBlocks.first;
+            std::vector<std::string> path;
+            AstBegin* abovep = nullptr;
+            for (const std::string& name : varBlocks.second) {
+                path.push_back(name);
+                AstBegin*& blockp = blockps[path];
+                if (!blockp) {
+                    std::string recorded;
+                    for (const std::string& pathName : path) {
+                        recorded = VString::dot(recorded, "__DOT__", pathName);
+                    }
+                    paths.emplace(recorded);
+                    blockp = new AstBegin{varp->fileline(), name, nullptr, false};
+                    if (abovep) {
+                        abovep->addStmtsp(blockp);
+                    } else {
+                        callStmtp->addHereThisAsNext(blockp);
+                    }
+                }
+                abovep = blockp;
+            }
+            abovep->addDeclsp(varp->unlinkFrBack());
+            m_forkLocalsp.erase(varp);
+        }
+        return paths;
+    }
+    // Report hierarchical references to automatic variables moved into a fork branch task, which
+    // only static variables may have (IEEE 1800-2023 6.21)
+    static void checkAutomaticXRefs(AstTask* taskp) {
+        taskp->foreach([](AstVarXRef* refp) {
+            AstVar* const varp = refp->varp();
+            if (!varp || !varp->lifetime().isAutomatic() || varp->isClassMember()) return;
+            refp->v3error("Hierarchical reference to automatic variable "
+                          << varp->prettyNameQ() << " (IEEE 1800-2023 6.21).");
+            refp->replaceWith(new AstVarRef{refp->fileline(), varp, refp->access()});
+            VL_DO_DANGLING(refp->deleteTree(), refp);
+        });
     }
 
     // Wrap body of the given AstFork branch in an AstTask, and replace body with a call to that
@@ -725,23 +874,51 @@ class ForkVisitor final : public VNVisitor {
         m_tasksp = AstNode::addNext(taskp, m_tasksp);
         if (itemp->declsp()) taskp->addDeclsp(itemp->declsp()->unlinkFrBackWithNext());
         AstTaskRef* const callp = new AstTaskRef{flp, taskp, m_capturedArgsp};
+        AstNodeStmt* callStmtp = nullptr;
         AstBegin* const beginp
             = itemp->stmtsp() ? VN_CAST(itemp->stmtsp()->lastp(), Begin) : nullptr;
         if (beginp && !beginp->name().empty()) {
             // A named block stays at the fork with the call, so V3Begin keeps its scope for
             // hierarchical references recorded relative to it (see BeginXRefScopeVisitor)
-            if (beginp->declsp()) taskp->addDeclsp(beginp->declsp()->unlinkFrBackWithNext());
+            // Its static variables stay in it, so hierarchical references reach them in its
+            // scope; only automatic ones are local to the task
+            for (AstNode *declp = beginp->declsp(), *nextp; declp; declp = nextp) {
+                nextp = declp->nextp();
+                AstVar* const varp = VN_CAST(declp, Var);
+                if (varp && !varp->lifetime().isAutomatic()) {
+                    m_forkLocalsp.erase(varp);
+                    continue;
+                }
+                taskp->addDeclsp(declp->unlinkFrBack());
+            }
             // Statements before the block, e.g. the start sentinel, still run first
             while (itemp->stmtsp() != beginp) taskp->addStmtsp(itemp->stmtsp()->unlinkFrBack());
             if (beginp->stmtsp()) taskp->addStmtsp(beginp->stmtsp()->unlinkFrBackWithNext());
-            beginp->addStmtsp(callp->makeStmt());
+            callStmtp = callp->makeStmt();
+            beginp->addStmtsp(callStmtp);
         } else {
             if (itemp->stmtsp()) taskp->addStmtsp(itemp->stmtsp()->unlinkFrBackWithNext());
-            itemp->addStmtsp(callp->makeStmt());
+            callStmtp = callp->makeStmt();
+            itemp->addStmtsp(callStmtp);
+        }
+        // Static variables of the blocks moved into the task stay in blocks of the same names at
+        // the call, so hierarchical references reach them in the scopes of those blocks. They are
+        // one variable for all processes of the branch anyway.
+        std::set<std::string> keptPaths;
+        if (!m_ftaskp && !VN_IS(m_modp, Class)) {
+            keptPaths = keepStaticBlocks(taskp, callStmtp);
+            checkAutomaticXRefs(taskp);
         }
 
         // Variables were moved under the task, so make sure they are marked as funcLocal
         for (AstVar* const localp : m_forkLocalsp) localp->funcLocal(true);
+        // Only module code has recorded blocks; see BeginXRefScopeVisitor
+        if (!m_ftaskp && !VN_IS(m_modp, Class)) {
+            const std::string callScope = beginp && !beginp->name().empty()
+                                              ? VString::dot(m_scope, "__DOT__", beginp->name())
+                                              : m_scope;
+            ForkXRefRescope::apply(taskp, callScope, keptPaths);
+        }
 
         // We did wrap the body
         return true;
@@ -798,6 +975,8 @@ class ForkVisitor final : public VNVisitor {
 
     // VISITORS
     void visit(AstNodeModule* nodep) override {
+        VL_RESTORER_COPY(m_scope);
+        m_scope.clear();
         VL_RESTORER(m_modp);
         VL_RESTORER(m_nForkTasks);
         VL_RESTORER(m_tasksp);
@@ -810,6 +989,8 @@ class ForkVisitor final : public VNVisitor {
     }
 
     void visit(AstFork* nodep) override {
+        VL_RESTORER_COPY(m_scope);
+        if (!m_ftaskp) m_scope = VString::dot(m_scope, "__DOT__", nodep->name());
         m_hasNestedFork = true;
         // IEEE 1800-2023 9.3.2: In all cases, processes spawned by a fork-join block shall not
         // start executing until the parent process is blocked or terminates. Because join and
@@ -859,6 +1040,16 @@ class ForkVisitor final : public VNVisitor {
     void visit(AstNodeFTask* nodep) override {
         VL_RESTORER(m_ftaskp);
         m_ftaskp = nodep;
+        iterateChildren(nodep);
+    }
+    void visit(AstGenBlock* nodep) override {
+        VL_RESTORER_COPY(m_scope);
+        m_scope = VString::dot(m_scope, "__DOT__", nodep->name());
+        iterateChildren(nodep);
+    }
+    void visit(AstBegin* nodep) override {
+        VL_RESTORER_COPY(m_scope);
+        if (!m_ftaskp) m_scope = VString::dot(m_scope, "__DOT__", nodep->name());
         iterateChildren(nodep);
     }
     void visit(AstVar* nodep) override {
