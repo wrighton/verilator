@@ -1424,8 +1424,11 @@ inline WDataOutP VL_MODDIVS_WWW(int lbits, WDataOutP owp, WDataInP lwp, WDataInP
     return VL_MODDIV_WWW(lbits, owp, lwp, rwp);
 }
 
-#define VL_POW_IIQ(obits, lbits, rbits, lhs, rhs) VL_POW_QQQ(obits, lbits, rbits, lhs, rhs)
-#define VL_POW_IIW(obits, lbits, rbits, lhs, rwp) VL_POW_QQW(obits, lbits, rbits, lhs, rwp)
+// An IData result, without the bits the QData power has above them
+#define VL_POW_IIQ(obits, lbits, rbits, lhs, rhs) \
+    static_cast<IData>(VL_POW_QQQ(obits, lbits, rbits, lhs, rhs))
+#define VL_POW_IIW(obits, lbits, rbits, lhs, rwp) \
+    static_cast<IData>(VL_POW_QQW(obits, lbits, rbits, lhs, rwp))
 #define VL_POW_QQI(obits, lbits, rbits, lhs, rhs) VL_POW_QQQ(obits, lbits, rbits, lhs, rhs)
 #define VL_POW_WWI(obits, lbits, rbits, owp, lwp, rhs) \
     VL_POW_WWQ(obits, lbits, rbits, owp, lwp, rhs)
@@ -1459,11 +1462,9 @@ WDataOutP VL_POW_WWQ(int obits, int, int rbits, WDataOutP owp, WDataInP const lw
 QData VL_POW_QQW(int obits, int, int rbits, QData lhs, WDataInP const rwp) VL_MT_SAFE;
 
 #define VL_POWSS_IIQ(obits, lbits, rbits, lhs, rhs, lsign, rsign) \
-    VL_POWSS_QQQ(obits, lbits, rbits, lhs, rhs, lsign, rsign)
-#define VL_POWSS_IIQ(obits, lbits, rbits, lhs, rhs, lsign, rsign) \
-    VL_POWSS_QQQ(obits, lbits, rbits, lhs, rhs, lsign, rsign)
+    static_cast<IData>(VL_POWSS_QQQ(obits, lbits, rbits, lhs, rhs, lsign, rsign))
 #define VL_POWSS_IIW(obits, lbits, rbits, lhs, rwp, lsign, rsign) \
-    VL_POWSS_QQW(obits, lbits, rbits, lhs, rwp, lsign, rsign)
+    static_cast<IData>(VL_POWSS_QQW(obits, lbits, rbits, lhs, rwp, lsign, rsign))
 #define VL_POWSS_QQI(obits, lbits, rbits, lhs, rhs, lsign, rsign) \
     VL_POWSS_QQQ(obits, lbits, rbits, lhs, rhs, lsign, rsign)
 #define VL_POWSS_WWI(obits, lbits, rbits, owp, lwp, rhs, lsign, rsign) \
