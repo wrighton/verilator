@@ -59,6 +59,37 @@ module t (
     if (q != $sampled(q) + 1) ++multi_bad;
   end
 
+  // Test: an action suspending does not hold back the actions of later attempts, or of another
+  // assertion on the clock, which still run in the time step of their evaluation
+  int susp_n = 0;
+  int susp_done_n = 0;
+  int susp_bad = 0;
+  a_susp :
+  assert property (@(posedge clk) 1) begin
+    ++susp_n;
+    if (q != $sampled(q) + 1) ++susp_bad;
+    @(posedge clk);
+    @(posedge clk);
+    @(posedge clk);
+    ++susp_done_n;
+  end
+  int loop_n = 0;
+  int loop_done_n = 0;
+  a_loop :
+  assert property (@(posedge clk) 1) begin
+    ++loop_n;
+    repeat (3) @(posedge clk);
+    ++loop_done_n;
+  end
+  int beside_n = 0;
+  int beside_bad = 0;
+  a_beside :
+  assert property (@(posedge clk) q < 0)
+  else begin
+    ++beside_n;
+    if (q != $sampled(q) + 1) ++beside_bad;
+  end
+
   // Test: procedural concurrent assertion
   int proc_n = 0;
   int proc_bad = 0;
@@ -171,6 +202,13 @@ module t (
       `checkd(fail_bad, 0);
       `checkd(multi_n, 6);
       `checkd(multi_bad, 0);
+      `checkd(susp_n, 10);
+      `checkd(susp_done_n, 7);
+      `checkd(susp_bad, 0);
+      `checkd(loop_n, 10);
+      `checkd(loop_done_n, 7);
+      `checkd(beside_n, 10);
+      `checkd(beside_bad, 0);
       `checkd(proc_n, 10);
       `checkd(proc_bad, 0);
       `checks(where, {scope, ".a_where"});
