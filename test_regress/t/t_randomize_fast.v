@@ -191,6 +191,97 @@ class CallbackQueue;
   endfunction
 endclass
 
+// :/ items whose coprime sizes have no 64-bit common denominator, plus a
+// := item. Unconstrained, each :/ item has mass 1 and the := item mass 10.
+class CoprimeDist;
+  rand bit [12:0] x;
+  constraint c {
+    x dist {
+      [13'd0 : 13'd1008] :/ 1,
+      [13'd1009 : 13'd2021] :/ 1,
+      [13'd2022 : 13'd3040] :/ 1,
+      [13'd3041 : 13'd4061] :/ 1,
+      [13'd4062 : 13'd5092] :/ 1,
+      [13'd5093 : 13'd6125] :/ 1,
+      [13'd6126 : 13'd7164] :/ 1,
+      [13'd7200 : 13'd7209] := 1
+    };
+  }
+endclass
+
+// The first item's count * weight does not fit in 64 bits, though both
+// masses do: 2^59 and 2^62, so 0..3 together have probability 1/9.
+class ClippedProduct;
+  rand bit [5:0] x;
+  constraint c {
+    x dist {
+      [6'd0 : 6'd31] :/ 64'h4000_0000_0000_0000,
+      [6'd40 : 6'd41] :/ 64'h4000_0000_0000_0000
+    };
+    x inside {[6'd0 : 6'd3], [6'd40 : 6'd41]};
+  }
+endclass
+
+// The total mass exceeds 64 bits; 10 and 20 each have probability just
+// below 1/2 and 30 has probability 1/(2^64 + 1).
+class HeavyPoints;
+  rand bit [5:0] x;
+  constraint c {
+    x dist {
+      6'd10 := 64'h8000_0000_0000_0000,
+      6'd20 := 64'h8000_0000_0000_0000,
+      6'd30 := 64'd1
+    };
+  }
+endclass
+
+// A heavy := point first: its weight times the :/ sizes' common denominator
+// does not fit in 64 bits. Every item has mass 2^36.
+class HeavyPoint;
+  rand bit [12:0] x;
+  constraint c {
+    x dist {
+      13'd7200 := 64'h10_0000_0000,
+      [13'd0 : 13'd1008] :/ 64'h10_0000_0000,
+      [13'd1009 : 13'd2021] :/ 64'h10_0000_0000,
+      [13'd2022 : 13'd3040] :/ 64'h10_0000_0000
+    };
+  }
+endclass
+
+// Nested :/ items with coprime sizes, crossing holes in the domain. Each
+// legal value weighs the sum of 1/size over the items containing it.
+class CoprimeOverlap;
+  rand bit [10:0] x;
+  constraint c {
+    x dist {
+      [11'd0 : 11'd1008] :/ 1,
+      [11'd0 : 11'd1012] :/ 1,
+      [11'd0 : 11'd1018] :/ 1,
+      [11'd0 : 11'd1020] :/ 1,
+      [11'd0 : 11'd1030] :/ 1,
+      [11'd0 : 11'd1032] :/ 1,
+      [11'd0 : 11'd1038] :/ 1
+    };
+    x inside {[11'd0 : 11'd9], [11'd1010 : 11'd1019], [11'd1030 : 11'd1039]};
+  }
+endclass
+
+// Coprime :/ sizes near 2^62, each restricted to a few values. Masses are
+// 1/(2^62-1), 2/(2^62+1) and 3/(2^62+3), so nearly 1:2:3.
+class TinyFractions;
+  rand bit [63:0] x;
+  constraint c {
+    x dist {
+      [64'h0 : 64'h3fff_ffff_ffff_fffe] :/ 1,
+      [64'h4000_0000_0000_0000 : 64'h8000_0000_0000_0000] :/ 1,
+      [64'h8000_0000_0000_0001 : 64'hc000_0000_0000_0003] :/ 1
+    };
+    x inside {64'h0, 64'h4000_0000_0000_0000, 64'h7fff_ffff_ffff_ffff,
+              [64'hc000_0000_0000_0001 : 64'hc000_0000_0000_0003]};
+  }
+endclass
+
 module t;
   localparam int N = 8192;
 
@@ -213,6 +304,34 @@ module t;
   endfunction
   function automatic int pick_signed(ref bit signed [6:0] value, input int lo, input int hi);
     return std::randomize(value) with {32'(value) inside {[lo : hi]};};
+  endfunction
+  // A range and its spelled-out points give the same per-value weights.
+  function automatic int pick_range_spelling(ref bit [6:0] value);
+    return std::randomize(value) with {
+      value dist {
+        [7'd0 : 7'd3] := 1,
+        7'd10 := 1
+      };
+      value != 7'd0;
+    };
+  endfunction
+  function automatic int pick_point_spelling(ref bit [6:0] value);
+    return std::randomize(value) with {
+      value dist {
+        7'd0 := 1,
+        7'd1 := 1,
+        7'd2 := 1,
+        7'd3 := 1,
+        7'd10 := 1
+      };
+      value != 7'd0;
+    };
+  endfunction
+  function automatic real coprime_weight(int value);
+    int sizes[7] = '{1009, 1013, 1019, 1021, 1031, 1033, 1039};
+    real weight = 0;
+    foreach (sizes[i]) if (value < sizes[i]) weight += 1.0 / sizes[i];
+    return weight;
   endfunction
 
   initial begin
@@ -481,6 +600,215 @@ module t;
         `checkd(bounded.value inside {bounded.allowed}, 1);
         `checkd(bounded.allowed.size(), 3);
       end
+    end
+
+    begin
+      // Removing a value keeps the other values' weights, however the
+      // dist spells them.
+      bit [6:0] value;
+      int range_counts[11];
+      int point_counts[11];
+      foreach (range_counts[i]) range_counts[i] = 0;
+      foreach (point_counts[i]) point_counts[i] = 0;
+      repeat (N) begin
+        `checkd(pick_range_spelling(value), 1);
+        `checkd(value inside {[7'd1 : 7'd3], 7'd10}, 1);
+        range_counts[int'(value)]++;
+        `checkd(pick_point_spelling(value), 1);
+        `checkd(value inside {[7'd1 : 7'd3], 7'd10}, 1);
+        point_counts[int'(value)]++;
+      end
+      foreach (range_counts[i]) begin
+        if (i inside {1, 2, 3, 10}) begin
+          `check_range(range_counts[i], N/ 4 - 200, N/ 4 + 200);
+          `check_range(point_counts[i], N/ 4 - 200, N/ 4 + 200);
+        end
+      end
+    end
+
+    begin
+      // :/ weighs each value 1/100 here; 100 alone keeps weight 1.
+      bit [6:0] value;
+      int hits;
+      hits = 0;
+      repeat (N) begin
+        randomize_result = std::randomize(value) with {
+          value dist {
+            [7'd0 : 7'd99] :/ 1,
+            7'd100 :/ 1
+          };
+          value inside {[7'd0 : 7'd9], 7'd100};
+        };
+        `checkd(randomize_result, 1);
+        `checkd(value inside {[7'd0 : 7'd9], 7'd100}, 1);
+        hits += int'(value == 7'd100);
+      end
+      `check_range(hits, 10 * N/ 11 - 200, 10 * N/ 11 + 200);
+    end
+
+    begin
+      // Removing 101 leaves per-value weights 1, 1, 2 and 5.
+      bit [8:0] value;
+      int counts[4];
+      foreach (counts[i]) counts[i] = 0;
+      repeat (N) begin
+        randomize_result = std::randomize(value) with {
+          value dist {
+            [9'd100 : 9'd102] := 1,
+            9'd200 := 2,
+            9'd300 := 5
+          };
+          value != 9'd101;
+        };
+        `checkd(randomize_result, 1);
+        case (value)
+          9'd100: counts[0]++;
+          9'd102: counts[1]++;
+          9'd200: counts[2]++;
+          9'd300: counts[3]++;
+          default: `stop;
+        endcase
+      end
+      `check_range(counts[0], N/ 9 - 200, N/ 9 + 200);
+      `check_range(counts[1], N/ 9 - 200, N/ 9 + 200);
+      `check_range(counts[2], 2 * N/ 9 - 200, 2 * N/ 9 + 200);
+      `check_range(counts[3], 5 * N/ 9 - 200, 5 * N/ 9 + 200);
+    end
+
+    begin
+      CoprimeDist coprime;
+      int lows[8];
+      int sizes[7];
+      int counts[8];
+      int item;
+      real total;
+      lows = '{0, 1009, 2022, 3041, 4062, 5093, 6126, 7200};
+      sizes = '{1009, 1013, 1019, 1021, 1031, 1033, 1039};
+      coprime = new;
+      foreach (counts[i]) counts[i] = 0;
+      repeat (N) begin
+        randomize_result = coprime.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(coprime.x inside {[13'd0 : 13'd7164], [13'd7200 : 13'd7209]}, 1);
+        item = 0;
+        foreach (lows[i]) if (int'(coprime.x) >= lows[i]) item = i;
+        counts[item]++;
+      end
+      for (int i = 0; i < 7; i++) `check_range(counts[i], N/ 17 - 200, N/ 17 + 200);
+      `check_range(counts[7], 10 * N/ 17 - 200, 10 * N/ 17 + 200);
+      // Keeping i+1 values of :/ item i gives it mass (i+1)/size.
+      foreach (counts[i]) counts[i] = 0;
+      repeat (N) begin
+        randomize_result = coprime.randomize() with {
+          x inside {13'd0, [13'd1009 : 13'd1010], [13'd2022 : 13'd2024], [13'd3041 : 13'd3044],
+                    [13'd4062 : 13'd4066], [13'd5093 : 13'd5098], [13'd6126 : 13'd6132]};
+        };
+        `checkd(randomize_result, 1);
+        item = 0;
+        foreach (lows[i]) if (int'(coprime.x) >= lows[i]) item = i;
+        `check_range(int'(coprime.x) - lows[item], 0, item);
+        counts[item]++;
+      end
+      total = 0;
+      foreach (sizes[i]) total += (i + 1.0) / sizes[i];
+      foreach (sizes[i]) begin
+        `check_range(counts[i], int'(N * (i + 1.0) / sizes[i] / total) - 200,
+                     int'(N * (i + 1.0) / sizes[i] / total) + 200);
+      end
+    end
+
+    begin
+      ClippedProduct clipped;
+      int counts[64];
+      clipped = new;
+      foreach (counts[i]) counts[i] = 0;
+      repeat (N) begin
+        randomize_result = clipped.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(clipped.x inside {[6'd0 : 6'd3], 6'd40, 6'd41}, 1);
+        counts[clipped.x]++;
+      end
+      for (int i = 0; i < 4; i++) `check_range(counts[i], N/ 36 - 100, N/ 36 + 100);
+      `check_range(counts[40], 4 * N/ 9 - 200, 4 * N/ 9 + 200);
+      `check_range(counts[41], 4 * N/ 9 - 200, 4 * N/ 9 + 200);
+    end
+
+    begin
+      HeavyPoints heavy_points;
+      int counts[64];
+      heavy_points = new;
+      foreach (counts[i]) counts[i] = 0;
+      repeat (N) begin
+        randomize_result = heavy_points.randomize();
+        `checkd(randomize_result, 1);
+        counts[heavy_points.x]++;
+      end
+      `check_range(counts[10], N/ 2 - 200, N/ 2 + 200);
+      `checkd(counts[10] + counts[20], N);
+    end
+
+    begin
+      HeavyPoint heavy;
+      int counts[4];
+      heavy = new;
+      foreach (counts[i]) counts[i] = 0;
+      repeat (N) begin
+        randomize_result = heavy.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(heavy.x inside {[13'd0 : 13'd3040], 13'd7200}, 1);
+        if (heavy.x < 13'd1009) counts[0]++;
+        else if (heavy.x < 13'd2022) counts[1]++;
+        else if (heavy.x < 13'd3041) counts[2]++;
+        else counts[3]++;
+      end
+      foreach (counts[i]) `check_range(counts[i], N/ 4 - 200, N/ 4 + 200);
+    end
+
+    begin
+      CoprimeOverlap overlap;
+      int counts[3];
+      real weights[3];
+      real total;
+      overlap = new;
+      foreach (counts[i]) counts[i] = 0;
+      repeat (N) begin
+        randomize_result = overlap.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(overlap.x inside {[11'd0 : 11'd9], [11'd1010 : 11'd1019], [11'd1030 : 11'd1038]},
+                1);
+        if (overlap.x < 11'd1000) counts[0]++;
+        else if (overlap.x < 11'd1030) counts[1]++;
+        else counts[2]++;
+      end
+      foreach (weights[i]) weights[i] = 0;
+      for (int v = 0; v < 10; v++) weights[0] += coprime_weight(v);
+      for (int v = 1010; v < 1020; v++) weights[1] += coprime_weight(v);
+      for (int v = 1030; v < 1040; v++) weights[2] += coprime_weight(v);
+      total = weights[0] + weights[1] + weights[2];
+      foreach (counts[i]) begin
+        `check_range(counts[i], int'(N * weights[i] / total) - 200,
+                     int'(N * weights[i] / total) + 200);
+      end
+    end
+
+    begin
+      TinyFractions tiny;
+      int counts[3];
+      tiny = new;
+      foreach (counts[i]) counts[i] = 0;
+      repeat (N) begin
+        randomize_result = tiny.randomize();
+        `checkd(randomize_result, 1);
+        case (tiny.x)
+          64'h0: counts[0]++;
+          64'h4000_0000_0000_0000, 64'h7fff_ffff_ffff_ffff: counts[1]++;
+          64'hc000_0000_0000_0001, 64'hc000_0000_0000_0002, 64'hc000_0000_0000_0003: counts[2]++;
+          default: `stop;
+        endcase
+      end
+      `check_range(counts[0], N/ 6 - 200, N/ 6 + 200);
+      `check_range(counts[1], 2 * N/ 6 - 200, 2 * N/ 6 + 200);
+      `check_range(counts[2], 3 * N/ 6 - 200, 3 * N/ 6 + 200);
     end
 
     $write("Fast digest=%0h\n", digest);
