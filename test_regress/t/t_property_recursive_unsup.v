@@ -46,6 +46,15 @@ module t (
   assert property (@(posedge clk) val |-> p_self);
   assert property (@(posedge clk) val |-> p_mutual1);
 
+  // Recursive property, legal unlike a recursive sequence (IEEE 1800-2023 16.12.17)
+  sequence s_val;
+    val;
+  endsequence
+  property prop_always(p);
+    p and (1'b1 |=> prop_always(p));
+  endproperty
+  assert property (@(posedge clk) s_val |=> prop_always(val));
+
   always @(posedge clk) begin
     $write("*-* All Finished *-*\n");
     $finish;

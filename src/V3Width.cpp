@@ -544,6 +544,7 @@ class WidthVisitor final : public VNVisitor {
     ContainingClassFinder m_containingClassFinder;  // Finds the class containing a node
     std::unordered_set<AstVar*> m_aliasedVars;  // Variables referenced in alias
     std::unordered_set<const AstVar*> m_seqUntypedFormals;  // Untyped formals of current sequence
+    std::vector<const AstSequence*> m_seqStack;  // Sequences being widthed, outermost first
     // Formals and local variables of the current property or sequence
     std::unordered_set<const AstVar*> m_schemaVars;
     // Formals that may be assigned through a sequence, kept for the whole pass as declarations
@@ -10755,10 +10756,33 @@ class WidthVisitor final : public VNVisitor {
             const AstVar* const varp = VN_CAST(declp, Var);
             if (varp && !varp->isIO()) m_propLocalVarps.emplace(varp);
         }
+        // Instances in the declaration are widthed with it on the stack, so an instance of a
+        // sequence on the stack is a cyclic dependency (IEEE 1800-2023 16.8)
+        nodep->doingWidth(true);
+        m_seqStack.push_back(nodep);
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "SeqBody", nodep->exprp(), SELF, BOTH);
+        m_seqStack.pop_back();
+        nodep->doingWidth(false);
         checkSvaInstanceOperands(nodep->exprp(), true);
         nodep->didWidth(true);
+    }
+    // Report and replace an instance of a sequence on the stack, as expanding it would never end
+    void replaceCyclicSequence(AstSchemaRef* nodep, const AstSequence* const seqp) {
+        // Each sequence from seqp instantiates the next, the last one instantiating seqp
+        const auto it = std::find(m_seqStack.begin(), m_seqStack.end(), seqp);
+        UASSERT_OBJ(it != m_seqStack.end(), nodep, "Sequence being widthed is not on the stack");
+        std::string cycle;
+        std::for_each(it, m_seqStack.end(), [&cycle](const AstSequence* const stackp) {
+            cycle += stackp->prettyNameQ() + " -> ";
+        });
+        nodep->v3error("Sequence instance " << seqp->prettyNameQ()
+                                            << " forms a cyclic dependency among named sequences"
+                                               " (IEEE 1800-2023 16.8).\n"
+                                            << nodep->warnMore() << "... Cycle: " << cycle
+                                            << seqp->prettyNameQ());
+        nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     // The actual argument of a formal that may be assigned through a sequence must be an entire
     // local variable (IEEE 1800-2023 16.10); a formal of the enclosing declaration passed on is
@@ -10815,6 +10839,12 @@ class WidthVisitor final : public VNVisitor {
                                           : std::pair<const AstVar*, bool>{nullptr, false});
         }
         if (needsTypedFormals(nodep->schemap())) typeUntypedFormals(nodep);
+        // Checked once retargeted, as a typed copy is on the stack while widthed
+        const AstSequence* const seqp = VN_CAST(nodep->schemap(), Sequence);
+        if (seqp && seqp->doingWidth()) {
+            replaceCyclicSequence(nodep, seqp);
+            return;
+        }
         userIterate(nodep->schemap(), nullptr);
         size_t argn = 0;
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
