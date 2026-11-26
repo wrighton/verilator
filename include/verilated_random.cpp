@@ -757,9 +757,17 @@ void VlRandomVar::emitElement(std::ostream& s, int /*j*/) const { s << ' ' << m_
 // Serialize the current runtime value as an SMT-LIB binary literal. Used by
 // randomize(null) to pin a var via `(assert (= var #b...))`. Binary (#b)
 // rather than hex (#x) sidesteps SMT-LIB's hex-width-multiple-of-4 rule.
-void VlRandomVar::emitConcreteValue(std::ostream& s) const {
-    const int w = width();
-    const void* const dp = datap(0);
+void VlRandomVar::emitConcreteValue(std::ostream& s) const { emitBinary(s, datap(0), width()); }
+void VlRandomVar::emitElementPins(std::ostream& s) const {
+    for (int j = 0; j < totalWidth() / width(); ++j) {
+        s << "(assert (=";
+        emitElement(s, j);
+        s << ' ';
+        emitBinary(s, datap(j), width());
+        s << "))\n";
+    }
+}
+void VlRandomVar::emitBinary(std::ostream& s, const void* dp, int w) {
     s << "#b";
     for (int i = w - 1; i >= 0; --i) {
         int bit = 0;
@@ -867,6 +875,7 @@ void VlRandomizer::randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
         }
     } else {
         for (const auto& var : m_vars) {
+            if (isFrozenVar(var.first, *var.second)) continue;
             vars.push_back(var.second.get());
             varBits += var.second->totalWidth();
         }
@@ -1079,6 +1088,10 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
         os << "(declare-fun " << var.first << " () ";
         var.second->emitType(os);
         os << ")\n";
+        // The constraints read an array with rand_mode() off as state (IEEE 1800-2023 18.8)
+        if (var.second->dimension() > 0 && isFrozenVar(var.first, *var.second)) {
+            var.second->emitElementPins(os);
+        }
         // Pin each var to its current value
         if (pinCurrent) {
             assert(var.second->dimension() == 0);
@@ -1466,9 +1479,10 @@ bool VlRandomizer::generateSamples(VlSolverSession& sess, VlRNG& rngr) VL_REQUIR
 }
 
 void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
+    // A variable with rand_mode() off is not sampled, as the solve keeps its value
     bool hasArray = false;
     for (const auto& var : m_vars) {
-        if (var.second->dimension() > 0) {
+        if (var.second->dimension() > 0 && !isFrozenVar(var.first, *var.second)) {
             hasArray = true;
             break;
         }
@@ -1487,6 +1501,7 @@ void VlRandomizer::solveDiversityPins(VlRNG& rngr, VlSolverSession& sess)
     // drop one conflicting literal per round until compatible
     int npins = 0;
     for (const auto& var : m_vars) {
+        if (isFrozenVar(var.first, *var.second)) continue;
         const int w = var.second->totalWidth();
         for (int b = 0; b < w; ++b) {
             const bool target = (VL_RANDOM_RNG_I(rngr) & 1);
@@ -1646,6 +1661,8 @@ bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
     size_t requested = 0;
     std::stringstream getValueStr;
     for (const auto& var : m_vars) {
+        // Not written, see parseModel
+        if (isFrozenVar(var.first, *var.second)) continue;
         if (var.second->dimension() > 0) {
             auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
             var.second->setArrayInfo(arrVarsp);

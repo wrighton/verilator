@@ -91,6 +91,10 @@ public:
     // Emit the current runtime value as an SMT bit-vector literal (#b...).
     // Used by randomize(null) to pin a var to its existing value.
     virtual void emitConcreteValue(std::ostream& s) const;
+    // Assert each element equal to its current value
+    void emitElementPins(std::ostream& s) const;
+    // SMT-LIB binary literal of the 'width' bit value at 'datap'
+    static void emitBinary(std::ostream& s, const void* datap, int width);
     virtual int totalWidth() const;
     mutable std::shared_ptr<const ArrayInfoMap> m_arrVarsRefp;
     void setArrayInfo(const std::shared_ptr<const ArrayInfoMap>& arrVarsRefp) const {

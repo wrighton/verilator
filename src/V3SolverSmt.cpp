@@ -1160,7 +1160,15 @@ class ConstraintExprVisitor final : public VNVisitor {
         // from reformatting the SMT variable name into a hex literal
         AstNodeExpr* exprp = new AstSFormatF{
             nodep->fileline(), m_nestedAccessp ? nodep->name() : smtName, false, nullptr};
-        if (!randMode.usesMode) {
+        // An array of integral elements with rand_mode() off is given to the solver with each
+        // element pinned to its current value (see VlRandomizer::emitDeclares), so is named as
+        // when on, also where a random index selects from it
+        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+        const bool pinnedArray = !m_nestedAccessp
+                                 && (VN_IS(dtypep, UnpackArrayDType)
+                                     || VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, QueueDType))
+                                 && dtypep->subDTypep()->skipRefp()->isIntegralOrPacked();
+        if (!randMode.usesMode || pinnedArray) {
             // Global constraints keep nodep alive for write_var processing
             if (!isGlobalConstrained) VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return exprp;
