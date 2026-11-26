@@ -254,6 +254,10 @@ class CastVisitor final : public VNVisitor {
         }
         nodep->user1(1);
     }
+    void visit(AstLambdaArgRef* nodep) override {
+        // A lambda argument is declared with the C type of its value, so is of known size
+        nodep->user1(1);
+    }
     void visit(AstConst* nodep) override {
         // Constants are of unknown size if smaller than 33 bits, because
         // we're too lazy to wrap every constant in the universe in
