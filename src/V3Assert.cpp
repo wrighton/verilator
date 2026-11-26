@@ -1102,13 +1102,18 @@ class AssertVisitor final : public VNVisitor {
         return bodysp;
     }
 
+    // Add a variable of state of the module, static in a class, whose processes are static
+    void addStateVar(AstVar* varp) {
+        if (VN_IS(m_modp, Class)) varp->lifetime(VLifetime::STATIC_EXPLICIT);
+        m_modp->addStmtsp(varp);
+    }
     AstVar* createDelayedVar(const std::string& name, AstAlways* alwaysp, AstNodeExpr* exprp,
                              AstNodeExpr* initp) {
         FileLine* const flp = exprp->fileline();
         AstVar* const varp = new AstVar{flp, VVarType::MODULETEMP, name, exprp->dtypep()};
         // TODO: this lifetime seems nonsene (can't have NBAs to automatics), but is as before
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-        m_modp->addStmtsp(varp);
+        addStateVar(varp);
         // Before enough clock ticks, $past returns the expression's default sampled value.
         if (initp) {
             m_modp->addStmtsp(new AstInitialStatic{
@@ -1185,7 +1190,7 @@ class AssertVisitor final : public VNVisitor {
             varpr = new AstVar{flp, VVarType::MODULETEMP,
                                "_Vpast_" + cvtToStr(m_modPastNum++) + "_t",
                                m_modp->findUInt64DType()};
-            m_modp->addStmtsp(varpr);
+            addStateVar(varpr);
             AstNodeExpr* const timep = new AstCExpr{flp, "vlSymsp->_vm_contextp__->time()", 64};
             alwaysp->addStmtsp(
                 new AstAssign{flp, new AstVarRef{flp, varpr, VAccess::WRITE}, timep});
@@ -1892,6 +1897,15 @@ class AssertVisitor final : public VNVisitor {
     //========== Move $sampled down to read-only variables
     void visit(AstSampled* nodep) override {
         if (nodep->user1()) return;
+        // Sampled values and their history are static, so not of each object
+        nodep->exprp()->foreach([](const AstNodeVarRef* refp) {
+            const AstVar* const varp = refp->varp();
+            if (varp->isClassMember() && !varp->lifetime().isStatic()) {
+                refp->v3warn(E_UNSUPPORTED,
+                             "Unsupported: sampled value of non-static class property "
+                                 << refp->prettyNameQ() << ".");
+            }
+        });
         VL_RESTORER(m_inSampled);
         {
             m_inSampled = true;
