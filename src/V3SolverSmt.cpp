@@ -65,8 +65,68 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 //######################################################################
 // Helpers shared by the lowering visitors
 
+// A value with x or z bits in a constraint, written or of parameter paramp, is an error
+static void fourStateError(const AstNode* nodep, const AstConst* valuep, const AstVar* paramp) {
+    nodep->v3error("Constraint expression "
+                   << (paramp ? "reads parameter " + paramp->prettyNameQ() + " of" : "has")
+                   << " 4-state value '" << valuep->num().ascii()
+                   << "' (x, z or '?' bits), but constraints support only 2-state values"
+                      " (IEEE 1800-2023 18.3).");
+}
+
+// Report each x or z in nodep, written or of a 4-state parameter, as an error; return
+// whether there was none. Constraints support only 2-state values (IEEE 1800-2023 18.3).
+static bool checkTwoState(AstNode* nodep) {
+    bool twoState = true;
+    nodep->foreach([&](const AstNodeExpr* exprp) {
+        const AstVarRef* const refp = VN_CAST(exprp, VarRef);
+        const AstVar* const paramp
+            = refp && refp->varp()->isParam() && refp->varp()->dtypep()->skipRefp()->isFourstate()
+                  ? refp->varp()
+                  : nullptr;
+        const AstConst* const valuep
+            = paramp ? VN_CAST(paramp->valuep(), Const) : VN_CAST(exprp, Const);
+        if (valuep && valuep->num().isAnyXZ()) {
+            fourStateError(exprp, valuep, paramp);
+            twoState = false;
+        }
+    });
+    return twoState;
+}
+
+static bool isDivModPow(const AstNode* nodep) {
+    return VN_IS(nodep, Div) || VN_IS(nodep, DivS) || VN_IS(nodep, ModDiv) || VN_IS(nodep, ModDivS)
+           || VN_IS(nodep, Pow) || VN_IS(nodep, PowSS) || VN_IS(nodep, PowSU)
+           || VN_IS(nodep, PowUS);
+}
+
 // SMT constant with the value of nodep
 static AstSFormatF* getConstFormat(AstNodeExpr* nodep) {
+    // Constraints support only 2-state values (IEEE 1800-2023 18.3): an x or z written in
+    // one, also by a 4-state parameter, is an error. As a computable value is formatted
+    // whole, without visiting it, its subtree is searched.
+    checkTwoState(nodep);
+    std::vector<AstNodeBiop*> opps;  // Divisions, moduli and powers, outermost first
+    nodep->foreach([&](AstNodeBiop* opp) {
+        if (isDivModPow(opp)) opps.push_back(opp);
+    });
+    // The x of a division or modulus by zero, or of a power of 0 with a negative exponent,
+    // of 2-state values is 0 where it is given (11.3.4), as in procedural code, so the value
+    // does not depend on how its expression is grouped: innermost first, each is folded
+    for (auto it = opps.rbegin(); it != opps.rend(); ++it) {
+        AstNodeExpr* const foldedp = V3Const::constifyEdit(*it);
+        if (*it == nodep) nodep = foldedp;
+        AstConst* const constp = VN_CAST(foldedp, Const);
+        if (constp && constp->num().isAnyXZ()) constp->num().setAllBits0();
+    }
+    nodep = V3Const::constifyEdit(nodep);
+    // Any other x folding gives is 0 too, so no x or z is formatted
+    if (AstConst* const constp = VN_CAST(nodep, Const)) {
+        if (constp->num().isAnyXZ()) {
+            const V3Number num{constp->num()};
+            constp->num().opBitsOne(num);
+        }
+    }
     return new AstSFormatF{nodep->fileline(), (nodep->width() & 3) ? "#b%b" : "#x%x", false,
                            nodep};
 }
@@ -3736,6 +3796,10 @@ private:
             if (!cp) {
                 nodep->v3warn(E_UNSUPPORTED,
                               "Unsupported: non-constant control in $countbits inside constraint");
+            } else if (cp->num().isAnyXZ()) {
+                fourStateError(cp, cp, nullptr);
+            }
+            if (!cp || cp->num().isAnyXZ()) {
                 AstConst* const zerop
                     = new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0U};
                 nodep->replaceWith(zerop);
@@ -8089,6 +8153,8 @@ class SolverSmtLowering final : public V3SolverLowering {
         FileLine* const fl = distp->fileline();
         std::vector<DistBucket> buckets;
         for (AstDistItem* const ditemp : distp->itemspList()) {
+            // A weight is evaluated, not solved, so is checked here
+            if (!checkTwoState(ditemp->weightp())) continue;
             if (const AstConst* const constp = VN_CAST(ditemp->weightp(), Const)) {
                 if (constp->toUQuad() == 0) continue;
             }
