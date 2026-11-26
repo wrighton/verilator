@@ -3658,17 +3658,28 @@ class RandomizeVisitor final : public VNVisitor {
                 if (commonPrefixp == exprp) break;
                 AstVar* const randVarp = getVarFromRef(exprp);
                 AstClass* const classp = VN_AS(randVarp->user2p(), Class);
+                // The other members are state (IEEE 1800-2023 18.11), also the static ones, so
+                // both the per-instance and the static rand_mode arrays are cleared
+                for (AstVar* const modeVarp :
+                     {RandModeVars::randModeVarp(classp), getStaticRandModeVar(classp)}) {
+                    if (!modeVarp || !savedRandModeVarps.insert(modeVarp).second) continue;
+                    // The per-instance array of the object of a static member
+                    AstMethodCall* const callp = VN_CAST(nodep, MethodCall);
+                    AstNodeExpr* const objExprp
+                        = callp && randVarp->lifetime().isStatic()
+                                  && !modeVarp->lifetime().isStatic()
+                              ? new AstMemberRef{fl, callp->fromp()->cloneTree(false), randVarp}
+                              : nullptr;
+                    tmpVarps = AstNode::addNext(
+                        tmpVarps, makeTmpRandModeVar(objExprp ? objExprp : exprp, modeVarp,
+                                                     storeStmtsp, restoreStmtsp));
+                    if (objExprp) VL_DO_DANGLING(objExprp->deleteTree(), objExprp);
+                }
                 AstVar* const randModeVarp = randVarp->lifetime().isStatic()
                                                  ? getStaticRandModeVar(classp)
                                                  : RandModeVars::randModeVarp(classp);
                 UASSERT_OBJ(randModeVarp, randVarp,
                             "Rand var with rand_mode must have a mode array");
-                if (savedRandModeVarps.find(randModeVarp) == savedRandModeVarps.end()) {
-                    AstVar* const randModeTmpVarp
-                        = makeTmpRandModeVar(exprp, randModeVarp, storeStmtsp, restoreStmtsp);
-                    savedRandModeVarps.insert(randModeVarp);
-                    tmpVarps = AstNode::addNext(tmpVarps, randModeTmpVarp);
-                }
                 const RandomizeMode randMode = {.asUQuad = randVarp->user1()};
                 AstDynArraySel* const setp
                     = new AstDynArraySel{fl, makeModeVarRef(exprp, randModeVarp, VAccess::WRITE),
