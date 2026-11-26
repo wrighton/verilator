@@ -137,6 +137,70 @@ module t;
       `checkh(p, 4'd1);
     end
 
+    // Reductions without 'with' return the element type (IEEE 1800-2023 7.12.3)
+    begin
+      typedef bit [6:0] elem_t;
+      localparam bit [6:0] P[3] = '{100, 100, 1};
+      localparam int PSUM = int'(P.sum());
+      elem_t f[3:1];
+      elem_t d[];
+      elem_t q[$];
+      elem_t a[int];
+      f = '{100, 100, 1};
+      d = '{100, 100, 1};
+      q = '{100, 100, 1};
+      a = '{1: 100, 2: 100, 3: 1};
+      `checkh(int'(f.sum()), 73);
+      `checkh($bits(f.sum()), 7);
+      `checkh(int'(f.product()), 16);
+      `checkh(PSUM, 73);
+      `checkh(int'(f.sum()), int'(d.sum()));
+      `checkh(int'(f.sum()), int'(q.sum()));
+      `checkh(int'(f.sum()), int'(a.sum()));
+      `checkh(int'(f.product()), int'(d.product()));
+      `checkh(int'(f.product()), int'(q.product()));
+      `checkh(f.sum() with (int'(item)), 201);
+    end
+    begin
+      byte s[3];
+      byte b[2];
+      s = '{-100, -100, -100};
+      `checkh(int'(s.sum()), -44);
+      b = '{-2, 1};
+      `checkh(int'(b.or()), -1);
+      `checkh(int'(b.and()), 0);
+      `checkh(int'(b.xor()), -1);
+    end
+    begin
+      bit [64:0] w[2];
+      w = '{'1, 2};
+      `checkh(96'(w.sum()), 96'h1);
+      `checkh(96'(w.product()), 96'h1_ffff_ffff_ffff_fffe);
+    end
+    begin
+      typedef enum bit [1:0] {E0, E1, E2, E3} enum_t;
+      enum_t e[3];
+      enum_t ev;
+      e = '{E3, E2, E1};
+      ev = e.sum();
+      `checkh(ev, E2);
+      `checkh(int'(e.sum()), 2);
+    end
+    begin
+      typedef struct packed {
+        bit [2:0] hi;
+        bit [3:0] lo;
+      } struct_t;
+      struct_t ps[3];
+      ps = '{'{7, 15}, '{7, 15}, '{0, 2}};
+      `checkh(int'(ps.sum()), 0);
+    end
+    begin
+      bit [6:0] m[2][1:3];
+      m = '{'{1, 1, 1}, '{100, 100, 1}};
+      `checkh(int'(m[1].sum()), 73);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
