@@ -2564,12 +2564,22 @@ class LinkDotFindVisitor final : public VNVisitor {
         iterateAndNextNull(nodep->itemsp());
         // If the block has no name, one cannot reference the clockvars
         VSymEnt* itSymp = nullptr;
-        if (nodep->isGlobal()  //
-            && m_statep->forPrimary()) {  // else flattening may see two globals
-            m_statep->checkDuplicate(m_curSymp, nodep, "__024global_clock");
-            itSymp
-                = m_statep->insertBlock(m_curSymp, "__024global_clock", nodep, m_classOrPackagep);
-            itSymp->fallbackp(nullptr);
+        if (nodep->isGlobal()) {
+            if (m_statep->forPrimary()) {  // else flattening may see two globals
+                m_statep->checkDuplicate(m_curSymp, nodep, "__024global_clock");
+                itSymp = m_statep->insertBlock(m_curSymp, "__024global_clock", nodep,
+                                               m_classOrPackagep);
+                itSymp->fallbackp(nullptr);
+            }
+            // The name by which instances below find the event
+            if (itSymp) {
+                m_curSymp->reinsert(AstClocking::globalEventName(), itSymp);
+            } else {
+                m_statep
+                    ->insertBlock(m_curSymp, AstClocking::globalEventName(), nodep,
+                                  m_classOrPackagep)
+                    ->fallbackp(nullptr);
+            }
         }
         if (!nodep->name().empty()) {
             itSymp = m_statep->insertBlock(m_curSymp, nodep->name(), nodep, m_classOrPackagep);
@@ -4195,6 +4205,19 @@ private:
         if (!nodep->varp()->isFuncLocal() && !nodep->varp()->isClassMember()) {
             VSymEnt* const varSymp
                 = m_statep->insertSym(m_modSymp, nodep->varp()->name(), nodep, nullptr);
+            // Also by the name instances below find it by, in its inlined scope
+            if (nodep->varp()->isGlobalClockingEvent()) {
+                const string& name = nodep->varp()->name();
+                const string& origName = nodep->varp()->origName();
+                UASSERT_OBJ(
+                    name.size() >= origName.size()
+                        && name.compare(name.size() - origName.size(), string::npos, origName)
+                               == 0,
+                    nodep, "Inlined name should end with the original name");
+                m_modSymp->reinsert(name.substr(0, name.size() - origName.size())
+                                        + AstClocking::globalEventName(),
+                                    varSymp);
+            }
             if (nodep->varp()->isIfaceRef()) {
                 AstIfaceRefDType* const dtypep
                     = LinkDotState::ifaceRefFromArray(nodep->varp()->dtypep());
@@ -4709,6 +4732,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     LinkDotState* const m_statep;  // State, including dotted symbol table
     VSymEnt* m_curSymp = nullptr;  // SymEnt for current lookup point
     VSymEnt* m_modSymp = nullptr;  // SymEnt for current module
+    bool m_globalClockEventsMade = false;  // Made the event of each global clocking
     VSymEnt* m_pinSymp = nullptr;  // SymEnt for pin lookups
     VSymEnt* m_randSymp = nullptr;  // SymEnt for randomize target class's lookups
     const AstCell* m_cellp = nullptr;  // Current cell
@@ -5095,6 +5119,24 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (AstClocking* const clockingp = VN_CAST(nodep, Clocking)) return clockingp;
         if (const AstModportClockingRef* const clockingRefp = VN_CAST(nodep, ModportClockingRef))
             return clockingRefp->clockingp();
+        return nullptr;
+    }
+    static constexpr const char* globalClockMissingMessage
+        = "No global clocking in the instance, or in an enclosing instance, for '$global_clock'"
+          " (IEEE 1800-2023 14.14).";
+    // A reference to the global clocking of an enclosing instance, see visit(AstParseRef)
+    static bool isGlobalClockXRef(const AstVarXRef* nodep) {
+        return nodep->dotted().empty() && nodep->name() == AstClocking::globalEventName();
+    }
+    // The event of the global clocking effective at a scope: the nearest one declared in it or
+    // an enclosing instance (IEEE 1800-2023 14.14)
+    VSymEnt* findGlobalClockEventSymp(VSymEnt* symp, string& baddot) {
+        const string name = AstClocking::globalEventName();
+        for (; symp; symp = symp->parentp()) {
+            if (VSymEnt* const foundp = m_statep->findSymPrefixed(symp, name, baddot, false)) {
+                return foundp;
+            }
+        }
         return nullptr;
     }
     VSymEnt* getCreateClockingEventSymEnt(AstClocking* clockingp) {
@@ -6512,6 +6554,28 @@ class LinkDotResolveVisitor final : public VNVisitor {
             m_ds.init(m_curSymp);
             // Note m_ds.m_dotp remains nullptr; this is a reference not under a dot
         }
+        if (start && m_inSens && nodep->name() == "__024global_clock"
+            && !m_curSymp->findIdFallback(nodep->name())) {
+            // Not declared in this module: refer to an enclosing instance's, found for each
+            // instance as the reference is resolved
+            string baddot;
+            if (findGlobalClockEventSymp(m_curSymp, baddot)) {
+                // Instances may find any global clocking, so each needs its event
+                if (!m_globalClockEventsMade) {
+                    m_globalClockEventsMade = true;
+                    v3Global.rootp()->foreach([](AstClocking* clockingp) {
+                        if (clockingp->isGlobal()) clockingp->ensureEventp(true);
+                    });
+                }
+                AstVarXRef* const newp = new AstVarXRef{
+                    nodep->fileline(), AstClocking::globalEventName(), "", VAccess::READ};
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                iterate(newp);
+                m_ds = lastStates;
+                return;
+            }
+        }
         if (nodep->isSuper()) {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: super");
             m_ds.m_dotErr = true;
@@ -7550,6 +7614,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         prefix = std::move(nextPrefix);
                     }
                     baddot = nodep->name();
+                } else if (isGlobalClockXRef(nodep)) {
+                    foundp = findGlobalClockEventSymp(dotSymp, baddot);
                 } else {
                     foundp = m_statep->findSymPrefixed(dotSymp, nodep->name(), baddot, true, true);
                 }
@@ -7567,6 +7633,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 UINFO(7, indent() << "Resolved " << nodep);  // Also prints varp
                 // If found, check if it's ok to access in case it's in a hier_block
                 if (nodep->varp() && errorHierNonPort(nodep, nodep->varp(), dotSymp)) return;
+                if (!nodep->varp() && isGlobalClockXRef(nodep)) {
+                    nodep->v3error(globalClockMissingMessage);
+                    return;
+                }
                 if (!nodep->varp()) {
                     nodep->v3error("Can't find definition of "
                                    << AstNode::prettyNameQ(baddot) << " in dotted signal: '"
@@ -7586,7 +7656,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 AstVarScope* vscp = findVirtualPortVarScope(dotSymp, nodep->name());
                 if (!vscp) {
                     VSymEnt* const foundp
-                        = m_statep->findSymPrefixed(dotSymp, nodep->name(), baddot, true);
+                        = isGlobalClockXRef(nodep)
+                              ? findGlobalClockEventSymp(dotSymp, baddot)
+                              : m_statep->findSymPrefixed(dotSymp, nodep->name(), baddot, true);
                     vscp = foundp ? VN_CAST(foundp->nodep(), VarScope) : nullptr;
                 }
                 // If found, check if it's ok to access in case it's in a hier_block
@@ -7597,7 +7669,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                 "Assertion control site bound to another elaboration");
                     nodep->assertCtlOptional(false);
                 }
-                if (!vscp) {
+                if (!vscp && isGlobalClockXRef(nodep)) {
+                    nodep->v3error(globalClockMissingMessage);
+                } else if (!vscp) {
                     nodep->v3error("Can't find varpin scope of "
                                    << AstNode::prettyNameQ(baddot) << " in dotted signal: '"
                                    << nodep->dotted() + "." + nodep->prettyName() << "'\n"
