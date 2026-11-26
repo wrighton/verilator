@@ -515,6 +515,70 @@ public:
 //######################################################################
 // Fork visitor, transforms asynchronous blocks into separate tasks
 
+// Rescope hierarchical references moved into a fork branch task. BeginXRefScopeVisitor recorded
+// in them the named blocks above, which V3Begin keeps as scopes only outside of tasks, so the
+// blocks that moved into the task are removed from them, as are the blocks around the calls of
+// the tasks of forks nested in it, that moved into it with them.
+class ForkXRefRescopeVisitor final : public VNVisitor {
+    // STATE
+    std::string m_scope;  // Named blocks above, in the task, as recorded
+    // Tasks of nested forks rescoped, each once, as V3Fork calls each from one place
+    std::unordered_set<const AstTask*> m_nestedTaskps;
+
+    // METHODS
+    static bool isForkTask(const AstNodeFTask* taskp) {
+        return VN_IS(taskp, Task) && VString::startsWith(taskp->name(), "__VforkTask_");
+    }
+    // Remove 'suffix' recorded last in the reference's scope, if it is there
+    static void unscope(AstNode* nodep, const std::string& suffix) {
+        if (suffix.empty()) return;
+        const auto rescope = [&](const std::string& dots) -> std::string {
+            if (dots == suffix) return "";
+            const std::string tail = "__DOT__" + suffix;
+            if (VString::endsWith(dots, tail)) return dots.substr(0, dots.size() - tail.size());
+            return dots;
+        };
+        if (AstVarXRef* const refp = VN_CAST(nodep, VarXRef)) {
+            refp->inlinedDots(rescope(refp->inlinedDots()));
+        } else if (AstNodeFTaskRef* const refp = VN_CAST(nodep, NodeFTaskRef)) {
+            if (!refp->dotted().empty()) refp->inlinedDots(rescope(refp->inlinedDots()));
+        }
+    }
+    // Remove 'suffix' from all references in a nested fork's task, and those nested in it
+    void unscopeTask(AstTask* taskp, const std::string& suffix) {
+        const bool newTask = m_nestedTaskps.emplace(taskp).second;
+        UASSERT_OBJ(newTask, taskp, "Fork branch task called from more than one place");
+        taskp->foreach([&](AstNode* nodep) {
+            unscope(nodep, suffix);
+            if (const AstTaskRef* const callp = VN_CAST(nodep, TaskRef)) {
+                AstTask* const calleep = VN_CAST(callp->taskp(), Task);
+                if (calleep && isForkTask(calleep)) unscopeTask(calleep, suffix);
+            }
+        });
+    }
+
+    // VISITORS
+    void visit(AstNodeBlock* nodep) override {
+        VL_RESTORER_COPY(m_scope);
+        m_scope = VString::dot(m_scope, "__DOT__", nodep->name());
+        iterateChildren(nodep);
+    }
+    void visit(AstVarXRef* nodep) override { unscope(nodep, m_scope); }
+    void visit(AstNodeFTaskRef* nodep) override {
+        unscope(nodep, m_scope);
+        AstTask* const calleep = VN_CAST(nodep->taskp(), Task);
+        if (calleep && isForkTask(calleep)) unscopeTask(calleep, m_scope);
+        iterateChildren(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+    // CONSTRUCTORS
+    explicit ForkXRefRescopeVisitor(AstTask* taskp) { iterateChildren(taskp); }
+
+public:
+    static void apply(AstTask* taskp) { ForkXRefRescopeVisitor{taskp}; }
+};
+
 class ForkVisitor final : public VNVisitor {
     // NODE STATE
     // AstVarRef::user2()       -> bool, 1 = Node is a class handle reference. The handle gets
@@ -600,6 +664,8 @@ class ForkVisitor final : public VNVisitor {
 
         // Variables were moved under the task, so make sure they are marked as funcLocal
         for (AstVar* const localp : m_forkLocalsp) localp->funcLocal(true);
+        // Only module code has recorded blocks; see BeginXRefScopeVisitor
+        if (!m_ftaskp && !VN_IS(m_modp, Class)) ForkXRefRescopeVisitor::apply(taskp);
 
         // We did wrap the body
         return true;
