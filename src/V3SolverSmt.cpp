@@ -1264,30 +1264,25 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
             // VL_RESTORER restores m_selGuardsp before 'guards' goes out of scope
             // cppcheck-suppress danglingLifetime
-            const bool guarded = m_selGuardsp && VN_IS(nodep->fromp(), VarRef)
+            const bool guarded = m_selGuardsp && countableArray(nodep->fromp())
                                  && !isForeachElement(nodep->fromp(), nodep->bitp());
-            // A std::randomize() with-clause argument is solved too
-            const bool indexSolved = nodep->bitp()->exists([](const AstNodeVarRef* const vrefp) {
-                return vrefp->varp()->rand().isRandomizable()
-                       || vrefp->varp()->isStdRandomizeArg();
-            });
+            const bool indexSolved = isSolvedIndex(nodep->bitp());
             const int elemWidth = nodep->width();
             const int indexWidth = nodep->bitp()->width();
             const bool indexSigned = nodep->bitp()->isSigned();
             AstNodeExpr* sizeTextp = nullptr;
             if (guarded) {
-                AstVarRef* const arrayp = VN_AS(nodep->fromp(), VarRef);
+                AstNodeExpr* const arrayp = nodep->fromp();
                 AstNodeExpr* const indexp = nodep->bitp();
                 const int guardWidth = guardedIndexWidth(indexWidth);
+                const AstVarRef* const varRefp = VN_CAST(arrayp, VarRef);
                 // A solved size is a solver term, and the index may be one with it
-                if (indexSolved || VN_IS(arrayp->varp()->user4p(), Var)) {
+                if (indexSolved || (varRefp && VN_IS(varRefp->varp()->user4p(), Var))) {
                     sizeTextp = newArraySizeTextp(arrayp, guardWidth);
                 } else {
-                    AstCMethodHard* const dynSizep
-                        = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
-                    dynSizep->dtypeSetInt();
-                    addStateSelGuard(new AstLt{fl, newGuardedIndexp(indexp->cloneTreePure(false)),
-                                               new AstExtend{fl, dynSizep, guardWidth}});
+                    addStateSelGuard(
+                        new AstLt{fl, newGuardedIndexp(indexp->cloneTreePure(false)),
+                                  new AstExtend{fl, newArraySizep(arrayp), guardWidth}});
                 }
                 // In the solver's 32-bit index sort, in range when selected
                 if (!sizeTextp && indexp->width() != VL_IDATASIZE) {
@@ -2168,11 +2163,64 @@ class ConstraintExprVisitor final : public VNVisitor {
                                           new AstCond{fl, guards.statep, resultp, newZerop()}});
         }
     }
+    // Whether the elements of queue or dynamic array 'arrayp' can be counted where its element
+    // select is checked: it is a variable, a member through class handles, or an element of
+    // such an array selected by indices that are not solved
+    static bool countableArray(const AstNodeExpr* arrayp) {
+        if (VN_IS(arrayp, VarRef)) return true;
+        if (const AstMemberRef* const refp = VN_CAST(arrayp, MemberRef)) {
+            return countableArray(refp->fromp());
+        }
+        const AstNodeExpr* indexp = nullptr;
+        const AstNodeExpr* fromp = nullptr;
+        if (const AstArraySel* const selp = VN_CAST(arrayp, ArraySel)) {
+            indexp = selp->bitp();
+            fromp = selp->fromp();
+        } else if (isFrontElementSel(arrayp)) {
+            indexp = VN_AS(arrayp, NodeSel)->bitp();
+            fromp = VN_AS(arrayp, NodeSel)->fromp();
+        } else {
+            return false;
+        }
+        return !isSolvedIndex(indexp) && countableArray(fromp);
+    }
+    // Whether index 'indexp' is solved, as it reads a random variable or a std::randomize()
+    // with-clause argument
+    static bool isSolvedIndex(const AstNodeExpr* indexp) {
+        return indexp->exists([](const AstNodeVarRef* const vrefp) {
+            return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
+        });
+    }
+    // Number of elements of queue or dynamic array 'arrayp' when randomize() is called, zero if a
+    // class handle on the path to it is null
+    static AstNodeExpr* newArraySizep(AstNodeExpr* arrayp) {
+        FileLine* const fl = arrayp->fileline();
+        AstNodeExpr* nonNullp = nullptr;
+        for (const AstNodeExpr* pathp = arrayp; !VN_IS(pathp, VarRef);) {
+            if (const AstMemberRef* const refp = VN_CAST(pathp, MemberRef)) {
+                AstNodeExpr* const neqp = new AstNeq{fl, refp->fromp()->cloneTreePure(false),
+                                                     new AstConst{fl, AstConst::Null{}}};
+                // From the variable outwards, so no member of a null handle is read
+                nonNullp = nonNullp ? new AstLogAnd{fl, neqp, nonNullp} : neqp;
+                pathp = refp->fromp();
+            } else {
+                pathp = VN_AS(pathp, NodeSel)->fromp();
+            }
+        }
+        AstCMethodHard* const sizep
+            = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
+        sizep->dtypeSetInt();
+        if (!nonNullp) return sizep;
+        AstCond* const condp = new AstCond{fl, nonNullp, sizep, new AstConst{fl, 0}};
+        condp->dtypeSetInt();
+        return condp;
+    }
     // Number of elements of queue or dynamic array 'arrayp', as a 'width' bit solver term: its
     // size variable if its size is constrained, as that is solved with the elements
-    AstNodeExpr* newArraySizeTextp(AstVarRef* arrayp, int width) {
+    AstNodeExpr* newArraySizeTextp(AstNodeExpr* arrayp, int width) {
         FileLine* const fl = arrayp->fileline();
-        if (AstVar* const sizeVarp = VN_CAST(arrayp->varp()->user4p(), Var)) {
+        const AstVarRef* const varRefp = VN_CAST(arrayp, VarRef);
+        if (AstVar* const sizeVarp = varRefp ? VN_CAST(varRefp->varp()->user4p(), Var) : nullptr) {
             AstVarRef* const sizeRefp = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule),
                                                       sizeVarp, VAccess::READ};
             sizeRefp->user1(true);
@@ -2180,10 +2228,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             extendp->user1(true);
             return VN_AS(iterateSubtreeReturnEdits(extendp), NodeExpr);
         }
-        AstCMethodHard* const sizep
-            = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
-        sizep->dtypeSetInt();
-        return getConstFormat(new AstExtend{fl, sizep, width});
+        return getConstFormat(new AstExtend{fl, newArraySizep(arrayp), width});
     }
     // Name an element of an array of structs or objects the way the solver registers it
     void renameArrayExpr(AstSFormatF* const newp, const bool objectElem) const {
@@ -2230,6 +2275,13 @@ class ConstraintExprVisitor final : public VNVisitor {
                 indexIsRand = true;
             }
         });
+        // As for a dynamic array or queue (see visitElementSel), a random index into an array
+        // not solved, reached through a class handle, is unsupported
+        if (indexIsRand && !nodep->fromp()->user1() && VN_IS(nodep->fromp(), MemberRef)) {
+            nodep->v3warn(E_UNSUPPORTED,
+                          "Unsupported: Randomization of an index to a non-random variable");
+            return;
+        }
         if (m_nestedAccessp) {
             AstNodeExpr* const bitp = nodep->bitp()->cloneTreePure(false);
             AstNodeExpr* const bitFormatp

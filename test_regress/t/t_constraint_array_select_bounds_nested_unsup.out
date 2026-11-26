@@ -1,0 +1,11 @@
+%Error-UNSUPPORTED: t/t_constraint_array_select_bounds_nested_unsup.v:26:18: Unsupported: Randomization of an index to a non-random variable
+   26 |     y == nm.nl.tb[k];   
+      |                  ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_array_select_bounds_nested_unsup.v:27:18: Unsupported: Randomization of an index to a non-random variable
+   27 |     y == rm.rl.tb[k];   
+      |                  ^
+%Error-UNSUPPORTED: t/t_constraint_array_select_bounds_nested_unsup.v:28:19: Unsupported: Randomization of an index to a non-random variable
+   28 |     y == nm.nl.rtb[k];   
+      |                   ^
+%Error: Exiting due to
