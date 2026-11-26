@@ -1250,18 +1250,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
               || (withIt != m_inlineWithps.end()
                   && std::any_of(withIt->second.begin(), withIt->second.end(), referencesp));
         if (!referenced) return;
-        // A constraint of a derived class overrides the one of the same name of a base class
-        // (IEEE 1800-2023 18.5.2), which is visited first
-        std::vector<AstConstraint*> constrps;
-        std::map<std::string, size_t> nameIndex;
-        elemDtp->classp()->foreachMember([&](AstClass* const, AstConstraint* const constrp) {
-            const auto pair = nameIndex.emplace(constrp->name(), constrps.size());
-            if (pair.second) {
-                constrps.push_back(constrp);
-            } else {
-                constrps[pair.first->second] = constrp;
-            }
-        });
+        const std::vector<AstConstraint*> constrps = constraints(elemDtp->classp());
         FileLine* const fl = arrVarp->fileline();
         // Rand fields that are arrays or objects are not solver variables of the elements (see
         // createWriteVarForClassFields), so the items of the constraints on them are ignored.
@@ -1323,11 +1312,21 @@ class RandomizeMarkVisitor final : public VNVisitor {
     }
 
     // The constraints of classp, declared or inherited, before any is cloned into the class
-    // or one of its bases, as for a rand member of a derived class or of its own class
+    // or one of its bases, as for a rand member of a derived class or of its own class. A
+    // constraint of a derived class replaces the one of the same name of a base class (IEEE
+    // 1800-2023 18.5.2).
     static std::vector<AstConstraint*> constraints(AstClass* classp) {
         std::vector<AstConstraint*> constrps;
-        classp->foreachMember(
-            [&](AstClass* const, AstConstraint* const constrp) { constrps.push_back(constrp); });
+        std::unordered_map<std::string, size_t> nameIndex;  // Index in constrps of each name
+        // Base classes are visited first
+        classp->foreachMember([&](AstClass* const, AstConstraint* const constrp) {
+            const auto pair = nameIndex.emplace(constrp->name(), constrps.size());
+            if (pair.second) {
+                constrps.push_back(constrp);
+            } else {
+                constrps[pair.first->second] = constrp;
+            }
+        });
         return constrps;
     }
     // Clone constraints from nested rand class members.
