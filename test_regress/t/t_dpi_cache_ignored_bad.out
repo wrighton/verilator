@@ -1,0 +1,8 @@
+%Error-BADVLTPRAGMA: t/t_dpi_cache_ignored_bad.v:9:39: Ignoring /*verilator dpi_cache*/ on a context DPI import, or one with an inout, string or open array argument: 't.dpic_ctx'
+    9 |   import "DPI-C" context function int dpic_ctx(input int a)  /*verilator dpi_cache*/;
+      |                                       ^~~~~~~~
+                     ... For error description see https://verilator.org/warn/BADVLTPRAGMA?v=latest
+%Error-BADVLTPRAGMA: t/t_dpi_cache_ignored_bad.v:10:31: Ignoring /*verilator dpi_cache*/ on a context DPI import, or one with an inout, string or open array argument: 't.dpic_str'
+   10 |   import "DPI-C" function int dpic_str(input string s)  /*verilator dpi_cache*/;
+      |                               ^~~~~~~~
+%Error: Exiting due to

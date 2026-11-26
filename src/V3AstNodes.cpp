@@ -1240,6 +1240,7 @@ void AstCFunc::dump(std::ostream& str) const {
     if (dpiImportPrototype()) str << " [DPIIP]";
     if (dpiImportWrapper()) str << " [DPIIW]";
     if (dpiPure()) str << " [DPIPURE]";
+    if (dpiCache()) str << " [DPICACHE]";
     if (isConstructor()) str << " [CTOR]";
     if (fromFTask()) str << " [FTASK]";
     if (isOutlinePart()) str << " [OUTLINEPART]";
@@ -1270,6 +1271,7 @@ void AstCFunc::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, dpiExportImpl);
     dumpJsonBoolFuncIf(str, dpiImportPrototype);
     dumpJsonBoolFuncIf(str, dpiImportWrapper);
+    dumpJsonBoolFuncIf(str, dpiCache);
     dumpJsonBoolFuncIf(str, dpiContext);
     dumpJsonBoolFuncIf(str, isConstructor);
     dumpJsonBoolFuncIf(str, fromFTask);
@@ -3859,6 +3861,7 @@ void AstNodeFTask::dump(std::ostream& str) const {
     if (classMethod()) str << " [METHOD]";
     if (dpiExport()) str << " [DPIX]";
     if (dpiImport()) str << " [DPII]";
+    if (dpiCache()) str << " [DPICACHE]";
     if (dpiOpenChild()) str << " [DPIOPENCHILD]";
     if (dpiOpenParent()) str << " [DPIOPENPARENT]";
     if (isExternDef()) str << " [EXTDEF]";
@@ -3885,6 +3888,7 @@ void AstNodeFTask::dumpJson(std::ostream& str) const {
     dumpJsonBoolIf(str, "method", classMethod());
     dumpJsonBoolFuncIf(str, dpiExport);
     dumpJsonBoolFuncIf(str, dpiImport);
+    dumpJsonBoolFuncIf(str, dpiCache);
     dumpJsonBoolFuncIf(str, dpiOpenChild);
     dumpJsonBoolFuncIf(str, dpiOpenParent);
     dumpJsonBoolFuncIf(str, isExternDef);
@@ -5573,6 +5577,7 @@ void AstVar::dump(std::ostream& str) const {
     if (isPrimaryRegOut()) str << " [PREG]";
     if (isPrimaryPosedge()) str << " [PPOS]";
     if (isPrimaryCombOut()) str << " [PCOMB]";
+    if (isPrimaryDataOut()) str << " [PDATA]";
     if (isConst()) str << " [CONST]";
     if (isPullup()) str << " [PULLUP]";
     if (isPulldown()) str << " [PULLDOWN]";
@@ -5632,6 +5637,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isPrimaryRegOut);
     dumpJsonBoolFuncIf(str, isPrimaryPosedge);
     dumpJsonBoolFuncIf(str, isPrimaryCombOut);
+    dumpJsonBoolFuncIf(str, isPrimaryDataOut);
     dumpJsonStr(str, "direction", direction().ascii());
     dumpJsonStr(str, "declDirection", declDirection().ascii());
     dumpJsonBoolFuncIf(str, isConst);

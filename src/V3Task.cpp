@@ -652,6 +652,10 @@ class TaskVisitor final : public VNVisitor {
     VDouble0 m_statForkItemVars;  // Statistic tracking
     VDouble0 m_statGetters;  // Statistic tracking
     VDouble0 m_statHierDpisWithCosts;  // Statistic tracking
+    VDouble0 m_statDpiCaches;  // Statistic tracking
+    AstCDType* m_dpiCacheDtp = nullptr;  // Type of the results a DPI import call reuses
+    // Variable keeping them for each module and DPI import, by their names
+    std::unordered_map<std::string, AstVar*> m_dpiCacheVarps;
 
     // METHODS
 
@@ -1933,6 +1937,96 @@ class TaskVisitor final : public VNVisitor {
         return dpiExportTriggerp;
     }
 
+    // Whether the wrapper of the DPI import 'cfuncp' can keep and compare its arguments as bytes
+    static bool dpiCacheableArgs(const AstNodeFTask* nodep, const AstCFunc* cfuncp) {
+        if (nodep->dpiContext() || nodep->taskPublic()) return false;
+        for (const AstNode* const stmtp : cfuncp->argspList()) {
+            const AstVar* const portp = VN_CAST(stmtp, Var);
+            if (!portp || !portp->isIO()) continue;
+            if (portp->isDpiOpenArray() || portp->isInout()) return false;
+            const AstNodeDType* dtypep = portp->dtypep()->skipRefp();
+            while (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+                dtypep = adtypep->subDTypep()->skipRefp();
+            }
+            const AstBasicDType* const basicp = dtypep->basicp();
+            if (!dtypep->isIntegralOrPacked() && !(basicp && basicp->isCHandle())) return false;
+        }
+        return true;
+    }
+
+    // In the wrapper 'cfuncp' of a DPI import marked /*verilator dpi_cache*/, reuse the outputs of
+    // the previous call of the same instance if it had the same inputs. The variable keeping them
+    // is a member of the instance, which the scheduling ignores the writes of.
+    void addDpiCache(AstNodeFTask* nodep, AstCFunc* cfuncp) {
+        FileLine* const flp = nodep->fileline();
+        if (!m_dpiCacheDtp) {
+            m_dpiCacheDtp = new AstCDType{flp, "VlDpiCache"};
+            v3Global.rootp()->typeTablep()->addTypesp(m_dpiCacheDtp);
+        }
+        const std::string name = "__Vdpicache_" + nodep->name();
+        AstVar*& varpr = m_dpiCacheVarps[m_modp->name() + "." + name];
+        if (!varpr) {
+            varpr = new AstVar{flp, VVarType::MODULETEMP, name, m_dpiCacheDtp};
+            varpr->noReset(true);
+            varpr->isInternal(true);
+            varpr->setIgnoreSchedWrite();
+            m_modp->addStmtsp(varpr);
+        }
+        AstVarScope* const cachep = new AstVarScope{flp, m_scopep, varpr};
+        m_scopep->addVarsp(cachep);
+        cfuncp->isStatic(false);
+        cfuncp->dpiCache(true);
+        v3Global.setUsesDpiCache();
+        ++m_statDpiCaches;
+
+        const auto cacheRef = [&]() { return new AstVarRef{flp, cachep, VAccess::READWRITE}; };
+        const auto addArg
+            = [&](AstCStmt* stmtp, const std::string& method, AstVarScope* vscp, VAccess access) {
+                  stmtp->add(method + "(__Vdpicachepos, &(");
+                  stmtp->add(new AstVarRef{flp, vscp, access});
+                  stmtp->add("), sizeof(");
+                  stmtp->add(new AstVarRef{flp, vscp, access});
+                  stmtp->add("))");
+              };
+        // Inputs, compared and kept first, then outputs
+        std::vector<AstVarScope*> inps;
+        std::vector<AstVarScope*> outps;
+        for (AstNode* const stmtp : cfuncp->argspList()) {
+            AstVar* const portp = VN_CAST(stmtp, Var);
+            if (!portp || !portp->isIO()) continue;
+            AstVarScope* const vscp = VN_AS(portp->user2p(), VarScope);
+            (portp->isReadOnly() ? inps : outps).push_back(vscp);
+        }
+        AstCStmt* const reusep = new AstCStmt{flp, "{\nsize_t __Vdpicachepos = 0;\nif ("};
+        reusep->add(cacheRef());
+        reusep->add(".valid()");
+        for (AstVarScope* const vscp : inps) {
+            reusep->add(" && ");
+            reusep->add(cacheRef());
+            addArg(reusep, ".same", vscp, VAccess::READ);
+        }
+        reusep->add(") {\n");
+        for (AstVarScope* const vscp : outps) {
+            reusep->add(cacheRef());
+            addArg(reusep, ".load", vscp, VAccess::WRITE);
+            reusep->add(";\n");
+        }
+        reusep->add(cacheRef());
+        reusep->add(".skipped();\nreturn;\n}\n}");
+        cfuncp->prependStmtsp(reusep);
+        AstCStmt* const savep = new AstCStmt{flp, "{\nsize_t __Vdpicachepos = 0;\n"};
+        for (const std::vector<AstVarScope*>* const vscpsp : {&inps, &outps}) {
+            for (AstVarScope* const vscp : *vscpsp) {
+                savep->add(cacheRef());
+                addArg(savep, ".save", vscp, VAccess::READ);
+                savep->add(";\n");
+            }
+        }
+        savep->add(cacheRef());
+        savep->add(".validate();\n}");
+        cfuncp->addStmtsp(savep);
+    }
+
     AstCFunc* makeUserFunc(AstNodeFTask* nodep, bool ftaskNoInline) {
         // Given a already cloned node, make a public C function, or a non-inline C function
         // Probably some of this work should be done later, but...
@@ -2111,7 +2205,20 @@ class TaskVisitor final : public VNVisitor {
             unlinkAndClone(nodep, bodysp, true);
             cfuncp->addStmtsp(bodysp);
         }
-        if (nodep->dpiImport()) bodyDpiImportFunc(nodep, rtnvscp, cfuncp, dpiFuncp);
+        if (nodep->dpiImport()) {
+            bodyDpiImportFunc(nodep, rtnvscp, cfuncp, dpiFuncp);
+            // With --prof-exec the wrapper takes the symbol table, which a member declares as well
+            if (nodep->dpiCache() && !v3Global.opt.savable() && !v3Global.opt.profExec()) {
+                if (dpiCacheableArgs(nodep, cfuncp)) {
+                    addDpiCache(nodep, cfuncp);
+                } else {
+                    nodep->v3warn(BADVLTPRAGMA,
+                                  "Ignoring /*verilator dpi_cache*/ on a context DPI import, or "
+                                  "one with an inout, string or open array argument: "
+                                      << nodep->prettyNameQ());
+                }
+            }
+        }
 
         // Return statement
         if (rtnvscp && nodep->taskPublic()) {
@@ -2729,6 +2836,7 @@ public:
         V3Stats::addStat("Optimizations, Function getters replaced with reads", m_statGetters);
         V3Stats::addStat("Optimizations, Hierarchical DPI wrappers with costs",
                          m_statHierDpisWithCosts);
+        V3Stats::addStat("Optimizations, DPI import wrappers reusing results", m_statDpiCaches);
     }
 };
 
