@@ -1676,7 +1676,7 @@ AstVar* AstClocking::ensureEventp(bool childDType) {
         // An unnamed clocking block is a default or a global one, at most one of each per scope.
         // Its event needs a name, else V3Begin names it after the enclosing generate block.
         const std::string name = !m_name.empty() ? m_name
-                                 : m_isGlobal    ? "__Vclocking_global"
+                                 : m_isGlobal    ? globalEventName()
                                                  : "__Vclocking_default";
         AstVar* const evp
             = childDType ? new AstVar{fileline(), VVarType::MODULETEMP, name, VFlagChildDType{},
@@ -1684,6 +1684,7 @@ AstVar* AstClocking::ensureEventp(bool childDType) {
                          : new AstVar{fileline(), VVarType::MODULETEMP, name,
                                       findBasicDType(VBasicDTypeKwd::EVENT)};
         evp->lifetime(VLifetime::STATIC_EXPLICIT);
+        evp->isGlobalClockingEvent(isGlobal());
         eventp(evp);
         // Trigger the clocking event in Observed (IEEE 1800-2023 14.13)
         addNextHere(new AstAlwaysObserved{
@@ -5583,6 +5584,7 @@ void AstVar::dump(std::ostream& str) const {
     if (isReadByDpi()) str << " [DPIRD]";
     if (isWrittenByDpi()) str << " [DPIWR]";
     if (isInternal()) str << " [INTERNAL]";
+    if (isGlobalClockingEvent()) str << " [GCLKEVENT]";
     if (isLatched()) str << " [LATCHED]";
     if (isUsedLoopIdx()) str << " [LOOPIDX]";
     if (rand().isRandomizable()) str << " [" << rand().ascii() << "]";
@@ -5623,6 +5625,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     dumpJsonStrFunc(str, origName);
     dumpJsonStrFunc(str, verilogName);
     dumpJsonBoolFuncIf(str, constPoolEntry);
+    dumpJsonBoolFuncIf(str, isGlobalClockingEvent);
     dumpJsonBoolFuncIf(str, covergroupRefMember);
     dumpJsonBoolFuncIf(str, embeddedCovergroup);
     dumpJsonBoolFuncIf(str, isSc);
