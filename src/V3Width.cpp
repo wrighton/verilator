@@ -525,6 +525,7 @@ class WidthVisitor final : public VNVisitor {
     const AstFunc* m_funcp = nullptr;  // Current function
     const AstAttrOf* m_attrp = nullptr;  // Current attribute
     const AstNodeExpr* m_randomizeFromp = nullptr;  // Current randomize method call fromp
+    bool m_inRandomizeArgs = false;  // Under the arguments of a randomize() call
     bool m_solverExpr = false;  // Under a constraint or randomize 'with', solved not executed
     const bool m_paramsOnly;  // Computing parameter value; limit operation
     const bool m_doGenerate;  // Do errors later inside generate statement
@@ -6266,7 +6267,8 @@ class WidthVisitor final : public VNVisitor {
             if (AstNode* const foundp = m_memberMap.findMember(classp, nodep->name())) {
                 if (AstVar* const varp = VN_CAST(foundp, Var)) {
                     if (!varp->didWidth()) userIterate(varp, nullptr);
-                    if (varp->lifetime().isStatic()) {
+                    // A randomize() argument keeps its object, whose member it names
+                    if (varp->lifetime().isStatic() && !m_inRandomizeArgs) {
                         // Static members are moved outside the class, so they shouldn't be
                         // accessed by member select on a class object
                         AstVarRef* const varRefp
@@ -7398,8 +7400,12 @@ class WidthVisitor final : public VNVisitor {
             m_randomizeFromp = nodep->fromp();
             withp = methodWithClause(nodep, false, false, adtypep->findVoidDType(),
                                      adtypep->findBitDType(), adtypep);
-            for (AstArg* const argp : nodep->argspList()) {
-                if (argp->exprp()) userIterate(argp->exprp(), WidthVP{SELF, BOTH}.p());
+            {
+                VL_RESTORER(m_inRandomizeArgs);
+                m_inRandomizeArgs = true;
+                for (AstArg* const argp : nodep->argspList()) {
+                    if (argp->exprp()) userIterate(argp->exprp(), WidthVP{SELF, BOTH}.p());
+                }
             }
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             V3Randomize::newRandomizeFunc(m_memberMap, first_classp);
@@ -11454,8 +11460,12 @@ class WidthVisitor final : public VNVisitor {
                 v3Global.rootp()->typeTablep()->addTypesp(adtypep);
                 withp = methodWithClause(nodep, false, false, adtypep->findVoidDType(),
                                          adtypep->findBitDType(), adtypep);
-                for (const AstArg* const argp : nodep->argspList()) {
-                    userIterateAndNext(argp->exprp(), WidthVP{SELF, BOTH}.p());
+                {
+                    VL_RESTORER(m_inRandomizeArgs);
+                    m_inRandomizeArgs = true;
+                    for (const AstArg* const argp : nodep->argspList()) {
+                        userIterateAndNext(argp->exprp(), WidthVP{SELF, BOTH}.p());
+                    }
                 }
                 handleRandomizeArgs(nodep, classp);
             } else if (nodep->name() == "srandom") {

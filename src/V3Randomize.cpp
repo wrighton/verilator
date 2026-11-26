@@ -336,7 +336,8 @@ static AstClass* handleClassp(const AstVar* varp) {
 static bool reachesThroughRandHandle(const AstClass* classp, const AstClass* declClassp,
                                      ActiveSet& visited) {
     return classp->existsMember([&](const AstClass*, const AstVar* varp) {
-        if (!varp->rand().isRandomizable()) return false;
+        // A handle an argument list made randomizable is random only in that call
+        if (!varp->rand().isRand()) return false;
         const AstClass* const memberClassp = handleClassp(varp);
         if (!memberClassp) return false;
         if (AstClass::isClassExtendedFrom(memberClassp, declClassp)) return true;
@@ -512,6 +513,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
     ClonedConstraints& m_cloneObjps;  // Constraints made by cloning
     std::unordered_set<AstVar*>& m_elemModeArrays;  // Arrays with per-element rand_mode()
     AstClass* m_withClassp = nullptr;  // Class of obj in the current obj.randomize() with
+    AstClass* m_thisWithClassp = nullptr;  // Class of the current this.randomize() with
+    // Variables the argument list of the current randomize() with names
+    std::unordered_set<const AstVar*> m_withArgVarps;
     using ConstraintNames = std::unordered_map<const AstClass*, std::unordered_set<std::string>>;
     // Names of the constraints of each class, not its base classes, found when first needed and
     // updated as constraints are cloned into it, see cloneObjectConstraint, which is the only
@@ -1430,7 +1434,12 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 RandomizeMode randMode = {};
                 randMode.usesMode = true;
                 randVarp->user1(randMode.asUQuad);
-                backp->user1(IS_RANDOMIZED_INLINE);
+                // Its other members are state, so use rand mode too, also if a member of an
+                // object of another class (IEEE 1800-2023 18.11)
+                if (backp->user1() != IS_RANDOMIZED_INLINE) {
+                    backp->user1(IS_RANDOMIZED_INLINE);
+                    markMembers(VN_AS(backp, Class));
+                }
             }
         }
     }
@@ -1696,11 +1705,14 @@ class RandomizeMarkVisitor final : public VNVisitor {
         // class handles, into VarRefs of their class. Any other reference names a variable in
         // the caller's scope (IEEE 1800-2023 18.7), which is a state value even if declared rand.
         bool callerVar = m_withClassp != nullptr;
-        if (callerVar && nodep->varp()->lifetime().isStatic()) {
+        // Also another class's static in this.randomize() with, unless an argument names it
+        const AstClass* const withClassp = m_withClassp ? m_withClassp : m_thisWithClassp;
+        if (withClassp && nodep->varp()->lifetime().isStatic()) {
             const AstClass* const varClassp = VN_CAST(nodep->classOrPackagep(), Class);
             ActiveSet visited;
-            callerVar = !AstClass::isClassExtendedFrom(m_withClassp, varClassp)
-                        && !(varClassp && hierarchyReaches(m_withClassp, varClassp, visited));
+            callerVar = !m_withArgVarps.count(nodep->varp())
+                        && !AstClass::isClassExtendedFrom(withClassp, varClassp)
+                        && !(varClassp && hierarchyReaches(withClassp, varClassp, visited));
         }
         // Mark as randomizable if: rand-declared, or listed in std::randomize() args
         if (nodep->varp()->rand().isRandomizable() && !(m_inStdWith && m_stdRandCallp)
@@ -1769,7 +1781,18 @@ class RandomizeMarkVisitor final : public VNVisitor {
     void visit(AstWith* nodep) override {
         VL_RESTORER(m_withp);
         VL_RESTORER(m_withClassp);
+        VL_RESTORER(m_thisWithClassp);
+        VL_RESTORER_CLEAR(m_withArgVarps);
         m_withp = nodep;
+        if (const AstNodeFTaskRef* const callp = VN_CAST(nodep->backp(), NodeFTaskRef)) {
+            for (const AstArg* const argp : callp->argspList()) {
+                if (const AstMemberRef* const selp = VN_CAST(argp->exprp(), MemberRef)) {
+                    m_withArgVarps.emplace(selp->varp());
+                } else if (const AstNodeVarRef* const refp = VN_CAST(argp->exprp(), NodeVarRef)) {
+                    m_withArgVarps.emplace(refp->varp());
+                }
+            }
+        }
         // Only this 'with' item's entry is saved, as a copy of the map at every nesting level
         // would be quadratic in the nesting depth
         const AstCMethodHard* const methodp = VN_CAST(nodep->backp(), CMethodHard);
@@ -1790,6 +1813,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             m_withClassp = VN_AS(callp->fromp()->dtypep()->skipRefp(), ClassRefDType)->classp();
             m_inlineWithps[m_withClassp].push_back(nodep);
         } else if (m_classp && VN_IS(nodep->backp(), FuncRef) && !m_stdRandCallp) {
+            m_thisWithClassp = m_classp;
             m_inlineWithps[m_classp].push_back(nodep);  // this.randomize() with
         }
         if (m_stdRandCallp && nodep == m_stdRandCallp->withp()) m_inStdWith = true;
@@ -1936,6 +1960,8 @@ class CaptureVisitor final : public VNVisitor {
     std::unordered_set<const AstVar*> m_ownedDecls;  // Declarations owned by the expression
     AstVar* m_thisp = nullptr;  // Variable for outer context's object, if necessary
     const bool m_randomizesThis;  // True for randomize() in class method
+    // Static members a randomize() argument list makes random, if any
+    const std::unordered_set<const AstVar*>* const m_randomArgps;
 
     // METHODS
 
@@ -1949,6 +1975,8 @@ class CaptureVisitor final : public VNVisitor {
             newVarp->funcReturn(false);
             newVarp->direction(VDirection::INPUT);
             newVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            // A captured value is state, so it has no rand_mode
+            newVarp->user1(0);
             m_varCloneMap.emplace(varrefp->varp(), newVarp);
             varp = newVarp;
             return true;
@@ -2020,6 +2048,8 @@ class CaptureVisitor final : public VNVisitor {
             const AstClass* const funcClassp = m_targetp ? m_targetp : callerClassp;
             if (AstClass::isClassExtendedFrom(funcClassp, varClassp)) return CaptureMode::CAP_NO;
             if (varRefp->user1()) return CaptureMode::CAP_NO;
+            // Also one an argument list makes random (IEEE 1800-2023 18.11)
+            if (m_randomArgps && m_randomArgps->count(varRefp->varp())) return CaptureMode::CAP_NO;
             return CaptureMode::CAP_VALUE;
         }
         if (callerIsClass && varIsFieldOfCaller) return CaptureMode::CAP_THIS;
@@ -2176,10 +2206,12 @@ class CaptureVisitor final : public VNVisitor {
 
 public:
     explicit CaptureVisitor(AstNode* const nodep, AstNodeModule* callerp, AstClass* const targetp,
-                            bool randomizesThis = false)
+                            bool randomizesThis = false,
+                            const std::unordered_set<const AstVar*>* randomArgps = nullptr)
         : m_callerp{callerp}
         , m_targetp{targetp}
-        , m_randomizesThis{randomizesThis} {
+        , m_randomizesThis{randomizesThis}
+        , m_randomArgps{randomArgps} {
         iterateAndNextNull(nodep);
     }
 
@@ -3129,10 +3161,13 @@ class RandomizeVisitor final : public VNVisitor {
             storeStmtspr,
             makeModeSetLoop(fl, makeModeVarRef(siblingExprp, randModeVarp, VAccess::WRITE),
                             new AstConst{fl, 0}, m_ftaskp));
-        restoreStmtspr = AstNode::addNext(
-            restoreStmtspr,
-            new AstAssign{fl, makeModeVarRef(siblingExprp, randModeVarp, VAccess::WRITE),
-                          new AstVarRef{fl, randModeTmpVarp, VAccess::READ}});
+        // Restored in reverse order, so of an object two paths reach, the copy saved first,
+        // before it was cleared, is the one restored last
+        AstNodeStmt* const restorep
+            = new AstAssign{fl, makeModeVarRef(siblingExprp, randModeVarp, VAccess::WRITE),
+                            new AstVarRef{fl, randModeTmpVarp, VAccess::READ}};
+        if (restoreStmtspr) restorep->addNext(restoreStmtspr);
+        restoreStmtspr = restorep;
         return randModeTmpVarp;
     }
     // Returns the common prefix of two hierarchical accesses, or nullptr if there is none
@@ -3636,7 +3671,9 @@ class RandomizeVisitor final : public VNVisitor {
     }
 
     // Handle inline random variable control. After this, the randomize() call has no args
-    void handleRandomizeArgs(AstNodeFTaskRef* const nodep) {
+    // Lower the argument list of a randomize() call, and collect the variables it names
+    void handleRandomizeArgs(AstNodeFTaskRef* const nodep,
+                             std::unordered_set<const AstVar*>& randomArgps) {
         if (!nodep->argsp()) return;
         // Strip the null literal arg. V3Width already rejected mixed/non-null
         // AstConst args.
@@ -3676,13 +3713,15 @@ class RandomizeVisitor final : public VNVisitor {
             }
         }
         // Construct temp vars, and store and restore statements
-        std::set<AstVar*> savedRandModeVarps;
+        // Saved rand_mode arrays, with the object of a per-instance one
+        std::vector<std::pair<const AstVar*, const AstNodeExpr*>> savedModeps;
         AstVar* tmpVarps = nullptr;
         AstNode* storeStmtsp = nullptr;
         AstNode* setStmtsp = nullptr;
         AstNodeStmt* restoreStmtsp = nullptr;
         for (AstArg* const argp : nodep->argspList()) {
             AstNodeExpr* exprp = argp->exprp();
+            randomArgps.emplace(getVarFromRef(exprp));
             AstNodeExpr* const commonPrefixp = sliceToCommonPrefix(exprp, nodep);
             UASSERT_OBJ(commonPrefixp != exprp, nodep,
                         "Common prefix should be different than pin");
@@ -3695,12 +3734,30 @@ class RandomizeVisitor final : public VNVisitor {
                 // both the per-instance and the static rand_mode arrays are cleared
                 for (AstVar* const modeVarp :
                      {RandModeVars::randModeVarp(classp), getStaticRandModeVar(classp)}) {
-                    if (!modeVarp || !savedRandModeVarps.insert(modeVarp).second) continue;
-                    // The per-instance array of the object of a static member
+                    if (!modeVarp) continue;
+                    // The per-instance array of the object of a static member named without it
+                    // is that of the call's object
                     AstMethodCall* const callp = VN_CAST(nodep, MethodCall);
+                    const bool callObj = callp && !VN_IS(exprp, MemberRef)
+                                         && randVarp->lifetime().isStatic()
+                                         && !modeVarp->lifetime().isStatic();
+                    const AstNodeExpr* const ownerp = modeVarp->lifetime().isStatic() ? nullptr
+                                                      : callObj ? callp->fromp()
+                                                                : getFromp(exprp);
+                    // Each object's array is saved once; argument lists are short, so a linear
+                    // search
+                    bool saved = false;
+                    for (const std::pair<const AstVar*, const AstNodeExpr*>& savedp :
+                         savedModeps) {
+                        saved |= savedp.first == modeVarp
+                                 && (savedp.second == ownerp
+                                     || (savedp.second && ownerp
+                                         && savedp.second->sameTree(ownerp)));
+                    }
+                    if (saved) continue;
+                    savedModeps.emplace_back(modeVarp, ownerp);
                     AstNodeExpr* const objExprp
-                        = callp && randVarp->lifetime().isStatic()
-                                  && !modeVarp->lifetime().isStatic()
+                        = callObj
                               ? new AstMemberRef{fl, callp->fromp()->cloneTree(false), randVarp}
                               : nullptr;
                     tmpVarps = AstNode::addNext(
@@ -3722,7 +3779,8 @@ class RandomizeVisitor final : public VNVisitor {
                     = AstNode::addNext(setStmtsp, new AstAssign{fl, setp, new AstConst{fl, 1}});
                 exprp = getFromp(exprp);
             }
-            VL_DO_DANGLING(argp->unlinkFrBack()->deleteTree(), argp);
+            // Deferred, as the saved objects above are in arguments
+            VL_DO_DANGLING(pushDeletep(argp->unlinkFrBack()), argp);
         }
         if (hasNullArg) {  // Re-point to the per-class __Vrandomize_null wrapper
             AstClass* targetClassp = nullptr;
@@ -4206,7 +4264,9 @@ class RandomizeVisitor final : public VNVisitor {
             UINFOTREE(9, randomizeFuncp, "", "std::rnd-func");
             return;
         }
-        handleRandomizeArgs(nodep);
+        // The variables the argument list names, for this call's with constraints only
+        std::unordered_set<const AstVar*> randomArgps;
+        handleRandomizeArgs(nodep, randomArgps);
 
         AstWith* const withp = nodep->withp();
         if (!withp) {
@@ -4262,7 +4322,8 @@ class RandomizeVisitor final : public VNVisitor {
 
         // Detach the expression and prepare variable copies
         // (randomize() in class method is a FuncRef, not a MethodCall)
-        const CaptureVisitor captured{withp->exprp(), m_modp, classp, !VN_IS(nodep, MethodCall)};
+        const CaptureVisitor captured{withp->exprp(), m_modp, classp, !VN_IS(nodep, MethodCall),
+                                      &randomArgps};
         // Add function arguments
         captured.addFunctionArguments(randomizeFuncp);
 
