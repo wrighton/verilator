@@ -235,6 +235,7 @@ class TimingSuspendableVisitor final : public VNVisitor {
     AstClass* m_classp = nullptr;  // Current class
     AstNode* m_procp = nullptr;  // NodeProcedure/CFunc/ForkItem we're under
     uint8_t m_underFork = F_NONE;  // F_NONE or flags of a fork we are under
+    size_t m_statEdgeVisits = 0;  // Dependency edges visited propagating flags
     V3Graph m_suspGraph;  // Dependency graph where a node is a dependency of another if it being
                           // suspendable makes the other node suspendable
     V3Graph m_procGraph;  // Dependency graph where a node is a dependency of another if it being
@@ -273,10 +274,17 @@ class TimingSuspendableVisitor final : public VNVisitor {
         }
         return false;
     }
+    // Return the number of edges of graph
+    static size_t edgeCount(const V3Graph& graph) {
+        size_t count = 0;
+        for (const V3GraphVertex& vtx : graph.vertices()) count += vtx.outEdges().size();
+        return count;
+    }
     // Propagate flag to all nodes that depend on the given one
     void propagateFlags(DepVtx* const vxp, NodeFlag flag) {
         auto* const parentp = vxp->nodep();
         for (V3GraphEdge& edge : vxp->outEdges()) {
+            ++m_statEdgeVisits;
             auto* const depVxp = static_cast<DepVtx*>(edge.top());
             AstNode* const depp = depVxp->nodep();
             if (passFlag(parentp, depp, flag)) propagateFlags(depVxp, flag);
@@ -286,6 +294,7 @@ class TimingSuspendableVisitor final : public VNVisitor {
     void propagateFlagsIf(DepVtx* const vxp, NodeFlag flag, T_Predicate p) {
         auto* const parentp = vxp->nodep();
         for (V3GraphEdge& edge : vxp->outEdges()) {
+            ++m_statEdgeVisits;
             auto* const depVxp = static_cast<DepVtx*>(edge.top());
             AstNode* const depp = depVxp->nodep();
             if (p(&edge) && passFlag(parentp, depp, flag)) propagateFlagsIf(depVxp, flag, p);
@@ -295,6 +304,7 @@ class TimingSuspendableVisitor final : public VNVisitor {
     void propagateFlagsReversedIf(DepVtx* const vxp, NodeFlag flag, T_Predicate p) {
         auto* const parentp = vxp->nodep();
         for (V3GraphEdge& edge : vxp->inEdges()) {
+            ++m_statEdgeVisits;
             auto* const depVxp = static_cast<DepVtx*>(edge.fromp());
             AstNode* const depp = depVxp->nodep();
             if (p(&edge) && passFlag(parentp, depp, flag))
@@ -550,6 +560,9 @@ public:
     }
     ~TimingSuspendableVisitor() override {
         V3Stats::addStat("Timing, suspendable DPI exports", m_suspendableExports);
+        V3Stats::addStat("Timing, dependency edges",
+                         edgeCount(m_suspGraph) + edgeCount(m_procGraph));
+        V3Stats::addStat("Timing, dependency edges visited", m_statEdgeVisits);
     }
 };
 
