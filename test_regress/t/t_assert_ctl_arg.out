@@ -388,51 +388,6 @@ Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_e
 Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt_else' at t/t_assert_ctl_arg.v:111
 Passed 'top.t.cover_simple_immediate_stmt_111' at t/t_assert_ctl_arg.v:111
 Passed 'top.t.cover_final_deferred_immediate_stmt_111' at t/t_assert_ctl_arg.v:111
-[0] %Error: t_assert_ctl_arg.v:55: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:55
-[0] %Error: t_assert_ctl_arg.v:55: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:55
-[0] %Error: t_assert_ctl_arg.v:55: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:55
-[0] %Error: t_assert_ctl_arg.v:55: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:55
-Passed 'top.t' at t/t_assert_ctl_arg.v:55
-[0] %Error: t_assert_ctl_arg.v:70: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:70
-[0] %Error: t_assert_ctl_arg.v:70: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:70
-[0] %Error: t_assert_ctl_arg.v:70: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:70
-[0] %Error: t_assert_ctl_arg.v:70: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:70
-Passed 'top.t' at t/t_assert_ctl_arg.v:70
-[0] %Error: t_assert_ctl_arg.v:75: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:75
-[0] %Error: t_assert_ctl_arg.v:75: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:75
-[0] %Error: t_assert_ctl_arg.v:75: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:75
-[0] %Error: t_assert_ctl_arg.v:75: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:75
-Passed 'top.t' at t/t_assert_ctl_arg.v:75
-[0] %Error: t_assert_ctl_arg.v:77: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:77
-[0] %Error: t_assert_ctl_arg.v:77: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:77
-[0] %Error: t_assert_ctl_arg.v:77: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:77
-[0] %Error: t_assert_ctl_arg.v:77: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:77
-Passed 'top.t' at t/t_assert_ctl_arg.v:77
-[0] %Error: t_assert_ctl_arg.v:89: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:89
-[0] %Error: t_assert_ctl_arg.v:89: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:89
-[0] %Error: t_assert_ctl_arg.v:89: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:89
-[0] %Error: t_assert_ctl_arg.v:89: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:89
-Passed 'top.t' at t/t_assert_ctl_arg.v:89
 [0] %Error: t_assert_ctl_arg.v:96: Assertion failed in top.t: 'assert' failed.
 Failed 'top.t' at t/t_assert_ctl_arg.v:96
 [0] %Error: t_assert_ctl_arg.v:96: Assertion failed in top.t: 'assert' failed.
