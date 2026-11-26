@@ -24,8 +24,8 @@ module t (
     if ($past(d, TICKS)) $stop;
   end
 
-  string strings[2];
+  int assoc[int];
   always @(posedge clk) begin
-    if ($changed(strings)) $stop;
+    if ($changed(assoc)) $stop;
   end
 endmodule

@@ -116,8 +116,17 @@ void V3AssertCommon::checkSampledDType(AstNode* nodep, const AstNodeDType* dtype
 bool V3AssertCommon::isSampledType(const AstNodeDType* dtypep) {
     // Sampled value functions store and compare such values (IEEE 1800-2023 7.4.3, 16.9.3)
     dtypep = dtypep->skipRefp();
-    if (dtypep->isIntegralOrPacked()) return true;
+    if (dtypep->isIntegralOrPacked() || dtypep->isDouble() || dtypep->isString()
+        || VN_IS(dtypep, ClassRefDType)) {
+        return true;
+    }
     if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        return isSampledType(arrayp->subDTypep());
+    }
+    if (const AstQueueDType* const arrayp = VN_CAST(dtypep, QueueDType)) {
+        return isSampledType(arrayp->subDTypep());
+    }
+    if (const AstDynArrayDType* const arrayp = VN_CAST(dtypep, DynArrayDType)) {
         return isSampledType(arrayp->subDTypep());
     }
     const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
@@ -363,6 +372,21 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         constp->dtypep(dtypep);
         return constp;
     }
+    // Whether a constant can have the default value of 'dtypep': not if it is, or has elements
+    // or members of, a dynamically sized type or a class
+    static bool hasConstant(const AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        if (dtypep->isDynamicallySized() || VN_IS(dtypep, ClassRefDType)) return false;
+        if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+            return hasConstant(arrayp->subDTypep());
+        }
+        const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+        if (!structp) return true;
+        for (const AstMemberDType* memberp = structp->membersp(); memberp;
+             memberp = VN_AS(memberp->nextp(), MemberDType))
+            if (!hasConstant(memberp->subDTypep())) return false;
+        return true;
+    }
     static bool hasDefaultValue(const AstVar* varp) {
         return !varp->isParam()
                && (varp->isNet() || !varp->lifetime().isStatic() || !varp->hasUserInit());
@@ -375,9 +399,9 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         return nullptr;
     }
     void replaceWithTypeDefault(AstNodeExpr* nodep) {
-        // Only integral values and unpacked arrays and structures of them have a constant, but
-        // before any process runs the expression has the default value of its type
-        if (!V3AssertCommon::isSampledType(nodep->dtypep())) return;
+        // No constant may have its value, but before any process runs the expression has the
+        // default value of its type
+        if (!hasConstant(nodep->dtypep())) return;
         nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
