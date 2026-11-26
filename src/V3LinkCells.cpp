@@ -693,6 +693,15 @@ class LinkCellsVisitor final : public VNVisitor {
                 }
             }
         }
+        // A checker body can instantiate only checkers (IEEE 1800-2023 17.2)
+        const AstModule* const modp = VN_CAST(m_modp, Module);
+        const AstModule* const cellModp = VN_CAST(nodep->modp(), Module);
+        if (modp && modp->isChecker() && nodep->modp() && !(cellModp && cellModp->isChecker())) {
+            nodep->v3error("Instance of " << nodep->modp()->verilogKwd() << " "
+                                          << nodep->modp()->prettyNameQ()
+                                          << " in a checker, which can instantiate only checkers"
+                                             " (IEEE 1800-2023 17.2).");
+        }
         // Remove AstCell(AstPin("",nullptr)), it's a side effect of how we parse "()"
         // the empty middle is identical to the empty rule that must find pins in "(,)".
         if (nodep->pinsp() && !nodep->pinsp()->nextp() && nodep->pinsp()->name() == ""
