@@ -2129,9 +2129,10 @@ private:
         return exprp;
     }
     AstSFormatF* editSMT(AstNodeExpr* nodep, AstNodeExpr* lhsp = nullptr,
-                         AstNodeExpr* rhsp = nullptr, AstNodeExpr* thsp = nullptr) {
+                         AstNodeExpr* rhsp = nullptr, AstNodeExpr* thsp = nullptr,
+                         std::string smtExpr = "") {
         // Replace incomputable (result-dependent) expression with SMT expression
-        std::string smtExpr = nodep->emitSMT();  // Might need child width (AstExtend)
+        if (smtExpr.empty()) smtExpr = nodep->emitSMT();  // Might need child width (AstExtend)
         if (smtExpr == "") {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported expression inside constraint");
             return nullptr;
@@ -3825,39 +3826,168 @@ private:
         // folded constant here, instead of being left behind unconverted.
         iterate(zerop);
     }
-    void handlePow(AstNodeBiop* nodep) {
-        if (AstConst* const exponentp = VN_CAST(nodep->rhsp(), Const)) {
-            FileLine* const fl = nodep->fileline();
-            AstNodeExpr* const basep = nodep->lhsp();
-            const V3Number numOne{nodep, basep->width(), 1};
-            AstNodeExpr* powerp = new AstConst{fl, numOne};
-            const bool baseSigned = VN_IS(nodep, PowSS) || VN_IS(nodep, PowSU);
-            const int32_t exponent = baseSigned ? exponentp->toSInt() : exponentp->toUInt();
-            if (exponent > 0) {
-                for (int32_t i = 0; i < exponent; i++) {
-                    if (baseSigned) {
-                        powerp = new AstMulS{fl, powerp, basep->cloneTreePure(false)};
-                    } else {
-                        powerp = new AstMul{fl, powerp, basep->cloneTreePure(false)};
-                    }
-                    powerp->user1(true);
+    // The value of a negative power (IEEE 1800-2023 Table 11-4): 1 for a base of 1, for a base
+    // of -1 then -1 for an odd exponent and 1 for an even one, else 0, as is the x for a base
+    // of 0 as a 2-state value (11.3.4)
+    static AstNodeExpr* newNegativePowp(AstNodeBiop* nodep, AstNodeExpr* basep, bool baseSigned,
+                                        bool oddExponent) {
+        FileLine* const fl = nodep->fileline();
+        const int width = basep->width();
+        const V3Number numOne{nodep, width, 1};
+        AstNodeExpr* resultp = new AstConst{fl, AstConst::WidthedValue{}, width, 0};
+        if (baseSigned) {
+            V3Number numMinusOne{nodep, width};
+            numMinusOne.setAllBits1();
+            AstEq* const isMinusOnep
+                = new AstEq{fl, basep->cloneTreePure(false), new AstConst{fl, numMinusOne}};
+            isMinusOnep->user1(true);
+            resultp = new AstCond{fl, isMinusOnep,
+                                  new AstConst{fl, oddExponent ? numMinusOne : numOne}, resultp};
+            resultp->dtypeFrom(nodep);
+            resultp->user1(true);
+        }
+        AstEq* const isOnep = new AstEq{fl, basep->cloneTreePure(false), new AstConst{fl, numOne}};
+        isOnep->user1(true);
+        resultp = new AstCond{fl, isOnep, new AstConst{fl, numOne}, resultp};
+        resultp->dtypeFrom(nodep);
+        resultp->user1(true);
+        return resultp;
+    }
+    // SMT-LIB literal of num, in hex if its width allows
+    static std::string smtBits(const V3Number& num) {
+        const int digitBits = (num.width() % 4) ? 1 : 4;
+        std::string smt = (digitBits == 4) ? "#x" : "#b";
+        for (int i = num.width() - digitBits; i >= 0; i -= digitBits) {
+            int digit = 0;
+            for (int bit = digitBits - 1; bit >= 0; --bit) {
+                digit = (digit << 1) | num.bitIs1(i + bit);
+            }
+            smt += "0123456789abcdef"[digit];
+        }
+        return smt;
+    }
+    // Inverse of an odd value at its width, by Newton's iteration, doubling the right bits
+    static V3Number oddInverse(AstNode* nodep, const V3Number& odd) {
+        const int width = odd.width();
+        const V3Number two{nodep, width, 2};
+        V3Number inverse{nodep, width, 1};  // Right in bit 0, as odd is odd
+        for (int right = 1; right < width; right *= 2) {
+            V3Number product{nodep, width};
+            product.opMul(odd, inverse);
+            V3Number correction{nodep, width};
+            correction.opSub(two, product);
+            V3Number next{nodep, width};
+            next.opMul(inverse, correction);
+            inverse.opAssign(next);
+        }
+        return inverse;
+    }
+    // SMT-LIB of %l to the power of a positive exponent, which wraps at the width of the power
+    // (IEEE 1800-2023 11.4.3). %l and the values made of it are bound by lets, so each is encoded
+    // once, and no product is deeper than the width.
+    static std::string positivePowSmt(AstNode* nodep, const V3Number& exponent, int width) {
+        std::string smt = "(let ((__Vpow0 %l)) ";
+        std::string closes = ")";
+        const int bits = exponent.mostSetBitP1();
+        if (bits < 32 && exponent.toUInt() < static_cast<uint32_t>(width)) {
+            // Below the width, by squaring
+            std::string product;
+            for (int i = 0; i < bits; ++i) {
+                const std::string name = "__Vpow" + cvtToStr(i);
+                if (i) {
+                    const std::string last = "__Vpow" + cvtToStr(i - 1);
+                    smt += "(let ((" + name + " (bvmul " + last + " " + last + "))) ";
+                    closes += ")";
                 }
-            } else if (exponent < 0) {
-                // Limit chain of divisions to max 2, because operations are on integers.
-                // Two divisions are needed to preserve the sign.
-                if (baseSigned) {
-                    powerp = new AstDivS{fl, powerp, basep->cloneTreePure(false)};
-                    powerp->user1(true);
-                    powerp = new AstDivS{fl, powerp, basep->cloneTreePure(false)};
-                    powerp->user1(true);
-                } else {
-                    powerp = new AstDiv{fl, powerp, basep->cloneTreePure(false)};
-                    powerp->user1(true);
+                if (exponent.bitIs1(i)) {
+                    product = product.empty() ? name : "(bvmul " + product + " " + name + ")";
                 }
             }
-            nodep->replaceWith(powerp);
-            VL_DO_DANGLING(nodep->deleteTree(), nodep);
-            iterate(powerp);
+            return smt + product + closes;
+        }
+        // From the width up, an even %l gives 0. An odd %l is 2 * h + 1 for h = %l >> 1, so its
+        // power e is the sum of C(e, i) * 2**i * h**i, whose terms from i = width on are 0.
+        // C(e, i) is p / 2**t / f for p = e * (e - 1) * ... * (e - i + 1) and i! = 2**t * f with
+        // f odd, so invertible at the width. As t < width, p is needed at twice the width only.
+        // So the SMT-LIB has at most width terms, each one product at the width, and its text
+        // grows as the width squared; the coefficients take a few products of up to twice the
+        // width each, so verilating grows as its cube. That is little below a few hundred bits,
+        // and a power of so wide a random value to so large an exponent is rare.
+        std::string sum = smtBits(V3Number{nodep, width, 1});
+        std::string halves;  // Lets binding h and its powers
+        int powers = 0;
+        V3Number product{nodep, 2 * width, 1};  // p
+        V3Number odd{nodep, width, 1};  // f
+        int twos = 0;  // t
+        for (int i = 1; i < width; ++i) {
+            V3Number factor{nodep, exponent.width()};
+            factor.opSub(exponent,
+                         V3Number{nodep, exponent.width(), static_cast<uint32_t>(i - 1)});
+            V3Number next{nodep, 2 * width};
+            next.opMul(product, V3Number{nodep, 2 * width, factor});
+            product.opAssign(next);
+            int divisor = i;
+            for (; !(divisor & 1); divisor >>= 1) ++twos;
+            V3Number nextOdd{nodep, width};
+            nextOdd.opMul(odd, V3Number{nodep, width, static_cast<uint32_t>(divisor)});
+            odd.opAssign(nextOdd);
+            V3Number shifted{nodep, width};  // p / 2**t
+            for (int bit = 0; bit < width; ++bit) shifted.setBit(bit, product.bitIs1(bit + twos));
+            V3Number binomial{nodep, width};  // C(e, i)
+            binomial.opMul(shifted, oddInverse(nodep, odd));
+            V3Number coefficient{nodep, width};  // C(e, i) * 2**i
+            for (int bit = i; bit < width; ++bit) {
+                coefficient.setBit(bit, binomial.bitIs1(bit - i));
+            }
+            if (coefficient.isEqZero()) continue;
+            for (; powers < i; ++powers) {
+                const std::string name = "__Vhalf" + cvtToStr(powers + 1);
+                halves
+                    += "(let ((" + name + " "
+                       + (powers ? "(bvmul __Vhalf" + cvtToStr(powers) + " __Vhalf1)"
+                                 : "(bvlshr __Vpow0 " + smtBits(V3Number{nodep, width, 1}) + ")")
+                       + ")) ";
+            }
+            sum = "(bvadd " + sum + " (bvmul " + smtBits(coefficient) + " __Vhalf" + cvtToStr(i)
+                  + "))";
+        }
+        return smt + "(ite (= ((_ extract 0 0) __Vpow0) #b0) " + smtBits(V3Number{nodep, width, 0})
+               + " " + halves + sum + std::string(powers, ')') + ")" + closes;
+    }
+    void handlePow(AstNodeBiop* nodep) {
+        if (editFormat(nodep)) return;
+        // A computable exponent, as a negated literal, is folded, and used folded only if it
+        // gives a 2-state constant
+        if (!VN_IS(nodep->rhsp(), Const) && !nodep->rhsp()->user1()) {
+            AstNodeExpr* const foldedp
+                = V3Const::constifyEdit(nodep->rhsp()->cloneTreePure(false));
+            const AstConst* const foldedConstp = VN_CAST(foldedp, Const);
+            if (foldedConstp && !foldedConstp->num().isAnyXZ()) {
+                pushDeletep(nodep->rhsp()->unlinkFrBack());
+                nodep->rhsp(foldedp);
+            } else {
+                VL_DO_DANGLING(pushDeletep(foldedp), foldedp);
+            }
+        }
+        if (const AstConst* const exponentp = VN_CAST(nodep->rhsp(), Const)) {
+            const V3Number& exponent = exponentp->num();
+            const bool baseSigned = VN_IS(nodep, PowSS) || VN_IS(nodep, PowSU);
+            // Only a signed exponent is negative; an unsigned one with its top bit set is large
+            const bool negative = (VN_IS(nodep, PowSS) || VN_IS(nodep, PowUS))
+                                  && exponent.bitIs1(exponent.width() - 1);
+            if (negative || exponent.isEqZero()) {
+                AstNodeExpr* const powerp
+                    = negative
+                          ? newNegativePowp(nodep, nodep->lhsp(), baseSigned, exponent.bitIs1(0))
+                          : new AstConst{nodep->fileline(), AstConst::WidthedValue{},
+                                         nodep->width(), 1};
+                nodep->replaceWith(powerp);
+                VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                iterate(powerp);
+            } else {
+                editSMT(nodep, nodep->lhsp(), nullptr, nullptr,
+                        positivePowSmt(nodep, exponent, nodep->width()));
+            }
         } else if (const AstConst* const basep = VN_CAST(nodep->lhsp(), Const)) {
             if (basep->num().toUInt() == 2) {
                 // Non-constant exponent, base == 2: transform to shift-based SMT expression.
