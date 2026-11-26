@@ -122,6 +122,20 @@ module t;
     end
   end
 
+  // The sampled value of a runtime-valued automatic variable, also an argument or a local of an
+  // automatic function, is its current value
+  function automatic int fs(int x);
+    int l;
+    l = 2 * x + 1;
+    return $sampled(l) + $sampled(x);
+  endfunction
+  always @(posedge clk) begin
+    automatic int la;
+    la = 2 * cyc + 1;
+    `checkh($sampled(la), 2 * cyc + 1);
+    `checkh(fs(cyc + 11), 3 * (cyc + 11) + 1);
+  end
+
   // A class property is not an automatic variable, whatever its lifetime: its past value is its
   // history
   class Cp;
