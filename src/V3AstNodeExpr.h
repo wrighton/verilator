@@ -1611,6 +1611,20 @@ public:
     AstNodeModule* classOrPackagep() const { return m_classOrPackagep; }
     void classOrPackagep(AstNodeModule* nodep) { m_classOrPackagep = nodep; }
 };
+class AstEventArg final : public AstNodeExpr {
+    // An event expression actual argument of a sequence or property instance, until its formal
+    // is substituted (IEEE 1800-2023 16.8.1)
+    // @astgen op1 := senItemp : AstSenItem
+public:
+    AstEventArg(FileLine* fl, AstSenItem* senItemp)
+        : ASTGEN_SUPER_EventArg(fl) {
+        this->senItemp(senItemp);
+    }
+    ASTGEN_MEMBERS_AstEventArg;
+    string emitVerilog() override { V3ERROR_NA_RETURN(""); }
+    string emitC() override { V3ERROR_NA_RETURN(""); }
+    bool cleanOut() const override { V3ERROR_NA_RETURN(true); }
+};
 class AstEventually final : public AstNodeExpr {
     // eventually property expression (IEEE 1800-2023 16.12.13)
     // @astgen op1 := exprp : AstNodeExpr
@@ -7017,7 +7031,8 @@ public:
                 && readOnlyModport() == asamep->readOnlyModport()
                 && assertCtlOptional() == asamep->assertCtlOptional()
                 && assertCtlAbsolute() == asamep->assertCtlAbsolute()
-                && upward() == asamep->upward());
+                && upward() == asamep->upward()
+                && resolvedDotted() == asamep->resolvedDotted());
     }
 };
 
