@@ -64,6 +64,14 @@ string blocks that may include newlines and single quotes.
 Verilator implements a full IEEE 1800-2023 compliant preprocessor,
 including triple-quoted strings, and \`ifdef expressions.
 
+A ``dist`` range item weighs as a whole, counting values that other
+constraints exclude, as IEEE 1800-2023 18.5.3 requires: the range size
+times the weight for ``:=``, or the weight for ``:/``. In files processed
+as IEEE 1800-2017 or earlier, selected by :vlopt:`--default-language` or a
+``+<lang>ext+`` option, each value of the range that remains keeps its own
+weight instead. A ``\`begin_keywords`` directive selects only keywords, not
+these semantics.
+
 
 Verilog AMS Support
 -------------------

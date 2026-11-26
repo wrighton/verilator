@@ -1502,7 +1502,7 @@ VlRandomizer::FastRanges VlRandomizer::fastIntersect(const FastRanges& a, const 
                                    [](const FastRange& r, QData lo) { return r.hi < lo; });
         for (; it != b.end() && it->lo <= range.hi; ++it) {
             result.push_back({std::max(range.lo, it->lo), std::min(range.hi, it->hi), range.weight,
-                              range.divisor});
+                              range.scale});
         }
     }
     return result;
@@ -1564,12 +1564,13 @@ struct VlFastQuotient final {
 };
 
 // One dist item's feasible values, a contiguous span of ranks in the domain.
-// Its mass, count * weight / divisor, is scaled into whole units plus, when
+// Its mass, massCount * weight / divisor, is scaled into whole units plus, when
 // the scaled mass is not whole, a final unit accepted with probability equal
 // to the fraction whose binary digits remain in fraction.
 struct VlFastBucket final {
     QData first = 0;  // Rank of the first feasible value
     QData count = 0;  // Number of feasible values
+    QData massCount = 0;  // Values the mass counts, feasible or not; 0 is 2^64
     QData weight = 0;
     QData divisor = 0;
     QData units = 0;
@@ -1599,8 +1600,8 @@ static QData vl_fastExactMasses(std::vector<VlFastBucket>& buckets) {
         const QData scale = denominator / bucket.divisor;
         if (bucket.weight > s_fastMax / scale) return 0;
         const QData weight = bucket.weight * scale;
-        if (bucket.count > s_fastMax / weight) return 0;
-        bucket.units = bucket.count * weight;
+        if (!bucket.massCount || bucket.massCount > s_fastMax / weight) return 0;
+        bucket.units = bucket.massCount * weight;
         if (bucket.units > s_fastMax - total) return 0;
         total += bucket.units;
         bucket.end = total;
@@ -1609,7 +1610,7 @@ static QData vl_fastExactMasses(std::vector<VlFastBucket>& buckets) {
 }
 
 // Masses scaled by a common power of two when no 64-bit common denominator
-// exists. Long division of each 128-bit count * weight by the divisor gives
+// exists. Long division of each 128-bit massCount * weight by the divisor gives
 // its whole scaled units; the remaining quotient digits are the fraction of
 // its final unit. With every mass below 2^maxBits, the shift keeps the total
 // below 2^63 + buckets and the largest mass at least 2^60 / buckets units.
@@ -1618,8 +1619,10 @@ static QData vl_fastScaledMasses(std::vector<VlFastBucket>& buckets) {
     int maxBits = std::numeric_limits<int>::min();
     for (VlFastBucket& bucket : buckets) {
         VlFastQuotient& fraction = bucket.fraction;
-        fraction = {vl_fastMulHi(bucket.count, bucket.weight), bucket.count * bucket.weight,
-                    bucket.divisor};
+        fraction = bucket.massCount
+                       ? VlFastQuotient{vl_fastMulHi(bucket.massCount, bucket.weight),
+                                        bucket.massCount * bucket.weight, bucket.divisor}
+                       : VlFastQuotient{bucket.weight, 0, bucket.divisor};
         const int bits = fraction.bits() - static_cast<int>(VL_MOSTSETBITP1_Q(bucket.divisor)) + 1;
         maxBits = std::max(maxBits, bits);
     }
@@ -1694,14 +1697,19 @@ bool VlRandomizer::fastSample(VlRNG& rngr, const FastRanges& domain, const FastC
                                   : std::lower_bound(loIt, domain.end(), range.hi, endsBefore);
             const QData first = rankAt(loIt, range.lo, false);
             const QData count = rankAt(hiIt, range.hi, true) - first;
-            if (count) buckets.push_back({first, count, range.weight, range.divisor});
+            if (!count) continue;
+            // IEEE 1800-2023 18.5.3 weighs an item as a whole, counting values other
+            // constraints exclude; 1800-2017 18.5.4 weighs each surviving value.
+            if (distp->rangeMass) {
+                buckets.push_back({first, count, range.scale, range.weight, 1});
+            } else {
+                buckets.push_back({first, count, count, range.weight, range.scale});
+            }
         }
         assert(!buckets.empty());  // The domain is a subset of the retained dist's union
     } else {
-        buckets.push_back({0, prefix.back(), 1, 1});
+        buckets.push_back({0, prefix.back(), prefix.back(), 1, 1});
     }
-    // IEEE 1800-2023 18.5.3: each feasible value carries its item's per-value
-    // weight, so an item's mass is its feasible count times weight / divisor.
     QData total = vl_fastExactMasses(buckets);
     if (!total) total = vl_fastScaledMasses(buckets);
     // Only a final partial unit can reject, below B^2 / 2^60 of proposals
