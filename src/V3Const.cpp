@@ -965,6 +965,7 @@ class ConstVisitor final : public VNVisitor {
     VDouble0 m_statBitOpReduction;  // Ops reduced in ConstBitOpTreeVisitor
     VDouble0 m_statConcatMerge;  // Concat merges
     VDouble0 m_statAndOrVisits;  // Visits of bitwise And and Or
+    VDouble0 m_statLogicPurities;  // Purities computed to convert LogAnd/LogOr to bitwise
     VDouble0 m_statCondExprRedundant;  // Conditional repeated expressions
     VDouble0 m_statIfCondExprRedundant;  // Conditional repeated expressions
     VDouble0 m_statMemberAccessVisits;  // Nodes visited by containsMemberAccessRecurse
@@ -3133,6 +3134,13 @@ class ConstVisitor final : public VNVisitor {
         }
         return nodep->isPure();
     }
+    // matchBiopToBitwise, counting the purities it computes
+    bool matchLogicToBitwise(AstNodeBiop* const nodep) {
+        const uint64_t purityCnt = VIsCached::setCntGbl();
+        const bool match = matchBiopToBitwise(nodep);
+        m_statLogicPurities += VIsCached::setCntGbl() - purityCnt;
+        return match;
+    }
     bool matchBiopToBitwise(AstNodeBiop* const nodep) {
         if (!m_convertLogicToBit) return false;
         if (!nodep->lhsp()->width1()) return false;
@@ -4733,8 +4741,8 @@ class ConstVisitor final : public VNVisitor {
     TREEOPV("AstOneHot{$lhsp.width1}",          "replaceWLhs(nodep)");
     TREEOPV("AstOneHot0{$lhsp.width1}",         "replaceNum(nodep,1)");
     // Binary AND/OR is faster than logical and/or (usually)
-    TREEOPV("AstLogAnd{matchBiopToBitwise(nodep)}", "replaceLogicWithBitwise(nodep)");
-    TREEOPV("AstLogOr {matchBiopToBitwise(nodep)}", "replaceLogicWithBitwise(nodep)");
+    TREEOPV("AstLogAnd{matchLogicToBitwise(nodep)}", "replaceLogicWithBitwise(nodep)");
+    TREEOPV("AstLogOr {matchLogicToBitwise(nodep)}", "replaceLogicWithBitwise(nodep)");
     TREEOPV("AstLogNot{$lhsp.width1}",  "AstNot{$lhsp}");
     // CONCAT(CONCAT({a},{b}),{c}) -> CONCAT({a},CONCAT({b},{c}))
     // CONCAT({const},CONCAT({const},{c})) -> CONCAT((constifiedCONC{const|const},{c}))
@@ -4887,6 +4895,7 @@ public:
             }
         }
         V3Stats::addStatSum("Optimizations, Const and/or visits", m_statAndOrVisits);
+        V3Stats::addStatSum("Optimizations, Const logic purities computed", m_statLogicPurities);
         V3Stats::addStatSum("Optimizations, Cond redundant expressions", m_statCondExprRedundant);
         V3Stats::addStatSum("Optimizations, If cond redundant expressions",
                             m_statIfCondExprRedundant);
