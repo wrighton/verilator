@@ -5,9 +5,9 @@
 [25] %Error: t_assert_pass_only.v:29: Assertion failed in t: 'assert' failed.
 [25] %Error: t_assert_pass_only.v:42: Assertion failed in t: 'assert' failed.
 [25] %Error: t_assert_pass_only.v:43: Assertion failed in t: 'assert' failed.
-[25] %Error: t_assert_pass_only.v:46: Assertion failed in t: 'assert' failed.
-[25] %Error: t_assert_pass_only.v:44: Assertion failed in t: 'assert' failed.
 [25] %Error: t_assert_pass_only.v:26: Assertion failed in t: 'assert' failed.
 [25] %Error: t_assert_pass_only.v:27: Assertion failed in t: 'assert' failed.
+[25] %Error: t_assert_pass_only.v:44: Assertion failed in t: 'assert' failed.
+[25] %Error: t_assert_pass_only.v:46: Assertion failed in t: 'assert' failed.
 [35] final deferred pass
 *-* All Finished *-*
