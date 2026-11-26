@@ -94,6 +94,8 @@ private:
     AstSenItem* m_senip = nullptr;  // Last sensitivity
     // Reset each always:
     AstSenItem* m_seniAlwaysp = nullptr;  // Clock taken from the always
+    const AstNode* m_alwaysBlockerp = nullptr;  // Statement that prevents inferring it
+    bool m_alwaysWarned = false;  // Reported taking the clock as non-standard
     // Reset each assertion:
     AstNodeExpr* m_disablep = nullptr;  // Last disable
     AstIf* m_disableSeqIfp = nullptr;  // Used for handling disable iff in sequences
@@ -114,6 +116,7 @@ private:
     bool m_inConcatAssign = false;  // True if in assignment to a concatenation
     std::vector<SynchDrive> m_drives;  // Clockvars written by the synchronous drive
     bool m_hasCycleDelay = false;  // True if node has cycle delay beneath
+    std::unordered_map<const AstNodeFTask*, bool> m_taskBlocks;  // Whether calling a task blocks
     std::vector<AstVarXRef*> m_xrefsp;  // list of xrefs that need name fixup
     std::vector<AstSequence*> m_seqsToCleanup;  // Sequences to clean up after traversal
 
@@ -275,6 +278,19 @@ private:
             newp = new AstSenTree{nodep->fileline(), nullptr};
         } else {
             if (cassertp && fromAlways) cassertp->senFromAlways(true);
+            if (fromAlways && m_alwaysBlockerp && !m_alwaysWarned) {
+                m_alwaysWarned = true;
+                nodep->v3warn(NONSTD, "Non-standard clock inferred from a procedure with a"
+                                      " blocking timing control or another event control"
+                                      " (IEEE 1800-2023 16.14.6).\n"
+                                          << nodep->warnContextPrimary() << '\n'
+                                          << m_alwaysBlockerp->warnOther()
+                                          << "... Location of the timing control\n"
+                                          << m_alwaysBlockerp->warnContextSecondary()
+                                          << nodep->warnMore()
+                                          << "... Suggest declare default clocking with the"
+                                             " same event");
+            }
             // The procedure's clock is one event expression of its event control
             newp = new AstSenTree{nodep->fileline(), senip->cloneTree(!fromAlways)};
         }
@@ -768,11 +784,16 @@ private:
         }
     }
     void visit(AstAlways* nodep) override {
+        VL_RESTORER(m_alwaysBlockerp);
+        VL_RESTORER(m_alwaysWarned);
         iterateAndNextNull(nodep->sentreep());
         m_seniAlwaysp = V3AssertCommon::inferredClock(nodep);
         // Without an inferred clock, an only event expression is still the clock
         AstSenItem* const sensesp = nodep->sentreep() ? nodep->sentreep()->sensesp() : nullptr;
         if (!m_seniAlwaysp && sensesp && !sensesp->nextp()) m_seniAlwaysp = sensesp;
+        m_alwaysBlockerp
+            = m_seniAlwaysp ? V3AssertCommon::inferenceBlockerp(nodep, m_taskBlocks) : nullptr;
+        m_alwaysWarned = false;
         iterateAndNextNull(nodep->stmtsp());
         m_seniAlwaysp = nullptr;
     }

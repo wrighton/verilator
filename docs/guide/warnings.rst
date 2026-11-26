@@ -1693,6 +1693,15 @@ List Of Warnings
    vector wider than 32 bits, which IEEE 1800-2023 35.5.5 does not allow.
    See :option:`import&32;"DPI-C"&32;function`.
 
+   Also warns when a procedural concurrent assertion or a sampled value
+   function without a clocking event takes its clock from the event control
+   of an always procedure that also has a blocking timing control or another
+   event control. No clock is inferred for such a procedure (IEEE 1800-2023
+   16.14.6 a) and b)), so without default clocking the assertion has no
+   clock, which IEEE 1800-2023 16.16 f) does not allow. Verilator clocks it
+   by the procedure's event control. Instead declare default clocking with
+   that event.
+
    Ignoring this warning will only suppress the lint check; it will
    simulate correctly.
 
