@@ -157,6 +157,7 @@ class AstNodeFTask VL_NOT_FINAL : public AstNode {
     bool m_needsVlProcess : 1;  // Needs access to VlProcess of the caller
     bool m_isCovergroupSample : 1;  // Covergroup sample() method
     bool m_isProcessKill : 1;  // std::process::kill() method
+    bool m_unelaborated : 1;  // Body removed, as in an interface not elaborated (V3LinkDot)
     VBaseOverride m_baseOverride;  // BaseOverride (inital/final/extends)
     VLifetime m_lifetime;  // Default lifetime of local vars
     VIsCached m_purity;  // Pure state
@@ -194,7 +195,8 @@ protected:
         , m_virtual{false}
         , m_needsVlProcess{false}
         , m_isCovergroupSample{false}
-        , m_isProcessKill{false} {
+        , m_isProcessKill{false}
+        , m_unelaborated{false} {
         cname(name);  // Might be overridden by dpi import/export
     }
     void fvarp(AstVar* varp) { m_fvarp = varp; }
@@ -282,6 +284,8 @@ public:
     void isCovergroupSample(bool flag) { m_isCovergroupSample = flag; }
     bool isProcessKill() const { return m_isProcessKill; }
     void isProcessKill(bool flag) { m_isProcessKill = flag; }
+    bool unelaborated() const { return m_unelaborated; }
+    void unelaborated(bool flag) { m_unelaborated = flag; }
     void baseOverride(const VBaseOverride& flag) { m_baseOverride = flag; }
     VBaseOverride baseOverride() const { return m_baseOverride; }
     void lifetime(const VLifetime& flag) { m_lifetime = flag; }
