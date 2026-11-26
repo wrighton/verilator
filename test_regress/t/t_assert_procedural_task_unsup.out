@@ -1,18 +1,14 @@
-%Error-UNSUPPORTED: t/t_assert_procedural_task_unsup.v:15:26: Unsupported: Procedural concurrent assertion in a task referencing a variable of the task 'i' (IEEE 1800-2023 16.14.6).
+%Error-UNSUPPORTED: t/t_assert_procedural_task_unsup.v:17:26: Unsupported: Procedural concurrent assertion in a task referencing a variable of the task 'i' (IEEE 1800-2023 16.14.6).
                                                             : ... note: In instance 't'
-   15 |       else got.push_back(i);
+   17 |       else got.push_back(i);
       |                          ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_assert_procedural_task_unsup.v:20:37: Unsupported: Procedural concurrent assertion in a task referencing a variable of the task 'k' (IEEE 1800-2023 16.14.6).
+%Error-UNSUPPORTED: t/t_assert_procedural_task_unsup.v:25:37: Unsupported: Procedural concurrent assertion in a task referencing a static variable of the task 'n' (IEEE 1800-2023 16.14.6).
                                                             : ... note: In instance 't'
-   20 |     assert property (@(posedge clk) k == 0);
+   25 |     assert property (@(posedge clk) n == 1);
       |                                     ^
-%Error-UNSUPPORTED: t/t_assert_procedural_task_unsup.v:26:37: Unsupported: Procedural concurrent assertion in a task referencing a variable of the task 'n' (IEEE 1800-2023 16.14.6).
+%Error-UNSUPPORTED: t/t_assert_procedural_task_unsup.v:31:18: Unsupported: Procedural concurrent assertion in a task referencing a static variable of the task 'kept' (IEEE 1800-2023 16.14.6).
                                                             : ... note: In instance 't'
-   26 |     assert property (@(posedge clk) n == 1);
-      |                                     ^
-%Error-UNSUPPORTED: t/t_assert_procedural_task_unsup.v:32:18: Unsupported: Procedural concurrent assertion in a task referencing a variable of the task 'kept' (IEEE 1800-2023 16.14.6).
-                                                            : ... note: In instance 't'
-   32 |       static int kept;
+   31 |       static int kept;
       |                  ^~~~
 %Error: Exiting due to
