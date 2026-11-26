@@ -379,9 +379,29 @@ class LinkCellsVisitor final : public VNVisitor {
     string m_origTopModuleName;  // original name of the top module
     int m_modDepth = 0;  // Depth of the current module
     uint64_t m_statModsScanned = 0;  // Modules examined by readModNames
+    // Module -> its non-parameter variables by name, found once
+    std::unordered_map<const AstNodeModule*, std::unordered_map<string, const AstVar*>> m_modVars;
+    uint64_t m_statModVarStmts = 0;  // Module statements examined for m_modVars
     uint64_t m_statHierStubs = 0;  // Parameterized hierarchical blocks reduced by stubHierBlocks
 
     // METHODS
+    // Return the non-parameter variable of modp named name, if any. Found once, as this pass
+    // adds no port variables to modules: bind adds cells, and the only variables it adds are
+    // interface references named for an instance with a __Viftop suffix.
+    const AstVar* findModVar(const AstNodeModule* modp, const string& name) {
+        const auto pair = m_modVars.emplace(modp, std::unordered_map<string, const AstVar*>{});
+        if (pair.second) {
+            for (const AstNode* const stmtp : modp->stmtspList()) {
+                ++m_statModVarStmts;
+                if (const AstVar* const varp = VN_CAST(stmtp, Var)) {
+                    // The first of a name, as found before
+                    if (!varp->isParam()) pair.first->second.emplace(varp->name(), varp);
+                }
+            }
+        }
+        const auto it = pair.first->second.find(name);
+        return it == pair.first->second.end() ? nullptr : it->second;
+    }
     V3GraphVertex* vertex(AstNodeModule* nodep) {
         // Return corresponding vertex for this module
         if (!nodep->user1p()) nodep->user1p(new LinkCellsVertex{&m_graph, nodep});
@@ -1293,19 +1313,9 @@ class LinkCellsVisitor final : public VNVisitor {
                             // with the same name() as the port. We'll look for that in-line here,
                             // if a port is missing on this instance.
 
-                            // Get the AstVar for this AstPort, if it exists, using this
-                            // inefficient O(n) lookup to match the port name.
-                            const AstVar* portp_varp = nullptr;
-                            for (AstNode* const module_stmtsp : nodep->modp()->stmtspList()) {
-                                if (const AstVar* const varp = VN_CAST(module_stmtsp, Var)) {
-                                    if (!varp->isParam() && varp->name() == portp->name()) {
-                                        // not a parameter, same name, break, this is our varp
-                                        // (AstVar*)
-                                        portp_varp = varp;
-                                        break;
-                                    }
-                                }
-                            }
+                            // Get the AstVar for this AstPort, if it exists
+                            const AstVar* const portp_varp
+                                = findModVar(nodep->modp(), portp->name());
 
                             // Is the matching Module port: an INPUT, with default value (in
                             // valuep):
@@ -1316,13 +1326,16 @@ class LinkCellsVisitor final : public VNVisitor {
                                     = new AstPin{nodep->fileline(), 0, portp->name(), nullptr};
                                 nodep->addPinsp(newp);
                             } else {
-                                nodep->v3warn(PINMISSING,
-                                              "Instance has missing pin: "
-                                                  << portp->prettyNameQ() << '\n'
-                                                  << nodep->warnContextPrimary() << '\n'
-                                                  << portp->warnOther()
-                                                  << "... Location of port declaration\n"
-                                                  << portp->warnContextSecondary());
+                                // Not forming the source contexts of a warning that is off
+                                if (!nodep->fileline()->warnIsOff(V3ErrorCode::PINMISSING)) {
+                                    nodep->v3warn(PINMISSING,
+                                                  "Instance has missing pin: "
+                                                      << portp->prettyNameQ() << '\n'
+                                                      << nodep->warnContextPrimary() << '\n'
+                                                      << portp->warnOther()
+                                                      << "... Location of port declaration\n"
+                                                      << portp->warnContextSecondary());
+                                }
                                 AstPin* const newp
                                     = new AstPin{nodep->fileline(), 0, portp->name(), nullptr};
                                 nodep->addPinsp(newp);
@@ -1514,6 +1527,7 @@ public:
     }
     ~LinkCellsVisitor() override {
         V3Stats::addStat("LinkCells, Modules scanned", m_statModsScanned);
+        V3Stats::addStat("LinkCells, Module statements scanned for variables", m_statModVarStmts);
         V3Stats::addStat("LinkCells, Hierarchical blocks stubbed", m_statHierStubs);
         if (debug() >= 5 || dumpGraphLevel() >= 5) { m_mods.dumpFilePrefixed("linkcells"); }
     }
