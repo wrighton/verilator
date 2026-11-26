@@ -4096,6 +4096,7 @@ public:
             return "VL_NEQ_%lq(%lW, %P, %li, %ri)";
         }
     }
+    string emitSMT() const override { return "(__Vbv (not (= %l %r)))"; }
     string emitSimpleOperator() override {
         if (v3Global.opt.fourstate()) {
             V3ERROR_NA_RETURN("");
