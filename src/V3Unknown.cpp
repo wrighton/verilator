@@ -238,6 +238,42 @@ class UnknownVisitor final : public VNVisitor {
         }
     }
 
+    // Delete the statements in list 'stmtsp' that have no effect, given that the variables in
+    // 'readps' are read after them: assignments of pure values to internal temporaries not read
+    // later, and conditions left with no statements. Walking back from the statements with
+    // effects keeps only the lifted temporaries (V3LiftExpr) these read. Updates 'readps'.
+    void deleteNoEffect(AstNode* stmtsp, std::unordered_set<const AstVar*>& readps) {
+        std::vector<AstNode*> stmtps;
+        for (AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) stmtps.push_back(stmtp);
+        const auto addReads = [&](AstNode* nodep) {
+            nodep->foreach([&](const AstNodeVarRef* refp) {
+                if (refp->access().isReadOrRW()) readps.emplace(refp->varp());
+            });
+        };
+        for (auto it = stmtps.rbegin(); it != stmtps.rend(); ++it) {
+            AstNode* const stmtp = *it;
+            if (AstIf* const ifp = VN_CAST(stmtp, If)) {
+                std::unordered_set<const AstVar*> elseReadps{readps};
+                if (ifp->thensp()) deleteNoEffect(ifp->thensp(), readps);
+                if (ifp->elsesp()) deleteNoEffect(ifp->elsesp(), elseReadps);
+                readps.insert(elseReadps.begin(), elseReadps.end());
+                if (!ifp->thensp() && !ifp->elsesp() && ifp->condp()->isPure()) {
+                    VL_DO_DANGLING(pushDeletep(ifp->unlinkFrBack()), ifp);
+                } else {
+                    addReads(ifp->condp());
+                }
+                continue;
+            }
+            const AstAssign* const assignp = VN_CAST(stmtp, Assign);
+            const AstVarRef* const refp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+            if (refp && refp->varp()->isInternal() && !readps.count(refp->varp())
+                && assignp->rhsp()->isPure()) {
+                VL_DO_DANGLING(pushDeletep(stmtp->unlinkFrBack()), stmtp);
+                continue;
+            }
+            addReads(stmtp);
+        }
+    }
     void replaceBoundLvalue(AstNodeExpr* nodep, AstNodeExpr* condp) {
         // Spec says a out-of-range LHS SEL results in a NOP.
         // We wrap the expression into IF
@@ -249,9 +285,27 @@ class UnknownVisitor final : public VNVisitor {
             prep = VN_AS(prep->backp(), NodeExpr);
         }
         if (VN_IS(prep->backp(), AssignForce) || VN_IS(prep->backp(), Release)) {
+            AstNode* const stmtp = prep->backp();
+            if (!stmtp->backp()) {
+                // Already removed for another select of the target wholly out of range
+                VL_DO_DANGLING(condp->deleteTree(), condp);
+                return;
+            }
             if (condp->isZero()) {
-                // Forcing or releasing only bits out of range does nothing (IEEE 1800-2023 11.5.1)
-                AstNode* const stmtp = prep->backp()->unlinkFrBack();
+                // Only bits out of range are forced or released, so nothing is written
+                // (IEEE 1800-2023 11.5.1). A force still evaluates its value when executed
+                // (IEEE 1800-2023 10.6): the statements lifted from it (V3LiftExpr) that have an
+                // effect run in its place, and its result is dropped.
+                const AstAssignForce* const forcep = VN_CAST(stmtp, AssignForce);
+                if (AstExprStmt* const exprStmtp
+                    = forcep ? VN_CAST(forcep->rhsp(), ExprStmt) : nullptr) {
+                    std::unordered_set<const AstVar*> readps;
+                    deleteNoEffect(exprStmtp->stmtsp(), readps);
+                    if (AstNode* const stmtsp = exprStmtp->stmtsp()) {
+                        stmtp->addHereThisAsNext(stmtsp->unlinkFrBackWithNext());
+                    }
+                }
+                stmtp->unlinkFrBack();
                 VL_DO_DANGLING(pushDeletep(stmtp), stmtp);
                 VL_DO_DANGLING(condp->deleteTree(), condp);
                 return;
@@ -1029,8 +1083,15 @@ class UnknownVisitor final : public VNVisitor {
             }
             nodep->replaceWith(newp);
             if (assignp) {
-                AstNodeExpr* const rhsp = assignp->rhsp()->unlinkFrBack();
-                assignp->rhsp(new AstSel{fl, rhsp, static_cast<int>(low - lsb), count});
+                // Of a value with statements lifted from it (V3LiftExpr), the result is selected
+                AstExprStmt* const exprStmtp = VN_CAST(assignp->rhsp(), ExprStmt);
+                AstNodeExpr* const valuep = exprStmtp ? exprStmtp->resultp() : assignp->rhsp();
+                VNRelinker relinker;
+                valuep->unlinkFrBack(&relinker);
+                AstSel* const valueSelp
+                    = new AstSel{fl, valuep, static_cast<int>(low - lsb), count};
+                relinker.relink(valueSelp);
+                if (exprStmtp) exprStmtp->dtypeFrom(valueSelp);
             }
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             VL_DO_DANGLING(lsbp->deleteTree(), lsbp);

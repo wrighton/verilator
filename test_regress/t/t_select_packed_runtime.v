@@ -7,6 +7,7 @@
 // verilog_format: off
 `define stop $stop
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define STRINGIFY(x) `"x`"
 // verilog_format: on
 
 // A nonblocking write outside its storage in a package task, which is widthed from a module
@@ -280,9 +281,10 @@ module t;
   // parts are forced from their own bits of the value
   wire [7:0] concat_net = 8'h08;
   int forced_calls = 0;
-  function automatic logic forced_value();
+  logic [1:0] forced_arg = 2'b01;
+  function automatic logic [1:0] forced_value(logic [1:0] value);
     ++forced_calls;
-    return 1'b1;
+    return value;
   endfunction
   wire [3:0][1:0] nested_net = '0;
   initial begin
@@ -309,12 +311,41 @@ module t;
     `checkh(concat_net, 8'h08);
     force {concat_net[9], concat_net[8]} = 2'b11;
     release {concat_net[9], concat_net[8]};
-    // The value of a removed force is still evaluated once
-    force concat_net[9] = forced_value();
+    // The value of a removed force is still evaluated once, and not again when it changes
+    force concat_net[9:8] = forced_value(forced_arg);
     `checkh(forced_calls, 1);
+    force nested_net[5][3:2] = forced_value(forced_arg);
+    `checkh(forced_calls, 2);
+    force nested_net[5][2:1] = forced_value(forced_arg);
+    `checkh(forced_calls, 3);
+    force nested_net[1][3:2] = forced_value(forced_arg);
+    `checkh(forced_calls, 4);
+    // A force partly outside the net forces its bits within it, following its value
+    force concat_net[8:7] = forced_value(forced_arg);
+    force nested_net[1][2:1] = forced_value(forced_arg);
+    `checkh(forced_calls, 6);
+    #1;
+    `checkh(concat_net, 8'h88);
+    `checkh(nested_net, 8'h08);
+    forced_arg = 2'b10;
+    #1;
+    `checkh(concat_net, 8'h08);
+    `checkh(nested_net, 8'h00);
+    `checkh(forced_calls, 8);
+    release concat_net[8:7];
+    release concat_net[9:8];
+    release nested_net[5][3:2];
+    release nested_net[5][2:1];
+    release nested_net[1][3:2];
+    release nested_net[1][2:1];
+    forced_arg = 2'b01;
+    #1;
+    `checkh(forced_calls, 8);
     // A select of an element outside the net, within a part, has no storage bits either
     force nested_net[5][0] = 1'b1;
     release nested_net[5][0];
+    force nested_net[5][3] = 1'b1;
+    release nested_net[5][3];
     force {nested_net[5][1:0], nested_net[0][0]} = 3'b111;
     #1;
     `checkh(nested_net, 8'h01);
@@ -324,6 +355,80 @@ module t;
     // verilator lint_on SELRANGE
     #1;
     `checkh(concat_net, 8'h08);
+  end
+
+  // A random value of a force of parts, one outside the net, is drawn once, also under a
+  // condition
+  wire [6:0] random_net = '0;
+  int unsigned random_draws[2];
+  int unsigned random_next;
+  bit random_gate;
+  initial begin
+    void'($urandom(12345));
+    random_draws[0] = $urandom;
+    random_draws[1] = $urandom;
+    random_gate = random_draws[1] != 0;
+    // verilator lint_off SELRANGE
+    void'($urandom(12345));
+    force {random_net[9], random_net[6]} = 2'($urandom);
+    random_next = $urandom;
+    #1;
+    `checkh(random_next, random_draws[1]);
+    `checkh(random_net, {random_draws[0][0], 6'h0});
+    release {random_net[9], random_net[6]};
+    void'($urandom(12345));
+    force {random_net[9], random_net[6]} = random_gate ? 2'($urandom) : 2'b00;
+    random_next = $urandom;
+    #1;
+    `checkh(random_next, random_draws[1]);
+    `checkh(random_net, {random_draws[0][0], 6'h0});
+    release {random_net[9], random_net[6]};
+    // A random draw in the value of a force wholly outside the net is not drawn
+    void'($urandom(12345));
+    force random_net[9] = 1'($urandom);
+    random_next = $urandom;
+    release random_net[9];
+    `checkh(random_next, random_draws[0]);
+    void'($urandom(12345));
+    force random_net[9] = random_gate ? 1'($urandom) : 1'b0;
+    random_next = $urandom;
+    release random_net[9];
+    `checkh(random_next, random_draws[0]);
+    void'($urandom(12345));
+    force {random_net[9], random_net[8]} = 2'($urandom);
+    random_next = $urandom;
+    release {random_net[9], random_net[8]};
+    `checkh(random_next, random_draws[0]);
+    // A random draw in a condition is not drawn either, unless branch coverage counts the
+    // condition, which then still draws it
+    void'($urandom(12345));
+    force random_net[9] = 1'($urandom) ? 1'($urandom) : 1'b0;
+    random_next = $urandom;
+    release random_net[9];
+`ifdef TEST_BRANCH_COVERAGE
+    `checkh(random_next, random_draws[1]);
+`else
+    `checkh(random_next, random_draws[0]);
+`endif
+    // verilator lint_on SELRANGE
+  end
+
+  // The value of a force wholly outside the net still reads its file
+  wire [6:0] file_net = '0;
+  initial begin
+    int fd;
+    int got;
+    fd = $fopen({`STRINGIFY(`TEST_OBJ_DIR), "/forced_file.txt"}, "w");
+    $fwrite(fd, "ab");
+    $fclose(fd);
+    fd = $fopen({`STRINGIFY(`TEST_OBJ_DIR), "/forced_file.txt"}, "r");
+    // verilator lint_off SELRANGE
+    force file_net[9] = 1'($fgetc(fd));
+    release file_net[9];
+    // verilator lint_on SELRANGE
+    got = $fgetc(fd);
+    `checkh(got, 32'h62);
+    $fclose(fd);
   end
 
   // A wholly outside blocking write with an intra-assignment delay evaluates its value when
