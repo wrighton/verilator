@@ -248,6 +248,27 @@ public:
     }
 
     // Solver variable name for a constrained dynamic or queue size.
+    // A variable's solver symbol: its name, renamed if it is a reserved word or a theory symbol,
+    // which a solver does not take as a declared name, even quoted. A user's name cannot start
+    // with "__V".
+    static std::string smtSymbol(const std::string& name) {
+        // SMT-LIB 2.6 reserved words (3.1), and the symbols of the Core, FixedSizeBitVectors and
+        // ArraysEx theories, the bv* operations below
+        static const std::set<std::string> s_reserved{
+            "!",           "_",           "as",      "BINARY",   "DECIMAL",     "exists",
+            "forall",      "HEXADECIMAL", "let",     "match",    "NUMERAL",     "par",
+            "STRING",      "true",        "false",   "not",      "and",         "or",
+            "xor",         "=>",          "=",       "distinct", "ite",         "select",
+            "store",       "concat",      "extract", "repeat",   "zero_extend", "sign_extend",
+            "rotate_left", "rotate_right"};
+        return s_reserved.count(name) || isBvOperation(name) ? "__Vsmt_" + name : name;
+    }
+    // Whether a name is of the form of a bit-vector operation, as bvadd
+    static bool isBvOperation(const std::string& name) {
+        return name.size() > 2 && name.compare(0, 2, "bv") == 0
+               && std::all_of(name.begin() + 2, name.end(),
+                              [](char c) { return c >= 'a' && c <= 'z'; });
+    }
     static std::string sizeVarName(const AstVar* const varp) {
         return "__V" + varp->name() + "_size";
     }
@@ -1950,7 +1971,7 @@ private:
     // Returns nullptr for unsupported expression types.
     AstNodeExpr* buildSolveBeforeNameExpr(FileLine* fl, AstNodeExpr* exprp) {
         if (const AstVarRef* const varrefp = VN_CAST(exprp, VarRef)) {
-            return new AstConst{fl, AstConst::String{}, varrefp->name()};
+            return new AstConst{fl, AstConst::String{}, SmtUtil::smtSymbol(varrefp->name())};
         }
         // Handle MemberRef or StructSel (V3Width converts MemberRef -> StructSel for structs)
         if (AstNodeExpr* const selFromp = getSelFromp(exprp)) {
@@ -3414,10 +3435,10 @@ private:
 
             // Above functions returned empty string, unrecognized node type,
             // Using nodep->name();
-            if (smtName == "") smtName = nodep->name();
+            if (smtName == "") smtName = SmtUtil::smtSymbol(nodep->name());
         } else {
-            // No MemberRef, StructSel, element select or CMethodHard: just variable name
-            smtName = nodep->name();
+            // No MemberRef, StructSel or CMethodHard:at : just variable name
+            smtName = SmtUtil::smtSymbol(nodep->name());
         }
         // Recorded so the runtime can tell constraints naming only randc variables apart
         // (#8058). A name matching no registered variable, as a nested access path formatted
@@ -6358,7 +6379,7 @@ private:
                 AstVar* const varp = VN_IS(itemp, MemberRef) ? VN_AS(itemp, MemberRef)->varp()
                                                              : VN_AS(itemp, VarRef)->varp();
                 const std::string smtName
-                    = memberRefp ? buildMemberPath(memberRefp) : varp->name();
+                    = memberRefp ? buildMemberPath(memberRefp) : SmtUtil::smtSymbol(varp->name());
                 AstNodeModule* const varModp = VN_AS(varp->user2p(), NodeModule);
                 UASSERT_OBJ(varModp, nodep, "varp has no NodeModule set");
                 AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
@@ -6435,7 +6456,8 @@ private:
                     if (m_inlineInitBlockp) m_inlineWrittenVars.insert(varp->name());
                     // Convert to C string
                     AstNodeExpr* const varnamep = new AstCExpr{
-                        fl, AstCExpr::Pure{}, "\"" + varp->name() + "\"", varp->width()};
+                        fl, AstCExpr::Pure{}, "\"" + SmtUtil::smtSymbol(varp->name()) + "\"",
+                        varp->width()};
 
                     AstCMethodHard* const writeVarCallp = new AstCMethodHard{
                         fl, genVarRefp(VAccess::READ), VCMethod::RANDOMIZER_WRITE_VAR};
@@ -7014,7 +7036,7 @@ private:
                 // Whole array variable: register each element as solver variable
                 AstVarRef* const arrRefp = VN_CAST(nodep->fromp(), VarRef);
                 AstVar* const arrVarp = arrRefp->varp();
-                const std::string smtArrayName = arrVarp->name();
+                const std::string smtArrayName = SmtUtil::smtSymbol(arrVarp->name());
                 AstNodeDType* const elemDtp = arrVarp->dtypep()->skipRefp()->subDTypep();
                 const int elemWidth = elemDtp->width();
                 AstNodeModule* const arrModulep = VN_AS(arrVarp->user2p(), NodeModule);
@@ -7182,7 +7204,7 @@ private:
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* keyp = nullptr;
         if (const AstNodeVarRef* const vrefp = VN_CAST(nodep->exprp(), NodeVarRef)) {
-            keyp = new AstConst{fl, AstConst::String{}, vrefp->name()};
+            keyp = new AstConst{fl, AstConst::String{}, SmtUtil::smtSymbol(vrefp->name())};
         } else if (const AstMemberRef* const mselp = VN_CAST(nodep->exprp(), MemberRef)) {
             // The name of its registration and of the soft constraints it appears in
             std::string fmt;
@@ -8606,7 +8628,8 @@ class SolverSmtLowering final : public V3SolverLowering {
     }
     // SMT name of varp in the object of member select mselp, or in this object without mselp
     static std::string siblingSmtName(const AstVar* const varp, const AstMemberRef* const mselp) {
-        return mselp ? buildMemberPath(mselp->fromp()) + "." + varp->name() : varp->name();
+        return mselp ? buildMemberPath(mselp->fromp()) + "." + varp->name()
+                     : SmtUtil::smtSymbol(varp->name());
     }
     // Statements stmtsp on the array of member select mselp, if any, run only while the
     // handles to its object are not null
@@ -9996,7 +10019,8 @@ public:
                 const size_t width = RandomizeUtil::arrayElementDTypep(arrVarp->dtypep())->width();
                 methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, width});
                 AstNodeExpr* const varnamep = new AstCExpr{
-                    fl, AstCExpr::Pure{}, "\"" + arrVarp->name() + "\"", arrVarp->width()};
+                    fl, AstCExpr::Pure{}, "\"" + SmtUtil::smtSymbol(arrVarp->name()) + "\"",
+                    arrVarp->width()};
                 varnamep->dtypep(arrVarp->dtypep());
                 methodp->addPinsp(varnamep);
                 methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, dimension});
