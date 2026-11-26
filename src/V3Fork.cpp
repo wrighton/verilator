@@ -249,6 +249,7 @@ private:
 class ForkWrittenVisitor final : public VNVisitorConst {
     // NODE STATE
     // AstVar::user4()          -> bool.  Written other than by its initialization (set here)
+    // AstVarRef::user4()       -> bool.  Handle of a member access (set here)
 
     // VISITORS
     void visit(AstInitialAutomaticStmt* nodep) override {
@@ -265,6 +266,7 @@ class ForkWrittenVisitor final : public VNVisitorConst {
     void visit(AstMemberRef* nodep) override {
         // A write to a member of an object changes the object, not the variable with its handle
         AstNodeExpr* fromp = nodep->fromp();
+        if (AstVarRef* const refp = VN_CAST(fromp, VarRef)) refp->user4(true);
         while (const AstNodeSel* const selp = VN_CAST(fromp, NodeSel)) {
             iterateAndNextConstNull(selp->bitp());
             fromp = selp->fromp();
@@ -294,6 +296,7 @@ class DynScopeVisitor final : public VNVisitor {
     //                                    (ForkWrittenVisitor)
     // AstVarRef::user2()       -> bool.  Reads in a process of a fork, which may use a copy
     // AstVarRef::user3p()      -> AstFork*.  Fork that captures values, whose process reads here
+    // AstVarRef::user4()       -> bool.  Handle of a member access (ForkWrittenVisitor)
     // AstAssignDly::user2()    -> bool.  Already visited
     // AstFork::user1p()        -> AstNodeModule*.  Module of a fork that captures values
     const VNUser1InUse m_inuser1;
@@ -377,6 +380,12 @@ class DynScopeVisitor final : public VNVisitor {
     bool inCapturingFork(const AstVarRef* refp) const {
         return m_capturesDepth > refp->varp()->user1();
     }
+    // Whether a reference in a process of a fork that captures values writes its variable. The
+    // handle of a member access is read, as the target of an NBA is evaluated when the statement
+    // runs (IEEE 1800-2023 10.4.2).
+    static bool capturingWrites(const AstVarRef* refp) {
+        return refp->access().isWriteOrRW() && !refp->user4();
+    }
     // Whether the reference needs the variable itself, through the dynamic scope, rather than a
     // copy made when its process is spawned: to write it, or, conservatively, to read a variable
     // of a task or function after a timing control or call. A process of a fork that captures
@@ -386,7 +395,7 @@ class DynScopeVisitor final : public VNVisitor {
     bool needsDynScope(const AstVarRef* refp) const {
         if (!inForkProcess(refp)) return false;
         const bool funcLocal = refp->varp()->isFuncLocal();
-        if (inCapturingFork(refp)) return funcLocal && refp->access().isWriteOrRW();
+        if (inCapturingFork(refp)) return funcLocal && capturingWrites(refp);
         return refp->access().isWriteOrRW() || (funcLocal && m_afterTimingControl);
     }
 
@@ -564,7 +573,7 @@ class DynScopeVisitor final : public VNVisitor {
         } else if (inForkProcess(nodep)) {
             if (!inCapturingFork(nodep)) {
                 nodep->user2(true);
-            } else if (!nodep->access().isWriteOrRW()) {
+            } else if (!capturingWrites(nodep)) {
                 nodep->user3p(m_capturesForkp);
             }
         }
