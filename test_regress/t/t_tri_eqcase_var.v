@@ -28,6 +28,8 @@ module t (
   wire tri_net;
   wire [1:0] w_half;
   assign w_half[0] = crc[12];
+  wire [3:0] w_part;
+  assign w_part[1:0] = crc[14:13];
   assign tri_net = crc[10] ? crc[11] : 1'bz;
 
   // verilator lint_off UNDRIVEN
@@ -54,6 +56,10 @@ module t (
     `checkd(tri_net === 1'bz, !crc[10]);
     `checkd(undriven === 1'bz, 1'b1);
     `checkd(w_half[1] === 1'bz, 1'b1);
+    `checkd(w_half[0] === 1'bz, 1'b0);
+    `checkd(w_part[0] === 1'bz, 1'b0);
+    `checkd(w_part[1] === 1'bz, 1'b0);
+    `checkd(w_part[3:2] === 2'bzz, 1'b1);
     `checkd(unset === 1'bz, 1'b0);
     if (cyc == 20) begin
       $write("*-* All Finished *-*\n");
