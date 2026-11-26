@@ -3345,38 +3345,149 @@ class AssertNfaVisitor final : public VNVisitor {
         return nullptr;
     }
 
-    // V3AssertPre lowers a single-cycle property to a boolean, so split the pass action of
-    // an implication here, where its antecedent tells a vacuous success apart
-    // (IEEE 1800-2023 16.14.8)
-    static void splitSingleCyclePasssp(AstNodeCoverOrAssert* assertp) {
-        if (hasMultiCycleExpr(assertp->propp())) return;
-        // A future value function delays the evaluation of the property, not of the antecedent
-        if (assertp->propp()->exists([](const AstNodeExpr* np) {
+    // Success and nonvacuity of a property evaluated on its start tick
+    struct SingleTickProp final {
+        AstNodeExpr* successp = nullptr;  // Holds when the property holds
+        AstNodeExpr* nonvacuousp = nullptr;  // Holds when nonvacuous; nullptr if always
+    };
+    static AstNodeExpr* newOrNonvacuous(FileLine* flp, AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
+        if (!lhsp || !rhsp) {
+            if (lhsp) VL_DO_DANGLING(lhsp->deleteTree(), lhsp);
+            if (rhsp) VL_DO_DANGLING(rhsp->deleteTree(), rhsp);
+            return nullptr;
+        }
+        return new AstLogOr{flp, lhsp, rhsp};
+    }
+    static AstNodeExpr* newAndNonvacuous(FileLine* flp, AstNodeExpr* condp, AstNodeExpr* nonvacp) {
+        return nonvacp ? new AstLogAnd{flp, condp, nonvacp} : condp;
+    }
+    static void deleteSingleTickProp(SingleTickProp& prop) {
+        if (prop.successp) VL_DO_DANGLING(prop.successp->deleteTree(), prop.successp);
+        if (prop.nonvacuousp) VL_DO_DANGLING(prop.nonvacuousp->deleteTree(), prop.nonvacuousp);
+    }
+    // Build the success and nonvacuity of nodep (IEEE 1800-2023 16.14.8), or return false
+    // if nodep is not evaluated on its start tick
+    static bool buildSingleTickProp(AstNodeExpr* nodep, SingleTickProp& prop) {
+        FileLine* const flp = nodep->fileline();
+        SingleTickProp lhs;
+        SingleTickProp rhs;
+        if (AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            if (!implp->isOverlapped() || implp->isFollowedBy()) return false;
+            // Match item assignments belong to the antecedent, not to its checks
+            AstNodeExpr* antp = implp->lhsp();
+            if (const AstExprStmt* const exprStmtp = VN_CAST(antp, ExprStmt)) {
+                antp = exprStmtp->resultp();
+            }
+            if (!buildSingleTickProp(antp, lhs) || lhs.nonvacuousp
+                || !buildSingleTickProp(implp->rhsp(), rhs)) {
+                deleteSingleTickProp(lhs);
+                deleteSingleTickProp(rhs);
+                return false;
+            }
+            // 16.12.7, 16.14.8 h
+            prop.successp = new AstLogOr{
+                flp, new AstLogNot{flp, lhs.successp->cloneTreePure(false)}, rhs.successp};
+            prop.nonvacuousp = newAndNonvacuous(flp, lhs.successp, rhs.nonvacuousp);
+            return true;
+        }
+        if (const AstAbortOn* const abortp = VN_CAST(nodep, AbortOn)) {
+            // On a single tick the abort condition holds during the evaluation if it holds
+            // on the tick (16.12.14, 16.14.8 ab-ae)
+            if (!buildSingleTickProp(abortp->propp(), rhs)) return false;
+            AstNodeExpr* const condp = abortp->condp()->cloneTreePure(false);
+            prop.successp = abortp->kind().isAccept()
+                                ? static_cast<AstNodeExpr*>(new AstLogOr{flp, condp, rhs.successp})
+                                : new AstLogAnd{flp, new AstLogNot{flp, condp}, rhs.successp};
+            prop.nonvacuousp = newAndNonvacuous(
+                flp, new AstLogNot{flp, abortp->condp()->cloneTreePure(false)}, rhs.nonvacuousp);
+            return true;
+        }
+        if (const AstLogNot* const notp = VN_CAST(nodep, LogNot)) {
+            // 16.12.3, 16.14.8 d
+            if (!buildSingleTickProp(notp->lhsp(), lhs)) return false;
+            prop.successp = new AstLogNot{flp, lhs.successp};
+            prop.nonvacuousp = lhs.nonvacuousp;
+            return true;
+        }
+        const AstNodeBiop* const biopp = VN_CAST(nodep, NodeBiop);
+        const AstSAnd* const andp = VN_CAST(nodep, SAnd);
+        if ((andp && !andp->propertyControl()) || VN_IS(nodep, SOr) || VN_IS(nodep, LogOr)) {
+            if (!buildSingleTickProp(biopp->lhsp(), lhs)
+                || !buildSingleTickProp(biopp->rhsp(), rhs)) {
+                deleteSingleTickProp(lhs);
+                deleteSingleTickProp(rhs);
+                return false;
+            }
+            // 16.12.4, 16.12.5, 16.14.8 e and f
+            prop.successp
+                = andp ? static_cast<AstNodeExpr*>(new AstLogAnd{flp, lhs.successp, rhs.successp})
+                       : new AstLogOr{flp, lhs.successp, rhs.successp};
+            prop.nonvacuousp = newOrNonvacuous(flp, lhs.nonvacuousp, rhs.nonvacuousp);
+            return true;
+        }
+        // A side effect is left where V3AssertPre evaluates it once
+        if (!nodep->isPure() || hasMultiCycleExpr(nodep)
+            || nodep->exists([](const AstImplication*) { return true; })) {
+            return false;
+        }
+        prop.successp = nodep->cloneTreePure(false);  // A boolean, so nonvacuous (16.14.8 a)
+        return true;
+    }
+
+    // V3AssertPre lowers a property evaluated on its start tick to a boolean, so when an
+    // assertion of it can succeed vacuously, lower its operators here and split its pass
+    // action on its nonvacuity (IEEE 1800-2023 16.14.8). Return true if so.
+    bool lowerSingleTickProp(AstNodeCoverOrAssert* assertp) {
+        AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
+        if (!assertAssertp) return false;
+        AstNodeExpr* const bodyp = VN_AS(assertp->propp(), PropSpec)->propp();
+        if (!bodyp->exists(
+                [](const AstNode* np) { return VN_IS(np, Implication) || VN_IS(np, AbortOn); })) {
+            return false;
+        }
+        // A future value function delays the evaluation of the property
+        // (IEEE 1800-2023 16.9.4), but not of a condition in its pass action
+        if (bodyp->exists([](const AstNode* np) {
                 return VN_IS(np, Future) || VN_IS(np, Rising) || VN_IS(np, Falling)
                        || VN_IS(np, Steady);
             })) {
-            return;
+            return false;
         }
-        PropertyParts parts = decomposeProperty(assertp->propp());
-        if (!splitsImplicationPasssp(assertp, parts)) return;
-        // Match item assignments belong to the antecedent, not to the vacuity check
-        AstNodeExpr* antp = parts.triggerExprp;
-        if (const AstExprStmt* const exprStmtp = VN_CAST(antp, ExprStmt)) {
-            antp = exprStmtp->resultp();
+        // A boolean body is left in place, with its match item assignments
+        const bool lowerBody = hasMultiCycleExpr(bodyp);
+        if (lowerBody && bodyp->exists([](const AstExprStmt*) { return true; })) return false;
+        SingleTickProp prop;
+        if (!buildSingleTickProp(bodyp, prop)) return false;
+        if (!prop.nonvacuousp) {
+            deleteSingleTickProp(prop);
+            return false;
         }
-        // One pass action, enabled by the control of the kind of success the antecedent tells.
-        // A single test, so a pass action that suspends does not see the antecedent change.
-        AstAssert* const assertAssertp = VN_AS(assertp, Assert);
-        FileLine* const flp = assertp->fileline();
-        AstNodeStmt* const passsp = assertAssertp->passsp()->unlinkFrBackWithNext();
-        AstNodeExpr* const passOnp = new AstCond{
-            flp, sampled(antp->cloneTreePure(false)),
-            assertPassOnCond(flp, assertp->userType(), assertp->directive(), /*vacuous=*/false),
-            assertPassOnCond(flp, assertp->userType(), assertp->directive(), /*vacuous=*/true)};
-        AstIf* const ifp = new AstIf{flp, passOnp, passsp};
-        ifp->isBoundsCheck(true);
-        ifp->user1(true);
-        assertAssertp->addPasssp(ifp);
+        if (lowerBody) {
+            bodyp->replaceWith(prop.successp);
+            VL_DO_DANGLING(pushDeletep(bodyp), bodyp);
+        } else {
+            VL_DO_DANGLING(prop.successp->deleteTree(), prop.successp);
+        }
+        if (assertAssertp->passsp()) {
+            // The pass action runs only when the property holds, under the pass control of a
+            // nonvacuous success if N holds, else of a vacuous one. One action and a single test,
+            // so a pass action that suspends does not see N change.
+            FileLine* const flp = assertp->fileline();
+            AstNodeStmt* const passsp = assertAssertp->passsp()->unlinkFrBackWithNext();
+            AstNodeExpr* const passOnp
+                = new AstCond{flp, sampled(prop.nonvacuousp),
+                              assertPassOnCond(flp, assertp->userType(), assertp->directive(),
+                                               /*vacuous=*/false),
+                              assertPassOnCond(flp, assertp->userType(), assertp->directive(),
+                                               /*vacuous=*/true)};
+            AstIf* const ifp = new AstIf{flp, passOnp, passsp};
+            ifp->isBoundsCheck(true);
+            ifp->user1(true);
+            assertAssertp->addPasssp(ifp);
+        } else {
+            VL_DO_DANGLING(prop.nonvacuousp->deleteTree(), prop.nonvacuousp);
+        }
+        return true;
     }
 
     // Reject unsupported shapes.
@@ -3408,10 +3519,7 @@ class AssertNfaVisitor final : public VNVisitor {
         if (assertp->immediate()) return;
 
         AstPropSpec* const propp = prepareAssertionProp(assertp);
-        if (!propp) {
-            splitSingleCyclePasssp(assertp);
-            return;
-        }
+        if (lowerSingleTickProp(assertp) || !propp) return;
 
         PropertyParts parts = decomposeProperty(propp);
         UASSERT_OBJ(parts.seqExprp, propp, "Property body must be an expression");
