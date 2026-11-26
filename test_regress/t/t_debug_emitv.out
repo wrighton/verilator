@@ -527,6 +527,9 @@ module t;
             if ($past(cyc[1])) begin
                 $write("");
             end
+            if ($past(const'(cyc[1]))) begin
+                $write("");
+            end
             if ($rose(cyc, @( clk))) begin
                 $write("");
             end

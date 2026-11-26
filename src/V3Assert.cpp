@@ -336,7 +336,7 @@ class AssertPastSplitVisitor final : public VNVisitor {
     // TYPES
     struct Operand final {
         AstNodeExpr* nodep;  // The operand
-        bool automatic;  // Reads an automatic variable
+        bool automatic;  // Reads a current value: an automatic variable or a const cast
         bool reads;  // Reads a variable
     };
 
@@ -379,6 +379,8 @@ class AssertPastSplitVisitor final : public VNVisitor {
     void visit(AstNodeVarRef* nodep) override {
         m_operands.push_back({nodep, nodep->varp()->lifetime().isAutomatic(), true});
     }
+    // The past value of a const cast is also its current value (IEEE 1800-2023 16.5.1)
+    void visit(AstConstCast* nodep) override { m_operands.push_back({nodep, true, true}); }
     void visit(AstNodeExpr* nodep) override {
         const size_t first = m_operands.size();
         iterateChildren(nodep);
@@ -1524,6 +1526,15 @@ class AssertVisitor final : public VNVisitor {
         }
         nodep->replaceWith(inp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+
+    void visit(AstConstCast* nodep) override {
+        // Only the expression, whose sampled value is its current value (IEEE 1800-2023 16.5.1)
+        AstNodeExpr* const lhsp = nodep->lhsp()->unlinkFrBack();
+        nodep->replaceWith(lhsp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        lhsp->foreach([](AstNodeVarRef* refp) { refp->user2(1); });
+        iterate(lhsp);
     }
 
     //========== Move $sampled down to read-only variables

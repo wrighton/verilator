@@ -487,6 +487,7 @@ module t (/*AUTOARG*/
     if ($stable(cyc)) $write("");
     if ($changed(cyc)) $write("");
     if ($past(cyc[1])) $write("");
+    if ($past(const'(cyc[1]))) $write("");
 
     if ($rose(cyc, clk)) $write("");
     if ($fell(cyc, clk)) $write("");
