@@ -2354,7 +2354,21 @@ class ParamProcessor final {
         nodep->ifacep(VN_AS(newModp, Iface));
         return newModp;
     }
+    // Link the parameter pins of a reference to classp to its parameters. As a pin keeps its
+    // links when cloned, those of a reference cloned together with the class, as in a module or
+    // generate block, still link to the original class's parameters.
+    void relinkClassPins(AstPin* paramsp, AstNodeModule* classp) {
+        for (AstPin* const pinp : VNList<AstPin>{paramsp}) {
+            if (AstVar* const varp = pinp->modVarp()) {
+                pinp->modVarp(VN_AS(m_memberMap.findMember(classp, varp->name()), Var));
+            } else if (AstParamTypeDType* const ptp = pinp->modPTypep()) {
+                pinp->modPTypep(
+                    VN_AS(m_memberMap.findMember(classp, ptp->name()), ParamTypeDType));
+            }
+        }
+    }
     AstNodeModule* classRefDeparam(AstClassOrPackageRef* nodep, AstNodeModule* srcModp) {
+        relinkClassPins(nodep->paramsp(), srcModp);
         resolveDefaultParams(nodep);
         AstNodeModule* const newModp
             = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false);
@@ -2372,6 +2386,7 @@ class ParamProcessor final {
         return newModp;
     }
     AstNodeModule* classRefDeparam(AstClassRefDType* nodep, AstNodeModule* srcModp) {
+        relinkClassPins(nodep->paramsp(), srcModp);
         resolveDefaultParams(nodep);
         AstNodeModule* const newModp
             = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false);
