@@ -3,4 +3,16 @@
    11 |     q.mex;
       |       ^~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_array_method_bad.v:22:11: Array reduction method 'sum' without a 'with' clause requires an integral element type, but has data type 'struct t.us_t' (IEEE 1800-2023 7.12.3)
+                                    : ... note: In instance 't'
+   22 |     i = s.sum();
+      |           ^~~
+%Error: t/t_array_method_bad.v:22:11: Operator ADD expects a numeric LHS operand, but it has data type 'struct t.us_t' (IEEE 1800-2023 11.3)
+                                    : ... note: In instance 't'
+   22 |     i = s.sum();
+      |           ^~~
+%Error: t/t_array_method_bad.v:22:11: Operator ADD expects a numeric RHS operand, but it has data type 'struct t.us_t' (IEEE 1800-2023 11.3)
+                                    : ... note: In instance 't'
+   22 |     i = s.sum();
+      |           ^~~
 %Error: Exiting due to
