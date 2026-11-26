@@ -22,8 +22,13 @@ test.execute(
     all_run_flags=['+verilator+rand+sampler+default', '+verilator+solver+file+' + solver_log])
 
 test.file_grep(solver_log, '# Verilator solver log')
-# Without array variables the solver gets QF_BV, which z3 solves incrementally faster
-test.file_grep(solver_log, r'\(set-logic QF_BV\)')
+
+# Without array variables the solver gets QF_BV, which z3 solves incrementally faster,
+# unless two variables are multiplied, which z3 solves faster with QF_ABV. A session
+# is found by the first variable it declares.
+session = r'^  \(set-logic (\S+)\)\n(?:  \(define-fun .*\n)*  \(declare-fun '
+test.file_grep(solver_log, session + r'tripled ', 'QF_BV')
+test.file_grep(solver_log, session + r'factor_a ', 'QF_ABV')
 
 # Each command and reply is logged whole, however the pipe split it
 longest = 0
