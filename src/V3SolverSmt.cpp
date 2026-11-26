@@ -174,6 +174,12 @@ static bool isRandIndex(const AstNodeExpr* indexp) {
     });
 }
 
+// Whether an index reads the size variable of a size-constrained array
+static bool isSizeIndex(const AstNodeExpr* indexp) {
+    return indexp->exists(
+        [](const AstNodeVarRef* const vrefp) { return vrefp->varp()->isRandSizeVar(); });
+}
+
 // A direct rand struct container whose size has a solver proxy.
 static bool isSizeBackedStructContainer(const AstVar* varp) {
     const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
@@ -6649,7 +6655,9 @@ private:
         if (nodep->method() == VCMethod::ARRAY_AT) {
             addStringNamePart(nodep->pinsp(), "%x");
             const bool indexIsRand = isRandIndex(nodep->pinsp());
-            if (indexIsRand && m_structSel && nodep->fromp()->user1()
+            // An index of a solved size is known only after the setup of the constraints
+            if ((indexIsRand || isSizeIndex(nodep->pinsp())) && m_structSel
+                && nodep->fromp()->user1()
                 && VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType)) {
                 unsupportedObjectRandIndex(nodep);
                 return;
@@ -6696,15 +6704,22 @@ private:
                     = m_structSel ? new AstCMethodHard{fl, nodep->fromp()->cloneTreePure(false),
                                                        VCMethod::DYN_SIZE}
                                   : nullptr;
-                AstNodeExpr* const originalPinp = nodep->pinsp();
+                // A copy, as formatting the index may replace and delete it
+                AstNodeExpr* const originalPinp
+                    = m_structSel ? nodep->pinsp()->cloneTreePure(false) : nullptr;
                 if (indexIsRand) {
                     // A negative index stays out of range when sign extended
                     AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
                     nodep->addPinsp(newSmtIndexp(pinp, pinp->isSigned()));
                 }
                 iterateChildren(nodep);
-                AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
+                AstNodeExpr* pinp = nodep->pinsp()->unlinkFrBack();
                 AstSFormatF* newp;
+                if (m_structSel && !indexIsRand) {
+                    // The value of a state index, as an expression is formatted as SMT terms
+                    VL_DO_DANGLING(pinp->deleteTree(), pinp);
+                    pinp = new AstSFormatF{fl, "%x", false, originalPinp->cloneTreePure(false)};
+                }
                 if (m_structSel) {
                     if (AstSFormatF* const sformatfp = VN_CAST(pinp, SFormatF)) {
                         sformatfp->name("%x");
@@ -6729,6 +6744,7 @@ private:
                                     rangeIndexp->cloneTreePure(false)},
                         new AstLtS{fl, rangeIndexp, rangeSizep}};
                     m_conditionp = m_conditionp ? new AstLogAnd{fl, m_conditionp, condp} : condp;
+                    VL_DO_DANGLING(originalPinp->deleteTree(), originalPinp);
                     newp = new AstSFormatF{fl, "%s.%s", false, argsp};
                 } else {
                     newp = createSolverArrDerefp(fl, nodep->fromp()->unlinkFrBack(), pinp);
