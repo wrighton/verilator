@@ -5162,8 +5162,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             // nodep->v3error("Static access to non-static member variable "
                             //                << varp->prettyNameQ() << endl);
                         }
-                        // A bind's references are written outside the module they resolve in
+                        // A bind's references are written outside the module they resolve in.
+                        // A temporary, e.g. a clocking event, has no declaration in the source.
                         if (start && !foundp->imported() && !VN_IS(m_modp, Class)
+                            && !varp->isTemp()
                             && nodep->fileline()->tokenNum() > m_modp->fileline()->tokenNum()
                             && nodep->fileline()->tokenNum() < varp->fileline()->tokenNum()) {
                             nodep->v3warn(

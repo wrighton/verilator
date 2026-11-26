@@ -186,6 +186,21 @@ module Test3 (  /*AUTOARG*/
   input clk;
   input [31:0] in;
 
+  // The global clock and a clocking block may be referenced before their declarations
+  bit gclk_seen;
+  bit cb_seen;
+  always @($global_clock) gclk_seen = 1;
+  always @(cb) cb_seen = 1;
+  always @(posedge clk) begin
+    if (in > 2) begin
+      `checkd(gclk_seen, 1);
+      `checkd(cb_seen, 1);
+      `checkd($past_gclk(in), in - 1);
+    end
+  end
+  clocking cb @(posedge clk);
+  endclocking
+
   // Check the named form of global clocking
   global clocking gck @(posedge clk);
   endclocking
