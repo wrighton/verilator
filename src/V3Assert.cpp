@@ -2047,6 +2047,7 @@ class AssertVisitor final : public VNVisitor {
     // Maximum statically possible depth by type/directive bit for each shared list.
     std::unordered_map<AstAssertCtlTargetSet*, AssertCtlDepths> m_sharedControlDepths;
     VDouble0 m_statLiftedCaseExprs;  // Count of purified case expressions
+    VDouble0 m_statLiftedUniqueConds;  // Count of conditions and case items evaluated once
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
     V3UniqueNames m_matchCountNames{"__VnfaRemainingMatchCount"};  // Match replay counter names
@@ -3864,15 +3865,27 @@ class AssertVisitor final : public VNVisitor {
     // VISITORS
     void visit(AstIf* nodep) override {
         if (!nodep->user1SetOnce()) {
-            if (nodep->uniquePragma() || nodep->unique0Pragma()) {
-                const AstIf* ifp = nodep;
+            if (nodep->uniquePragma() || nodep->unique0Pragma() || nodep->priorityPragma()) {
+                const bool priority = nodep->priorityPragma();
+                // A unique or unique0 if evaluates all its conditions (IEEE 1800-2023 12.4.2).
+                // If one has a side effect, evaluate each once, in order, for the check and the
+                // statement.
+                bool lift = false;
+                for (const AstIf* ifp = nodep; !priority && ifp; ifp = VN_CAST(ifp->elsesp(), If))
+                    lift |= !ifp->condp()->isPure();
+                AstIf* ifp = nodep;
+                AstIf* lastifp = nodep;
                 AstNodeExpr* propp = nullptr;
                 bool hasDefaultElse = false;
                 do {
                     // If this statement ends with 'else if', then nextIf will point to the
                     // nextIf statement.  Otherwise it will be null.
-                    const AstIf* const nextifp = dynamic_cast<AstIf*>(ifp->elsesp());
+                    AstIf* const nextifp = VN_CAST(ifp->elsesp(), If);
                     iterateAndNextNull(ifp->condp());
+                    if (lift) {
+                        ++m_statLiftedUniqueConds;
+                        liftExpr(nodep, ifp->condp());
+                    }
 
                     // Recurse into the true case.
                     iterateAndNextNull(ifp->thensp());
@@ -3883,11 +3896,13 @@ class AssertVisitor final : public VNVisitor {
                     }
 
                     // Build a bitmask of the true predicates
-                    AstNodeExpr* const predp = ifp->condp()->cloneTreePure(false);
-                    if (propp) {
-                        propp = new AstConcat{nodep->fileline(), predp, propp};
-                    } else {
-                        propp = predp;
+                    if (!priority) {
+                        AstNodeExpr* const predp = ifp->condp()->cloneTreePure(false);
+                        if (propp) {
+                            propp = new AstConcat{nodep->fileline(), predp, propp};
+                        } else {
+                            propp = predp;
+                        }
                     }
 
                     // Record if this ends with an 'else' that does not have an if.  An else
@@ -3902,24 +3917,37 @@ class AssertVisitor final : public VNVisitor {
                         }
                     }
 
+                    lastifp = ifp;
                     ifp = nextifp;
                 } while (ifp);
 
                 const bool allow_none = nodep->unique0Pragma();
+
+                // A priority if is violated when no condition is true, so when it reaches its end
+                // without an 'else'. Report there, as it evaluates its conditions in order up to
+                // the first true one (IEEE 1800-2023 12.4.2).
+                if (priority) {
+                    if (!hasDefaultElse) {
+                        lastifp->addElsesp(newFireAssert(nodep, VAssertDirectiveType::VIOLATION_IF,
+                                                         VAssertType::PRIORITY,
+                                                         "'priority if' statement violated"));
+                    }
+                    return;
+                }
 
                 // Empty case means no property
                 if (!propp) propp = new AstConst{nodep->fileline(), AstConst::BitFalse{}};
 
                 // Note: if this ends with an 'else', then we don't need to validate that one of
                 // the predicates evaluates to true.
-                AstNodeExpr* const ohotp
-                    = ((allow_none || hasDefaultElse)
-                           ? static_cast<AstNodeExpr*>(new AstOneHot0{nodep->fileline(), propp})
-                           : static_cast<AstNodeExpr*>(new AstOneHot{nodep->fileline(), propp}));
+                AstNodeExpr* const okp
+                    = (allow_none || hasDefaultElse)
+                          ? static_cast<AstNodeExpr*>(new AstOneHot0{nodep->fileline(), propp})
+                          : static_cast<AstNodeExpr*>(new AstOneHot{nodep->fileline(), propp});
                 const VAssertType assertType
                     = nodep->uniquePragma() ? VAssertType::UNIQUE : VAssertType::UNIQUE0;
                 AstIf* const checkifp
-                    = new AstIf{nodep->fileline(), new AstLogNot{nodep->fileline(), ohotp},
+                    = new AstIf{nodep->fileline(), new AstLogNot{nodep->fileline(), okp},
                                 newFireAssert(nodep, VAssertDirectiveType::VIOLATION_IF,
                                               assertType, "'unique if' statement violated")};
                 checkifp->isBoundsCheck(true);  // To avoid LATCH warning
@@ -3988,29 +4016,64 @@ class AssertVisitor final : public VNVisitor {
         }
     }
 
+    // Evaluate an expression of a statement once, before the statement, into a temporary that
+    // the statement, and the checks that read the expression again, read instead
+    void liftExpr(AstNodeStmt* stmtp, AstNodeExpr* exprp) {
+        FileLine* const fl = exprp->fileline();
+        AstVar* const varp
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_caseTempNames.get(stmtp), exprp->dtypep()};
+        exprp->replaceWith(new AstVarRef{fl, varp, VAccess::READ});
+        stmtp->addHereThisAsNext(
+            new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, exprp});
+        if (m_ftaskp) {
+            varp->funcLocal(true);
+            varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            m_ftaskp->prependDeclsp(varp);
+        } else {
+            m_modp->prependStmtsp(varp);
+        }
+        VIsCached::clearCacheTree();
+    }
+
+    // A unique, unique0 or parallel case compares the expression with all its items (IEEE
+    // 1800-2023 12.5.3). If an item expression has a side effect, evaluate each item expression
+    // once, in order, for the check and the statement, after the case expression, which is
+    // evaluated first, unless 'exprLifted' says it already is.
+    void liftCaseItems(AstCase* nodep, bool exprLifted) {
+        std::vector<AstNodeExpr*> exprps;  // Item expressions, and the bounds of ranges
+        for (const AstCaseItem* const itemp : nodep->itemspList()) {
+            for (AstNodeExpr* const icondp : itemp->condspList()) {
+                if (const AstInsideRange* const rcondp = VN_CAST(icondp, InsideRange)) {
+                    exprps.push_back(rcondp->lhsp());
+                    exprps.push_back(rcondp->rhsp());
+                } else {
+                    exprps.push_back(icondp);
+                }
+            }
+        }
+        if (std::all_of(exprps.begin(), exprps.end(),
+                        [](AstNodeExpr* exprp) { return exprp->isPure(); })) {
+            return;
+        }
+        // An item expression could change what the case expression reads
+        if (!exprLifted && !VN_IS(nodep->exprp(), Const)) {
+            ++m_statLiftedUniqueConds;
+            liftExpr(nodep, nodep->exprp());
+        }
+        m_statLiftedUniqueConds += exprps.size();
+        for (AstNodeExpr* const exprp : exprps) liftExpr(nodep, exprp);
+    }
+
     //========== Case assertions
     void visit(AstCase* nodep) override {
         // Introduce temporary variable for AstCase if needed - it is done here and not in V3Case
         // because this phase is before V3Scope and V3Case is not. Doing it before V3Scope ensures
         // that V3Scope will take care of a scope creation
         // We also need to do it before V3Begin, co that pragmas like `unique0` also work correctly
-        if (!nodep->exprp()->isPure()) {
+        const bool exprLifted = !nodep->exprp()->isPure();
+        if (exprLifted) {
             ++m_statLiftedCaseExprs;
-            FileLine* const fl = nodep->exprp()->fileline();
-            AstVar* const varp = new AstVar{fl, VVarType::BLOCKTEMP, m_caseTempNames.get(nodep),
-                                            nodep->exprp()->dtypep()};
-            AstNodeExpr* const origp = nodep->exprp()->unlinkFrBack();
-            nodep->addHereThisAsNext(
-                new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, origp});
-            nodep->exprp(new AstVarRef{fl, varp, VAccess::READ});
-            if (m_ftaskp) {
-                varp->funcLocal(true);
-                varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-                m_ftaskp->prependDeclsp(varp);
-            } else {
-                m_modp->prependStmtsp(varp);
-            }
-            VIsCached::clearCacheTree();
+            liftExpr(nodep, nodep->exprp());
         }
         iterateChildren(nodep);
         if (!nodep->user1SetOnce()) {
@@ -4051,6 +4114,7 @@ class AssertVisitor final : public VNVisitor {
                 if (!has_default && !nodep->itemsp()) {
                     // Not parallel, but harmlessly so.
                 } else {
+                    liftCaseItems(nodep, exprLifted);
                     AstNodeExpr* propp = nullptr;
                     for (AstCaseItem* const itemp : nodep->itemspList()) {
                         AstNodeExpr* itembitp = nullptr;
@@ -5019,6 +5083,7 @@ public:
         V3Stats::addStat("Assertions, assertOn checks hoisted", m_statAssertOnHoisted);
         V3Stats::addStat("Assertions, deferred violation reports", m_statViolationsDeferred);
         V3Stats::addStat("Assertions, lifted impure case expressions", m_statLiftedCaseExprs);
+        V3Stats::addStat("Assertions, lifted unique conditions", m_statLiftedUniqueConds);
         // Rewrites can change purity, e.g. by compiling out assertion statements with --no-assert
         VIsCached::clearCacheTree();
     }
