@@ -2618,6 +2618,15 @@ private:
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
         return varp;
     }
+    // Copy of translated solver text 'textp'. A block building text in it, as of a held array
+    // (see newIndexedArrayp), only sets its own variables, so may run once for each copy, and
+    // is named anew, so its variables are declared in each.
+    AstNodeExpr* cloneTextp(AstNodeExpr* textp) {
+        AstNodeExpr* const clonep = textp->cloneTree(false);
+        clonep->foreach(
+            [this](AstBegin* const beginp) { beginp->name(m_uniqueNames.get(beginp->name())); });
+        return clonep;
+    }
     // Statement appending 'exprp' to the text in 'varp'
     static AstStmtExpr* newTextAppendp(FileLine* flp, AstVar* varp, AstNodeExpr* exprp) {
         AstCFuncHard* const callp = new AstCFuncHard{flp, VCFunction::STRING_APPEND,
@@ -7590,9 +7599,8 @@ private:
                     newp = new AstSFormatF{fl, "%s.%s", false, argsp};
                 } else {
                     if (sizeTextp) {
-                        AstSFormatF* const guardp
-                            = new AstSFormatF{fl, "(bvult ((_ zero_extend 1) %s) %s)", false,
-                                              pinp->cloneTreePure(false)};
+                        AstSFormatF* const guardp = new AstSFormatF{
+                            fl, "(bvult ((_ zero_extend 1) %s) %s)", false, cloneTextp(pinp)};
                         guardp->addExprsp(sizeTextp);
                         smtGuardp = guardp;
                     }
