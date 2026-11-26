@@ -19,22 +19,23 @@ solver_log = test.obj_dir + '/solver.log'
 test.execute(
     check_finished=True,
     all_run_flags=['+verilator+solver+file+' + solver_log, '+verilator+rand+sampler+default'])
-# The 4-bit state array uses ALL in the scalar solve-before session.
+# The 4-bit rand_mode(0) associative array uses ALL in the scalar solve-before session.
 test.file_grep(
     solver_log, r'(?s)\(set-logic ALL\)(?:(?!\(reset\)).)*'
     r'\(as const \(Array \(_ BitVec 32\) \(_ BitVec 4\)\)')
-# A soft-only 5-bit state array uses ALL; a plain scalar phased solve keeps QF_ABV.
+# A soft-only 5-bit one uses ALL; a plain scalar phased solve keeps QF_ABV.
 test.file_grep(
     solver_log, r'(?s)\(set-logic ALL\)(?:(?!\(reset\)).)*'
     r'\(declare-fun soft_v (?:(?!\(reset\)).)*'
     r'\(as const \(Array \(_ BitVec 32\) \(_ BitVec 5\)\)')
 test.file_grep(solver_log, r'(?s)\(set-logic QF_ABV\)(?:(?!\(reset\)).)*\(declare-fun plain_v ')
-# Repeated default sampling reaches a constructor-bearing UniGen2 transaction.
+# Repeated default sampling reaches a UniGen2 transaction reading the state array, which keeps
+# a restricted logic
 test.file_grep(
     solver_log, r'(?s)\(set-option :produce-models true\)'
     r'(?:(?!\(reset\)|:produce-unsat-assumptions).)*'
-    r'\(set-logic ALL\)(?:(?!\(reset\)).)*'
-    r'\(as const \(Array \(_ BitVec 32\) \(_ BitVec 7\)\)')
+    r'\(set-logic QF_[A-Z]+\)(?:(?!\(reset\)).)*'
+    r'\(let \(\(\?i idx\)\) \(ite \(= \?i #x00000000\) #b0010010 ')
 test.file_grep_not(solver_log,
                    r'(?s)\(set-logic (?!ALL\))[^)]*\)(?:(?!\(reset\)).)*\(as const \(Array ')
 
