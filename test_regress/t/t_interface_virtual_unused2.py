@@ -11,7 +11,7 @@ import vltest_bootstrap
 
 test.scenarios('simulator')
 
-test.compile()
+test.compile(verilator_flags2=["--debug-check", "--timing", "--dump-tree", "--dump-tree-json"])
 
 test.execute()
 

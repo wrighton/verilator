@@ -3275,6 +3275,7 @@ void AstNodeFTask::dump(std::ostream& str) const {
     if (pureVirtual()) str << " [PUREVIRTUAL]";
     if (recursive()) str << " [RECURSIVE]";
     if (taskPublic()) str << " [PUBLIC]";
+    if (unelaborated()) str << " [UNELAB]";
     if (isStatic()) str << " [STATIC]";
     if (verilogTask()) str << " [VTASK]";
     if (verilogFunction()) str << " [VFUNC]";
@@ -3300,6 +3301,7 @@ void AstNodeFTask::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, prototype);
     dumpJsonBoolFuncIf(str, recursive);
     dumpJsonBoolFuncIf(str, taskPublic);
+    dumpJsonBoolFuncIf(str, unelaborated);
     dumpJsonStr(str, "ifacePortName", ifacePortName());
     dumpJsonStr(str, "lifetime", lifetime().ascii());
     if (baseOverride().isAny()) dumpJsonStr(str, "baseOverride", baseOverride().ascii());

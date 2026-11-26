@@ -1,0 +1,7 @@
+%Error: t/t_interface_virtual_unused_const_bad.v:12:22: Expecting expression to be constant, but can't determine constant for FUNCREF 'width'
+                                                      : ... note: In instance 't'
+        t/t_interface_virtual_unused_const_bad.v:9:26: ... Location of non-constant FUNC 'width': Constant function with a hierarchical reference (IEEE 1800-2023 13.4.3)
+   12 |   localparam int W = width();
+      |                      ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

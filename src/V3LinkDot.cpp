@@ -209,6 +209,7 @@ private:
         m_nameScopeSymMap;  // Map of scope referenced by non-pretty textual name
     std::set<std::pair<AstNodeModule*, std::string>>
         m_implicitNameSet;  // For [module][signalname] if we can implicitly create it
+    std::unordered_set<const AstNodeModule*> m_vifOnlyIfaces;  // See vifOnly
     std::array<ScopeAliasMap, SAMN__MAX> m_scopeAliasMap;  // Map of <lhs,rhs> aliases
     std::vector<VSymEnt*> m_ifaceVarSyms;  // List of AstIfaceRefDType's to be imported
     std::vector<VSymEnt*> m_shadowingSyms;  // Generate blocks that replaced a same-named one
@@ -597,6 +598,10 @@ public:
                && (m_implicitNameSet.find(std::make_pair(nodep, varname))
                    != m_implicitNameSet.end());
     }
+
+    // Interfaces only used as the type of virtual interfaces, not elaborated
+    void vifOnlyAdd(const AstIface* nodep) { m_vifOnlyIfaces.emplace(nodep); }
+    bool vifOnly(const AstNodeModule* nodep) const { return m_vifOnlyIfaces.count(nodep); }
 
     // Track and later recurse interface modules
     void insertIfaceModSym(AstIface* nodep, VSymEnt* symp) {
@@ -1191,6 +1196,29 @@ public:
 };
 
 LinkDotState* LinkDotState::s_errorThisp = nullptr;
+
+//======================================================================
+// Find the outermost named blocks in a statement
+
+class LinkDotNamedBlocksVisitor final : public VNVisitorConst {
+    std::vector<AstNodeBlock*> m_blockps;  // Found
+
+    void visit(AstNodeBlock* nodep) override {
+        if (nodep->unnamed()) {
+            iterateChildrenConst(nodep);
+        } else {
+            m_blockps.push_back(nodep);
+        }
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+    explicit LinkDotNamedBlocksVisitor(AstNode* nodep) { iterateConst(nodep); }
+
+public:
+    static std::vector<AstNodeBlock*> find(AstNode* nodep) {
+        return LinkDotNamedBlocksVisitor{nodep}.m_blockps;
+    }
+};
 
 //======================================================================
 
@@ -2460,6 +2488,7 @@ class LinkDotFindVisitor final : public VNVisitor {
         m_curSymp = m_statep->getNodeSym(top);
         for (AstIface* ifacep : m_virtIfaces) {
             if (!ifacep->user4()) {  // virtual interface never assigned any actual interface
+                m_statep->vifOnlyAdd(ifacep);
                 // Create dummy cell to keep the virtual interface alive
                 // (later stages assume that non-dead interface has associated cell)
                 AstCell* const ifacecellp = new AstCell{ifacep->fileline(),
@@ -3464,6 +3493,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Current module
     AstGenBlock* m_genBlockp = nullptr;  // Current generate block
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
+    AstNodeProcedure* m_procp = nullptr;  // Current process
+    std::vector<AstNode*>
+        m_unelabps;  // Tasks, functions and processes to remove, see unelaborated
     AstMethodCall* m_randMethodCallp = nullptr;  // Current randomize() method call
     int m_modportNum = 0;  // Uniqueify modport numbers
     int m_indent = 0;  // Indentation (tree depth) for debug
@@ -4304,6 +4336,81 @@ class LinkDotResolveVisitor final : public VNVisitor {
         iterateChildrenBackwardsConst(nodep);
     }
     void visit(AstTypeTable*) override {}
+    // Whether a reference that does not resolve is in code of an interface that is not
+    // elaborated, see vifOnly. Such code is never executed, as virtual interfaces of the
+    // interface can only be null, so the statements of its task or function, or process (also
+    // of a continuous assignment or assertion), are removed instead of reporting the reference.
+    bool unelaborated() {
+        if (!m_statep->vifOnly(m_modp)) return false;
+        AstNode* const unelabp = m_ftaskp ? static_cast<AstNode*>(m_ftaskp) : m_procp;
+        if (!unelabp) return false;
+        // References in one are visited together, so it is last if already found
+        if (m_unelabps.empty() || m_unelabps.back() != unelabp) {
+            UINFO(4, "Remove unelaborated " << unelabp);
+            m_unelabps.push_back(unelabp);
+        }
+        return true;
+    }
+    // Remove the statements of a body other than declarations and named blocks, which may be
+    // referenced by name, returning whether a named block is kept. A named block in another
+    // statement, which does not name a scope, moves before it, at the same hierarchical path.
+    bool removeStatements(AstNode* stmtsp) {
+        bool keptNamed = false;
+        for (AstNode *stmtp = stmtsp, *nextp; stmtp; stmtp = nextp) {
+            nextp = stmtp->nextp();
+            if (VN_IS(stmtp, Var) || VN_IS(stmtp, Typedef)) continue;
+            if (AstNodeBlock* const blockp = VN_CAST(stmtp, NodeBlock)) {
+                if (removeBlockStatements(blockp)) {
+                    keptNamed = true;
+                    continue;
+                }
+            } else {
+                for (AstNodeBlock* const namedp : LinkDotNamedBlocksVisitor::find(stmtp)) {
+                    stmtp->addHereThisAsNext(namedp->unlinkFrBack());
+                    removeBlockStatements(namedp);
+                    keptNamed = true;
+                }
+            }
+            VL_DO_DANGLING(pushDeletep(stmtp->unlinkFrBack()), stmtp);
+        }
+        return keptNamed;
+    }
+    // Remove the statements of a block, returning whether it is kept, being or holding a named
+    // block
+    bool removeBlockStatements(AstNodeBlock* blockp) {
+        bool keep = removeStatements(blockp->stmtsp()) || !blockp->unnamed();
+        if (AstFork* const forkp = VN_CAST(blockp, Fork)) {
+            for (AstForkItem *itemp = forkp->forksp(), *nextItemp; itemp; itemp = nextItemp) {
+                nextItemp = VN_AS(itemp->nextp(), ForkItem);
+                if (removeStatements(itemp->stmtsp())) {
+                    keep = true;
+                } else {
+                    VL_DO_DANGLING(pushDeletep(itemp->unlinkFrBack()), itemp);
+                }
+            }
+        }
+        return keep;
+    }
+    void removeUnelaborated() {
+        for (AstNode* const nodep : m_unelabps) {
+            if (AstNodeFTask* const ftaskp = VN_CAST(nodep, NodeFTask)) {
+                removeStatements(ftaskp->stmtsp());
+                ftaskp->unelaborated(true);
+                // A function's return value is no longer set
+                ftaskp->fileline(new FileLine{ftaskp->fileline()});
+                ftaskp->fileline()->warnOff(V3ErrorCode::NORETURN, true);
+            } else {
+                AstNodeProcedure* const procp = VN_AS(nodep, NodeProcedure);
+                if (AstAlways* const alwaysp = VN_CAST(procp, Always)) {
+                    if (AstSenTree* const sentreep = alwaysp->sentreep()) {
+                        VL_DO_DANGLING(pushDeletep(sentreep->unlinkFrBack()), sentreep);
+                    }
+                }
+                removeStatements(procp->stmtsp());
+            }
+        }
+        m_unelabps.clear();
+    }
     void visit(AstNodeModule* nodep) override {
         if (nodep->dead()) return;
         LINKDOT_VISIT_START();
@@ -4320,6 +4427,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         m_modp = nodep;
         m_modportNum = 0;
         iterateChildren(nodep);
+        removeUnelaborated();
         m_modp = nullptr;
         m_ds.m_dotSymp = m_curSymp = m_modSymp = nullptr;
         m_ds.m_dotPos = DP_NONE;
@@ -5432,6 +5540,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                            << nodep->prettyName() << "'" << " as a "
                                            << foundp->nodep()->typeName() << " but expected a "
                                            << expectWhat);
+                        } else if (m_ds.m_dotp && unelaborated()) {
+                            // Removed instead
                         } else if (m_ds.m_dotText == "") {
                             UINFO(1, "   ErrParseRef curSymp=se" << cvtToHex(m_curSymp)
                                                                  << " ds=" << m_ds.ascii());
@@ -7157,6 +7267,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
         checkNoDot(nodep);
         VL_RESTORER(m_replaceWithAlias);
         if (nodep->user2()) m_replaceWithAlias = false;
+        iterateChildren(nodep);
+    }
+    void visit(AstNodeProcedure* nodep) override {
+        LINKDOT_VISIT_START();
+        checkNoDot(nodep);
+        VL_RESTORER(m_procp);
+        m_procp = nodep;
         iterateChildren(nodep);
     }
 
