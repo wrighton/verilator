@@ -411,6 +411,41 @@ class AssertElabVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
         VL_DO_DANGLING(pushDeletep(specp), specp);
     }
+    // True if a sequence admits an empty match (IEEE 1800-2023 16.12.22), by the derived forms of
+    // its operators (IEEE 1800-2023 F.3.4.2). Repetition counts and cycle delays are constants
+    // by here.
+    static bool admitsEmptyMatch(const AstNodeExpr* nodep) {
+        if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            return VN_AS(repp->countp(), Const)->num().isEqZero()
+                   || admitsEmptyMatch(repp->exprp());
+        }
+        if (const AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
+            // '##[m:n] r' is '1[*m:n] ##1 r'. 'r1 ##[m:n] r2' is 'r1 ##1 1[*m-1:n-1] ##1 r2',
+            // or a fusion if m is 0, which matches no empty word, or-ed with the rest of the range
+            const AstDelay* const delayp = VN_AS(sexprp->delayp(), Delay);
+            const uint32_t minCycles = VN_AS(delayp->lhsp(), Const)->toUInt();
+            if (!sexprp->preExprp()) return minCycles == 0 && admitsEmptyMatch(sexprp->exprp());
+            const bool rangeHasOne
+                = minCycles == 1
+                  || (minCycles == 0 && delayp->isRangeDelay()
+                      && (delayp->isUnbounded() || VN_AS(delayp->rhsp(), Const)->toUInt() >= 1));
+            return rangeHasOne && admitsEmptyMatch(sexprp->preExprp())
+                   && admitsEmptyMatch(sexprp->exprp());
+        }
+        if (const AstSOr* const orp = VN_CAST(nodep, SOr)) {
+            return admitsEmptyMatch(orp->lhsp()) || admitsEmptyMatch(orp->rhsp());
+        }
+        if (const AstSThroughout* const throughoutp = VN_CAST(nodep, SThroughout)) {
+            return admitsEmptyMatch(throughoutp->rhsp());
+        }
+        if (const AstNodeBiop* const biopp = VN_CAST(nodep, NodeBiop)) {
+            return (VN_IS(biopp, SAnd) || VN_IS(biopp, SIntersect) || VN_IS(biopp, SWithin))
+                   && admitsEmptyMatch(biopp->lhsp()) && admitsEmptyMatch(biopp->rhsp());
+        }
+        // A boolean; a sequence with match items, a fusion (IEEE 1800-2023 F.3.4.2.4); or a goto
+        // or nonconsecutive repetition, whose count V3Width requires to be nonzero
+        return false;
+    }
     void inlineSequence(AstSchemaRef* schemaRefp, AstSequence* seqp) {
         // Clone the body expression since the sequence may be referenced multiple times
         AstNodeExpr* clonedp = VN_AS(
@@ -501,6 +536,17 @@ class AssertElabVisitor final : public VNVisitor {
         }
         // V3LinkResolve substituted every let, so this is a property instance
         inlineNestedProperty(nodep, VN_AS(nodep->schemap(), Property));
+    }
+    void visit(AstExprStmt* nodep) override {
+        // Sequence instances in it are inlined first
+        iterateChildren(nodep);
+        if (admitsEmptyMatch(nodep->resultp())) {
+            nodep->v3error("Match item attached to a sequence that admits an empty match"
+                           " (IEEE 1800-2023 16.11).\n"
+                           << nodep->warnMore()
+                           << "... Suggest attaching it to an enclosing sequence that has no"
+                              " empty match.");
+        }
     }
     // Declarations are inlined at their instances
     void visit(AstProperty*) override {}
