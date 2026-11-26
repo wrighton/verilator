@@ -41,6 +41,50 @@ module t_pin_sub_part (
   assign o[3:0] = 1;
 endmodule
 
+module t_pin_sub_z (
+    output wire [31:0] o
+);
+  assign o = 'z;
+endmodule
+
+module t_pin_sub_zrelay (
+    output wire [31:0] o
+);
+  t_pin_sub_z z (.o);
+endmodule
+
+module t_pin_sub_zcat_relay (
+    output wire [31:0] o
+);
+  t_pin_sub_z z (.o({o[31:16], o[15:0]}));
+endmodule
+
+module t_pin_sub_zsel_relay (
+    output wire [31:0] o
+);
+  t_pin_sub_z z (.o(o[31:0]));
+endmodule
+
+primitive t_pin_udp_buf(output o, input i);
+  table
+    0 : 0;
+    1 : 1;
+  endtable
+endprimitive
+
+module t_pin_sub_udp (
+    output wire o,
+    input wire i
+);
+  t_pin_udp_buf u (o, i);
+endmodule
+
+module t_pin_sub_relay (
+    output wire [31:0] o
+);
+  t_pin_sub s (.o);
+endmodule
+
 module t_pin_sub_readonly (
     output logic [31:0] o
 );
@@ -100,6 +144,17 @@ module t_lint_multidriven_pin_bad (
   // A logic variable is not a net, so its port connection is not a
   // second driver: no warning
   logic [31:0] logic_pin;
+  // A port driven only with Z, also through another output port, also
+  // connected by a concatenation or select, drives nothing, so no warning
+  wire [31:0] z_port;
+  wire [31:0] zrelay_port;
+  wire [31:0] zcat_port;
+  wire [31:0] zsel_port;
+  // A port driven through another output port is a real driver
+  // <--- Warning
+  wire [31:0] relay_port;
+  // A port driven by a primitive's output is a real driver  // <--- Warning
+  wire udp_port;
   // Two continuous assignments without a port connection, so no warning
   wire [31:0] no_pin;
   // Suppressed with lint_off on the declaration
@@ -118,6 +173,12 @@ module t_lint_multidriven_pin_bad (
   assign zcond_pin = b[0] ? a : 32'bz;
   assign zcmp_pin = a === 'z;
   assign logic_pin = a;
+  assign z_port = a;
+  assign zrelay_port = a;
+  assign zcat_port = a;
+  assign zsel_port = a;
+  assign relay_port = a;
+  assign udp_port = a[0];
   t_pin_sub i1 (.o(init_pin));
   t_pin_sub i2 (.o(init_z));
   t_pin_sub i3 (.o(cont_pin));
@@ -142,6 +203,15 @@ module t_lint_multidriven_pin_bad (
   t_pin_sub i30 (.o(wor_bus));
   t_pin_sub1 i23 (.o(zcmp_pin));
   t_pin_sub i24 (.o(logic_pin));
+  t_pin_sub_z i31 (.o(z_port));
+  t_pin_sub_zrelay i32 (.o(zrelay_port));
+  t_pin_sub_zcat_relay i34 (.o(zcat_port));
+  t_pin_sub_zsel_relay i35 (.o(zsel_port));
+  t_pin_sub_relay i33 (.o(relay_port));
+  t_pin_sub_udp i36 (
+      .o(udp_port),
+      .i(b[0])
+  );
   generate
     // A net under a generate is a separate net, so the check still
     // applies  // <--- Warning
