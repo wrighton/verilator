@@ -3109,6 +3109,14 @@ bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
     return parseModel(is, requested);
 }
 
+const VlRandomVar* VlRandomizer::sizeVarp(const VlRandomVar& varr) const {
+    if (varr.dimension() != 1) return nullptr;
+    // The name V3SolverSmt's sizeVarName() gives a random size; the two must agree, which
+    // t_constraint_solve_before_array_pins checks
+    const auto it = m_vars.find("__V" + varr.name() + "_size");
+    return it == m_vars.end() ? nullptr : it->second.get();
+}
+
 // The element name, as ArrayInfo names it, that a select of varr with these index terms
 // names, whichever literal notation the solver answered in: each index of up to 32 bits in
 // decimal, a wider one in hex without leading zeros. False if they are not one index of
@@ -3118,12 +3126,14 @@ bool VlRandomizer::elementName(const VlRandomVar& varr, std::vector<std::string>
     // One index per dimension: neither a whole array nor a select of a scalar is an element
     if (indices.size() != static_cast<size_t>(varr.dimension())) return false;
     // An element is recorded with one index per dimension, but an array with no element has
-    // no entry to name one
+    // no entry to name one, unless its size is random: then it is a queue or dynamic array,
+    // indexed by 32 bits
     const auto infoIt = m_arr_vars.find(generateKey(varr.name(), 0));
-    if (infoIt == m_arr_vars.end()) return false;
+    const bool sized = infoIt == m_arr_vars.end() && sizeVarp(varr);
+    if (infoIt == m_arr_vars.end() && !sized) return false;
     elementr = varr.name();
     for (size_t i = 0; i < indices.size(); ++i) {
-        const int width = static_cast<int>(infoIt->second->m_idxWidths[i]);
+        const int width = sized ? 32 : static_cast<int>(infoIt->second->m_idxWidths[i]);
         smtIndexedToBinary(indices[i], width);
         const std::string& index = indices[i];
         // Of exactly the index's width, so no digit is dropped onto another element
@@ -4010,6 +4020,7 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
             if (asked.emplace(key).second) terms << term << separator;
         }
     };
+    std::vector<const VlRandomVar*> sized;  // Arrays pinned by element up to their size
     for (const auto& varName : layerVars) {
         const VlRandomVar* const varp = solveBeforeVarp(varName);
         if (varp->dimension() > 0) {
@@ -4022,31 +4033,82 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
                 ask(elems.str(), "");
                 continue;
             }
+            // A solver need not take back its own model of a whole array (cvc5 rejects the
+            // constant array in it), so one of a solved size is pinned by element instead,
+            // in time linear in the size, which its resize allocates anyway
+            if (sizeVarp(*varp)) {
+                sized.push_back(varp);
+                continue;
+            }
         }
         ask(varp->name(), " ");
     }
+    const std::string fixedTerms = terms.str();  // All but the elements of sized arrays
+    // The sizes of the sized arrays in the current model, and their elements up to them, in
+    // valuesr; false if a reply is unusable. Both are pinned, so that a later phase can
+    // neither pick another size nor leave elements free.
+    const auto readSized = [&](std::map<std::string, std::string>& valuesr) VL_REQUIRES(
+                               sess.m_mutex) {
+        if (sized.empty()) return true;
+        std::ostringstream sizeTerms;
+        for (const VlRandomVar* const varp : sized) {
+            sizeTerms << sizeVarp(*varp)->name() << ' ';
+        }
+        os << "(get-value (" << sizeTerms.str() << "))\n";
+        if (!readPhaseValues(sess, sizeTerms.str(), valuesr)) return false;
+        std::ostringstream elems;
+        elems << std::hex << std::setfill('0');
+        for (const VlRandomVar* const varp : sized) {
+            const VlRandomVar* const sizep = sizeVarp(*varp);
+            std::vector<EData> words(VL_WORDS_I(sizep->width()), 0);
+            parseSMTNum(sizep->width(), WDataOutP::external(words.data()), valuesr[sizep->name()]);
+            for (EData j = 0; j < words[0]; ++j) {
+                elems << "(select " << varp->name() << " #x" << std::setw(8) << j << ")";
+            }
+        }
+        // Arrays of size 0 leave no element to ask for
+        if (elems.str().empty()) return true;
+        os << "(get-value (" << elems.str() << "))\n";
+        return readPhaseValues(sess, elems.str(), valuesr);
+    };
     // Get baseline values (deterministic, always valid)
-    os << "(get-value (" << terms.str() << "))\n";
-    if (!readPhaseValues(sess, terms.str(), solvedValuesr)) return false;
-    if (solverSamples()) return true;
+    std::map<std::string, std::string> values;
+    if (!fixedTerms.empty()) {
+        os << "(get-value (" << fixedTerms << "))\n";
+        if (!readPhaseValues(sess, fixedTerms, values)) return false;
+    }
+    if (!readSized(values)) return false;
 
     // Try diversity: add random constraint, re-check. If sat, get
     // updated (more diverse) values. If unsat, keep baseline values.
-    // Scoped to this layer's own vars -- see randomConstraint's comment.
-    os << "(assert ";
-    randomConstraint(os, rngr, _VL_SOLVER_HASH_LEN, &layerVars);
-    os << ")\n";
-    os << "(check-sat)\n";
-    const VlSolverStatus status = sess.readStatus();
-    if (status == VlSolverStatus::SAT) {
-        os << "(get-value (" << terms.str() << "))\n";
-        // An unusable reply leaves the baseline values
-        (void)readPhaseValues(sess, terms.str(), solvedValuesr);
-    } else if (status == VlSolverStatus::FAIL) {
-        // Only the diversity commands can be unanswered, and the next phase starts with a
-        // (reset), so get back in step here and keep the baseline values
-        sess.resync();
+    // Scoped to this layer's own vars -- see randomConstraint's comment -- and the sizes of
+    // its sized arrays, which are read again with their elements.
+    if (!solverSamples()) {
+        std::vector<std::string> hashVars = layerVars;
+        for (const VlRandomVar* const varp : sized) hashVars.push_back(sizeVarp(*varp)->name());
+        os << "(assert ";
+        randomConstraint(os, rngr, _VL_SOLVER_HASH_LEN, &hashVars);
+        os << ")\n";
+        os << "(check-sat)\n";
+        const VlSolverStatus status = sess.readStatus();
+        if (status == VlSolverStatus::SAT) {
+            // An unusable reply leaves the baseline values
+            std::map<std::string, std::string> diverse;
+            if (fixedTerms.empty()) {
+                if (readSized(diverse)) values.swap(diverse);
+            } else {
+                os << "(get-value (" << fixedTerms << "))\n";
+                if (readPhaseValues(sess, fixedTerms, diverse) && readSized(diverse)) {
+                    values.swap(diverse);
+                }
+            }
+        } else if (status == VlSolverStatus::FAIL) {
+            // Only the diversity commands can be unanswered, and the next phase starts with a
+            // (reset), so get back in step here and keep the baseline values
+            sess.resync();
+        }
     }
+    for (const auto& entry : values) solvedValuesr[entry.first] = entry.second;
     return true;
 }
 
