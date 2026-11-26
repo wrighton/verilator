@@ -2624,6 +2624,9 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         if (fixedp && fixedp->count(var.first)) continue;
         // Nor one with rand_mode off, which keeps its value (IEEE 1800-2023 18.8)
         if (isFrozenVar(var.first, *var.second)) continue;
+        // The solve of the array sizes keeps only the sizes: the elements it also holds are
+        // those of the old sizes, which the final solve picks again
+        if (m_sizeSolve && !m_sizeVars.count(var.first)) continue;
         const int width = var.second->width();
         for (int j = 0; j < var.second->totalWidth() / width; ++j) {
             terms.push_back({var.second.get(), j, 0, width, static_cast<int>(terms.size())});
@@ -3111,6 +3114,8 @@ bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
     size_t requested = 0;
     std::stringstream getValueStr;
     for (const auto& var : m_vars) {
+        // The solve of the array sizes writes only the sizes (parseModel), so asks only them
+        if (m_sizeSolve && !m_sizeVars.count(var.first)) continue;
         if (var.second->dimension() > 0) {
             auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
             var.second->setArrayInfo(arrVarsp);
