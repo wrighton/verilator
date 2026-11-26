@@ -16,6 +16,7 @@ test.compile(verilator_flags2=['--assert', '--stats'])
 if test.vlt_all:
     # Elements 2 and 3 of 'arr', element 5, and the part of element 6
     test.file_grep(test.stats, r'Optimizations, Sampled variable ranges\s+(\d+)', 3)
+    test.file_grep(test.stats, r'Optimizations, Sampled variable selections\s+(\d+)', 15)
 
 test.execute()
 
