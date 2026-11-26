@@ -11,4 +11,8 @@
                                                         : ... note: In instance 't'
    38 |   property p_mutual1;
       |            ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_recursive_unsup.v:53:12: Unsupported: Recursive property call: 'prop_always'
+                                                        : ... note: In instance 't'
+   53 |   property prop_always(p);
+      |            ^~~~~~~~~~~
 %Error: Exiting due to
