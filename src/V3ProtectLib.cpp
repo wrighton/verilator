@@ -70,6 +70,7 @@ class ProtectVisitor final : public VNVisitor {
     AstTextBlock* m_cSeqClksp = nullptr;  // Sequential clock copy list
     AstTextBlock* m_settleDeclp = nullptr;  // Where the settle function is declared, if needed
     AstTextBlock* m_settleCallp = nullptr;  // Where the settle function is called, if needed
+    AstTextBlock* m_regSelectp = nullptr;  // Registered outputs from the clock update alone
     AstTextBlock* m_cSettlep = nullptr;  // Where the settle function is defined, if needed
     AstTextBlock* m_settlePortsp = nullptr;  // Settle function's SV declaration ports
     AstTextBlock* m_cSettleParamsp = nullptr;  // Settle function's C parameters
@@ -99,8 +100,9 @@ class ProtectVisitor final : public VNVisitor {
     std::string m_lastSeqName = "last_seq_seqnum__V";  // Sequence number of the update of clocks
     std::string m_seqNumName = "seq_seqnum__V";  // Same, at once
     std::string m_seqInitName = "seq_init__V";  // Set after the first update of clocks
-    std::string m_seqFirstName = "seq_first__V";  // Set in the first update of clocks
     std::string m_settleName;  // Function settling the library before the first update of clocks
+    std::string m_settledName = "settled__V";  // Its result, passed to the update of clocks
+    std::string m_lastComboName = "last_combo_seqnum__V";  // Sequence number of the combo update
     std::string m_lowName;  // Function updating the library at falling edges of its clocks
     AstTextBlock* m_selectp = nullptr;  // Results whichever update ran last
     // Suffixes of the C names of the library's DPI functions after the library name
@@ -148,8 +150,7 @@ class ProtectVisitor final : public VNVisitor {
             m_usedNames.emplace(svPortName(varp));
             m_usedNames.emplace(AstNode::verilogIdent(varp->name() + "_combo__V"));
         }
-        for (const char* const namep :
-             {"handle__V", "last_combo_seqnum__V", "protectlib_hash__V"}) {
+        for (const char* const namep : {"handle__V", "protectlib_hash__V"}) {
             m_usedNames.emplace(namep);
         }
         for (const char* const suffixp : {s_checkHashSuffix, s_createSuffix, s_comboUpdateSuffix,
@@ -157,12 +158,13 @@ class ProtectVisitor final : public VNVisitor {
             m_dpiNames.emplace(m_libName + suffixp, uniqueName(m_libName + suffixp));
         }
         m_seqInitName = uniqueName(m_seqInitName);
-        m_seqFirstName = uniqueName(m_seqFirstName);
         m_settleName = uniqueName(m_libName + "_protectlib_settle");
         m_lowName = uniqueName(m_libName + "_protectlib_clock_low");
         m_seqNumName = uniqueName(m_seqNumName);
         m_initName = uniqueName(m_initName);
         m_lastSeqName = uniqueName(m_lastSeqName);
+        m_settledName = uniqueName(m_settledName);
+        m_lastComboName = uniqueName(m_lastComboName);
         if (v3Global.opt.vpi()) {
             m_vpiWritesName = uniqueName("vpi_writes__V");
             m_vpiWrittenName = uniqueName(m_libName + "_protectlib_vpi_written");
@@ -313,8 +315,12 @@ class ProtectVisitor final : public VNVisitor {
         initialComment(txtp, fl);
         txtp->add(dpiImport(s_createSuffix, "chandle") + "string scope__V);\n\n");
         comboComment(txtp, fl);
+        // Where the library's outputs depend on its inputs and clock updates alone, the call
+        // may reuse the results of the previous one with the same inputs: a clock update since
+        // has newer results, which the selection of the outputs then takes
         m_comboPortsp = new AstTextBlock{
-            fl, dpiImport(s_comboUpdateSuffix, "longint unsigned") + "\n", ", ", ");\n\n"};
+            fl, dpiImport(s_comboUpdateSuffix, "longint unsigned") + "\n", ", ",
+            v3Global.libComboCache() ? ") /*verilator dpi_cache*/;\n\n" : ");\n\n"};
         m_comboPortsp->add("chandle handle__V\n");
         txtp->add(m_comboPortsp);
         seqComment(txtp, fl);
@@ -343,7 +349,7 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add("// verilator tracing_off\n");
 
         txtp->add("chandle handle__V;\n");
-        txtp->add("time last_combo_seqnum__V;\n");
+        txtp->add("time " + m_lastComboName + ";\n");
         if (v3Global.opt.vpi()) {
             // Written by the export, called after a write through the VPI into the library
             // module, so the update below sees a change of this instance alone
@@ -383,12 +389,16 @@ class ProtectVisitor final : public VNVisitor {
                   + "($sformatf(\"%m\"));\n");
         if (m_hasSeqUpdate) txtp->add(m_initName + " = 1'b1;\n");
         txtp->add("end\n\n");
+        if (m_hasSeqUpdate) {
+            m_settleCallp = new AstTextBlock{fl};
+            txtp->add(m_settleCallp);
+        }
 
         // Combinatorial process
         addComment(txtp, fl, "Combinatorially evaluate changes to inputs");
         txtp->add("always_comb begin\n");
         m_comboParamsp = new AstTextBlock{
-            fl, "last_combo_seqnum__V = " + dpiName(s_comboUpdateSuffix) + "(\n", ",\n", "\n);\n"};
+            fl, m_lastComboName + " = " + dpiName(s_comboUpdateSuffix) + "(\n", ",\n", "\n);\n"};
         m_comboParamsp->add("handle__V");
         txtp->add(m_comboParamsp);
         txtp->add("end\n\n");
@@ -411,8 +421,6 @@ class ProtectVisitor final : public VNVisitor {
                 m_comboIgnoreParamsp->add("handle__V");
                 txtp->add(m_comboIgnoreParamsp);
             }
-            m_settleCallp = new AstTextBlock{fl};
-            txtp->add(m_settleCallp);
             m_seqParamsp = new AstTextBlock{
                 fl, m_seqNumName + " = " + dpiName(s_seqUpdateSuffix) + "(\n", ",\n",
                 "\n);\n" + m_lastSeqName + " <= " + m_seqNumName + ";\n"};
@@ -431,20 +439,31 @@ class ProtectVisitor final : public VNVisitor {
         addComment(txtp, fl, "Select between combinatorial and sequential results");
         txtp->add("always_comb begin\n");
         if (m_hasSeqUpdate) {
-            txtp->add("if (" + m_lastSeqName + " > last_combo_seqnum__V) begin\n");
+            txtp->add("if (" + m_lastSeqName + " > " + m_lastComboName + ") begin\n");
             m_seqAssignsp = new AstTextBlock{fl};
             txtp->add(m_seqAssignsp);
             txtp->add("end else begin\n");
             m_comboAssignsp = new AstTextBlock{fl};
             txtp->add(m_comboAssignsp);
             txtp->add("end\n");
-            m_selectp = new AstTextBlock{fl};
-            txtp->add(m_selectp);
         } else {
             m_comboAssignsp = new AstTextBlock{fl};
             txtp->add(m_comboAssignsp);
         }
         txtp->add("end\n\n");
+        if (m_hasSeqUpdate) {
+            // Apart, as these read what the clock update writes with blocking assignments, so
+            // where another output is a clock, they do not bring the clock update into the
+            // active region
+            m_selectp = new AstTextBlock{fl, "always_comb begin\n", "", "end\n\n"};
+            txtp->add(m_selectp);
+        }
+        if (m_hasSeqUpdate) {
+            // Apart, so where such an output is a clock the clock update writes it by NBAs alone
+            // and stays in the NBA region
+            m_regSelectp = new AstTextBlock{fl, "always_comb begin\n", "", "end\n\n"};
+            txtp->add(m_regSelectp);
+        }
 
         // Final
         txtp->add("final " + dpiName(s_finalSuffix) + "(handle__V);\n\n");
@@ -877,24 +896,38 @@ class ProtectVisitor final : public VNVisitor {
     // returns its outputs, and its call
     void newSettle(FileLine* fl) {
         m_seqDeclsp->add("bit " + m_seqInitName + ";\n");
-        m_seqDeclsp->add("bit " + m_seqFirstName + ";\n");
         m_seqInitp->add(m_seqInitName + " <= 1'b1;\n");
+        // Run apart from the update of the clocks, so where such an output is a clock that update
+        // stays in the NBA region. At time zero the settle region runs the combinational update,
+        // which passes the inputs, before the trigger of this process. It takes the sequence
+        // number of the combinational update and its result goes to the update of the clocks,
+        // so threads never run it at the same time as either.
+        m_seqDeclsp->add("longint unsigned " + m_settledName + ";\n");
         m_settlePortsp = new AstTextBlock{
-            fl, "import \"DPI-C\" function void " + m_settleName + "(\n", ", ", ");\n\n"};
+            fl, "import \"DPI-C\" function longint unsigned " + m_settleName + "(\n", ", ",
+            ");\n\n"};
         m_settlePortsp->add("chandle handle__V\n");
+        m_settlePortsp->add("input longint unsigned " + m_lastComboName + "\n");
         m_settleDeclp->add(m_settlePortsp);
-        m_seqFirstp
-            = new AstTextBlock{fl, "if (!" + m_seqFirstName + ") begin\n" + m_settleName + "(\n",
-                               ",\n", "\n);\n" + m_seqFirstName + " = 1'b1;\nend\n"};
+        m_seqFirstp = new AstTextBlock{
+            fl, "always @(" + m_initName + ") " + m_settledName + " = " + m_settleName + "(\n",
+            ",\n", "\n);\n\n"};
         m_seqFirstp->add("handle__V");
+        m_seqFirstp->add(m_lastComboName);
         m_settleCallp->add(m_seqFirstp);
-        m_cSettleParamsp = new AstTextBlock{fl, "void " + m_settleName + "(\n", ",\n", "\n) {\n"};
+        m_seqPortsp->add("input longint unsigned " + m_settledName + "\n");
+        m_seqParamsp->add(m_settledName);
+        m_cSeqParamsp->add("unsigned long long /*" + m_settledName + "*/");
+        m_cSettleParamsp
+            = new AstTextBlock{fl, "unsigned long long " + m_settleName + "(\n", ",\n", "\n) {\n"};
         m_cSettleParamsp->add("void* vhandlep__V");
+        m_cSettleParamsp->add("unsigned long long /*" + m_lastComboName + "*/");
         m_cSettlep->add(m_cSettleParamsp);
         castPtr(fl, m_cSettlep);
         m_cSettlep->add("handlep__V->eval();\n");
         m_cSettleOutsp = new AstTextBlock{fl};
         m_cSettlep->add(m_cSettleOutsp);
+        m_cSettlep->add("return 0;\n");
         m_cSettlep->add("}\n\n");
     }
 
@@ -921,13 +954,16 @@ class ProtectVisitor final : public VNVisitor {
         // library settled before the first clock update, its initial value, so the parent has it
         // at time zero like the combinational results
         // A function of the inputs alone is current after either update, so it comes from the
-        // latest one at once, and from the clock update alone if a function of the clocks alone
-        const bool inputsOnly = m_hasSeqUpdate && varp->isPrimaryCombOut();
+        // latest one at once, and from the clock update alone if a function of the clocks alone.
+        // One of the data inputs alone, which the combinational update has, needs that only after
+        // a write through the VPI, and comes like the others.
+        const bool inputsOnly
+            = m_hasSeqUpdate && varp->isPrimaryCombOut() && !varp->isPrimaryDataOut();
         std::string seqAssign = portName + " = " + seqName + ";\n";
         if (inputsOnly) {
             seqAssign = portName + " = " + tmpName + ";\n";
             if (combo) {
-                seqAssign = "if (" + m_seqNumName + " > last_combo_seqnum__V) " + seqAssign
+                seqAssign = "if (" + m_seqNumName + " > " + m_lastComboName + ") " + seqAssign
                             + "else " + portName + " = " + comboName + ";\n";
             }
         } else if (!combo) {
@@ -965,6 +1001,8 @@ class ProtectVisitor final : public VNVisitor {
         if (combo && !inputsOnly) {
             if (m_hasSeqUpdate) m_seqAssignsp->add(seqAssign);
             m_comboAssignsp->add(portName + " = " + comboName + ";\n");
+        } else if (!combo && !inputsOnly) {
+            m_regSelectp->add(seqAssign);
         } else {
             m_selectp->add(seqAssign);
         }

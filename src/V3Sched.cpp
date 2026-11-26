@@ -864,6 +864,25 @@ struct IcoPublicAnalysis final {
 
 // Replace the reads of the time in the logic, and find the variables feeding hidden state reads,
 // which the change detection of the top level inputs also leaves out
+// Whether the 'ico' region may detect the changes of top level input 'vscp' itself: not if the
+// design writes it, as the 'previous value' would get out of sync, if forceable, as the actual
+// value is not visible, nor for unpacked arrays or SystemC types, which lack the '!=' needed.
+// With -fico-public-change-detect it does not either for an input feeding logic reading hidden
+// state (see analyzeIcoPublic).
+bool icoInputChangeDetectable(const AstVarScope* vscp) {
+    const AstVar* const varp = vscp->varp();
+    return v3Global.opt.fIcoChangeDetect().isTrue() && varp->isPrimaryInish()
+           && !varp->icoMaybeWritten() && !varp->isForced()
+           && !VN_IS(vscp->dtypep()->skipRefp(), UnpackArrayDType) && !varp->isSc();
+}
+
+// Whether logic in the 'ico' region reading 'varp' gets the 'first iteration' trigger, so runs at
+// every evaluation, unless the region detects its changes: a top level input, a public variable
+// or a sampled one, as the 'ico' ordering in createIcoRegion falls back to
+bool icoFirstIterationRead(const AstVar* varp) {
+    return varp->isPrimaryInish() || varp->isSigUserRWPublic() || varp->sampled();
+}
+
 IcoPublicAnalysis analyzeIcoPublic(AstNetlist* netlistp, ProcessList& logic,
                                    const LogicRegions& regions, IcoPublicChangeDetect& result) {
     IcoPublicAnalysis analysis;
@@ -1020,15 +1039,7 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
         AstScope* const scopep = netlistp->topScopep()->scopep();
         for (AstVarScope* const vscp : scopep->varspList()) {
             // Only for top level ports, assume outputs don't change externally
-            if (!vscp->varp()->isPrimaryInish()) continue;
-            // Don't do if written by the design - wouldn't update the change detect 'prev' value
-            if (vscp->varp()->icoMaybeWritten()) continue;
-            // Don't do if forceable, as we can't see the actual value - this is belt and braces
-            if (vscp->varp()->isForced()) continue;
-            // Can't handle unpacked arrays (they have special types when primary input)
-            if (VN_IS(vscp->dtypep()->skipRefp(), UnpackArrayDType)) continue;
-            // Similarly to arrays, can't handle SystemC types
-            if (vscp->varp()->isSc()) continue;
+            if (!icoInputChangeDetectable(vscp)) continue;
             // With -fico-public-change-detect, nor if it feeds logic reading hidden state
             if (publicAnalysis.m_hiddenFedVscps.count(vscp)) {
                 ++nHiddenInputs;
@@ -1556,6 +1567,321 @@ std::unordered_set<const AstVar*> regOutTaints(const LogicClasses& logicClasses,
     return taints;
 }
 
+// Whether an expression of logic run at every evaluation may give another value or have another
+// effect each time: a random number, a file read, user C code, a call through DPI. Following the
+// calls into the called functions, but not into what a display or an assertion reports, which has
+// no effect on the outputs.
+class LibUnrepeatableVisitor final : public VNVisitorConst {
+    std::unordered_set<const AstCFunc*> m_visited;  // Functions already followed
+    bool m_found = false;  // Found one
+
+    void visit(AstDisplay*) override {}
+    void visit(AstStop*) override {}
+    void visit(AstFinish*) override {}
+    void visit(AstNodeCCall* nodep) override {
+        if (m_found) return;
+        iterateChildrenConst(nodep);
+        AstCFunc* const funcp = nodep->funcp();
+        if (funcp->dpiImportWrapper() || funcp->dpiExportDispatcher()) {
+            m_found = true;
+        } else if (m_visited.emplace(funcp).second) {
+            iterateChildrenConst(funcp);
+        }
+    }
+    void visit(AstNodeExpr* nodep) override {
+        if (m_found) return;
+        if (!nodep->isPure() || !nodep->isPredictOptimizable()) {
+            m_found = true;
+            return;
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override {
+        if (!m_found) iterateChildrenConst(nodep);
+    }
+
+public:
+    static bool found(AstNode* nodep) {
+        LibUnrepeatableVisitor visitor;
+        visitor.iterateConst(nodep);
+        return visitor.m_found;
+    }
+};
+
+// Whether logic has an effect other than writing variables, or computes something differently
+// each time: any node not pure, an outputter (a display, an assertion action, the end of the
+// simulation, a file write), an expression not predictable from its operands (a file read, a
+// random number, the time, user C code, or a function call, whatever the function does), or a
+// statement other than plain assignments and control flow (an event trigger, which wakes
+// processes without changing a value, a compound assignment, a force or release, a disable, a
+// wait, process control), or a write into a class object, whose state outlives the evaluation
+// outside the variables of the library
+class LibEffectVisitor final : public VNVisitorConst {
+    bool m_found = false;  // Found one
+
+    static bool plainStmt(const AstNode* nodep) {
+        return VN_IS(nodep, Assign) || VN_IS(nodep, AssignW) || VN_IS(nodep, AssignDly)
+               || VN_IS(nodep, If) || VN_IS(nodep, Case) || VN_IS(nodep, Loop)
+               || VN_IS(nodep, LoopTest) || VN_IS(nodep, JumpBlock) || VN_IS(nodep, JumpGo)
+               || VN_IS(nodep, Break) || VN_IS(nodep, Continue) || VN_IS(nodep, Begin)
+               || VN_IS(nodep, StmtExpr) || VN_IS(nodep, Comment) || VN_IS(nodep, Return)
+               || VN_IS(nodep, CReturn);
+    }
+    // Whether an assignment writes a member of a class object, whose state is not in variables
+    static bool classWrite(const AstNode* nodep) {
+        const AstNodeAssign* const assignp = VN_CAST(nodep, NodeAssign);
+        return assignp && assignp->lhsp()->exists([](const AstMemberRef* selp) {
+            return VN_IS(selp->fromp()->dtypep()->skipRefp(), ClassRefDType);
+        });
+    }
+    void visit(AstNode* nodep) override {
+        if (m_found) return;
+        const AstNodeExpr* const exprp = VN_CAST(nodep, NodeExpr);
+        if (!nodep->isPure() || nodep->isOutputter() || (exprp && !exprp->isPredictOptimizable())
+            || (VN_IS(nodep, NodeStmt) && !plainStmt(nodep)) || classWrite(nodep)) {
+            m_found = true;
+            return;
+        }
+        iterateChildrenConst(nodep);
+    }
+
+public:
+    static bool found(AstNode* nodep) {
+        LibEffectVisitor visitor;
+        visitor.iterateConst(nodep);
+        return visitor.m_found;
+    }
+};
+
+// The variables logic may read before writing them in the same evaluation, so whose values it
+// keeps from its previous evaluation: in statement order, a read not preceded by an
+// unconditional write of the whole variable, by a blocking assignment of the logic itself, not
+// in a branch or loop
+class LibLiveInVisitor final : public VNVisitorConst {
+    std::unordered_set<const AstVarScope*> m_written;  // Written unconditionally so far
+    std::unordered_set<const AstVarScope*>& m_liveInr;  // Read before written
+    int m_condDepth = 0;  // Under a branch or loop
+
+    void visit(AstVarRef* nodep) override {
+        if (nodep->access().isReadOrRW() && !m_written.count(nodep->varScopep())) {
+            m_liveInr.emplace(nodep->varScopep());
+        }
+    }
+    void visit(AstNodeAssign* nodep) override {
+        iterateConst(nodep->rhsp());
+        AstVarRef* const refp = VN_CAST(nodep->lhsp(), VarRef);
+        if (refp && m_condDepth == 0 && VN_IS(nodep, Assign)) {
+            m_written.emplace(refp->varScopep());
+        } else {
+            // Its indices, and a read of the variable by a partial write
+            iterateConst(nodep->lhsp());
+        }
+    }
+    void visit(AstIf* nodep) override { conditional(nodep); }
+    void visit(AstCase* nodep) override { conditional(nodep); }
+    void visit(AstLoop* nodep) override { conditional(nodep); }
+    void visit(AstJumpBlock* nodep) override { conditional(nodep); }
+    void visit(AstSenTree*) override {}  // Sensitivities are not reads of the evaluation
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+    void conditional(AstNode* nodep) {
+        ++m_condDepth;
+        iterateChildrenConst(nodep);
+        --m_condDepth;
+    }
+
+public:
+    LibLiveInVisitor(AstNode* nodep, std::unordered_set<const AstVarScope*>& liveInr)
+        : m_liveInr{liveInr} {
+        iterateConst(nodep);
+    }
+};
+
+// Whether a library evaluated again with the inputs it had at its previous evaluation, without
+// an update of its clocks between, gives the same outputs, so the combinational update of its
+// wrapper may reuse its results for unchanged inputs. Only the logic that may affect an output
+// counts, so not assertions and what they report. Such logic may change its outputs otherwise if
+// it runs without a change of its inputs, if it computes something differently each time, like
+// a random number or a file read, or through functions called through DPI. A write through the
+// VPI runs the update of the clocks, whose newer results the wrapper then selects.
+bool libComboCacheable(const LogicClasses& logicClasses,
+                       const VirtIfaceTriggers& virtIfaceTriggers) {
+    const auto notCacheable = [](const char* reasonp) {
+        V3Stats::addStat(
+            std::string{"Scheduling, library combinational results not reused, "} + reasonp, 1);
+        return false;
+    };
+    if (!virtIfaceTriggers.m_triggers.empty()) return notCacheable("virtual interfaces");
+    // The wrapper's import passes the ports, which V3Task can only reuse the results for if
+    // integral, packed, or arrays of these, and not inout (see V3Task's dpiCacheableArgs)
+    for (const AstVarScope* vscp = v3Global.rootp()->topScopep()->scopep()->varsp(); vscp;
+         vscp = VN_AS(vscp->nextp(), VarScope)) {
+        const AstVar* const varp = vscp->varp();
+        if (!varp->isPrimaryIO()) continue;
+        const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+        while (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+            dtypep = adtypep->subDTypep()->skipRefp();
+        }
+        if (varp->isInout() || !dtypep->isIntegralOrPacked()) {
+            return notCacheable("ports not passed as integral values");
+        }
+    }
+    if (v3Global.rootp()->exists([](const AstCFunc* funcp) { return funcp->dpiExportImpl(); })) {
+        return notCacheable("DPI exports");
+    }
+    // The variables that may affect an output, through the logic writing them
+    struct Logic final {
+        AstNodeProcedure* m_procp;  // The process
+        const ProcessList* m_listp;  // Its class
+        std::vector<const AstVarScope*> m_reads;  // What it reads, its sensitivities included
+        std::vector<const AstVarScope*> m_writes;  // What it writes
+    };
+    std::vector<Logic> logics;
+    std::unordered_map<const AstVarScope*, std::vector<size_t>> writers;
+    for (const ProcessList* const listp :
+         {&logicClasses.m_static, &logicClasses.m_initial, &logicClasses.m_comb,
+          &logicClasses.m_clocked, &logicClasses.m_hybrid, &logicClasses.m_postponed,
+          &logicClasses.m_observed, &logicClasses.m_reactive}) {
+        for (const Process& process : *listp) {
+            const size_t index = logics.size();
+            logics.push_back({process.m_procp, listp, {}, {}});
+            Logic& logic = logics.back();
+            process.m_senTreep->foreach(
+                [&](const AstVarRef* refp) { logic.m_reads.push_back(refp->varScopep()); });
+            // Its accesses, and those of the functions it calls, other than of their own
+            // variables
+            std::unordered_set<const AstCFunc*> followed;
+            std::vector<const AstNode*> todo{process.m_procp};
+            while (!todo.empty()) {
+                const AstNode* const nodep = todo.back();
+                todo.pop_back();
+                const bool inFunc = VN_IS(nodep, CFunc);
+                nodep->foreach([&](const AstNode* subp) {
+                    if (const AstVarRef* const refp = VN_CAST(subp, VarRef)) {
+                        if (inFunc && refp->varp()->isFuncLocal()) return;
+                        if (refp->access().isWriteOrRW()) {
+                            writers[refp->varScopep()].push_back(index);
+                            logic.m_writes.push_back(refp->varScopep());
+                        }
+                        if (refp->access().isReadOrRW())
+                            logic.m_reads.push_back(refp->varScopep());
+                    } else if (const AstNodeCCall* const callp = VN_CAST(subp, NodeCCall)) {
+                        if (followed.emplace(callp->funcp()).second) {
+                            todo.push_back(callp->funcp());
+                        }
+                    }
+                });
+            }
+        }
+    }
+    std::unordered_set<const AstVarScope*> affecting;
+    std::vector<const AstVarScope*> queue;
+    v3Global.rootp()->topScopep()->scopep()->foreach([&](const AstVarScope* vscp) {
+        if (vscp->varp()->isPrimaryIO() && vscp->varp()->isWritable()) {
+            if (affecting.emplace(vscp).second) queue.push_back(vscp);
+        }
+    });
+    std::vector<bool> affects(logics.size(), false);
+    while (!queue.empty()) {
+        const AstVarScope* const vscp = queue.back();
+        queue.pop_back();
+        const auto it = writers.find(vscp);
+        if (it == writers.end()) continue;
+        for (const size_t index : it->second) {
+            if (affects[index]) continue;
+            affects[index] = true;
+            for (const AstVarScope* const readp : logics[index].m_reads) {
+                if (affecting.emplace(readp).second) queue.push_back(readp);
+            }
+        }
+    }
+    for (size_t index = 0; index < logics.size(); ++index) {
+        if (!affects[index]) continue;
+        const Logic& logic = logics[index];
+        if (logic.m_listp == &logicClasses.m_postponed || logic.m_listp == &logicClasses.m_observed
+            || logic.m_listp == &logicClasses.m_reactive) {
+            return notCacheable("observed, reactive or postponed logic");
+        }
+        if (logic.m_procp->isSuspendable()) return notCacheable("suspendable logic");
+        if ((logic.m_listp == &logicClasses.m_comb || logic.m_listp == &logicClasses.m_hybrid)
+            && LibUnrepeatableVisitor::found(logic.m_procp)) {
+            return notCacheable("unrepeatable combinational logic");
+        }
+    }
+    // Combinational logic the 'ico' region runs at every evaluation (see icoFirstIterationRead and
+    // icoInputChangeDetectable), and that reading what it writes, may not have effects other than
+    // writing variables (see LibEffectVisitor), nor affect the outputs if reading a sampled
+    // variable, which may differ at the next evaluation. With -fico-public-change-detect, any
+    // top level input may feed logic reading hidden state, so has no change detection.
+    const bool publicDetect
+        = v3Global.opt.fIcoChangeDetect().isTrue() && v3Global.opt.fIcoPublicChangeDetect();
+    const auto everyEvalRead = [&](const AstVarScope* vscp) {
+        const AstVar* const varp = vscp->varp();
+        if (!icoFirstIterationRead(varp)) return false;
+        if (varp->isSigUserRWPublic() || varp->sampled()) return true;
+        return publicDetect || !icoInputChangeDetectable(vscp);
+    };
+    std::unordered_map<const AstVarScope*, std::vector<size_t>> combReaders;
+    for (size_t index = 0; index < logics.size(); ++index) {
+        const Logic& logic = logics[index];
+        if (logic.m_listp != &logicClasses.m_comb && logic.m_listp != &logicClasses.m_hybrid) {
+            continue;
+        }
+        for (const AstVarScope* const vscp : logic.m_reads) combReaders[vscp].push_back(index);
+    }
+    std::vector<bool> everyEval(logics.size(), false);
+    std::vector<bool> sampledRead(logics.size(), false);
+    std::vector<size_t> evalQueue;
+    for (size_t index = 0; index < logics.size(); ++index) {
+        if (logics[index].m_listp != &logicClasses.m_comb
+            && logics[index].m_listp != &logicClasses.m_hybrid) {
+            continue;
+        }
+        for (const AstVarScope* const vscp : logics[index].m_reads) {
+            if (!everyEvalRead(vscp)) continue;
+            if (vscp->varp()->sampled()) sampledRead[index] = true;
+            if (!everyEval[index]) {
+                everyEval[index] = true;
+                evalQueue.push_back(index);
+            }
+        }
+    }
+    while (!evalQueue.empty()) {
+        const size_t index = evalQueue.back();
+        evalQueue.pop_back();
+        for (const AstVarScope* const vscp : logics[index].m_writes) {
+            const auto it = combReaders.find(vscp);
+            if (it == combReaders.end()) continue;
+            for (const size_t readerIndex : it->second) {
+                bool requeue = !everyEval[readerIndex];
+                everyEval[readerIndex] = true;
+                if (sampledRead[index] && !sampledRead[readerIndex]) {
+                    sampledRead[readerIndex] = true;
+                    requeue = true;
+                }
+                if (requeue) evalQueue.push_back(readerIndex);
+            }
+        }
+    }
+    for (size_t index = 0; index < logics.size(); ++index) {
+        if (!everyEval[index]) continue;
+        if (sampledRead[index] && affects[index]) {
+            return notCacheable("logic run at every evaluation reading sampled values");
+        }
+        if (LibEffectVisitor::found(logics[index].m_procp)) {
+            return notCacheable("logic run at every evaluation with effects");
+        }
+        std::unordered_set<const AstVarScope*> liveIn;
+        LibLiveInVisitor{logics[index].m_procp, liveIn};
+        for (const AstVarScope* const vscp : logics[index].m_writes) {
+            if (liveIn.count(vscp)) {
+                UINFO(4, "Library keeps state in " << vscp);
+                return notCacheable("logic run at every evaluation keeping state");
+            }
+        }
+    }
+    return true;
+}
+
 // Mark the 1-bit top level inputs read only as the clock of rising edges. The wrapper of a library
 // updates the library at their falling edges without passing its inputs or taking its outputs.
 void markPrimaryPosedges(AstNetlist* netlistp) {
@@ -1658,8 +1984,16 @@ void markPrimaryRegOuts(const LogicRegions& logicRegions,
           };
     spread(readers, tainted);
     spread(combReaders, stateful);
+    // What a clock input reaches through combinational logic, which the wrapper passes to its
+    // clock update alone
+    std::unordered_set<const AstVar*> clocked;
+    v3Global.rootp()->foreach([&](const AstVar* varp) {
+        if (varp->isPrimaryInish() && varp->isPrimaryClock()) clocked.emplace(varp);
+    });
+    spread(combReaders, clocked);
     size_t regOuts = 0;
     size_t combOuts = 0;
+    size_t dataOuts = 0;
     v3Global.rootp()->foreach([&](AstVar* varp) {
         if (!varp->isPrimaryIO() || !varp->isWritable()) return;
         if (!tainted.count(varp)) {
@@ -1669,10 +2003,15 @@ void markPrimaryRegOuts(const LogicRegions& logicRegions,
         if (!stateful.count(varp)) {
             varp->setPrimaryCombOut();
             ++combOuts;
+            if (!clocked.count(varp)) {
+                varp->setPrimaryDataOut();
+                ++dataOuts;
+            }
         }
     });
     V3Stats::addStat("Scheduling, library outputs from the clock update alone", regOuts);
     V3Stats::addStat("Scheduling, library outputs of the inputs alone", combOuts);
+    V3Stats::addStat("Scheduling, library outputs of the data inputs alone", dataOuts);
 }
 
 }  // namespace
@@ -1746,6 +2085,7 @@ void schedule(AstNetlist* netlistp) {
     std::unordered_set<const AstVar*> libRegOutTaints;
     if (!v3Global.opt.libCreate().empty()) {
         libRegOutTaints = regOutTaints(logicClasses, virtIfaceTriggers);
+        v3Global.libComboCache(libComboCacheable(logicClasses, virtIfaceTriggers));
     }
 
     if (v3Global.opt.stats()) {
