@@ -1765,6 +1765,7 @@ class AssertVisitor final : public VNVisitor {
     VDouble0 m_statPastVars;  // Statistic tracking
     VDouble0 m_statAssertOnCombined;  // Statistic tracking
     VDouble0 m_statAssertOnHoisted;  // Statistic tracking
+    VDouble0 m_statViolationsDeferred;  // Statistic tracking
     VDouble0 m_statTaskMature;  // Statistic tracking
     bool m_inSampled = false;  // True inside a sampled expression
     bool m_inRestrict = false;  // True inside restrict assertion
@@ -2153,9 +2154,30 @@ class AssertVisitor final : public VNVisitor {
     AstNodeStmt* newFireAssert(const AstNodeStmt* nodep, VAssertDirectiveType directiveType,
                                VAssertType assertType, const string& message,
                                AstNodeExpr* exprsp = nullptr) {
-        AstNodeStmt* bodysp = newFireAssertUnchecked(nodep, message, exprsp);
-        bodysp = newIfAssertOn(nodep->controlVarp(), bodysp, directiveType, assertType);
-        return bodysp;
+        AstNodeStmt* const bodysp = newFireAssertUnchecked(nodep, message, exprsp);
+        AstIf* const ifp = newIfAssertOn(nodep->controlVarp(), bodysp, directiveType, assertType);
+        // A unique, unique0 or priority violation report is pending until the Observed region,
+        // flushed like an observed deferred assertion report (IEEE 1800-2023 12.4.2.1, 12.5.3.1).
+        // It is made at once outside a procedure, so in a task or function, under a
+        // fork...join_any or fork...join_none and in an action of a concurrent assertion, where
+        // the process making it is not known, and in a final procedure, after which no Observed
+        // region runs. A compiled out check is left to be removed.
+        if (assertType != VAssertType::INTERNAL && !ifp->condp()->isZero()
+            && v3Global.opt.timing().isSetTrue() && m_procedurep && !VN_IS(m_procedurep, Final)
+            && !m_inSpawnedFork && !m_inConcurrentAction) {
+            ++m_statViolationsDeferred;
+            // Format the message at the check, so with its scope, time and values
+            AstDisplay* const dispp = VN_AS(bodysp, Display);
+            AstSFormatF* const fmtp = dispp->fmtp()->unlinkFrBack();
+            dispp->fmtp(new AstSFormatF{fmtp->fileline(), "%s", true, fmtp});
+            AstNodeStmt* queuesp = nullptr;
+            snapshotObservedExpr(fmtp, queuesp);
+            // Killed as an assert directive of its type, as assertOnCond controls it
+            ifp->addThensp(newObservedDeferredCall(
+                nodep->fileline(), ifp->thensp()->unlinkFrBackWithNext(), queuesp, assertType,
+                VAssertDirectiveType::ASSERT, nodep->controlVarp()));
+        }
+        return ifp;
     }
 
     AstVar* createDelayedVar(const std::string& name, AstAlways* alwaysp, AstNodeExpr* exprp,
@@ -2312,12 +2334,15 @@ class AssertVisitor final : public VNVisitor {
                 }
             }
         }
-        return newObservedDeferredCall(flp, actionsp, queuesp, assertp);
+        return newObservedDeferredCall(flp, actionsp, queuesp, assertp->userType(),
+                                       assertp->directive(), assertp->controlVarp());
     }
     // Make statements pending, appending what queues them to queuesp. A pending call made
-    // before an $assertkill of its assertion is not run (IEEE 1800-2023 20.11).
+    // before an $assertkill of its assertion, of the given types and control state, is not run
+    // (IEEE 1800-2023 20.11).
     AstNodeStmt* newObservedDeferredCall(FileLine* flp, AstNodeStmt* callsp, AstNodeStmt* queuesp,
-                                         const AstNodeCoverOrAssert* assertp) {
+                                         VAssertType assertType,
+                                         VAssertDirectiveType directiveType, AstVar* controlVarp) {
         // The calls run in a block of the module, so keep the scope of the named blocks, which
         // V3Begin would have added
         std::string scope = m_genScope;
@@ -2357,9 +2382,8 @@ class AssertVisitor final : public VNVisitor {
             m_obsFlushp,
             new AstAssign{flp, new AstVarRef{flp, killedp, VAccess::WRITE}, new AstConst{flp, 0}});
         const auto newKillCount = [&]() {
-            return V3AssertCommon::newAssertCtlGetp(flp, VAssertCtlQuery::KILL,
-                                                    assertp->userType(), assertp->directive(),
-                                                    assertp->controlVarp());
+            return V3AssertCommon::newAssertCtlGetp(flp, VAssertCtlQuery::KILL, assertType,
+                                                    directiveType, controlVarp);
         };
         const auto newKillCheck = [&]() {
             AstNodeStmt* const stmtsp
@@ -2383,7 +2407,7 @@ class AssertVisitor final : public VNVisitor {
                                    new AstAdd{flp, new AstVarRef{flp, pendingp, VAccess::READ},
                                               new AstConst{flp, 1}}});
         AstNodeProcedure* runnerp;
-        if (assertp->userType() == VAssertType::FINAL_DEFERRED_IMMEDIATE) {
+        if (assertType == VAssertType::FINAL_DEFERRED_IMMEDIATE) {
             if (!m_finalPostponedp) {
                 m_finalPostponedp = new AstAlwaysPostponed{flp, nullptr};
                 m_modp->addStmtsp(m_finalPostponedp);
@@ -3372,7 +3396,8 @@ class AssertVisitor final : public VNVisitor {
                 // IEEE 1800-2023 16.4.2: Deferred coverage is flushed like a pending report
                 AstNodeStmt* creditsp = covincp;
                 if (deferred) {
-                    creditsp = newObservedDeferredCall(flp, covincp, nullptr, nodep);
+                    creditsp = newObservedDeferredCall(flp, covincp, nullptr, nodep->userType(),
+                                                       nodep->directive(), nodep->controlVarp());
                     if (passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
                 }
                 if (passsp && actionSenTreep && !nodep->nfaLowered() && !passPast) {
@@ -4683,6 +4708,7 @@ public:
         V3Stats::addStat("Assertions, assertOn checks combined", m_statAssertOnCombined);
         V3Stats::addStat("Assertions, procedural in tasks matured", m_statTaskMature);
         V3Stats::addStat("Assertions, assertOn checks hoisted", m_statAssertOnHoisted);
+        V3Stats::addStat("Assertions, deferred violation reports", m_statViolationsDeferred);
         V3Stats::addStat("Assertions, lifted impure case expressions", m_statLiftedCaseExprs);
         // Rewrites can change purity, e.g. by compiling out assertion statements with --no-assert
         VIsCached::clearCacheTree();
