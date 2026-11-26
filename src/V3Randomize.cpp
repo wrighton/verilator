@@ -672,16 +672,58 @@ class RandomizeMarkVisitor final : public VNVisitor {
         }
     }
     // Add the handles through which the constraints of classp select members of elements of
-    // arrays of class handles
-    static void addSelectedElemHandles(const AstClass* classp,
-                                       std::unordered_set<const AstVar*>& handlesr) {
+    // arrays of class handles, and those through which they select sizes of arrays
+    static void addSelectedHandles(const AstClass* classp,
+                                   std::unordered_set<const AstVar*>& elemHandlesr,
+                                   std::unordered_set<const AstVar*>& sizeHandlesr) {
         for (AstNode* const memberp : classp->memberspList()) {
             const AstConstraint* const constrp = VN_CAST(memberp, Constraint);
             if (!constrp) continue;
             constrp->foreach([&](const AstMemberRef* refp) {
-                if (isHandleElemMember(refp)) addSelectHandles(refp->fromp(), handlesr);
+                if (isHandleElemMember(refp)) addSelectHandles(refp->fromp(), elemHandlesr);
+            });
+            constrp->foreach([&](const AstCMethodHard* methodp) {
+                if (isMemberArraySize(methodp)) addSelectHandles(methodp->fromp(), sizeHandlesr);
             });
         }
+    }
+    // Whether methodp is the size of an array selected as a member of an object
+    static bool isMemberArraySize(const AstCMethodHard* methodp) {
+        return isSizeMethod(methodp) && VN_IS(methodp->fromp(), MemberRef);
+    }
+    static bool isSizeMethod(const AstCMethodHard* methodp) {
+        return methodp->method() == VCMethod::DYN_SIZE
+               || methodp->method() == VCMethod::ASSOC_SIZE;
+    }
+    // Whether a constraint item of the class constrains members of array elements by an array
+    // size, so the elements are solved for that size
+    static bool constrainsElemsBySize(const AstClass* classp) {
+        return classp->existsMember([](const AstClass*, const AstConstraint* constrp) {
+            for (const AstNode* itemp = constrp->itemsp(); itemp; itemp = itemp->nextp()) {
+                if (constrainsElemsBySize(itemp)) return true;
+            }
+            return false;
+        });
+    }
+    static bool constrainsElemsBySize(const AstNode* itemp) {
+        std::unordered_set<const AstVar*> sizedps;  // Arrays whose sizes the item reads
+        itemp->foreach([&](const AstCMethodHard* methodp) {
+            if (isSizeMethod(methodp)) sizedps.insert(selectedVarp(methodp->fromp()));
+        });
+        sizedps.erase(nullptr);
+        return itemp->exists([&](const AstMemberRef* refp) {
+            return isHandleElemMember(refp) && sizedps.count(selectedVarp(elemArrayp(refp)));
+        });
+    }
+    // The array an element member select selects an element of
+    static const AstNodeExpr* elemArrayp(const AstMemberRef* refp) {
+        return VN_IS(refp->fromp(), ArraySel) ? VN_AS(refp->fromp(), ArraySel)->fromp()
+                                              : VN_AS(refp->fromp(), CMethodHard)->fromp();
+    }
+    // The variable a variable reference, as of the class's own array, selects, else nullptr
+    static const AstVar* selectedVarp(const AstNodeExpr* exprp) {
+        const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
+        return refp ? refp->varp() : nullptr;
     }
     // Whether refp selects a member of an element of an array of class handles
     static bool isHandleElemMember(const AstMemberRef* refp) {
@@ -726,10 +768,11 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         }
         std::vector<std::pair<AstClass*, AstVar*>> handles;  // Owner class and handle
-        // Handles through which a constraint selects members of array elements
-        std::unordered_set<const AstVar*> selectedElemHandleps;
+        // Handles through which a constraint selects members of array elements, or array sizes
+        std::unordered_set<const AstVar*> elemHandleps;
+        std::unordered_set<const AstVar*> sizeHandleps;
         for (const AstClass* const classp : m_classps)
-            addSelectedElemHandles(classp, selectedElemHandleps);
+            addSelectedHandles(classp, elemHandleps, sizeHandleps);
         for (AstClass* const classp : m_classps) {
             for (AstNode* const memberp : classp->memberspList()) {
                 AstVar* const varp = VN_CAST(memberp, Var);
@@ -738,9 +781,12 @@ class RandomizeMarkVisitor final : public VNVisitor {
                     = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
                 if (!classRefp) continue;
                 // Unless another class's constraint selects the members of its arrays' objects,
-                // which must be solved with it: then the clone reports the select unsupported
-                if (selectsElementMembersByIndex(classRefp->classp())
-                    && !selectedElemHandleps.count(varp)) {
+                // or the sizes its elements are solved for, which must be solved with it: then
+                // the clone reports the select unsupported
+                const bool joint
+                    = elemHandleps.count(varp)
+                      || (sizeHandleps.count(varp) && constrainsElemsBySize(classRefp->classp()));
+                if (selectsElementMembersByIndex(classRefp->classp()) && !joint) {
                     varp->globalConstrained(false);
                     continue;
                 }
