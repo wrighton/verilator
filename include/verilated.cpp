@@ -4708,24 +4708,28 @@ void VerilatedEvalLoop::evalImpl() {
         m_started = true;
         const uint32_t contextLimit = m_model.contextp()->convergeLimit();
         m_convergeLimit = contextLimit ? contextLimit : m_defaultConvergeLimit;
-        // Initialization on first time step only, a restored model may have done it
-        if (!m_model.m_didInit) {
-            VL_DEBUG_IF(VL_DBG_MSGF("+ Initial\n"););
-            // Static initializers
-            m_model.evalStatic();
-            // Initial blocks
-            m_model.evalInitial();
-            // The 'Settle' region, iterated until it converges
-            uint32_t stlIterCount = 0;
-            do {
-                checkConvergence(++stlIterCount, "Settle", &VerilatedModel::dumpTriggersStl);
-            } while (m_model.evalStl(stlIterCount == 1));
-            m_model.m_didInit = true;
-        }
     }
 
-    // Sampled values are collected before anything can read them
-    m_model.evalSample();
+    // Initialization on first time step only, a restored model may have done it
+    if (VL_UNLIKELY(!m_model.m_didInit)) {
+        VL_DEBUG_IF(VL_DBG_MSGF("+ Initial\n"););
+        // Static initializers
+        m_model.evalStatic();
+        // Time 0 samples the default sampled values, before the initial blocks
+        // (IEEE 1800-2023 16.5.1)
+        m_model.evalSample();
+        // Initial blocks
+        m_model.evalInitial();
+        // The 'Settle' region, iterated until it converges
+        uint32_t stlIterCount = 0;
+        do {
+            checkConvergence(++stlIterCount, "Settle", &VerilatedModel::dumpTriggersStl);
+        } while (m_model.evalStl(stlIterCount == 1));
+        m_model.m_didInit = true;
+    } else {
+        // Sampled values are collected before anything can read them
+        m_model.evalSample();
+    }
 
     // The 'Input combinational' region updates combinational logic driven from primary inputs
     {
