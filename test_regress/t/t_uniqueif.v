@@ -14,7 +14,7 @@ module t (
 );
 
   integer cyc = 1;
-  integer a, b, c, d, e, f, g, h, i, j, k, l;
+  integer a, b, c, d, e, f, g, h, i, j, k, l, m, o;
 
   always @(posedge clk) begin
     cyc <= cyc + 1;
@@ -83,6 +83,12 @@ module t (
     unique if (cyc > 5) l <= 17;
 `endif
 
+`ifdef FAILING_ASSERTION5
+    // priority if, no cases true and no else
+    priority if (cyc > 1000) o <= 17;
+    else if (cyc > 2000) o <= 19;
+`endif
+
     // Statics in the branches, referenced hierarchically
     unique if (cyc < 3) begin : uq_then
       static int n = 0;
@@ -96,6 +102,14 @@ module t (
     // multi if with an empty else, which is still a final else (hit when cyc == 3)
     unique if (cyc < 3) e <= 17;
     else if (cyc > 3) e <= 19;
+    else ;
+
+    // priority if, several cases true
+    priority if (cyc < 5) m <= 17;
+    else if (cyc < 1000) m <= 19;
+
+    // priority if with an else, no case true
+    priority if (cyc > 1000) m <= 21;
     else ;
 
     if (cyc == 10) begin
