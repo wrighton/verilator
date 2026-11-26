@@ -1,0 +1,52 @@
+%Warning-WIDTHEXPAND: t/t_constraint_xz_bad.v:35:12: Operator DIST expects 8 bits on the Dist Item, but Dist Item's CONST '7'h2' generates 7 bits.
+   35 |     w_part dist {7'd2 := PART};
+      |            ^~~~
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Error: t/t_constraint_xz_bad.v:32:25: Constraint expression has 4-state value '1'bx' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   32 |     weighted dist {1 := 'x, 2 := 1};
+      |                         ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_constraint_xz_bad.v:35:26: Constraint expression reads parameter 'PART' of 4-state value '7'b10x0001' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   35 |     w_part dist {7'd2 := PART};
+      |                          ^~~~
+%Error: t/t_constraint_xz_bad.v:36:26: Constraint expression reads parameter 'UNKNOWN' of 4-state value '8'bx' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   36 |     w_unknown dist {1 := UNKNOWN, 2 := 1};
+      |                          ^~~~~~~
+%Error: t/t_constraint_xz_bad.v:23:10: Constraint expression has 4-state value '8'bx' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   23 |     x == 8'bx;
+      |          ^~~~
+%Error: t/t_constraint_xz_bad.v:24:10: Constraint expression has 4-state value '8'bz' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   24 |     z == 'z;
+      |          ^~
+%Error: t/t_constraint_xz_bad.v:25:13: Constraint expression has 4-state value '8'b1x0' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   25 |     part != 8'b1x0;
+      |             ^~~~~~
+%Error: t/t_constraint_xz_bad.v:26:16: Constraint expression has 4-state value '8'bx0001' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   26 |     sum == x + 8'hx1;
+      |                ^~~~~
+%Error: t/t_constraint_xz_bad.v:27:18: Constraint expression has 4-state value '8'b1zzzzzzz' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   27 |     wild inside {8'b1???_????};
+      |                  ^~~~~~~~~~~~
+%Error: t/t_constraint_xz_bad.v:28:11: Constraint expression has 4-state value '8'bx' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   28 |     lx == 'x;
+      |           ^~
+%Error: t/t_constraint_xz_bad.v:29:20: Constraint expression reads parameter 'WILD' of 4-state value '8'b1zzz0000' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   29 |     p_wild inside {WILD};
+      |                    ^~~~
+%Error: t/t_constraint_xz_bad.v:30:18: Constraint expression reads parameter 'UNKNOWN' of 4-state value '8'bx' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   30 |     p_unknown == UNKNOWN;
+      |                  ^~~~~~~
+%Error: t/t_constraint_xz_bad.v:31:16: Constraint expression reads parameter 'FLOAT' of 4-state value '8'bz' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   31 |     p_float != FLOAT;
+      |                ^~~~~
+%Error: t/t_constraint_xz_bad.v:33:39: Constraint expression has 4-state value '1'bx' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   33 |     count_rand == $countbits(counted, 1'bx);
+      |                                       ^~~~
+%Error: t/t_constraint_xz_bad.v:34:38: Constraint expression has 4-state value '1'bz' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   34 |     count_state == $countbits(state, 1'bz);
+      |                                      ^~~~
+%Error: t/t_constraint_xz_bad.v:37:20: Constraint expression reads parameter 'WILD' of 4-state value '8'b1zzz0000' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   37 |     bounded dist {[WILD : 8'd250] := 1};
+      |                    ^~~~
+%Error: Exiting due to
