@@ -1119,6 +1119,10 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_RANDC_HISTORY_FROM,      "randc_history_from",     false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_RESTORE_SOLUTION,        "restore_solution",       false,  CLEAN,  false,      "", "") \
     macro(RANDOMIZER_SOFT,                    "soft",                   false,  CLEAN,  false,      "rrrrr", "") \
+    macro(RANDOMIZER_TABLE_BEGIN,             "table_begin",            false,  CLEAN,  false,      "rrrr", "") \
+    macro(RANDOMIZER_TABLE_END,               "table_end",              false,  CLEAN,  false,      "r", "") \
+    macro(RANDOMIZER_TABLE_ENTRY,             "table_entry",            false,  CLEAN,  false,      "rr", "") \
+    macro(RANDOMIZER_TABLE_PREFIX_FROM,       "table_prefix_from",      false,  CLEAN,  false,      "m", "") \
     macro(RANDOMIZER_UNIQUE,                  "rand_unique",            false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_MARK_RANDC,              "markRandc",              false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_MARK_HELD_LOOKUP,        "markHeldLookup",         false,  CLEAN,  false,      "r", "") \

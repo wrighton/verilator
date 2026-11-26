@@ -301,6 +301,24 @@ class VlRandomizer VL_NOT_FINAL {
     std::map<uint32_t, std::unordered_set<std::string>> m_uniqueArrays;
     // Variable name and constraint of each pin_frozen()
     std::vector<std::pair<std::string, std::string>> m_frozenPins;
+    std::vector<std::string> m_tables;  // Body of each table
+    std::vector<std::string> m_tableHeads;  // Head of each definition: parameter, value sort
+    std::vector<std::string> m_tableNames;  // Name of each, kept by merge_nested()
+    std::vector<uint8_t> m_tableNeeds;  // Of each, see TableNeeds
+    std::unordered_multimap<size_t, size_t> m_tableIds;  // Own tables by hash of head and body
+    std::string m_tablePrefix;  // Suffix of its tables' names, see table_prefix_from()
+    size_t m_tablesMerged = 0;  // Objects table_prefix_from() named since clearConstraints()
+    size_t m_pendingTablesHash = 0;  // Of the tables table_end() named for the next constraint
+    std::vector<size_t> m_constraintTablesHash;  // Per hard constraint, of the tables it calls
+    // The tables being built, innermost last, as an entry's value may read another
+    struct TableBuilder final {
+        std::string head;  // See m_tableHeads
+        bool positional;  // Whether the keys are the positions 0, 1, ... in order, none missing
+        uint8_t needs;  // See TableNeeds
+        std::vector<std::string> keys;
+        std::vector<std::string> values;
+    };
+    std::vector<TableBuilder> m_tableBuilders;
     // Arrays clear_elem_vars() unregistered since clearConstraints()
     std::set<std::string> m_elemVarsCleared;
     const VlQueue<CData>* m_randmodep = nullptr;  // rand_mode state;
@@ -563,6 +581,7 @@ class VlRandomizer VL_NOT_FINAL {
     bool buildSolveLayers(std::vector<std::vector<std::string>>& layersr);
     // SMT logic for a flat or UniGen2 session
     const char* solverLogic() const;
+    bool tablesNeed(uint8_t needs) const;  // Whether a table needs any of 'needs' (TableNeeds)
     // The variable or array element a solve...before name names, nullptr if none
     const VlRandomVar* solveBeforeVarp(const std::string& name);
     // Resolve a solve-before operand to its bits, false if it names none
@@ -1297,11 +1316,25 @@ public:
     // Add a hard constraint that applies only while variable varName is registered
     void pin_frozen(const std::string& varName, std::string&& constraint) {
         m_frozenPins.emplace_back(varName, std::move(constraint));
+        m_pendingTablesHash = 0;
     }
     // Record that smtName, named name in the source, is a member of a null handle, which a
     // constraint added after reads in an evaluation error that fails the next solve (IEEE
     // 1800-2023 18.5.12), unless a guard keeps it out. Return smtName, standing in for it.
     std::string null_read(const std::string& name, const std::string& smtName);
+    // What a table's values need of the solver, which the compiler finds in their text, as
+    // solverLogic() reads it in a constraint's: an array constant, or another array term or a
+    // product or quotient of variables
+    enum TableNeeds : uint8_t { TABLE_CONST_ARRAY = 1, TABLE_ARRAY_TERMS = 2 };
+    // Build an SMT function of the indexWidth-bit '?i' to valueWidth bits: the value of each
+    // key, then the value of other keys, which table_end() returns the name of. It is defined in
+    // every solver session until clearConstraints(), once for every equal one.
+    void table_begin(int indexWidth, int valueWidth, bool positional, uint8_t needs);
+    void table_entry(const std::string& key, std::string value);
+    std::string table_end(const std::string& otherwise);
+    // Name the tables of an object merged into 'into' (see merge_nested) apart from the tables
+    // of 'into' and of the other objects merged into it
+    void table_prefix_from(VlRandomizer& into);
     void clearConstraints();
     void clearAll();  // Clear both constraints and variables
     // Unregister the fields of the objects in a class handle array to register them again, once
