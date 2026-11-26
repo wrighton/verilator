@@ -7,6 +7,8 @@
 # SPDX-FileCopyrightText: 2026 Wilson Snyder
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
+import shutil
+
 import vltest_bootstrap
 
 test.scenarios('simulator')
@@ -37,5 +39,15 @@ for text in sessions:
             test.error("Size solve pins or asks an element: " + line[:200])
 if stale < 10:
     test.error("Size solves holding elements of the old size: " + str(stale))
+# Each call ties n first to a value of its range, which the size takes without a conflict to
+# split, so spreading takes few checks (363 with z3 4.13 to 5.4 and cvc5; 724 or more, 1019
+# with cvc5, tying n to any value)
+checks = sum(text.count("\n  (check-sat") for text in sessions)
+if checks > 450:
+    test.error("Solver checks: " + str(checks))
+
+# The sizes the solver's own models would take differ, the distribution must not
+if shutil.which('cvc5'):
+    test.execute(run_env='VERILATOR_SOLVER="cvc5 --incremental"')
 
 test.passes()
