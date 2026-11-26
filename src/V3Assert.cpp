@@ -2405,6 +2405,11 @@ class AssertVisitor final : public VNVisitor {
         return ifp;
     }
 
+    // Add a variable of state of the module, static in a class, whose processes are static
+    void addStateVar(AstVar* varp) {
+        if (VN_IS(m_modp, Class)) varp->lifetime(VLifetime::STATIC_EXPLICIT);
+        m_modp->addStmtsp(varp);
+    }
     AstVar* createDelayedVar(const std::string& name, AstAlways* alwaysp, AstNodeExpr* exprp,
                              AstNodeExpr* initp) {
         FileLine* const flp = exprp->fileline();
@@ -2412,7 +2417,7 @@ class AssertVisitor final : public VNVisitor {
         // TODO: this lifetime seems nonsene (can't have NBAs to automatics), but is as before
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
         varp->isPastValue(true);
-        m_modp->addStmtsp(varp);
+        addStateVar(varp);
         // Before enough clock ticks, $past returns the expression's default sampled value.
         if (initp) {
             m_modp->addStmtsp(new AstInitialStatic{
@@ -2494,7 +2499,7 @@ class AssertVisitor final : public VNVisitor {
             varpr = new AstVar{flp, VVarType::MODULETEMP,
                                "_Vpast_" + cvtToStr(m_modPastNum++) + "_t",
                                m_modp->findUInt64DType()};
-            m_modp->addStmtsp(varpr);
+            addStateVar(varpr);
             AstNodeExpr* const timep = new AstCExpr{flp, "vlSymsp->_vm_contextp__->time()", 64};
             alwaysp->addStmtsp(
                 new AstAssign{flp, new AstVarRef{flp, varpr, VAccess::WRITE}, timep});
@@ -4101,6 +4106,13 @@ class AssertVisitor final : public VNVisitor {
     }
 
     void visit(AstPast* nodep) override {
+        // Checked before the expression is rewritten into its history
+        if (reportNonStaticProperty(nodep->exprp())) {
+            nodep->replaceWith(
+                new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         // When clocked in the Observed region, the history of a nested sampled value function
         // would already be updated in the time step
         if (isObservedEventClock(nodep->sentreep())
@@ -4166,8 +4178,24 @@ class AssertVisitor final : public VNVisitor {
     }
 
     //========== Move $sampled down to read-only variables
+    // Report a sampled value of a non-static class property, as sampled values and their
+    // history are static, so not of each object. Return whether reported.
+    static bool reportNonStaticProperty(const AstNode* exprp) {
+        bool reported = false;
+        exprp->foreach([&](const AstNodeVarRef* refp) {
+            const AstVar* const varp = refp->varp();
+            if (varp->isClassMember() && !varp->lifetime().isStatic()) {
+                refp->v3warn(E_UNSUPPORTED,
+                             "Unsupported: sampled value of non-static class property "
+                                 << refp->prettyNameQ() << ".");
+                reported = true;
+            }
+        });
+        return reported;
+    }
     void visit(AstSampled* nodep) override {
         if (nodep->user1()) return;
+        reportNonStaticProperty(nodep->exprp());
         VL_RESTORER(m_inSampled);
         {
             m_inSampled = true;
