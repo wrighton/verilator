@@ -127,6 +127,22 @@ class SizeMultiDimDyn;
   constraint c {q.size() inside {[1:3]}; unique {q, a};}
 endclass
 
+// Whole arrays whose elements are set after the object is constructed
+class WholeSized;
+  rand val_t q1[$];
+  rand val_t q2[$];
+  int n1;
+  constraint s {q1.size() == n1;}
+  constraint u {unique {q1, q2};}
+endclass
+
+class WholeFree;
+  rand val_t q1[$];
+  rand val_t d[];
+  rand val_t aa[int];
+  constraint u {unique {q1, d, aa};}
+endclass
+
 class SizeRangeEnum;
   rand sparse_t q[$];
   rand sparse_t x;
@@ -279,6 +295,8 @@ module t;
     automatic SizeRangeMultiDim srm = new;
     automatic SizeMultiDimGrow smg = new;
     automatic SizeMultiDimDyn smd = new;
+    automatic WholeSized wsz = new;
+    automatic WholeFree wfr = new;
     automatic SizeRangeEnum sre = new;
     automatic SizeRangeInt sri = new;
     automatic Small sm = new;
@@ -427,6 +445,24 @@ module t;
       nibs = '{smd.a};
       foreach (smd.q[i, j]) nibs.push_back(smd.q[i][j]);
       Check#(bit [1:0])::distinct(nibs, `__LINE__);
+
+      wsz.n1 = 2;
+      wsz.q1 = '{0, 0, 0};
+      wsz.q2 = '{0, 0, 0};
+      ok = wsz.randomize();
+      `checkd(ok, 1);
+      `checkd(wsz.q1.size(), 2);
+      `checkd(wsz.q2.size(), 3);
+      Check#()::distinct({wsz.q1, wsz.q2}, `__LINE__);
+
+      wfr.q1 = '{0, 0};
+      wfr.d = new[2];
+      wfr.aa[-3] = 0;
+      wfr.aa[7] = 0;
+      ok = wfr.randomize();
+      `checkd(ok, 1);
+      `checkd(wfr.aa.size(), 2);
+      Check#()::distinct({wfr.q1, wfr.d, wfr.aa[-3], wfr.aa[7]}, `__LINE__);
 
       sre.q = '{};
       ok = sre.randomize();

@@ -2571,13 +2571,10 @@ class ConstraintExprVisitor final : public VNVisitor {
             // makes exactly this distinction.
             const bool alreadyWritten
                 = m_inlineInitBlockp ? m_inlineWrittenVars.count(varp->name()) > 0 : varp->user3();
-            if (!alreadyWritten) {
-                varp->user3(true);  // Solver owns it; __VBasicRand must not overwrite
-                if (m_inlineInitBlockp) m_inlineWrittenVars.insert(varp->name());
-                // Convert to C string
+            // Registration of the array, which also lists the elements it holds
+            const auto newWriteVarp = [&]() -> AstNodeStmt* {
                 AstNodeExpr* const varnamep = new AstCExpr{
                     fl, AstCExpr::Pure{}, "\"" + varp->name() + "\"", varp->width()};
-
                 AstCMethodHard* const writeVarCallp = new AstCMethodHard{
                     fl, genVarRefp(VAccess::READ), VCMethod::RANDOMIZER_WRITE_VAR};
                 AstVarRef* const argVarRefp = new AstVarRef{fl, varp, VAccess::READ};
@@ -2587,7 +2584,18 @@ class ConstraintExprVisitor final : public VNVisitor {
                 writeVarCallp->addPinsp(varnamep);
                 writeVarCallp->addPinsp(new AstConst{fl, 1});  // Dimension
                 writeVarCallp->dtypeSetVoid();
-                initp->addStmtsp(new AstStmtExpr{fl, writeVarCallp});
+                return new AstStmtExpr{fl, writeVarCallp};
+            };
+            if (!alreadyWritten) {
+                varp->user3(true);  // Solver owns it; __VBasicRand must not overwrite
+                if (m_inlineInitBlockp) m_inlineWrittenVars.insert(varp->name());
+                initp->addStmtsp(newWriteVarp());
+            }
+            // The runtime makes distinct the elements listed when the array was registered,
+            // so an array whose elements can change since it was registered, as set after
+            // the object was constructed, is registered again when the constraints are set up
+            if (!VN_IS(dtypep, UnpackArrayDType)) {
+                setupStmtsp = AstNode::addNext<AstNode, AstNode>(setupStmtsp, newWriteVarp());
             }
 
             // A solver-sized container is resized between solve passes; joining the
