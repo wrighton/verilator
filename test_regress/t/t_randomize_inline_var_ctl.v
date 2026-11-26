@@ -115,7 +115,56 @@ class Outer;
   Holder b = new;
 endclass
 
+// Static rand members not in the argument list are state (IEEE 1800-2023 18.11)
+class StaticRand;
+  static rand bit [6:0] s;
+  rand bit [6:0] v;
+
+  function void test;
+    logic [1:0] ok = '0;
+    s = 50;
+    for (int i = 0; i < 20; i++) begin
+      void'(randomize(v) with {v == s;});
+      if (s != 50) $stop;
+      if (v != 50) $stop;
+    end
+    v = 60;
+    for (int i = 0; i < 20; i++) begin
+      void'(randomize(s));
+      if (v != 60) $stop;
+      if (s != 50) ok[0] = 1;
+    end
+    if (!ok[0]) $stop;
+    // Both are random again without an argument list
+    s = 70;
+    v = 70;
+    for (int i = 0; i < 20; i++) begin
+      void'(randomize());
+      if (s != 70) ok[1] = 1;
+      if (v != 70) ok[0] = 1;
+    end
+    if (ok != 'b11) $stop;
+  endfunction
+endclass
+
+class StaticRandDerived extends StaticRand;
+  rand bit [6:0] w;
+endclass
+
 module t;
+  initial begin
+    automatic StaticRandDerived srd = new;
+    srd.test;
+    StaticRand::s = 30;
+    srd.v = 31;
+    for (int i = 0; i < 20; i++) begin
+      void'(srd.randomize(w) with {w == 32;});
+      if (StaticRand::s != 30) $stop;
+      if (srd.v != 31) $stop;
+      if (srd.w != 32) $stop;
+    end
+  end
+
   int idx_calls;
   function automatic int idx_count(int i);
     idx_calls++;
