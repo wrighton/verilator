@@ -1995,6 +1995,7 @@ class VIsCached final {
     uint64_t m_cachedCnt : 63;  // Mark of when cache was computed
     uint64_t m_state : 1;
     static uint64_t s_cachedCntGbl;  // Global computed count
+    static uint64_t s_setCntGbl;  // Results computed, for statistics
 
 public:
     VIsCached()
@@ -2003,6 +2004,7 @@ public:
     bool isCached() const { return m_cachedCnt == s_cachedCntGbl; }
     bool get() const { return m_state; }
     void set(bool flag) {
+        ++s_setCntGbl;
         m_cachedCnt = s_cachedCntGbl;
         m_state = flag;
     }
@@ -2010,6 +2012,7 @@ public:
         m_cachedCnt = 0;
         m_state = 0;
     }
+    static uint64_t setCntGbl() { return s_setCntGbl; }
     VL_ATTR_ALWINLINE static void clearCacheTree() {
         ++s_cachedCntGbl;
         // 64 bits so won't overflow
