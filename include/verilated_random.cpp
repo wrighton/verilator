@@ -1446,6 +1446,8 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
             }
         }
         h ^= std::hash<std::string>{}(m_constraints[i]) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        // The tables it calls, as its text names them but does not hold them
+        h ^= m_constraintTablesHash[i] + 0x9e3779b9 + (h << 6) + (h >> 2);
     }
     for (const auto& c : extras) {
         h ^= std::hash<std::string>{}(c) + 0x9e3779b9 + (h << 6) + (h >> 2);
@@ -2135,6 +2137,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
         if (argRound.round < m_funcRound && !argRound.pin.empty()) {
             m_constraints.push_back(argRound.pin);
             m_constraintVarEnds.push_back(m_constraintVarNames.size());  // Names no randc
+            m_constraintTablesHash.push_back(0);
         }
     }
 
@@ -2264,6 +2267,63 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
             os << "(assert (= " << pair.first->second->name() << ' ' << var.first << "))\n";
         }
     }
+    // After the variables, which a table may read
+    for (size_t j = 0; j < m_tables.size(); ++j) {
+        os << "(define-fun " << m_tableNames[j] << ' ' << m_tableHeads[j] << m_tables[j] << ")\n";
+    }
+}
+
+void VlRandomizer::table_begin(int indexWidth, int valueWidth, bool positional, uint8_t needs) {
+    m_tableBuilders.push_back(TableBuilder{"((?i (_ BitVec " + std::to_string(indexWidth)
+                                               + "))) (_ BitVec " + std::to_string(valueWidth)
+                                               + ") ",
+                                           positional,
+                                           needs,
+                                           {},
+                                           {}});
+}
+
+void VlRandomizer::table_entry(const std::string& key, std::string value) {
+    m_tableBuilders.back().keys.push_back(key);
+    m_tableBuilders.back().values.push_back(std::move(value));
+}
+
+// Append the body of a table to 'body': a chain of tests of the key, '(ite (= ?i k) v ...)',
+// linear in the number of keys
+static void appendTableBody(std::string& body, const std::vector<std::string>& keys,
+                            const std::vector<std::string>& values, const std::string& otherwise) {
+    for (size_t j = 0; j < keys.size(); ++j) {
+        body += "(ite (= ?i " + keys[j] + ") " + values[j] + ' ';
+    }
+    body += otherwise;
+    body.append(keys.size(), ')');
+}
+
+std::string VlRandomizer::table_end(const std::string& otherwise) {
+    TableBuilder builder = std::move(m_tableBuilders.back());
+    m_tableBuilders.pop_back();
+    std::string body;
+    appendTableBody(body, builder.keys, builder.values, otherwise);
+    size_t hash = std::hash<std::string>{}(builder.head);
+    hash = hash * 31 + std::hash<std::string>{}(body);
+    m_pendingTablesHash
+        ^= hash + 0x9e3779b9 + (m_pendingTablesHash << 6) + (m_pendingTablesHash >> 2);
+    const auto range = m_tableIds.equal_range(hash);
+    for (auto it = range.first; it != range.second; ++it) {
+        if (m_tables[it->second] == body && m_tableHeads[it->second] == builder.head) {
+            return m_tableNames[it->second];
+        }
+    }
+    m_tableIds.emplace(hash, m_tables.size());
+    m_tableNames.push_back("__Vt" + std::to_string(m_tables.size()) + m_tablePrefix);
+    m_tables.push_back(std::move(body));
+    m_tableHeads.push_back(std::move(builder.head));
+    m_tableNeeds.push_back(builder.needs);
+    return m_tableNames.back();
+}
+
+void VlRandomizer::table_prefix_from(VlRandomizer& into) {
+    m_tablePrefix = into.m_tablePrefix + '.' + std::to_string(into.m_tablesMerged++);
 }
 
 void VlRandomizer::emitAsserts(std::ostream& os, const std::vector<std::string>& extras,
@@ -3299,7 +3359,10 @@ void VlRandomizer::reportUnsatSetup(VlSolverSession& sess,
     VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     os << "(set-option :produce-unsat-cores true)\n";
-    os << "(set-logic " << (constraintsUseConstArray(m_constraints) ? "ALL" : "QF_ABV") << ")\n";
+    os << "(set-logic "
+       << (constraintsUseConstArray(m_constraints) || tablesNeed(TABLE_CONST_ARRAY) ? "ALL"
+                                                                                    : "QF_ABV")
+       << ")\n";
     emitDefines(os);
     emitDeclares(os, false);
     emitAsserts(os, uniqueExprs, true);
@@ -3597,6 +3660,8 @@ void VlRandomizer::hard(std::string constraint, std::initializer_list<const char
     // known yet here
     m_constraintVarNames.insert(m_constraintVarNames.end(), varNames.begin(), varNames.end());
     m_constraintVarEnds.push_back(m_constraintVarNames.size());
+    m_constraintTablesHash.push_back(m_pendingTablesHash);
+    m_pendingTablesHash = 0;
     // Format constraint location: "filename:linenum   source"
     if (filename[0] != '\0' || source[0] != '\0') {
         std::string line;
@@ -3616,6 +3681,7 @@ void VlRandomizer::soft(std::string constraint, std::initializer_list<std::strin
     m_softConstraints.emplace_back(std::move(constraint));
     m_softVarNames.insert(m_softVarNames.end(), varNames.begin(), varNames.end());
     m_softVarEnds.push_back(m_softVarNames.size());
+    m_pendingTablesHash = 0;
 }
 
 void VlRandomizer::disable_soft(const std::string& varName) {
@@ -3684,9 +3750,17 @@ void VlRandomizer::merge_nested(const VlRandomizer& from, const std::string& pat
     }
     const std::string letBegin = bindings.empty() ? "" : "(let (" + bindings + ") ";
     const std::string letEnd = bindings.empty() ? "" : ")";
+    // Its tables, under their names, read through the same binding
+    for (size_t j = 0; j < from.m_tables.size(); ++j) {
+        m_tables.push_back(letBegin + from.m_tables[j] + letEnd);
+        m_tableHeads.push_back(from.m_tableHeads[j]);
+        m_tableNames.push_back(from.m_tableNames[j]);
+        m_tableNeeds.push_back(from.m_tableNeeds[j]);
+    }
     for (size_t i = 0; i < from.m_constraints.size(); ++i) {
         m_constraints.push_back(letBegin + from.m_constraints[i] + letEnd);
         m_constraintVarEnds.push_back(m_constraintVarNames.size());
+        m_constraintTablesHash.push_back(from.m_constraintTablesHash[i]);
         if (i < from.m_constraints_line.size()) {
             m_constraints_line.push_back(from.m_constraints_line[i]);
         }
@@ -3823,6 +3897,14 @@ void VlRandomizer::clearConstraints() {
     m_uniqueArrays.clear();  // Re-registered by constraint setup
     m_frozenPins.clear();  // Likewise re-added
     m_elemVarsCleared.clear();
+    m_tables.clear();
+    m_tableHeads.clear();
+    m_tableNames.clear();
+    m_tableNeeds.clear();
+    m_tableIds.clear();
+    m_tablesMerged = 0;
+    m_pendingTablesHash = 0;
+    m_constraintTablesHash.clear();
     // Keep m_vars for class member randomization
 }
 
@@ -4122,8 +4204,16 @@ static bool smtHasNonlinear(const std::string& term) {
     return false;
 }
 
+bool VlRandomizer::tablesNeed(uint8_t needs) const {
+    for (const uint8_t tableNeeds : m_tableNeeds) {
+        if (tableNeeds & needs) return true;
+    }
+    return false;
+}
+
 const char* VlRandomizer::solverLogic() const {
-    if (constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)) {
+    if (constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)
+        || tablesNeed(TABLE_CONST_ARRAY)) {
         return "ALL";
     }
     // Without arrays, QF_BV lets z3 answer the incremental checks of the sampling with
@@ -4134,7 +4224,9 @@ const char* VlRandomizer::solverLogic() const {
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) return "QF_ABV";
     }
-    // A constraint may hold an array term of its own, such as an array literal
+    // A constraint may hold an array term of its own, such as an array literal, also in a
+    // table it calls
+    if (tablesNeed(TABLE_ARRAY_TERMS)) return "QF_ABV";
     for (const auto* const constraintsp : {&m_constraints, &m_softConstraints}) {
         for (const std::string& constraint : *constraintsp) {
             if (constraint.find("(Array ") != std::string::npos) return "QF_ABV";
@@ -4145,7 +4237,8 @@ const char* VlRandomizer::solverLogic() const {
 }
 
 const char* VlRandomizer::phasedLogic() const {
-    if (constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)) {
+    if (constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)
+        || tablesNeed(TABLE_CONST_ARRAY)) {
         return "ALL";
     }
     for (const auto& var : m_vars) {
