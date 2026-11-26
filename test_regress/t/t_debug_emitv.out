@@ -751,6 +751,8 @@ module t;
     end
     always  begin
         begin : assert_observed_deferred_immediate
+
+            ???? // DISABLETARGETBODY
             assert #0 (1'h0) begin
             end
             else begin
@@ -1696,7 +1698,14 @@ module t;
     assign dump_net = (clk ? in : 1'bz);
     assign __Vcellinp__dump_value__p = in;
     logic __Vcellinp__dump_value__p;
+    initial begin
+        __VdisableCount_assert_observed_deferred_immediate__0 = (
+                                                                 __VdisableCount_assert_observed_deferred_immediate__0 
+                                                                 + 
+                                                                 32'h1);
+    end
     Iface bound_iface ();
+    IData __VdisableCount_assert_observed_deferred_immediate__0;
     int __Vpropvar_h34541112__0;
     int __Vpropvar_h7c329738__0;
     time __Vpropvar_hb95cf39f__0;

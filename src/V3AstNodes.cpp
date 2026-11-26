@@ -1169,9 +1169,12 @@ int AstBasicDType::widthTotalBytes() const {
 void AstBegin::dump(std::ostream& str) const {
     Super::dump(str);
     if (implied()) str << " [IMPLIED]";
+    if (stmtLabel()) str << " [STMTLABEL]";
+    if (disableCountp()) str << " [DISABLECOUNT]";
 }
 void AstBegin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, implied);
+    dumpJsonBoolFuncIf(str, stmtLabel);
     dumpJsonGen(str);
 }
 const char* AstCAwait::broken() const {
