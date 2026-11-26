@@ -3108,14 +3108,15 @@ bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
         }
         return requested;
     };
-    // Sends a (get-value) of terms and reads its reply; false without one, or on an error
+    // Sends a (get-value) of terms and reads its reply; false without one
     const auto ask = [&](const std::string& terms, std::string& replyr) VL_REQUIRES(sess.m_mutex) {
         os << "(get-value (" << terms << "))\n";
-        if (!sess.readSExpr(replyr)) return false;
-        if (isSolverError(replyr)) {
-            warnSolverReply(replyr);
-            return false;
-        }
+        return sess.readSExpr(replyr);
+    };
+    // Whether a reply is an error, warned of
+    const auto rejected = [&](const std::string& reply) {
+        if (!isSolverError(reply)) return false;
+        warnSolverReply(reply);
         return true;
     };
     std::unordered_set<std::string> whole;  // The arrays asked whole
@@ -3128,15 +3129,19 @@ bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
     }
     std::string reply;
     if (!ask(getValueStr.str(), reply)) return false;
-    std::istringstream is{reply};
-    bool fallback = false;
-    const bool parsed = parseModel(is, requested, &whole, &fallback);
-    if (!fallback) return parsed;
-    // An array value of another form: asked by element instead, nothing being written yet
+    // A solver may reject asking an array whole, or answer with a value of a form not read
+    bool fallback = !whole.empty() && isSolverError(reply);
+    if (!fallback) {
+        if (rejected(reply)) return false;
+        std::istringstream is{reply};
+        const bool parsed = parseModel(is, requested, &whole, &fallback);
+        if (!fallback) return parsed;
+    }
+    // Asked by element instead, nothing being written yet
     VL_DEBUG_IF(VL_DBG_MSGF("- randomize: array model read by element\n"););
     std::stringstream elemStr;
     emitTerms(elemStr, nullptr);
-    if (!ask(elemStr.str(), reply)) return false;
+    if (!ask(elemStr.str(), reply) || rejected(reply)) return false;
     std::istringstream elemIs{reply};
     return parseModel(elemIs, requested);
 }
