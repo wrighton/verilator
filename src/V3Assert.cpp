@@ -864,14 +864,69 @@ void V3AssertCommon::checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) {
     }
 }
 
+// Whether an action leaves itself by disable or jump
+static bool actionLeavesItself(const AstNode* actionsp) {
+    std::unordered_set<const AstNode*> blockps;  // What the action jumps in
+    actionsp->foreachAndNext([&](const AstJumpBlock* blockp) { blockps.insert(blockp); });
+    return actionsp->existsAndNext([&](const AstNode* np) {
+        const AstJumpGo* const gop = VN_CAST(np, JumpGo);
+        return VN_IS(np, Disable) || (gop && !blockps.count(gop->blockp()));
+    });
+}
+
+// An action of a concurrent assertion that may suspend runs in a process of its own, so what
+// runs it continues with other attempts and actions (IEEE 1800-2023 16.14.1). The conditions
+// on the outcomes of attempts that gate actions, as newPassOnIf makes, are decided where they
+// are, at once, and each action they gate runs in a process of its own.
+static AstNodeStmt* newSpawnedAction(AstNodeStmt* actionsp) {
+    // An action leaving itself stays in the process it leaves to
+    if (!v3Global.opt.timing().isSetTrue() || !V3AssertCommon::procSuspends(actionsp)
+        || actionLeavesItself(actionsp)) {
+        return actionsp;
+    }
+    const auto isGatep = [](const AstNode* nodep) {
+        const AstIf* const ifp = VN_CAST(nodep, If);
+        return ifp && ifp->user1() && !V3AssertCommon::procSuspends(ifp->condp());
+    };
+    bool gated = false;
+    for (AstNode* nodep = actionsp; nodep; nodep = nodep->nextp()) gated |= isGatep(nodep);
+    if (!gated) {
+        FileLine* const flp = actionsp->fileline();
+        AstFork* const forkp = new AstFork{flp, VJoinType::JOIN_NONE};
+        forkp->immediateStart(true);
+        forkp->addForksp(new AstForkItem{flp, new AstBegin{flp, "", actionsp, true}});
+        return forkp;
+    }
+    // Each gated action apart, and the statements between gates together
+    AstNodeStmt* newsp = nullptr;
+    AstNodeStmt* restsp = nullptr;
+    while (actionsp) {
+        AstNodeStmt* const nextp = VN_CAST(actionsp->nextp(), NodeStmt);
+        if (nextp) nextp->unlinkFrBackWithNext();
+        if (isGatep(actionsp)) {
+            if (restsp) newsp = AstNode::addNext(newsp, newSpawnedAction(restsp));
+            restsp = nullptr;
+            AstIf* const gatep = VN_AS(actionsp, If);
+            if (AstNodeStmt* const thensp = gatep->thensp()) {
+                gatep->addThensp(newSpawnedAction(thensp->unlinkFrBackWithNext()));
+            }
+            newsp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(newsp, gatep);
+        } else {
+            restsp = AstNode::addNext(restsp, actionsp);
+        }
+        actionsp = nextp;
+    }
+    if (restsp) newsp = AstNode::addNext(newsp, newSpawnedAction(restsp));
+    return newsp;
+}
+
 // Whether the action of a concurrent assertion can run in the Reactive region, not in the
 // process of its evaluation: it reads no automatic variable it does not declare, does not leave
 // itself by disable or jump, has no named block, and reads no sampled value of a past tick
 static bool actionRunsReactive(const AstNode* actionsp) {
-    std::unordered_set<const AstNode*> ownps;  // What the action declares, or jumps in
-    actionsp->foreachAndNext([&](const AstNode* np) {
-        if (VN_IS(np, Var) || VN_IS(np, JumpBlock)) ownps.insert(np);
-    });
+    if (actionLeavesItself(actionsp)) return false;
+    std::unordered_set<const AstVar*> ownps;  // What the action declares
+    actionsp->foreachAndNext([&](const AstVar* varp) { ownps.insert(varp); });
     return !actionsp->existsAndNext([&](const AstNode* np) {
         if (const AstVarRef* const refp = VN_CAST(np, VarRef)) {
             return refp->varp()->lifetime().isAutomatic() && !ownps.count(refp->varp());
@@ -881,11 +936,7 @@ static bool actionRunsReactive(const AstNode* actionsp) {
             if (!beginp->name().empty()) return true;
         }
         // Sampled values of past ticks would read the registers of later ticks
-        if (VN_IS(np, Past) || VN_IS(np, Rose) || VN_IS(np, Fell) || VN_IS(np, Stable)) {
-            return true;
-        }
-        const AstJumpGo* const gop = VN_CAST(np, JumpGo);
-        return VN_IS(np, Disable) || (gop && !ownps.count(gop->blockp()));
+        return VN_IS(np, Past) || VN_IS(np, Rose) || VN_IS(np, Fell) || VN_IS(np, Stable);
     });
 }
 
@@ -1007,7 +1058,7 @@ AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actions
     loopp->addStmtsp(new AstAssign{
         flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
         new AstSub{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}});
-    loopp->addStmtsp(actionsp);
+    loopp->addStmtsp(newSpawnedAction(actionsp));
     runnerr.runnerp->addStmtsp(loopp);
     return new AstAssign{
         flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
@@ -3482,6 +3533,11 @@ class AssertVisitor final : public VNVisitor {
         if (failsp && !VN_IS(propExprp, PExpr)) {
             failsp = newIfAssertFailOn(nodep->controlVarp(), failsp, nodep->directive(),
                                        nodep->userType());
+        }
+        // Also one left where it is
+        if (!nodep->immediate() && !isPExpr) {
+            if (passsp) passsp = newSpawnedAction(passsp);
+            if (failsp) failsp = newSpawnedAction(failsp);
         }
         if (coverp && matchCountp && passsp) {
             // Convert the match count into a loop that decrements a temporary variable until it
