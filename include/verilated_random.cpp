@@ -1943,6 +1943,14 @@ int VlRandomizer::nextFast(VlRNG& rngr) {
 }
 
 bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
+    if (VL_UNLIKELY(!m_nullRead.empty())) {
+        static bool s_warned = false;
+        if (!s_warned) {
+            s_warned = true;
+            VL_WARN_MT(m_nullReadFilename, m_nullReadLinenum, "", m_nullRead.c_str());
+        }
+        return false;
+    }
     // Check-only, resize, frozen and function-round calls retain their original
     // protocols. nextFast separately verifies enum domains and excludes randc.
     // The original setup and callbacks have already run.
@@ -3103,6 +3111,7 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
 
 void VlRandomizer::hard(std::string constraint, std::initializer_list<const char*> varNames,
                         const char* filename, uint32_t linenum, const char* source) {
+    if (VL_UNLIKELY(!m_nullReads.empty())) nullReadCheck(constraint, filename, linenum);
     m_constraints.emplace_back(std::move(constraint));
     // Stored for every constraint: a randomize() with clause registers its constraints
     // before markRandc() marks its randc variables, so whether the names are needed isn't
@@ -3123,7 +3132,8 @@ void VlRandomizer::hard(std::string constraint, std::initializer_list<const char
 }
 
 void VlRandomizer::soft(std::string constraint, std::initializer_list<std::string> varNames,
-                        const char* /*filename*/, uint32_t /*linenum*/, const char* /*source*/) {
+                        const char* filename, uint32_t linenum, const char* /*source*/) {
+    if (VL_UNLIKELY(!m_nullReads.empty())) nullReadCheck(constraint, filename, linenum);
     m_softConstraints.emplace_back(std::move(constraint));
     m_softVarNames.insert(m_softVarNames.end(), varNames.begin(), varNames.end());
     m_softVarEnds.push_back(m_softVarNames.size());
@@ -3280,7 +3290,36 @@ void VlRandomizer::clear_nested(const std::string& path) {
     m_nested.erase(it);
 }
 
+void VlRandomizer::nullReadCheck(const std::string& constraint, const char* filename,
+                                 uint32_t linenum) {
+    if (!m_nullRead.empty()) return;
+    for (const auto& nameRead : m_nullReads) {
+        // The solver name as a whole term, not a prefix of a longer one
+        for (size_t pos = constraint.find(nameRead.first); pos != std::string::npos;
+             pos = constraint.find(nameRead.first, pos + 1)) {
+            const size_t end = pos + nameRead.first.size();
+            if (end != constraint.size() && constraint[end] != ' ' && constraint[end] != ')') {
+                continue;
+            }
+            m_nullRead = "randomize() constraint reads '" + nameRead.second
+                         + "', a member of a null handle, so randomize() returns 0 (IEEE "
+                           "1800-2023 18.5.12); warned once";
+            m_nullReadFilename = filename;
+            m_nullReadLinenum = linenum;
+            return;
+        }
+    }
+}
+
+std::string VlRandomizer::null_read(const std::string& name, const std::string& smtName) {
+    m_nullReads.emplace_back(smtName, name);
+    return smtName;
+}
+
 void VlRandomizer::clearConstraints() {
+    m_nullReads.clear();
+    m_nullRead.clear();
+    m_nullReadFilename = nullptr;
     m_fastConstraints.clear();
     m_fastDisabled = false;
     m_constraints.clear();
