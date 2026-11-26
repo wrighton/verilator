@@ -19,7 +19,8 @@
 #         | high_digit | indent | limit_unsupported | low_digit | model_trunc | multiline
 #         | mute_at
 #         | no_digits | none | octal | oor_assume | phase_model | phase_trunc
-#         | short_model | stale_assume | success | unknown_once | unknown_twice
+#         | short_model | stale_assume | success | unknown_once | unknown_thrice
+#         | unknown_twice
 #         | unknown_var | unsat_recheck | unsupported_once | upper_hex
 #   bad_base         - replace the Nth model reply with a base character that is not b, o, x or h
 #   bad_digits       - replace the Nth model reply with one value holding digits outside its base
@@ -75,6 +76,7 @@
 #   success          - echo a print-success line before every reply
 #   unknown_once     - answer the Nth status with unknown
 #   unknown_twice    - answer two statuses with unknown
+#   unknown_thrice   - answer three statuses with unknown
 #   unknown_var      - replace the Nth model reply with one naming a variable never requested
 #   unsat_recheck    - answer the status that follows an unsat with sat
 #   unsupported_once - answer the Nth status with unsupported
@@ -102,7 +104,7 @@ once = os.environ.get("TAMPER_ONCE", "")
 # Modes acting on the TAMPER_AT'th status line rather than the Nth model reply
 STATUS_MODES = ("die_status_at", "err_extra", "err_marker", "err_multiline", "err_mute",
                 "err_once", "err_trunc", "err_unbal", "err_unbal_cont", "garbage_status",
-                "unknown_once", "unknown_twice", "unsupported_once")
+                "unknown_once", "unknown_thrice", "unknown_twice", "unsupported_once")
 # Modes acting on the TAMPER_AT'th S-expression reply of any kind
 REPLY_MODES = ("err_reply", )
 # Modes acting on an array model reply, which arrives as (select ...) terms
@@ -461,6 +463,10 @@ for line in proc.stdout:
     if mode == "unknown_twice":
         emit("unknown")
         done = replies >= at + 1
+        continue
+    if mode == "unknown_thrice":
+        emit("unknown")
+        done = replies >= at + 2
         continue
     if mode == "unknown_var":
         emit("((zzz #x01) (b #x12))")

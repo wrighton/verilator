@@ -38,6 +38,16 @@ class Remainder;
   }
 endclass
 
+// Elements of which a third of the values are ruled out: spreading is cut short with none
+// kept, and the solution is found again, with random hashes, in a fresh session (R501)
+class Thirds;
+  rand bit [7:0] d[];
+  constraint c {
+    d.size() == 500;
+    foreach (d[i]) d[i] % 3 != 0;
+  }
+endclass
+
 module t;
   initial begin
     begin
@@ -61,6 +71,24 @@ module t;
       // Checks the values found, with nothing to spread
       v = m.randomize(null);
       `checkd(v, 1);
+    end
+
+    begin
+      automatic Thirds h = new;
+      automatic int seen[int];
+      automatic int ones = 0;
+      int v;
+      h.srandom(1);
+      v = h.randomize();
+      `checkd(v, 1);
+      foreach (h.d[i]) begin
+        `checkd(h.d[i] % 3 != 0, 1'b1);
+        seen[int'(h.d[i])] = 1;
+        ones += $countones(h.d[i]);
+      end
+      // Spread over the 170 values allowed, near half of the 4000 bits set
+      `checkd(seen.num() > 130, 1'b1);
+      `checkd(ones > 1600 && ones < 2400, 1'b1);
     end
 
     $write("*-* All Finished *-*\n");

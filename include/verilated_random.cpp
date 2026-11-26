@@ -60,6 +60,10 @@ static constexpr uint64_t diversityCheckLimitSquare = 10;
 // The largest limit z3 takes, an unsigned 32-bit option value. From about 20000 terms on,
 // the limit is this one, effectively none, as before there were limits.
 static constexpr uint64_t diversityCheckLimitMax = 0xffffffffULL;
+// Random hashes a solution found again in a fresh session satisfies (see resolveFresh),
+// in a check limited to diversityFreshLimit times the spreading checks' limit
+static constexpr int diversityFreshHashes = 8;
+static constexpr uint64_t diversityFreshLimit = 4;
 
 // Index of the i-th of the elements checked out of n, spread over them
 static size_t diversitySample(size_t i, size_t n) {
@@ -1149,6 +1153,16 @@ void VlRandomizer::emitAsserts(std::ostream& os, const std::vector<std::string>&
     }
 }
 
+void VlRandomizer::emitFlat(std::ostream& os, const std::vector<std::string>& uniqueExprs) const {
+    os << "(set-logic QF_ABV)\n";
+    emitDefines(os);
+    emitDeclares(os, m_checkOnly);
+    emitAsserts(os, uniqueExprs, false);
+    // randc exclusions vs. a pinned current value would make every check
+    // trivially UNSAT after the first cycle.
+    if (!m_checkOnly) emitRandcExclusions(os);
+}
+
 bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
                             const std::vector<std::string>& uniqueExprs)
     VL_REQUIRES(sess.m_mutex) {
@@ -1170,15 +1184,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
             // Check-only results are not random, so leave the random state alone
             emitSolverSeed(os, rngr);
         }
-        os << "(set-logic QF_ABV)\n";
-        emitDefines(os);
-        emitDeclares(os, m_checkOnly);
-        emitAsserts(os, uniqueExprs, false);
-
-        // randc exclusions vs. a pinned current value would make every check
-        // trivially UNSAT after the first cycle.
-        if (!m_checkOnly) emitRandcExclusions(os);
-
+        emitFlat(os, uniqueExprs);
         relaxSoftConstraints(sess);
         os << "(check-sat)\n";
         const VlSolverStatus status = sess.readStatus();
@@ -1202,7 +1208,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
         if (!applyModel(sess)) return false;
 
         if (!m_checkOnly) {
-            if (!solverSamples()) solveDiversity(rngr, sess);
+            if (!solverSamples()) solveDiversity(rngr, sess, nullptr, &uniqueExprs);
             // Check-only must not advance randc cycle state.
             recordRandcValues();
         }
@@ -1520,7 +1526,9 @@ bool VlRandomizer::generateSamples(VlSolverSession& sess, VlRNG& rngr) VL_REQUIR
 }
 
 void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
-                                  const std::set<std::string>* fixedp) VL_REQUIRES(sess.m_mutex) {
+                                  const std::set<std::string>* fixedp,
+                                  const std::vector<std::string>* uniqueExprsp)
+    VL_REQUIRES(sess.m_mutex) {
     // Tie each variable or array element to a random value via an assumption literal and
     // drop the literals that conflict with the constraints. Dropped terms that can still
     // change are split in halves that are tied again, down to single bits, so free bits
@@ -1551,9 +1559,9 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
     // Checks spreading more terms (variables and array elements, not bits) take more work,
     // about the square of their number
     const uint64_t nterms = std::min<uint64_t>(terms.size(), 65536);
-    const VlSolverLimit limit{
-        sess, std::min(diversityCheckLimitMax,
-                       diversityCheckLimit + diversityCheckLimitSquare * nterms * nterms)};
+    const uint64_t checkLimit = std::min(
+        diversityCheckLimitMax, diversityCheckLimit + diversityCheckLimitSquare * nterms * nterms);
+    const VlSolverLimit limit{sess, checkLimit};
     std::string keep;  // Surviving literals
     int lits = 0;  // Literals declared so far
     int checksLeft = diversityMaxChecks;
@@ -1698,13 +1706,57 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         }
     }
     if (!settled) {
-        // Out of checks, or a check failed or was cut short. The kept literals have a
-        // solution, so finding it again is not limited.
+        // Out of checks, or a check failed or was cut short. With none kept, that is solving
+        // the constraints again, which can cost many times the first check: after
+        // assumptions, a solver such as z3 checks incrementally. Past the spreading limit,
+        // a fresh session finds it again instead. Softs are kept only in this session.
+        if (keep.empty() && uniqueExprsp && m_softConstraints.empty()) {
+            os << "(check-sat-assuming ())\n";
+            const VlSolverStatus status = sess.readStatus();
+            if (status == VlSolverStatus::SAT) applyModel(sess);
+            if (status != VlSolverStatus::UNKNOWN) return;
+            sess.limitChecks(0);
+            resolveFresh(rngr, sess, *uniqueExprsp,
+                         std::min(diversityCheckLimitMax, diversityFreshLimit * checkLimit));
+            return;
+        }
+        // The kept literals have a solution, so finding it again is not limited.
         sess.limitChecks(0);
         os << "(check-sat-assuming (" << keep << "))\n";
         if (sess.readStatus() != VlSolverStatus::SAT) return;
     }
     applyModel(sess);
+}
+
+void VlRandomizer::resolveFresh(VlRNG& rngr, VlSolverSession& sess,
+                                const std::vector<std::string>& uniqueExprs, uint64_t limit)
+    VL_REQUIRES(sess.m_mutex) {
+    std::iostream& os = sess.os();
+    // Random hashes of the variables' bits make the solution a random one, as spreading
+    // would have, at about the cost of the first check
+    os << "(reset)\n";
+    os << "(set-option :produce-models true)\n";
+    emitFlat(os, uniqueExprs);
+    for (int i = 0; i < diversityFreshHashes; ++i) {
+        os << "(assert ";
+        randomConstraint(os, rngr, 1);
+        os << ")\n";
+    }
+    const VlSolverStatus status = [&]() VL_REQUIRES(sess.m_mutex) {
+        const VlSolverLimit limited{sess, limit};
+        os << "(check-sat)\n";
+        return sess.readStatus();
+    }();
+    if (status == VlSolverStatus::SAT) {
+        applyModel(sess);
+        return;
+    }
+    // Hashed out, cut short or failed: solve without them as before, at the incremental cost
+    os << "(reset)\n";
+    os << "(set-option :produce-models true)\n";
+    emitFlat(os, uniqueExprs);
+    os << "(check-sat-assuming ())\n";
+    if (sess.readStatus() == VlSolverStatus::SAT) applyModel(sess);
 }
 
 bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std::string& keep,

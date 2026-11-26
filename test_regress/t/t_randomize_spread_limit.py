@@ -31,10 +31,13 @@ test.file_grep_not(test.run_log_filename, r'Solver returned unknown')
 
 # Every main check is unlimited, also one after a limited spreading in the same randomize().
 # A check cut short ends the spreading: the limit is lifted, and an unlimited check finds the
-# values kept so far again, so they are not lost.
+# values kept so far again, so they are not lost. With none kept, the constraints are solved
+# again under the limit, and past it in a fresh session: after a (reset), one plain check,
+# under a larger limit, of the constraints and random hashes, else an unlimited one (R501).
 limit = 0
-cut = False  # A check was cut short, and its closing is not checked yet
-closing = []  # Commands and statuses since then
+cut = False  # A check was cut short, and the solution is not found again yet
+fresh_now = False  # In a fresh session since
+fresh = 0  # Cuts closed in a fresh session
 with open(solver_log, encoding="utf8") as fh:
     for line in fh:
         line = line.rstrip('\n')
@@ -42,20 +45,23 @@ with open(solver_log, encoding="utf8") as fh:
             limit = int(line.split()[-1].rstrip(')'))
         elif line.startswith('  (reset)'):
             limit = 0
-        elif line.startswith('  (check-sat)') and limit:
+            fresh_now = cut
+        elif line.startswith('  (check-sat)') and limit and not fresh_now:
             test.error("Main check under a resource limit: " + line)
-        if cut and (line.startswith('  (') or line.startswith('< ')):
-            closing.append(line)
-            if len(closing) == 3:
-                if (closing[0] != '  (set-option :reproducible-resource-limit 0)'
-                        or not closing[1].startswith('  (check-sat-assuming')
-                        or closing[2] != '< sat'):
-                    test.error("Spreading cut short is not closed unlimited: " + str(closing))
-                cut = False
-        if line == '< unknown':
+        elif line.startswith('  (check-sat-assuming (') and cut and limit:
+            if line != '  (check-sat-assuming ())' or fresh_now:
+                test.error("Spreading cut short is not closed unlimited: " + line)
+        elif line == '< sat' and cut:
+            cut = False
+            fresh += fresh_now
+            fresh_now = False
+        elif line == '< unknown':
             if not limit:
                 test.error("Unlimited check answered unknown")
             cut = True
-            closing = []
+if cut:
+    test.error("Spreading cut short is not closed")
+if not fresh:
+    test.error("No spreading cut short with none kept was closed in a fresh session")
 
 test.passes()
