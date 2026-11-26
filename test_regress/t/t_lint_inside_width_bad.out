@@ -28,4 +28,8 @@
                                                        : ... note: In instance 't'
    21 |     r4 = next_value(v) inside {9'd300};
       |                        ^~~~~~
+%Warning-WIDTHEXPAND: t/t_lint_inside_width_bad.v:22:16: Operator COND expects 5 bits on the Conditional False, but Conditional False's FUNCREF 'next_value' generates 4 bits.
+                                                       : ... note: In instance 't'
+   22 |     r5 = (v[0] ? next_value(v) + 4'd1 : next_value(4'd2)) inside {5'd16};
+      |                ^
 %Error: Exiting due to

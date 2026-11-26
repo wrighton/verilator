@@ -13,11 +13,12 @@ module t;
 
   bit [3:0] v;
   bit signed [3:0] s;
-  bit r1, r2, r3, r4;
+  bit r1, r2, r3, r4, r5;
   initial begin
     r1 = v inside {9'd300, 2'd1};
     r2 = v inside {[2'd0 : 9'd300]};
     r3 = s inside {[-8'sd3 : 3'sd2], 5'd7};
     r4 = next_value(v) inside {9'd300};
+    r5 = (v[0] ? next_value(v) + 4'd1 : next_value(4'd2)) inside {5'd16};
   end
 endmodule
