@@ -958,6 +958,9 @@ module escapes;
     }
   endgroup
   \cg.g \cg.i = new;
+  task automatic nba_handle(Cls c);
+    c.member <= 1;
+  endtask
 endmodule
 
 package p;
