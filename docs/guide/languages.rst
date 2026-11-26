@@ -371,7 +371,10 @@ to a value other than a net, or to a net that has another driver, or set by
 is public writable. An input port so driven in turn drives the nets it is
 connected to in the same way. This fallback does not collapse two ports
 connected to overlapping bits of the same net, at any level of the ports
-they so drive, nor any of these ports.
+they so drive, nor any of these ports. This is decided for a module port
+across all instances of the module, so overlapping bits in one instance
+also leave the connections of another instance not collapsed, even to
+disjoint bits.
 
 A continuously written net input that any instance connects to a value,
 such as a variable, a hierarchical reference to a variable, a select by a
