@@ -5098,9 +5098,9 @@ private:
         }
         return randSelp;
     }
-    AstNodeExpr* newStructArrayDefaultp(AstStructSel* nodep) {
+    AstNodeExpr* newStructArrayDefaultp(AstNodeExpr* nodep) {
         AstNodeExpr* aggregateSelp = nullptr;
-        for (AstNodeExpr* selp = nodep->fromp();
+        for (AstNodeExpr* selp = V3Const::selectionFromp(nodep);
              selp && (isArraySel(selp) || VN_IS(selp, StructSel));
              selp = V3Const::selectionFromp(selp)) {
             if (isArraySel(selp) && VN_IS(selp->dtypep()->skipRefp(), StructDType))
@@ -5116,6 +5116,16 @@ private:
             return arrayp;
         }
         return VN_AS(iterateSubtreeReturnEdits(defaultp), NodeExpr);
+    }
+    // Whether integral element select 'nodep' reads a fixed-size unpacked array member of a
+    // struct array element chosen by a random index, which is lowered with the element select,
+    // so the value of an element that does not exist is an integral default, not an SMT array
+    static bool randIndexedMemberElement(AstArraySel* nodep) {
+        if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
+        AstNodeExpr* fromp = nodep->fromp();
+        while (AstArraySel* const selp = VN_CAST(fromp, ArraySel)) fromp = selp->fromp();
+        const AstStructSel* const structSelp = VN_CAST(fromp, StructSel);
+        return structSelp && randIndexedArraySel(structSelp->fromp());
     }
     // Whether the elements of an unpacked array, through all its dimensions, are integral, as
     // VlRandomizer declares the solver variable of an array of them
@@ -5402,12 +5412,12 @@ private:
     // so the member of the element at random index e becomes a chain over the current
     // elements, built at runtime: (ite (= e 0) arr.0.member (ite (= e 1) arr.1.member ... 0)).
     // The tail represents the selected member's type/declaration default on an invalid read.
-    void lowerRandIndexedStructSel(AstStructSel* nodep) {
+    void lowerRandIndexedStructSel(AstNodeExpr* nodep) {
         ++m_randIndexLowerings;
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* const defaultp = newStructArrayDefaultp(nodep);
-        AstStructSel* const elemp = nodep->cloneTree(false);
-        AstNodeExpr* const arraySelp = randIndexedArraySel(elemp->fromp());
+        AstNodeExpr* const elemp = nodep->cloneTree(false);
+        AstNodeExpr* const arraySelp = randIndexedArraySel(V3Const::selectionFromp(elemp));
         AstNodeExpr* const arrayp = arraySelFromp(arraySelp);
         gateOnCurrentSize(arrayp);
         AstNodeExpr* const indexp = selIndexp(arraySelp)->unlinkFrBack();
@@ -5781,6 +5791,10 @@ private:
     }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
+        if (randIndexedMemberElement(nodep)) {
+            lowerRandIndexedStructSel(nodep);
+            return;
+        }
         FileLine* const fl = nodep->fileline();
         // An element selected by an out-of-range index reads the default value
         // (IEEE 1800-2023 7.4.6); only an integral element has one to read instead
