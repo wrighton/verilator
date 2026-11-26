@@ -4732,12 +4732,31 @@ class WidthVisitor final : public VNVisitor {
                 VL_DO_DANGLING(exprp->deleteTree(), exprp);
                 return nullptr;
             }
+            // A value wider than the elements, compared at its width, matches only one that
+            // is an element value extended (IEEE 1800-2023 11.8.2)
+            AstNodeExpr* const pureExprp
+                = VN_IS(exprp, ExprStmt) ? VN_AS(exprp, ExprStmt)->resultp() : exprp;
+            AstNodeExpr* fitsp = nullptr;
+            if (memberTypep->isIntegralOrPacked()
+                && exprp->dtypep()->skipRefp()->isIntegralOrPacked()
+                && exprp->width() > memberTypep->width() && pureExprp->isPure()) {
+                FileLine* const flp = nodep->fileline();
+                AstNodeExpr* const lowp
+                    = new AstSel{flp, pureExprp->cloneTreePure(false), 0, memberTypep->width()};
+                AstNodeExpr* const backp
+                    = exprp->isSigned() && memberTypep->isSigned()
+                          ? static_cast<AstNodeExpr*>(new AstExtendS{flp, lowp, exprp->width()})
+                          : static_cast<AstNodeExpr*>(new AstExtend{flp, lowp, exprp->width()});
+                fitsp = new AstEq{flp, pureExprp->cloneTreePure(false), backp};
+            }
             // Unsupported in parameters
             AstNodeExpr* const inewp = new AstCMethodHard{nodep->fileline(), itemp->unlinkFrBack(),
                                                           VCMethod::ARRAY_INSIDE, exprp};
             iterateCheckTyped(nodep, "inside value", exprp, itemDtp->subDTypep(), BOTH);
             inewp->dtypeSetBit();
             inewp->didWidth(true);
+            // The method first, as it evaluates the value
+            if (fitsp) return new AstLogAnd{nodep->fileline(), inewp, fitsp};
             return inewp;
         }
         return AstEqWild::newTyped(itemp->fileline(), exprp, itemp->unlinkFrBack());
