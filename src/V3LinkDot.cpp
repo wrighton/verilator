@@ -5768,34 +5768,85 @@ class LinkDotResolveVisitor final : public VNVisitor {
         iterateChildrenBackwardsConst(nodep);
     }
     void visit(AstTypeTable*) override {}
-    // True if nodep is declared directly in the current module or in a package
-    bool isModuleScope(AstNode* nodep) const {
+    // The scope for the internal cover sequence of the sequence method of refp: the
+    // innermost of the current module and the generate blocks enclosing the method that
+    // declares the sequence or a variable the instance references, or holds the loop of a
+    // genvar it references, so the cover sees them all and the method sees the variable the
+    // cover sets. Null if a declaration is in none of them nor in a package.
+    AstNode* sequenceMethodScope(AstSchemaRef* refp) const {
         // The symbol of a module below the top is that of its instance, as is the parent symbol
-        // of each of its declarations
-        const VSymEnt* const parentSymp = LinkDotState::getNodeSym(nodep)->parentp();
-        return parentSymp == m_modSymp || VN_IS(parentSymp->nodep(), Package);
+        // of each of its declarations. Scopes enclosing the method, innermost first.
+        std::vector<const VSymEnt*> scopes;
+        for (const VSymEnt* symp = m_genBlockp ? m_statep->getNodeSym(m_genBlockp) : m_modSymp;
+             symp; symp = symp->parentp()) {
+            scopes.push_back(symp);
+            if (symp == m_modSymp) break;
+        }
+        UASSERT_OBJ(scopes.back() == m_modSymp, refp, "Scope not under its module");
+        size_t innermost = scopes.size() - 1;
+        const auto declaredIn = [&](AstNode* declp) {
+            const VSymEnt* const parentSymp = LinkDotState::getNodeSym(declp)->parentp();
+            if (VN_IS(parentSymp->nodep(), Package)) return true;
+            const auto it = std::find(scopes.begin(), scopes.end(), parentSymp);
+            if (it == scopes.end()) return false;
+            innermost = std::min(innermost, static_cast<size_t>(it - scopes.begin()));
+            return true;
+        };
+        if (!declaredIn(refp->schemap())) return nullptr;
+        // A genvar has a value only in the loop it is assigned by, enclosing the method
+        const bool allDeclared = !refp->exists([&](const AstVarRef* varRefp) {
+            if (!varRefp->varp()->isGenVar()) return !declaredIn(varRefp->varp());
+            innermost = 0;
+            return false;
+        });
+        if (!allDeclared) return nullptr;
+        if (innermost == scopes.size() - 1) return m_modp;
+        return VN_AS(scopes[innermost]->nodep(), GenBlock);
     }
     // Replace sequence method 'triggered' or 'matched' nodep, returning the variable it reads
     AstVar* replaceSequenceMethod(AstParseRef* nodep, AstSchemaRef* refp) {
-        // The instance moves to module scope, so cannot reference e.g. a property's formal,
-        // an automatic variable, a generate block's variable or genvar, or another instance.
-        if (!isModuleScope(refp->schemap()) || refp->exists([this](const AstVarRef* varRefp) {
-                return varRefp->varp()->isGenVar() || !isModuleScope(varRefp->varp());
-            })) {
-            nodep->v3warn(E_UNSUPPORTED, "Unsupported: sequence method "
-                                             << nodep->prettyNameQ()
-                                             << " on a sequence instance referencing a"
-                                                " non-module-scope declaration.");
+        // The instance moves to the scope of its internal cover sequence, so cannot reference
+        // e.g. a property's formal, a task's variable, or another instance
+        AstNode* scopep = sequenceMethodScope(refp);
+        if (!scopep) {
+            const AstVar* autoVarp = nullptr;
+            refp->exists([&](const AstVarRef* varRefp) {
+                if (varRefp->varp()->lifetime().isAutomatic()) autoVarp = varRefp->varp();
+                return autoVarp != nullptr;
+            });
+            if (autoVarp && !inPropSpec(nodep)) {
+                nodep->v3error("Sequence method "
+                               << nodep->prettyNameQ()
+                               << " on a sequence instance referencing automatic variable "
+                               << autoVarp->prettyNameQ() << " (IEEE 1800-2023 16.6).\n"
+                               << nodep->warnMore()
+                               << "... Only a procedural concurrent assertion can reference an"
+                                  " automatic variable");
+            } else {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: sequence method "
+                                  << nodep->prettyNameQ()
+                                  << " on a sequence instance referencing a declaration not in"
+                                     " its module, an enclosing generate block or a package.");
+            }
             VL_DO_CLEAR(pushDeletep(refp), refp = nullptr);  // Null: no sequence to follow
+            scopep = m_modp;
         }
         AstVar* const varp
             = nodep->name() == "matched"
-                  ? V3AssertCommon::newSequenceEndCount(nodep->fileline(), m_modp,
+                  ? V3AssertCommon::newSequenceEndCount(nodep->fileline(), scopep,
                                                         m_seqMatchedNames.get(nodep), refp)
-                  : V3AssertCommon::newSequenceEvent(nodep->fileline(), m_modp,
+                  : V3AssertCommon::newSequenceEvent(nodep->fileline(), scopep,
                                                      m_seqTriggeredNames.get(nodep), refp);
         replaceWithSequenceMethod(nodep, varp);
         return varp;
+    }
+    // True if nodep is in the property of a concurrent assertion
+    static bool inPropSpec(const AstNode* nodep) {
+        for (const AstNode* abovep = nodep->aboveLoopp(); abovep; abovep = abovep->aboveLoopp()) {
+            if (VN_IS(abovep, PropSpec)) return true;
+        }
+        return false;
     }
     void replaceWithSequenceMethod(AstParseRef* nodep, AstVar* varp) {
         // The values of the methods do not depend on the start of the match (IEEE 1800-2023
