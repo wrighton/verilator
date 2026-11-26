@@ -1,0 +1,10 @@
+%Error: t/t_sys_monitor_auto_bad.v:9:23: Automatic variable 'z' traced by $monitor, but it is deallocated when its task or function returns (IEEE 1800-2023 13.3.2).
+                                       : ... note: In instance 't'
+    9 |     $monitor("z=%0d", z);   
+      |                       ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sys_monitor_auto_bad.v:13:25: Automatic variable 'x' traced by $monitor, but it is deallocated when its task or function returns (IEEE 1800-2023 13.3.2).
+                                        : ... note: In instance 't'
+   13 |       $monitor("x=%0d", x);   
+      |                         ^
+%Error: Exiting due to
