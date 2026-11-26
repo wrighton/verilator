@@ -13,7 +13,7 @@ test.scenarios('vlt')
 
 test.sim_time = 3000
 
-test.compile()
+test.compile(verilator_flags2=['-Wno-ASYNCABORT'])
 
 test.execute()
 
