@@ -296,6 +296,10 @@ class VlRandomizer VL_NOT_FINAL {
     // Array size variables, by registered name, which a solve of array sizes alone sets
     std::unordered_set<std::string> m_sizeVars;
     std::unordered_set<std::string> m_heldLookups;  // See markHeldLookup
+    // Size assignments the size solves of this call exclude (see exclude_sizes)
+    std::vector<std::string> m_sizeExclusions;
+    bool m_quietUnsat = false;  // An unsatisfied solve is not reported (see quiet_unsat)
+    bool m_unsat = false;  // The last solve failed as its constraints are unsatisfied
     ArrayInfoMap m_arr_vars;  // Tracks each element in array structures for iteration
     // Arrays whose elements must be distinct grouped by unique constraint
     std::map<uint32_t, std::unordered_set<std::string>> m_uniqueArrays;
@@ -1325,6 +1329,26 @@ public:
     void markSizeVar(const std::string& name) { m_sizeVars.insert(name); }  // Of array size
     // Of an array whose element reads by a random index name it only while it is solved
     void markHeldLookup(const std::string& name) { m_heldLookups.insert(name); }
+    /// Exclude the sizes the size variables hold from the next size solves of this call, as
+    /// the solve of the elements failed with them. Returns true.
+    bool exclude_sizes();
+    /// Stop excluding sizes, as the call ends. Returns true.
+    bool clear_size_exclusions() {
+        m_sizeExclusions.clear();
+        return true;
+    }
+    /// Whether an unsatisfied solve is reported, as it is not when the call tries other sizes
+    /// after it. Returns true.
+    bool quiet_unsat(bool flag) {
+        m_quietUnsat = flag;
+        return true;
+    }
+    /// Report why the constraints set up now, with the sizes excluded, are unsatisfied, as an
+    /// unsatisfied solve does when not quiet. Returns true.
+    bool report_unsat();
+    /// Whether the last solve failed as its constraints are unsatisfied, not for another
+    /// reason, as reading a member of a null handle
+    bool unsat() const { return m_unsat; }
     /// Restrict variable name to its enum values: domain is a Bool term over '__Ve'
     void enum_domain(const std::string& name, const char* domain) { m_enumDomains[name] = domain; }
     /// Register solve-before ordering of bits [lsb, lsb + width) of variables or array
