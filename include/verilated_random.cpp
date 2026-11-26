@@ -47,6 +47,8 @@ static constexpr int diversityMaxSatisfied = 64;  // Most of them satisfied
 static constexpr int diversityWideBits = 64;  // Parts wider than this may stay unsplit
 static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to drop a part of all
 static constexpr int diversitySlotSamples = 4;  // Elements checked for a part dropped for all
+static constexpr int diversitySlotShare = 4;  // Of checks left, 1/this for a part one by one
+static constexpr int diversitySlotFew = 128;  // Of its elements, 1/this conflicting one by one
 // Resource limit of each spreading check, in the solver's own units (SMT-LIB 2.6
 // :reproducible-resource-limit): diversityCheckLimit, plus diversityCheckLimitSquare times
 // n^2, n the number of terms spread (variables and array elements, not bits). It bounds
@@ -2732,6 +2734,10 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
     // Conflicts per part of an array's elements (and pinned value, for a single bit), and
     // whether each of them was among others in its unsat core
     std::map<std::tuple<const VlRandomVar*, int, int, int>, std::pair<int, bool>> slotConflicts;
+    // How many more elements may conflict one by one, for parts whose samples all fit: a
+    // share of the checks left and a few of the elements, as a constraint that rules out
+    // many values (say d[i] < 200) would spend every check so
+    std::map<std::tuple<const VlRandomVar*, int, int, int>, int> oneByOneLeft;
     while (checksLeftr-- > 0) {
         os << "(check-sat-assuming (" << keep;
         for (size_t k = 0; k < terms.size(); ++k) {
@@ -2774,7 +2780,11 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
         // Dropped parts are checked further in solveDiversity, but single bits are not. A
         // single bit dropped with others of its unsat cores is set by those that remain,
         // but one that conflicted alone would be left to the solver, so it is dropped for
-        // all only if a few of the other elements cannot take their pin either.
+        // all only if a few of the other elements cannot take their pin either. A whole
+        // element that conflicted alone may be one of the few values a constraint rules
+        // out (say d[i] != 0), so it is dropped for all only if one of a few other elements
+        // cannot take its pin either: spreading a large array again part by part costs a
+        // check whose work grows with the square of its size.
         if (!slotIdsp) continue;
         const PinTerm& pickTerm = terms[pick];
         const auto slotOf = [](const PinTerm& term) {
@@ -2782,15 +2792,21 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
                                    term.width == 1 ? term.value0 : 0);
         };
         std::pair<int, bool>& conflicts = slotConflicts[slotOf(pickTerm)];
-        if (conflicts.first++ == 0) conflicts.second = true;
-        conflicts.second &= candidates > 1;
-        if (conflicts.first < diversitySlotConflicts) continue;
+        const auto leftIt = oneByOneLeft.find(slotOf(pickTerm));
+        const bool spent = leftIt != oneByOneLeft.end() && --leftIt->second < 0;
+        if (!spent) {
+            if (conflicts.first++ == 0) conflicts.second = true;
+            conflicts.second &= candidates > 1;
+            if (conflicts.first < diversitySlotConflicts) continue;
+        }
         std::vector<size_t> members;
         for (size_t k = 0; k < terms.size(); ++k) {
             if (!droppedr[k] && slotOf(terms[k]) == slotOf(pickTerm)) members.push_back(k);
         }
+        const bool single = pickTerm.width == 1;
         bool othersFit = false;
-        if (pickTerm.width == 1 && !conflicts.second) {
+        if (!spent && !conflicts.second && (single || pickTerm.width == pickTerm.varp->width())) {
+            othersFit = !single;  // Single bits need one sample to fit, elements all of them
             for (size_t i = 0; i < std::min<size_t>(diversitySlotSamples, members.size()); ++i) {
                 if (checksLeftr-- <= 0) return false;
                 os << "(check-sat-assuming (" << keep << " __Va"
@@ -2800,14 +2816,22 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
                 if (sampled != VlSolverStatus::SAT && sampled != VlSolverStatus::UNSAT) {
                     return false;
                 }
-                othersFit = sampled == VlSolverStatus::SAT;
-                if (!othersFit) continue;
-                if (--*satisfiedLeftp <= 0) checksLeftr = 0;
-                break;
+                const bool fit = sampled == VlSolverStatus::SAT;
+                if (fit && --*satisfiedLeftp <= 0) checksLeftr = 0;
+                if (single == fit) {
+                    othersFit = fit;
+                    break;
+                }
             }
         }
         if (othersFit) {
-            conflicts.first = 0;  // They go one by one
+            // They go one by one, and whole elements from now on, up to a few: sampling them
+            // again would spend the satisfied checks a large array needs
+            conflicts.first = single ? 0 : std::numeric_limits<int>::min();
+            if (!single) {
+                oneByOneLeft[slotOf(pickTerm)] = std::min<int>(checksLeftr / diversitySlotShare,
+                                                               members.size() / diversitySlotFew);
+            }
             continue;
         }
         for (const size_t k : members) {
