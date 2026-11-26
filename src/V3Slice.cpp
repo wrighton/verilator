@@ -275,10 +275,12 @@ class SliceVisitor final : public VNVisitor {
         const bool hasSc
             = nodep->exists([&](const AstVarRef* refp) -> bool { return refp->varp()->isSc(); });
         const bool consLhs = VN_IS(nodep->lhsp(), ConsArray);
-        // Slicing would evaluate a side that is not repeatable once per element, so copy the
-        // whole array, unless writing a slice, which is only done element by element
+        // Slicing would evaluate a side that is not repeatable once per element, or wait for an
+        // intra-assignment timing control once per element, so copy the whole array, unless
+        // writing a slice, which is only done element by element
         const bool impure = !nodep->lhsp()->isRepeatable() || !nodep->rhsp()->isRepeatable();
-        if (!hasSc && !lhsSlice && !consLhs && (!v3Global.opt.fSlice() || impure)) {
+        if (!hasSc && !lhsSlice && !consLhs
+            && (!v3Global.opt.fSlice() || impure || nodep->timingControlp())) {
             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
             return false;
         }
