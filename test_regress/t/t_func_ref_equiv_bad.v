@@ -40,6 +40,14 @@ module t;
   endfunction
   function automatic void fc(ref chandle a);
   endfunction
+  function automatic void fd(ref byte unsigned a[]);
+  endfunction
+  function automatic void ff(ref byte unsigned a[2:0]);
+  endfunction
+  function automatic void fa(ref byte unsigned a[int]);
+  endfunction
+  function automatic void fl(ref logic [11:0] a[]);
+  endfunction
 
   initial begin
     logic [12:0] v13;
@@ -59,5 +67,17 @@ module t;
     faa(b24);  // 2-state, to a packed array of 4-state structures
     fi(l32);  // 4-state
     fc(l32);  // Not integral
+    begin
+      byte unsigned q[$];
+      logic [7:0] l8[];
+      e_t ea[];
+      byte unsigned f4[3:0];
+      byte unsigned au[bit [31:0]];
+      fd(q);  // Queue to a dynamic array
+      fd(l8);  // 4-state elements
+      ff(f4);  // Different size
+      fa(au);  // Unsigned index
+      fl(ea);  // Enum elements
+    end
   end
 endmodule
