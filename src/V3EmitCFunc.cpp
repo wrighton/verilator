@@ -143,6 +143,7 @@ void EmitCFunc::emitOpName(AstNode* nodep, const string& format, AstNode* lhsp, 
                         puts("R");  // R for queue
                         usesQueue = true;
                     } else if (VN_IS(detailp->dtypep()->skipRefp(), QueueDType)
+                               || VN_IS(detailp->dtypep()->skipRefp(), DynArrayDType)
                                || VN_IS(detailp->dtypep()->skipRefp(), StreamDType)) {
                         puts("R");  // R for queue
                     } else {

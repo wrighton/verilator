@@ -44,6 +44,9 @@ class WidthSelVisitor final : public VNVisitor {
     //  on if widthing top-down or just for parameters.
 #define iterateChildren DO_NOT_iterateChildern_IN_V3WidthSel
 
+    // STATE
+    const bool m_padQueue;  // A queue slice keeps a constant size, as streamed by with[]
+
     // METHODS
 
     // Value of constant slice position 'constp', and whether it has one as a 64-bit int
@@ -55,6 +58,11 @@ class WidthSelVisitor final : public VNVisitor {
         const uint64_t value = num.toUQuad();
         if (value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) return {false, 0};
         return {true, static_cast<int64_t>(value)};
+    }
+    // Whether 'nodep' is a known constant position, so a slice it bounds can have a constant size
+    static bool isConstPosition(const AstNode* nodep) {
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        return constp && !constp->num().isFourState();
     }
     // Size of the slice from constant position lsbp to msbp, or nullptr if it is empty or not
     // a 32-bit int
@@ -374,11 +382,16 @@ class WidthSelVisitor final : public VNVisitor {
             AstNodeExpr* const qrightp = nodep->rightp()->unlinkFrBack();
             AstNodeExpr* const qleftBacknessp = selQueueBackness(qleftp);
             AstNodeExpr* const qrightBacknessp = selQueueBackness(qrightp);
-            // A dynamic array slice of constant size keeps it, an index outside the array reading
-            // the default value (IEEE 1800-2023 7.4.5). Any other slice is limited to the array,
-            // as a queue slice is (IEEE 1800-2023 7.10.1).
-            if (VN_IS(ddtypep, DynArrayDType) && !qleftBacknessp && !qrightBacknessp
-                && VN_IS(qleftp, Const) && VN_IS(qrightp, Const)) {
+            // A slice keeps the size its positions give, an index outside the array reading the
+            // default value: a dynamic array slice of constant size (IEEE 1800-2023 7.4.5), and
+            // a slice streamed by with[], also from the front to the back, and also at runtime
+            // (IEEE 1800-2023 11.4.14.4). Any other slice is limited to the array, as a queue
+            // slice is (IEEE 1800-2023 7.10.1). A slice with an unknown position selects nothing.
+            const bool constSize = isConstPosition(qleftBacknessp ? qleftBacknessp : qleftp)
+                                   && isConstPosition(qrightBacknessp ? qrightBacknessp : qrightp);
+            bool pad = (!qleftBacknessp || qrightBacknessp)
+                       && (m_padQueue || (VN_IS(ddtypep, DynArrayDType) && constSize));
+            if (pad && constSize && !qleftBacknessp && !qrightBacknessp) {
                 // As its first position and size, so the size stays exact when a position does
                 // not fit the runtime's 32 bits
                 if (AstConst* const sizep
@@ -394,15 +407,18 @@ class WidthSelVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     return;
                 }
-                // Else empty, or too large to read padded
+                pad = false;  // Empty, or too large to read padded
             }
             // Use special methods to refer to back rather than math using
             // queue size, this allows a single queue reference, to support
             // for equations in side effects that select the queue to
             // operate upon.
-            const VCMethod method = (qleftBacknessp    ? VCMethod::DYN_SLICE_BACK_BACK
-                                     : qrightBacknessp ? VCMethod::DYN_SLICE_FRONT_BACK
-                                                       : VCMethod::DYN_SLICE);
+            const VCMethod method
+                = qleftBacknessp
+                      ? (pad ? VCMethod::DYN_SLICE_PAD_BACK_BACK : VCMethod::DYN_SLICE_BACK_BACK)
+                  : qrightBacknessp
+                      ? (pad ? VCMethod::DYN_SLICE_PAD_FRONT_BACK : VCMethod::DYN_SLICE_FRONT_BACK)
+                      : (pad ? VCMethod::DYN_SLICE_PAD : VCMethod::DYN_SLICE);
             AstCMethodHard* const newp = new AstCMethodHard{nodep->fileline(), fromp, method};
             if (qleftBacknessp) {
                 VL_DO_DANGLING(pushDeletep(qleftp), qleftp);
@@ -641,8 +657,9 @@ class WidthSelVisitor final : public VNVisitor {
                 }
                 lsbp = newSubNeg(lsbp, width - 1);
             }
-            const VCMethod method = VN_IS(ddtypep, DynArrayDType) ? VCMethod::DYN_SLICE_PLUS_PAD
-                                                                  : VCMethod::DYN_SLICE_PLUS;
+            const VCMethod method = (VN_IS(ddtypep, DynArrayDType) || m_padQueue)
+                                        ? VCMethod::DYN_SLICE_PLUS_PAD
+                                        : VCMethod::DYN_SLICE_PLUS;
             AstCMethodHard* const newp
                 = new AstCMethodHard{nodep->fileline(), fromp, method, lsbp};
             newp->addPinsp(widthp);
@@ -676,7 +693,8 @@ class WidthSelVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    WidthSelVisitor() = default;
+    explicit WidthSelVisitor(bool padQueue)
+        : m_padQueue{padQueue} {}
     ~WidthSelVisitor() override = default;
     AstNode* mainAcceptEdit(AstNode* nodep) { return iterateSubtreeReturnEdits(nodep); }
 };
@@ -684,9 +702,9 @@ public:
 //######################################################################
 // Width class functions
 
-AstNode* V3Width::widthSelNoIterEdit(AstNode* nodep) {
+AstNode* V3Width::widthSelNoIterEdit(AstNode* nodep, bool padQueue) {
     UINFO(4, __FUNCTION__ << ": " << nodep);
-    WidthSelVisitor visitor;
+    WidthSelVisitor visitor{padQueue};
     nodep = visitor.mainAcceptEdit(nodep);
     return nodep;
 }

@@ -17,6 +17,7 @@ typedef enum bit [5:0] {
 } enum_t;
 
 module t;
+  int big = 32'sh7fff_ffff;
   task test1;
     bit arr[];
     bit [1:0] arr2[$];
@@ -194,10 +195,89 @@ module t;
     `checkh(rbits, 64'hefbeaddefecadefa);
   endtask
 
+  task test4;
+    // Items of unpacked arrays selected by with[]
+    byte unsigned data[];
+    byte unsigned q[$];
+    byte unsigned f[4];
+    byte unsigned fd[3:0];
+    int unsigned n;
+    bit [15:0] p16;
+    bit [7:0] p8;
+    data = '{8'h11, 8'h22, 8'h33, 8'h44};
+    q = '{8'h55, 8'h66, 8'h77};
+    f = '{8'h01, 8'h02, 8'h03, 8'h04};
+    n = 2;
+    data = {>>{data with [0:n-1]}};
+    `checkh(data.size(), 2);
+    `checkh(data[0], 8'h11);
+    `checkh(data[1], 8'h22);
+    p16 = {>>{q with [n-1+:2]}};
+    `checkh(p16, 16'h6677);
+    p16 = {<<8{q with [n-:2]}};
+    `checkh(p16, 16'h7766);
+    p8 = {>>{f with [n]}};
+    `checkh(p8, 8'h03);
+    p16 = {>>{f with [1:2]}};
+    `checkh(p16, 16'h0203);
+    // As the matching slice of a descending array
+    fd = '{8'h04, 8'h03, 8'h02, 8'h01};
+    p16 = {>>{fd with [2:1]}};
+    `checkh(p16, 16'h0302);
+    // A range past the end of the array streams it, then the default value for the items it lacks
+    q = '{8'h11, 8'h22};
+    data = {>>{q with [0:3]}};
+    `checkp(data, "'{'h11, 'h22, 'h0, 'h0}");
+    data = {>>{q with [$-3:$]}};
+    `checkp(data, "'{'h0, 'h0, 'h11, 'h22}");
+    data = {>>{q with [-1:$]}};
+    `checkp(data, "'{'h0, 'h11, 'h22}");
+    data = {>>{q with [0:$-(-2)]}};
+    `checkp(data, "'{'h11, 'h22, 'h0, 'h0}");
+    data = {>>{q with [big+:2]}};
+    `checkp(data, "'{'h0, 'h0}");
+    data = {>>{q with [big-1+:2]}};
+    `checkp(data, "'{'h0, 'h0}");
+    // Also with positions known only at runtime
+    data = {>>{q with [0:n+3]}};
+    `checkp(data, "'{'h11, 'h22, 'h0, 'h0, 'h0, 'h0}");
+    data = {>>{q with [n-1+:3]}};
+    `checkp(data, "'{'h22, 'h0, 'h0}");
+    data = {>>{q with [n:n]}};
+    `checkp(data, "'{'h0}");
+    data = {>>{q with [n+1:n+1]}};
+    `checkp(data, "'{'h0}");
+    data = {>>{q with [n-1:n]}};
+    `checkp(data, "'{'h22, 'h0}");
+    data = {>>{q with [2:2]}};
+    `checkp(data, "'{'h0}");
+    data = {>>{q with [n:n-1]}};
+    `checkp(data, "'{}");
+    // A dynamic array streamed into a queue
+    data = '{8'ha3, 8'hc5};
+    q = {>>{data}};
+    `checkp(q, "'{'ha3, 'hc5}");
+    q = {>>{data with [n:n]}};
+    `checkp(q, "'{'h0}");
+    q = {>>{data with [n-1:n]}};
+    `checkp(q, "'{'hc5, 'h0}");
+    data = '{8'h11, 8'h22, 8'h33};
+    data = {>>{data with [1:5]}};
+    `checkp(data, "'{'h22, 'h33, 'h0, 'h0, 'h0}");
+    begin
+      // Not limited by the bound of the queue
+      byte unsigned bq[$:3];
+      bq = '{8'h11, 8'h22};
+      data = {>>{bq with [0:5]}};
+      `checkp(data, "'{'h11, 'h22, 'h0, 'h0, 'h0, 'h0}");
+    end
+  endtask
+
   initial begin
     test1();
     test2();
     test3();
+    test4();
     $write("*-* All Finished *-*\n");
     $finish;
   end

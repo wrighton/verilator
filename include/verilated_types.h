@@ -890,13 +890,31 @@ public:
     // Return count items from lsb, an index outside the array reading the default value, as a
     // dynamic array slice does (IEEE 1800-2023 7.4.5). The result is unbounded: the bound of a
     // queue limits the variable, not the values selected from it.
+    // A count too large for an int, as positions that do not fit the runtime's 32 bits give,
+    // is limited to the array, as such a constant slice is.
     VlQueue<T_Value> slicePadCount(int64_t lsb, int64_t count) const {
         VlQueue<T_Value> out;
         const int64_t sz = static_cast<int64_t>(m_deque.size());
-        for (int64_t i = lsb; i < lsb + count; ++i) {
+        int64_t first = lsb;
+        int64_t end = lsb + count;
+        if (VL_UNLIKELY(count > std::numeric_limits<int32_t>::max())) {
+            first = std::max<int64_t>(first, 0);
+            end = std::min(end, sz);
+        }
+        for (int64_t i = first; i < end; ++i) {
             out.push_back((i >= 0 && i < sz) ? m_deque[i] : m_defaultValue);
         }
         return out;
+    }
+    VlQueue<T_Value> slicePad(int32_t lsb, int32_t msb) const {
+        return slicePadCount(lsb, static_cast<int64_t>(msb) - lsb + 1);
+    }
+    VlQueue<T_Value> slicePadFrontBack(int32_t lsb, int32_t msb) const {
+        return slicePadCount(lsb, static_cast<int64_t>(lastIndex()) - msb - lsb + 1);
+    }
+    VlQueue<T_Value> slicePadBackBack(int32_t lsb, int32_t msb) const {
+        return slicePadCount(static_cast<int64_t>(lastIndex()) - lsb,
+                             static_cast<int64_t>(lsb) - msb + 1);
     }
     VlQueue<T_Value> slicePlusPad(int32_t lsb, int32_t width) const {
         return slicePadCount(lsb, width);
