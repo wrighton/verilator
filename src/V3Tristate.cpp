@@ -863,9 +863,18 @@ class TristateVisitor final : public TristateBaseVisitor {
             // cell's port that may carry a z, is always driven. (Its __en would never be
             // assigned, which is right only for an undriven net.)
             const AuxAstVar& aux = m_varAux(varp);
-            if (!varp->isIO() && !aux.cellOutput && (aux.assigned || !varp->isNet())
-                && !m_tgraph.isTristate(varp)) {
-                return newAllZerosOrOnes(nodep, true);
+            if (!varp->isIO() && !aux.cellOutput && !m_tgraph.isTristate(varp)) {
+                if (aux.assigned || !varp->isNet()) return newAllZerosOrOnes(nodep, true);
+                // A net driven on some bits only by constant selects: z on the others. Like a
+                // whole assignment, a select's driver counts even if its value may be z, e.g. of
+                // an undriven net
+                if (aux.selBitCount) {
+                    V3Number num{nodep, nodep->width(), 0};
+                    for (size_t i = 0; i < aux.selBits.size(); ++i) {
+                        if (aux.selBits[i]) num.setBit(static_cast<int>(i), 1);
+                    }
+                    return new AstConst{nodep->fileline(), num};
+                }
             }
             return newReadEnp(varrefp, newEnVarRefp(varrefp));
         } else if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
