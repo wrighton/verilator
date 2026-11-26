@@ -1445,11 +1445,13 @@ void AstCgOptionAssign::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, typeOption);
     dumpJsonGen(str);
 }
+AstClass* AstClass::baseClassp() const {
+    const AstClassExtends* const cextendsp = extendsp();
+    return cextendsp && !cextendsp->isImplements() ? cextendsp->classp() : nullptr;
+}
 AstClass* AstClass::baseMostClassp() {
     AstClass* basep = this;
-    while (basep->extendsp() && basep->extendsp()->classp()) {
-        basep = basep->extendsp()->classp();
-    }
+    while (AstClass* const nextp = basep->baseClassp()) basep = nextp;
     return basep;
 }
 string AstClass::dtypeName(bool full) const {
@@ -1486,6 +1488,7 @@ void AstClass::dump(std::ostream& str) const {
     if (isPrintedFrom()) str << " [PRINTED]";
     if (isVirtual()) str << " [VIRT]";
     if (needRNG()) str << " [NRNG]";
+    if (needRNGAccessor()) str << " [NRNGACC]";
     if (hasRandVarsUpdate()) str << "[RANDVARUPD]";
     if (useVirtualPublic()) str << " [VIRPUB]";
     if (baseOverride().isAny()) str << " [" << baseOverride().ascii() << "]";
@@ -1502,6 +1505,7 @@ void AstClass::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isPrintedFrom);
     dumpJsonBoolFuncIf(str, isVirtual);
     dumpJsonBoolFuncIf(str, needRNG);
+    dumpJsonBoolFuncIf(str, needRNGAccessor);
     dumpJsonBoolFuncIf(str, hasRandVarsUpdate);
     dumpJsonBoolFuncIf(str, useVirtualPublic);
     if (baseOverride().isAny()) dumpJsonStr(str, "baseOverride", baseOverride().ascii());
@@ -1515,6 +1519,14 @@ string AstClass::embeddedCovergroupName() const {
     UASSERT_OBJ(VString::startsWith(origName(), prefix), this,
                 "Not the type of an embedded covergroup");
     return origName().substr(prefix.size());
+}
+bool AstClass::implementsRNGAccessor() const {
+    for (const AstClassExtends* extp = extendsp(); extp;
+         extp = VN_AS(extp->nextp(), ClassExtends)) {
+        const AstClass* const classp = extp->classp();
+        if (classp->needRNGAccessor() || classp->implementsRNGAccessor()) return true;
+    }
+    return false;
 }
 const AstNode* AstClass::instanceStateRefp() const {
     // Variables of the instance, and its tasks using them, but not parameters, as each
