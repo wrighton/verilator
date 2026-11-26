@@ -1,0 +1,19 @@
+%Warning-WIDTHEXPAND: t/t_constraint_dist_width_bad.v:10:7: Operator DIST expects 9 bits on the Dist expression, but Dist expression's VARREF 'x' generates 8 bits.
+                                                          : ... note: In instance 't'
+   10 |     x dist {7'd2 := 1, [7'd5 : 7'd6] := 1, [9'd300 : 9'd400] :/ 1};
+      |       ^~~~
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Warning-WIDTHEXPAND: t/t_constraint_dist_width_bad.v:10:7: Operator DIST expects 9 bits on the Dist Item, but Dist Item's CONST '7'h2' generates 7 bits.
+                                                          : ... note: In instance 't'
+   10 |     x dist {7'd2 := 1, [7'd5 : 7'd6] := 1, [9'd300 : 9'd400] :/ 1};
+      |       ^~~~
+%Warning-WIDTHEXPAND: t/t_constraint_dist_width_bad.v:10:24: Operator INSIDERANGE expects 9 bits on the Range LHS, but Range LHS's CONST '7'h5' generates 7 bits.
+                                                           : ... note: In instance 't'
+   10 |     x dist {7'd2 := 1, [7'd5 : 7'd6] := 1, [9'd300 : 9'd400] :/ 1};
+      |                        ^
+%Warning-WIDTHEXPAND: t/t_constraint_dist_width_bad.v:10:24: Operator INSIDERANGE expects 9 bits on the Range RHS, but Range RHS's CONST '7'h6' generates 7 bits.
+                                                           : ... note: In instance 't'
+   10 |     x dist {7'd2 := 1, [7'd5 : 7'd6] := 1, [9'd300 : 9'd400] :/ 1};
+      |                        ^
+%Error: Exiting due to
