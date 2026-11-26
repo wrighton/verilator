@@ -50,7 +50,9 @@ runs = [
     ('indent', 1, 16),  # leading whitespace before every reply
     ('low_digit', 1, 15),  # a character below any digit or letter
     ('model_trunc', 1, 0),  # unterminated model, then the pipe closes
-    ('model_trunc', 4, 7),  # unterminated reply to a spreading query, then the pipe closes
+    # Unterminated reply to a spreading query, then the pipe closes, in each solver started: a
+    # phased call spreads each layer, so a restarted solver dies in its next one, until given up
+    ('model_trunc', 4, 6),
     ('multiline', 1, 16),  # S-expression split one token per line
     ('no_digits', 1, 15),  # a base marker with no digits after it
     ('octal', 1, 16),  # octal values
