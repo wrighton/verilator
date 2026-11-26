@@ -36,7 +36,8 @@ class FastGapSlice;
 endclass
 
 // A 64-bit := item of 2^64-1 or 2^64 values competes with a point. Only
-// values below 10 are legal, so 0 weighs 10 and 1..9 weigh 1 each.
+// values below 10 are legal, but the item keeps its whole range weight, so
+// 0 has probability just above 1/10.
 class FastCompetingMass;
   rand bit [63:0] x;
   rand bit [6:0] pinned;
@@ -114,10 +115,11 @@ module t_wide;
       `check_range(value, 64'hffff_ffff_ffff_fff1, 64'hffff_ffff_ffff_fff5);
       overlap_counts[int'(value - 64'hffff_ffff_ffff_fff0)]++;
     end
+    // Whole range masses 5 and 6 over four and two legal values
     for (int i = 1; i < 4; i++)
-      `check_range(overlap_counts[i], N / 8 - 200, N / 8 + 200);
-    `check_range(overlap_counts[4], 3 * N / 8 - 200, 3 * N / 8 + 200);
-    `check_range(overlap_counts[5], 2 * N / 8 - 200, 2 * N / 8 + 200);
+      `check_range(overlap_counts[i], 5 * N / 44 - 200, 5 * N / 44 + 200);
+    `check_range(overlap_counts[4], 17 * N / 44 - 200, 17 * N / 44 + 200);
+    `check_range(overlap_counts[5], 12 * N / 44 - 200, 12 * N / 44 + 200);
     repeat (128) begin
       randomize_result = std::randomize(value) with {
         value inside {[64'hffff_ffff_ffff_fff8 : 64'hffff_ffff_ffff_ffff],
@@ -204,7 +206,7 @@ module t_wide;
           `checkd(obj.pinned, 7'd23);
           zeros += int'(obj.x == 64'd0);
         end
-        `check_range(zeros, 10 * N / 19 - 200, 10 * N / 19 + 200);
+        `check_range(zeros, N / 10 - 200, N / 10 + 200);
       end
     end
     $write("*-* All Finished *-*\n");
@@ -259,13 +261,9 @@ module t_slice;
         default: `stop;
       endcase
     end
-    // Keep the original band spans 52429/419430/52429 after hard clipping.
-    `check_range(longint'(restricted_counts[0]), 64'd419430 * N / 64'd891289 - 200,
-                 64'd419430 * N / 64'd891289 + 200);
-    `check_range(longint'(restricted_counts[1]), 64'd52429 * N / 64'd891289 - 200,
-                 64'd52429 * N / 64'd891289 + 200);
-    `check_range(longint'(restricted_counts[2]), 64'd419430 * N / 64'd891289 - 200,
-                 64'd419430 * N / 64'd891289 + 200);
+    // Each :/ band keeps its whole range weight with one legal value left.
+    foreach (restricted_counts[i])
+      `check_range(restricted_counts[i], N / 3 - 200, N / 3 + 200);
     randomize_result = nonzero_pins.randomize() with {
       soft addr[31:13] inside {19'd1, 19'd2};
     };

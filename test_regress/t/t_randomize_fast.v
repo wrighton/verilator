@@ -8,6 +8,12 @@
 `define stop $stop
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%0d exp=%0d\n", `__FILE__, `__LINE__, (gotv), (expv)); `stop; end while (0);
 `define check_range(gotv,minv,maxv) do if ((gotv) < (minv) || (gotv) > (maxv)) begin $write("%%Error: %s:%0d: got=%0d outside %0d..%0d\n", `__FILE__, `__LINE__, (gotv), (minv), (maxv)); `stop; end while (0);
+// Expected count under IEEE 1800-2017 per-value or 1800-2023 range dist weights
+`ifdef TEST_1800_2017
+`define check_dist(gotv,exp2017,exp2023) `check_range(gotv, (exp2017) - 200, (exp2017) + 200)
+`else
+`define check_dist(gotv,exp2017,exp2023) `check_range(gotv, (exp2023) - 200, (exp2023) + 200)
+`endif
 // verilog_format: on
 
 typedef enum bit [6:0] {
@@ -65,7 +71,8 @@ class SignedRange;
 endclass
 
 // Overlapping := and :/ ranges, partially removed by a hard restriction.
-// The surviving per-value weights at 1..5 are 1,1,1,3,2 (total 8).
+// The surviving per-value weights at 1..5 are 1,1,1,3,2 (total 8). As whole
+// ranges of mass 5 and 6, they are 5,5,5,17,12 in units of 1/4 (total 44).
 class RestrictedDist;
   rand bit [6:0] x;
   constraint c {
@@ -210,7 +217,8 @@ class CoprimeDist;
 endclass
 
 // The first item's count * weight does not fit in 64 bits, though both
-// masses do: 2^59 and 2^62, so 0..3 together have probability 1/9.
+// per-value masses do: 2^59 and 2^62, so 0..3 together have probability
+// 1/9. As whole ranges both items weigh 2^62.
 class ClippedProduct;
   rand bit [5:0] x;
   constraint c {
@@ -333,6 +341,14 @@ module t;
     foreach (sizes[i]) if (value < sizes[i]) weight += 1.0 / sizes[i];
     return weight;
   endfunction
+  // Legal CoprimeOverlap values in [lo:hi] below n
+  function automatic int overlap_legal(int lo, int hi, int n);
+    int count = 0;
+    for (int v = lo; v <= hi && v < n; v++) begin
+      if (v < 10 || (v >= 1010 && v < 1020) || (v >= 1030 && v < 1040)) count++;
+    end
+    return count;
+  endfunction
 
   initial begin
     Pinned pinned;
@@ -439,15 +455,15 @@ module t;
     end
     foreach (counts_single[i]) `check_range(counts_single[i], N/ 8 - 200, N/ 8 + 200);
     foreach (counts_signed[i]) `check_range(counts_signed[i], N/ 6 - 200, N/ 6 + 200);
-    for (int i = 1; i <= 3; i++) `check_range(counts_dist[i], N/ 8 - 200, N/ 8 + 200);
-    `check_range(counts_dist[4], 3 * N/ 8 - 200, 3 * N/ 8 + 200);
-    `check_range(counts_dist[5], 2 * N/ 8 - 200, 2 * N/ 8 + 200);
-    `check_range(counts_soft[2], N/ 8 - 200, N/ 8 + 200);
-    `check_range(counts_soft[3], N/ 8 - 200, N/ 8 + 200);
-    `check_range(counts_soft[7], 6 * N/ 8 - 200, 6 * N/ 8 + 200);
-    `check_range(counts_state[2], 2 * N/ 10 - 200, 2 * N/ 10 + 200);
-    `check_range(counts_state[3], 2 * N/ 10 - 200, 2 * N/ 10 + 200);
-    `check_range(counts_state[7], 6 * N/ 10 - 200, 6 * N/ 10 + 200);
+    for (int i = 1; i <= 3; i++) `check_dist(counts_dist[i], N/ 8, 5 * N/ 44);
+    `check_dist(counts_dist[4], 3 * N/ 8, 17 * N/ 44);
+    `check_dist(counts_dist[5], 2 * N/ 8, 12 * N/ 44);
+    `check_dist(counts_soft[2], N/ 8, N/ 6);
+    `check_dist(counts_soft[3], N/ 8, N/ 6);
+    `check_dist(counts_soft[7], 6 * N/ 8, 2 * N/ 3);
+    `check_dist(counts_state[2], 2 * N/ 10, N/ 4);
+    `check_dist(counts_state[3], 2 * N/ 10, N/ 4);
+    `check_dist(counts_state[7], 6 * N/ 10, N/ 2);
     state_dist.w = 0;
     randomize_result = state_dist.randomize();
     `checkd(randomize_result, 1);
@@ -462,10 +478,10 @@ module t;
     `check_range(counts_priority[8], 3 * N/ 4 - 200, 3 * N/ 4 + 200);
 
     // Unequal original band sizes, intersected with runtime [2:34], give
-    // exact band masses 12:20:5, not equal surviving buckets.
-    `check_range(band_counts[0], 12 * N/ 37 - 200, 12 * N/ 37 + 200);
-    `check_range(band_counts[1], 20 * N/ 37 - 200, 20 * N/ 37 + 200);
-    `check_range(band_counts[2], 5 * N/ 37 - 200, 5 * N/ 37 + 200);
+    // per-value band masses 12:20:5, but equal :/ range masses.
+    `check_dist(band_counts[0], 12 * N/ 37, N/ 3);
+    `check_dist(band_counts[1], 20 * N/ 37, N/ 3);
+    `check_dist(band_counts[2], 5 * N/ 37, N/ 3);
     for (int i = 0; i < 40; i++) begin
       lo = i;
       hi = i + 2;
@@ -567,10 +583,11 @@ module t;
         else if (value == 26) small_counts[1]++;
         else small_counts[2]++;
       end
-      // Original band sizes26/204/26 give weights102:13:102 after exclusion.
-      `check_range(small_counts[0], 102 * N/ 217 - 200, 102 * N/ 217 + 200);
-      `check_range(small_counts[1], 13 * N/ 217 - 200, 13 * N/ 217 + 200);
-      `check_range(small_counts[2], 102 * N/ 217 - 200, 102 * N/ 217 + 200);
+      // Original band sizes 26/204/26 give per-value weights 102:13:102 after
+      // exclusion, but equal :/ range masses.
+      `check_dist(small_counts[0], 102 * N/ 217, N/ 3);
+      `check_dist(small_counts[1], 13 * N/ 217, N/ 3);
+      `check_dist(small_counts[2], 102 * N/ 217, N/ 3);
       picker.excluded = pool;
       value = 999;
       `checkd(picker.pick(value, pool, 0, 255), 0);
@@ -603,8 +620,8 @@ module t;
     end
 
     begin
-      // Removing a value keeps the other values' weights, however the
-      // dist spells them.
+      // Removing a value keeps the other values' weights, however the dist
+      // spells them. Whole ranges instead keep [0:3] at mass 4 over 1..3.
       bit [6:0] value;
       int range_counts[11];
       int point_counts[11];
@@ -620,14 +637,14 @@ module t;
       end
       foreach (range_counts[i]) begin
         if (i inside {1, 2, 3, 10}) begin
-          `check_range(range_counts[i], N/ 4 - 200, N/ 4 + 200);
+          `check_dist(range_counts[i], N/ 4, i == 10 ? N/ 5 : 4 * N/ 15);
           `check_range(point_counts[i], N/ 4 - 200, N/ 4 + 200);
         end
       end
     end
 
     begin
-      // :/ weighs each value 1/100 here; 100 alone keeps weight 1.
+      // :/ weighs each value 1/100 here, or the whole range 1; 100 has weight 1.
       bit [6:0] value;
       int hits;
       hits = 0;
@@ -643,11 +660,12 @@ module t;
         `checkd(value inside {[7'd0 : 7'd9], 7'd100}, 1);
         hits += int'(value == 7'd100);
       end
-      `check_range(hits, 10 * N/ 11 - 200, 10 * N/ 11 + 200);
+      `check_dist(hits, 10 * N/ 11, N/ 2);
     end
 
     begin
-      // Removing 101 leaves per-value weights 1, 1, 2 and 5.
+      // Removing 101 leaves per-value weights 1, 1, 2 and 5, or 1.5, 1.5, 2
+      // and 5 when [100:102] keeps its whole range weight 3.
       bit [8:0] value;
       int counts[4];
       foreach (counts[i]) counts[i] = 0;
@@ -669,10 +687,10 @@ module t;
           default: `stop;
         endcase
       end
-      `check_range(counts[0], N/ 9 - 200, N/ 9 + 200);
-      `check_range(counts[1], N/ 9 - 200, N/ 9 + 200);
-      `check_range(counts[2], 2 * N/ 9 - 200, 2 * N/ 9 + 200);
-      `check_range(counts[3], 5 * N/ 9 - 200, 5 * N/ 9 + 200);
+      `check_dist(counts[0], N/ 9, N/ 7);
+      `check_dist(counts[1], N/ 9, N/ 7);
+      `check_dist(counts[2], 2 * N/ 9, 4 * N/ 21);
+      `check_dist(counts[3], 5 * N/ 9, 10 * N/ 21);
     end
 
     begin
@@ -696,7 +714,8 @@ module t;
       end
       for (int i = 0; i < 7; i++) `check_range(counts[i], N/ 17 - 200, N/ 17 + 200);
       `check_range(counts[7], 10 * N/ 17 - 200, 10 * N/ 17 + 200);
-      // Keeping i+1 values of :/ item i gives it mass (i+1)/size.
+      // Keeping i+1 values of :/ item i gives it mass (i+1)/size per value, or
+      // 1 as a whole range.
       foreach (counts[i]) counts[i] = 0;
       repeat (N) begin
         randomize_result = coprime.randomize() with {
@@ -711,10 +730,7 @@ module t;
       end
       total = 0;
       foreach (sizes[i]) total += (i + 1.0) / sizes[i];
-      foreach (sizes[i]) begin
-        `check_range(counts[i], int'(N * (i + 1.0) / sizes[i] / total) - 200,
-                     int'(N * (i + 1.0) / sizes[i] / total) + 200);
-      end
+      foreach (sizes[i]) `check_dist(counts[i], int'(N * (i + 1.0) / sizes[i] / total), N/ 7);
     end
 
     begin
@@ -728,9 +744,9 @@ module t;
         `checkd(clipped.x inside {[6'd0 : 6'd3], 6'd40, 6'd41}, 1);
         counts[clipped.x]++;
       end
-      for (int i = 0; i < 4; i++) `check_range(counts[i], N/ 36 - 100, N/ 36 + 100);
-      `check_range(counts[40], 4 * N/ 9 - 200, 4 * N/ 9 + 200);
-      `check_range(counts[41], 4 * N/ 9 - 200, 4 * N/ 9 + 200);
+      for (int i = 0; i < 4; i++) `check_dist(counts[i], N/ 36, N/ 8);
+      `check_dist(counts[40], 4 * N/ 9, N/ 4);
+      `check_dist(counts[41], 4 * N/ 9, N/ 4);
     end
 
     begin
@@ -768,7 +784,10 @@ module t;
       CoprimeOverlap overlap;
       int counts[3];
       real weights[3];
+      real masses[3];
+      int sizes[7];
       real total;
+      real totalMass;
       overlap = new;
       foreach (counts[i]) counts[i] = 0;
       repeat (N) begin
@@ -785,10 +804,49 @@ module t;
       for (int v = 1010; v < 1020; v++) weights[1] += coprime_weight(v);
       for (int v = 1030; v < 1040; v++) weights[2] += coprime_weight(v);
       total = weights[0] + weights[1] + weights[2];
-      foreach (counts[i]) begin
-        `check_range(counts[i], int'(N * weights[i] / total) - 200,
-                     int'(N * weights[i] / total) + 200);
+      foreach (masses[i]) masses[i] = 0;
+      sizes = '{1009, 1013, 1019, 1021, 1031, 1033, 1039};
+      foreach (sizes[k]) begin
+        masses[0] += real'(overlap_legal(0, 9, sizes[k])) / overlap_legal(0, 2047, sizes[k]);
+        masses[1] += real'(overlap_legal(1010, 1019, sizes[k])) / overlap_legal(0, 2047, sizes[k]);
+        masses[2] += real'(overlap_legal(1030, 1039, sizes[k])) / overlap_legal(0, 2047, sizes[k]);
       end
+      totalMass = masses[0] + masses[1] + masses[2];
+      foreach (counts[i]) begin
+        `check_dist(counts[i], int'(N * weights[i] / total), int'(N * masses[i] / totalMass));
+      end
+    end
+
+    begin
+      // The IEEE 1800-2023 18.5.3 example: [100:102] := 1 keeps range weight 3,
+      // like [100:102] :/ 3, although x > 101 leaves only 102 in it.
+      bit [7:0] value;
+      int hits[2];
+      foreach (hits[i]) hits[i] = 0;
+      repeat (N) begin
+        randomize_result = std::randomize(value) with {
+          value > 8'd101;
+          value dist {
+            [8'd100 : 8'd102] := 1,
+            8'd103 := 1
+          };
+        };
+        `checkd(randomize_result, 1);
+        `checkd(value inside {8'd102, 8'd103}, 1);
+        hits[0] += int'(value == 8'd102);
+        randomize_result = std::randomize(value) with {
+          value > 8'd101;
+          value dist {
+            [8'd100 : 8'd102] :/ 3,
+            8'd103 := 1
+          };
+        };
+        `checkd(randomize_result, 1);
+        `checkd(value inside {8'd102, 8'd103}, 1);
+        hits[1] += int'(value == 8'd102);
+      end
+      `check_dist(hits[0], N/ 2, 3 * N/ 4);
+      `check_dist(hits[1], N/ 2, 3 * N/ 4);
     end
 
     begin
@@ -806,9 +864,9 @@ module t;
           default: `stop;
         endcase
       end
-      `check_range(counts[0], N/ 6 - 200, N/ 6 + 200);
-      `check_range(counts[1], 2 * N/ 6 - 200, 2 * N/ 6 + 200);
-      `check_range(counts[2], 3 * N/ 6 - 200, 3 * N/ 6 + 200);
+      `check_dist(counts[0], N/ 6, N/ 3);
+      `check_dist(counts[1], 2 * N/ 6, N/ 3);
+      `check_dist(counts[2], 3 * N/ 6, N/ 3);
     end
 
     $write("Fast digest=%0h\n", digest);
