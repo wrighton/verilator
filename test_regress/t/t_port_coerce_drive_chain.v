@@ -194,8 +194,7 @@ endmodule
 
 bind cdut cdrv u_cdrv ();
 
-// A concatenation with a part that is not a net drives none of it; only that it builds is
-// checked
+// A concatenation with a part that is not a net drives none of it
 module kdut (
     input logic clk,
     input logic [3:0] md
@@ -328,6 +327,7 @@ module t;
     `checkh(bseen, 2'b11);
     `checkh(bv, 2'b11);
     `checkh(cgot, 16'ha5c3);
+    `checkh(kmd === 4'ha, 1'b0);
     `checkh(cmd, 4'ha);
     `checkh(cpkt, 7'h2e);
     `checkh(cw[6:2], 5'h03);
