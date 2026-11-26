@@ -938,6 +938,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(_NONE,                              "_none",                  false,  CLEAN,  false,      "", "") \
     macro(ARRAY_AT,                           "at",                     PURE,   CLEAN,  false,      "r", "array or queue element selection") \
     macro(ARRAY_AT_BACK,                      "atBack",                 PURE,   CLEAN,  false,      "r", "array or queue element selection") \
+    macro(ARRAY_AT_DEFAULT,                   "atDefault",              PURE,   CLEAN,  false,      "", "") \
     macro(ARRAY_AT_REF,                       "atRef",                  false,  CLEAN,  false,      "r", "array element passed by const reference") \
     macro(ARRAY_AT_WRITE,                     "atWrite",                PURE,   CLEAN,  false,      "r", "array or queue element selection") \
     macro(ARRAY_AT_WRITE_REF,                 "atWriteRef",             false,  CLEAN,  false,      "r", "array element passed by reference") \
