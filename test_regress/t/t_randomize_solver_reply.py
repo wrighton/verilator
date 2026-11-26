@@ -179,8 +179,8 @@ for mode, at, nrounds in pin_runs:
 # A spreading check cut short ends the spreading, wherever it is made. Bits status 7 is the
 # first of the one-by-one checks of the elements drawn 1, after the four conflicts of the
 # round; Either status 11 is the check of a part dropped as a guess; Consts status 12 is the
-# check of whether the value can change at all. No further limited check follows, only the
-# unlimited closing one, and the solution stands without a warning.
+# check of whether the value can change at all. No further spreading check follows, only the
+# closing one, and the solution stands without a warning.
 for mode, at in [('bits', 7), ('either', 11), ('consts', 12)]:
     logfile = test.obj_dir + '/sim_cut_' + mode + '.log'
     solver_log = test.obj_dir + '/solver_cut_' + mode + '.log'
@@ -190,9 +190,24 @@ for mode, at in [('bits', 7), ('either', 11), ('consts', 12)]:
                  'TAMPER=unknown_once TAMPER_AT=' + str(at))
     test.file_grep(logfile, r'NPASS=(\d+)', 1)
     test.file_grep_not(logfile, r'Solver returned unknown')
+    # The closing check finds the kept values again, unlimited, or with none kept, the
+    # solution under the limit first
     test.file_grep(
-        solver_log, r'^< unknown\n  \(set-option :reproducible-resource-limit 0\)\n'
-        r'  \(check-sat-assuming \([^)]*\)\)\n< sat$')
+        solver_log, r'^< unknown\n(  \(set-option :reproducible-resource-limit 0\)\n)?'
+        r'  \(check-sat-assuming \([^)]*\)\)\n< (sat|unknown)$')
+
+# Cut short with none kept, then the limited check finding the solution again and the fresh
+# session's hashed check too: the solution is found without the hashes, unlimited
+logfile = test.obj_dir + '/sim_cut_fresh.log'
+solver_log = test.obj_dir + '/solver_cut_fresh.log'
+test.execute(logfile=logfile,
+             all_run_flags=['+MODE=cut_bits', '+verilator+solver+file+' + solver_log],
+             run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
+             'TAMPER=unknown_thrice TAMPER_AT=7')
+test.file_grep(logfile, r'NPASS=(\d+)', 1)
+test.file_grep(
+    solver_log, r'^  \(check-sat\)\n< unknown\n(  .*\n)*?  \(reset\)\n(  .*\n)*?'
+    r'  \(check-sat-assuming \(\)\)\n< sat$')
 
 # 20 randomize calls of a wide class, alone, with a solver that does not support
 # check-sat-assuming
