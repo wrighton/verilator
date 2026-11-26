@@ -2290,6 +2290,10 @@ class RandomizeVisitor final : public VNVisitor {
     ElemRandModes m_elemModes;  // Per-element rand_mode() state
     std::map<AstClass*, std::vector<AstClass*>> m_derivedClasses;  // Directly derived classes
     const RandDispatch& m_dispatch;  // Rand class handles whose objects' constraints dispatch
+    // Classes implementing an interface class other than by their first extends entry
+    std::map<const AstClass*, std::vector<AstClass*>> m_implementers;
+    // Interface classes whose handles read the being-randomized flag of their object
+    std::vector<AstClass*> m_randomizingIfaces;
     const std::unique_ptr<V3SolverLowering> m_solverp;  // Constraint solver lowering
 
     // METHODS
@@ -2308,18 +2312,14 @@ class RandomizeVisitor final : public VNVisitor {
     }
     AstVar* getCreateRandModeVar(AstClass* const classp) {
         if (classp->user2p()) return VN_AS(classp->user2p(), Var);
-        if (AstClassExtends* const extendsp = classp->extendsp()) {
-            return getCreateRandModeVar(extendsp->classp());
-        }
+        if (AstClass* const basep = classp->baseClassp()) return getCreateRandModeVar(basep);
         AstVar* const randModeVarp = createModeVar(classp, "__Vrandmode");
         classp->user2p(randModeVarp);
         return randModeVarp;
     }
     AstVar* getCreateConstraintModeVar(AstClass* const classp) {
         if (classp->user4p()) return VN_AS(classp->user4p(), Var);
-        if (AstClassExtends* const extendsp = classp->extendsp()) {
-            return getCreateConstraintModeVar(extendsp->classp());
-        }
+        if (AstClass* const basep = classp->baseClassp()) return getCreateConstraintModeVar(basep);
         AstVar* const constraintModeVarp = createModeVar(classp, "__Vconstraintmode");
         classp->user4p(constraintModeVarp);
         return constraintModeVarp;
@@ -2331,8 +2331,8 @@ class RandomizeVisitor final : public VNVisitor {
         if (AstVar* const staticModeVarp = m_modeVars.staticConstraintModeVarp(classp)) {
             return staticModeVarp;
         }
-        if (AstClassExtends* const extendsp = classp->extendsp()) {
-            return getCreateStaticConstraintModeVar(extendsp->classp());
+        if (AstClass* const basep = classp->baseClassp()) {
+            return getCreateStaticConstraintModeVar(basep);
         }
         AstVar* const staticModeVarp = createStaticModeVar(classp, "__Vstaticconstraintmode");
         m_modeVars.addStaticConstraintModeVar(classp, staticModeVarp);
@@ -2345,9 +2345,7 @@ class RandomizeVisitor final : public VNVisitor {
         if (AstVar* const staticModeVarp = m_modeVars.staticRandModeVarp(classp)) {
             return staticModeVarp;
         }
-        if (AstClassExtends* const extendsp = classp->extendsp()) {
-            return getCreateStaticRandModeVar(extendsp->classp());
-        }
+        if (AstClass* const basep = classp->baseClassp()) return getCreateStaticRandModeVar(basep);
         AstVar* const staticModeVarp = createStaticModeVar(classp, "__Vstaticrandmode");
         m_modeVars.addStaticRandModeVar(classp, staticModeVarp);
         return staticModeVarp;
@@ -2489,9 +2487,7 @@ class RandomizeVisitor final : public VNVisitor {
             }
             if (staticRandModeCount > 0) {
                 getCreateStaticRandModeVar(classp);
-                AstClass* rootp = classp;
-                while (AstClassExtends* const ep = rootp->extendsp()) rootp = ep->classp();
-                uint32_t& slot = rootStaticRandModeCount[rootp];
+                uint32_t& slot = rootStaticRandModeCount[classp->baseMostClassp()];
                 if (staticRandModeCount > slot) slot = staticRandModeCount;
             }
         });
@@ -3227,13 +3223,13 @@ class RandomizeVisitor final : public VNVisitor {
         // classes that just share a base class (e.g. all UVM classes) do not. Visits each
         // once; called per class handle member of a randomized class, which is quadratic
         // only in the number of such classes.
-        if (AstClass::isClassExtendedFrom(classp, targetp)
-            || AstClass::isClassExtendedFrom(targetp, classp)) {
-            return true;
-        }
+        if (derivesFrom(classp, targetp) || derivesFrom(targetp, classp)) return true;
         if (!visited.insert(classp).second) return false;
         for (AstClass* const derivedp : m_derivedClasses[classp]) {
             if (reachesByRandHandle(derivedp, targetp, visited)) return true;
+        }
+        for (AstClass* const implp : m_implementers[classp]) {
+            if (reachesByRandHandle(implp, targetp, visited)) return true;
         }
         return classp->existsMember([&](const AstClass*, const AstVar* varp) {
             const AstClassRefDType* const classRefp
@@ -3243,6 +3239,10 @@ class RandomizeVisitor final : public VNVisitor {
         });
     }
 
+    // Whether classp is basep, or extends or implements it, directly or not
+    static bool derivesFrom(const AstClass* classp, const AstClass* basep) {
+        return classp == basep || implementsIface(classp, basep);
+    }
     // Whether rand handle varp of classp, or rand array of handles, is part of a cycle of rand
     // handles
     bool inRandHandleCycle(const AstVar* varp, AstClass* classp) {
@@ -3277,10 +3277,50 @@ class RandomizeVisitor final : public VNVisitor {
         m_memberMap.insert(classp, varp);
         return varp;
     }
+    // Whether classp extends or implements class ifacep, directly or not
+    static bool implementsIface(const AstClass* classp, const AstClass* ifacep) {
+        for (const AstClassExtends* extp = classp->extendsp(); extp;
+             extp = VN_AS(extp->nextp(), ClassExtends)) {
+            if (extp->classp() == ifacep || implementsIface(extp->classp(), ifacep)) return true;
+        }
+        return false;
+    }
+    // Get or create the method reading the being-randomized flag of an object of classp, pure
+    // virtual in an interface class, which has no data members (IEEE 1800-2023 8.26)
+    AstFunc* getCreateRandomizingGetter(AstClass* classp) {
+        static constexpr const char* const name = "__VisRandomizing";
+        if (AstFunc* const funcp = VN_CAST(m_memberMap.findMember(classp, name), Func)) {
+            return funcp;
+        }
+        FileLine* const fl = classp->fileline();
+        AstFunc* const funcp = new AstFunc{fl, name, classp->findBitDType()};
+        funcp->classMethod(true);
+        funcp->isVirtual(true);
+        if (classp->isInterfaceClass()) {
+            funcp->pureVirtual(true);
+            m_randomizingIfaces.push_back(classp);
+        } else {
+            AstVar* const flagVarp = getCreateRandomizingVar(classp);
+            funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, funcp->fvarp(), VAccess::WRITE},
+                                           new AstVarRef{fl, VN_AS(flagVarp->user2p(), NodeModule),
+                                                         flagVarp, VAccess::READ}});
+        }
+        classp->addMembersp(funcp);
+        m_memberMap.insert(classp, funcp);
+        return funcp;
+    }
     // Reference to the being-randomized flag of the object of rand handle varp
-    AstMemberRef* newRandomizingSelp(FileLine* fl, AstClass* ownerClassp, AstVar* varp,
-                                     const VAccess& access) {
+    AstNodeExpr* newRandomizingSelp(FileLine* fl, AstClass* ownerClassp, AstVar* varp,
+                                    const VAccess& access) {
         AstClass* const memberClassp = VN_AS(varp->dtypep()->skipRefp(), ClassRefDType)->classp();
+        if (memberClassp->baseMostClassp()->isInterfaceClass()) {
+            AstFunc* const getterp = getCreateRandomizingGetter(memberClassp->baseMostClassp());
+            AstMethodCall* const callp = new AstMethodCall{
+                fl, new AstVarRef{fl, ownerClassp, varp, VAccess::READ}, getterp->name(), nullptr};
+            callp->taskp(getterp);
+            callp->dtypeFrom(getterp);
+            return callp;
+        }
         AstVar* const flagVarp = getCreateRandomizingVar(memberClassp);
         AstMemberRef* const selp
             = new AstMemberRef{fl, new AstVarRef{fl, ownerClassp, varp, VAccess::READ}, flagVarp};
@@ -3919,12 +3959,17 @@ class RandomizeVisitor final : public VNVisitor {
         m_solverp->startClass(nodep);
 
         iterateChildren(nodep);
+        // Provides the RNG for the handles of an interface class it implements
+        if (!nodep->isInterfaceClass() && nodep->implementsRNGAccessor()) {
+            nodep->baseMostClassp()->needRNG(true);
+        }
         if (!nodep->user1()) return;  // Doesn't need randomize, or already processed
         // Clear now so a cycle of rand class handles does not revisit this class
         nodep->user1(false);
         m_activeClasses.insert(nodep);
         UINFO(9, "Define randomize() for " << nodep);
-        nodep->baseMostClassp()->needRNG(true);
+        // An interface class has no data members, the RNG is in each implementing class
+        if (!nodep->isInterfaceClass()) nodep->baseMostClassp()->needRNG(true);
 
         FileLine* const fl = nodep->fileline();
         AstFunc* const userRandp = V3Randomize::newRandomizeFunc(m_memberMap, nodep);
@@ -4401,8 +4446,12 @@ public:
                                                            m_elemModes, cloneObjps, dispatch,
                                                            deleter())} {
         nodep->foreach([&](AstClass* const classp) {
-            if (classp->extendsp())
-                m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
+            if (!classp->extendsp()) return;
+            m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
+            for (const AstClassExtends* extp = VN_AS(classp->extendsp()->nextp(), ClassExtends);
+                 extp; extp = VN_AS(extp->nextp(), ClassExtends)) {
+                m_implementers[extp->classp()].push_back(classp);
+            }
         });
         createRandomizeClassVars(nodep);
         // Flag local constraint leaves as solver-owned so __VBasicRand skips them.
@@ -4426,6 +4475,14 @@ public:
         });
 
         iterate(nodep);
+        // The classes implementing an interface class whose handles read the flag provide it
+        for (AstClass* const ifacep : m_randomizingIfaces) {
+            nodep->foreach([&](AstClass* const classp) {
+                if (!classp->isInterfaceClass() && implementsIface(classp, ifacep)) {
+                    getCreateRandomizingGetter(classp);
+                }
+            });
+        }
         // Grows while the methods of member objects and derived classes are created
         for (size_t i = 0; i < m_randomizeNullFuncs.size(); ++i) {
             addRandomizeNullBody(std::get<0>(m_randomizeNullFuncs[i]),

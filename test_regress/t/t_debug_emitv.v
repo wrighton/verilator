@@ -104,6 +104,17 @@ class VDer extends VBase;
   constraint pure_c {pv > 0;}
 endclass
 
+interface class IfcRng;
+  pure virtual function int ifunc();
+endclass
+
+class ImplRng implements IfcRng;
+  rand int iv;
+  function int ifunc();
+    return iv;
+  endfunction
+endclass
+
 class ClsExt extends Cls;
   constraint :extends init_c {rmember1 < 100;}
   function int inherited();
@@ -770,6 +781,15 @@ module t (/*AUTOARG*/
     if (obj.extf() != 7) $stop;
     vder = new;
     if (vder.randomize() != 1) $stop;
+  end
+  initial begin
+    IfcRng ifc;
+    ImplRng impl;
+    string state;
+    impl = new;
+    ifc = impl;
+    state = ifc.get_randstate();
+    ifc.set_randstate(state);
   end
   escapes escapes();
 
