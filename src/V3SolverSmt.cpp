@@ -92,9 +92,8 @@ static AstVar* findStaticRandModeVar(VMemberMap& memberMap, AstClass* classp) {
         if (AstVar* const varp = VN_CAST(memberMap.findMember(classp, "__Vstaticrandmode"), Var)) {
             return varp;
         }
-        AstClassExtends* const extendsp = classp->extendsp();
-        if (!extendsp) return nullptr;
-        classp = extendsp->classp();
+        classp = classp->baseClassp();
+        if (!classp) return nullptr;
     }
 }
 
@@ -229,7 +228,7 @@ public:
     // with no constraints of its own has no user3p() and defers to its base.
     static AstVar* getRandomGenerator(AstClass* const classp) {
         if (classp->user3p()) return VN_AS(classp->user3p(), Var);
-        if (classp->extendsp()) return getRandomGenerator(classp->extendsp()->classp());
+        if (AstClass* const basep = classp->baseClassp()) return getRandomGenerator(basep);
         return nullptr;
     }
 
@@ -1171,10 +1170,7 @@ struct StagedFieldGroup final {
     AstBegin* registrationsp = nullptr;
 };
 
-static AstClass* stagedFieldOwner(AstClass* classp) {
-    while (classp->extendsp()) classp = classp->extendsp()->classp();
-    return classp;
-}
+static AstClass* stagedFieldOwner(AstClass* classp) { return classp->baseMostClassp(); }
 
 static AstVar* newStagedMemberp(StagedFieldGroup& group, VMemberMap& memberMap,
                                 V3UniqueNames& names, const std::string& name,
@@ -7454,8 +7450,9 @@ class SolverSmtLowering final : public V3SolverLowering {
     }
     void createRandomGenerator(AstClass* const classp) {
         if (classp->user3p()) return;
-        if (classp->extendsp()) {
-            createRandomGenerator(classp->extendsp()->classp());
+        // The generator is shared with the base class
+        if (AstClass* const basep = classp->baseClassp()) {
+            createRandomGenerator(basep);
             return;
         }
         AstVar* const genp = new AstVar{classp->fileline(), VVarType::MEMBER, "constraint",
@@ -7753,7 +7750,7 @@ class SolverSmtLowering final : public V3SolverLowering {
     // The generator keeping the randc cycles of the randomize() with calls of the objects of a
     // class without a class generator, in the base-most class like a class generator
     AstVar* getCreateRandcHistoryp(AstClass* classp) {
-        while (classp->extendsp()) classp = classp->extendsp()->classp();
+        classp = classp->baseMostClassp();
         static constexpr const char* const name = "__Vrandc_history";
         if (AstVar* const varp = VN_CAST(m_memberMap.findMember(classp, name), Var)) return varp;
         AstVar* const varp = new AstVar{classp->fileline(), VVarType::MEMBER, name,
@@ -7983,8 +7980,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         nodep->addMembersp(updatep);
         nodep->hasRandVarsUpdate(true);
 
-        for (AstClass* classp = nodep; classp;
-             classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr) {
+        for (AstClass* classp = nodep; classp; classp = classp->baseClassp()) {
             AstNodeFTask* const newp = VN_AS(m_memberMap.findMember(classp, "new"), NodeFTask);
             addUpdateRandVarsStmts(updatep, newp->stmtsp());
         }

@@ -185,6 +185,12 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
                 putsDecoration(nullptr, "\n// INTERNAL VARIABLES\n");
                 puts("VlRNGReseeds __Vm_rng;\n");
             }
+            // The RNG of an object reached by a handle of an interface class
+            if (classp->needRNGAccessor()) {
+                puts("virtual VlRNGReseeds& __Vrng() = 0;\n");
+            } else if (!classp->isInterfaceClass() && classp->implementsRNGAccessor()) {
+                puts("VlRNGReseeds& __Vrng() override { return __Vm_rng; }\n");
+            }
         } else {  // not class
             putsDecoration(nullptr, "\n// INTERNAL VARIABLES\n");
             puts(EmitCUtil::symClassName() + "* vlSymsp;\n");
