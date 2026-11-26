@@ -15062,6 +15062,9 @@ public:
         std::unordered_set<const AstVar*> topPortps;
         std::unordered_set<const AstVar*> drivenps;  // Variables with a driver
         std::unordered_set<const AstNode*> forcedRefps;  // Lvalues of force and release
+        std::vector<AstPin*> netPinps;  // Input connections, driving if their net is driven
+        // Input port connections of each port, for a written port driving its nets
+        std::unordered_map<const AstVar*, std::vector<std::pair<AstCell*, AstPin*>>> inPinps;
         for (AstNode* modp = netlistp->modulesp(); modp; modp = modp->nextp()) {
             const bool isTop = VN_AS(modp, NodeModule)->isTop();
             // Pre-order, so a force is seen before the references in it
@@ -15087,8 +15090,12 @@ public:
                         if (m_writtenInputps.count(pinp->modVarp())) {
                             writtenPinps.emplace_back(cellp, pinp);
                         }
-                        if ((pinp->exprp() || pulled) && pinp->modVarp()->isNonOutput()) {
+                        if (!pinp->modVarp()->isNonOutput()) continue;
+                        inPinps[pinp->modVarp()].emplace_back(cellp, pinp);
+                        if (pulled) {
                             drivenps.emplace(pinp->modVarp());
+                        } else if (pinp->exprp()) {
+                            netPinps.push_back(pinp);
                         }
                     }
                 } else if (const AstVar* const varp = VN_CAST(np, Var)) {
@@ -15101,6 +15108,18 @@ public:
                     }
                 }
             });
+        }
+        // A port connected to a net drives it only if the net has a driver, as they collapse
+        // into one net (IEEE 1800-2023 23.3.3.7)
+        std::unordered_map<const AstVar*, std::vector<const AstVar*>> netPortps;
+        for (AstPin* const pinp : netPinps) {
+            std::vector<std::pair<int, int>> ranges;
+            AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
+            if (const AstVar* const netp = exprp ? selectedNetp(exprp, ranges) : nullptr) {
+                netPortps[netp].push_back(pinp->modVarp());
+            } else {
+                drivenps.emplace(pinp->modVarp());
+            }
         }
         // Candidates, with the parent input ports each connects to
         std::unordered_map<AstVar*, std::vector<AstVar*>> parentps;
@@ -15166,27 +15185,76 @@ public:
                 }  // LCOV_EXCL_LINE
             }
         }  // LCOV_EXCL_LINE
-        driveConnections(writtenPinps, drivenps);
+        driveConnections(writtenPinps, DriveContext{std::move(drivenps), std::move(netPortps),
+                                                    std::move(inPinps)});
+    }
+    // State of making written input ports drive the nets connected to them
+    struct DriveContext final {
+        std::unordered_set<const AstVar*> drivenps;  // Variables with a driver
+        // Ports connected to each net, driven if it is
+        std::unordered_map<const AstVar*, std::vector<const AstVar*>> netPortps;
+        // Input port connections of each port
+        std::unordered_map<const AstVar*, std::vector<std::pair<AstCell*, AstPin*>>> inPinps;
+    };
+    // A connection of a port that would drive the net connected to it
+    struct DriveConn final {
+        AstCell* cellp;
+        AstPin* pinp;
+        AstVar* netp;
+        std::vector<std::pair<int, int>> ranges;  // Selected, from the net outwards
+        size_t chain;  // Union-find parent, of connections that are decided together
+        bool keep;  // Keeps driving the port, of the chain's root
+    };
+    static size_t driveChain(std::vector<DriveConn>& conns, size_t i) {
+        while (conns[i].chain != i) {
+            conns[i].chain = conns[conns[i].chain].chain;
+            i = conns[i].chain;
+        }
+        return i;
     }
     // Make written input ports not coerced drive the connected nets with no other driver
     void driveConnections(const std::vector<std::pair<AstCell*, AstPin*>>& cellPinps,
-                          const std::unordered_set<const AstVar*>& drivenps) {
+                          DriveContext ctx) {
         // The port and the net collapse into one net (IEEE 1800-2023 23.3.3.7), so with no
         // other driver of the net, the port drives it, with all its writes, also through a
         // virtual interface or hierarchical reference. Otherwise the net drives the port.
         // Two such ports on the same bits would both drive them, and neither would see the
-        // other's writes, so these keep their connection driving the port.
-        struct Conn final {
-            AstCell* cellp;
-            AstPin* pinp;
-            AstVar* netp;
-            std::vector<std::pair<int, int>> ranges;  // Selected, from the net outwards
-            bool overlapped;
-        };
-        std::vector<Conn> conns;
+        // other's writes, so these keep their connection driving the port, as do all the
+        // connections decided together with theirs.
+        // Ports connected to driven nets are driven
+        std::vector<const AstVar*> drivenWork{ctx.drivenps.begin(), ctx.drivenps.end()};
+        while (!drivenWork.empty()) {
+            const AstVar* const netp = drivenWork.back();
+            drivenWork.pop_back();
+            const auto it = ctx.netPortps.find(netp);
+            if (it == ctx.netPortps.end()) continue;
+            for (const AstVar* const portp : it->second) {
+                if (ctx.drivenps.emplace(portp).second) drivenWork.push_back(portp);
+            }
+        }
+        // A port so driving an input port of its parent drives what that port connects to,
+        // in turn. The connections so reached from a written port form a chain, decided as
+        // a whole, as otherwise a net in it could have two drivers.
+        std::vector<DriveConn> conns;
+        std::unordered_map<const AstPin*, size_t> pinConns;  // Index into conns
         std::unordered_map<const AstVar*, std::vector<size_t>> netConns;  // Indices into conns
-        for (const auto& cellPin : cellPinps) {
+        std::vector<std::pair<AstCell*, AstPin*>> visitedPinps;  // Also those not candidates
+        // Connections to visit, with the index of the one reaching it, if not a written port
+        std::vector<std::pair<size_t, std::pair<AstCell*, AstPin*>>> work;
+        for (const auto& cellPin : cellPinps) work.emplace_back(SIZE_MAX, cellPin);
+        while (!work.empty()) {
+            const size_t fromi = work.back().first;
+            const std::pair<AstCell*, AstPin*> cellPin = work.back().second;
+            work.pop_back();
             AstPin* const pinp = cellPin.second;
+            const auto pinIt = pinConns.find(pinp);
+            if (pinIt != pinConns.end()) {
+                if (fromi != SIZE_MAX) {
+                    conns[driveChain(conns, fromi)].chain = driveChain(conns, pinIt->second);
+                }
+                continue;
+            }
+            visitedPinps.push_back(cellPin);
             if (pinp->modVarp()->direction() != VDirection::INPUT) continue;  // Coerced
             if (m_valueSyntaxPinps.count(pinp)) {
                 AstVar* const varp = pinp->modVarp();
@@ -15198,22 +15266,35 @@ public:
                 continue;
             }
             if (!sourceNetPinMatches(pinp, NetProjection::ANY)) continue;
-            Conn conn{cellPin.first, pinp, nullptr, {}, false};
+            DriveConn conn{cellPin.first, pinp, nullptr, {}, conns.size(), false};
             AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
             conn.netp = exprp ? selectedNetp(exprp, conn.ranges) : nullptr;
-            if (!conn.netp || drivenps.count(conn.netp)) continue;
+            if (!conn.netp) continue;
+            const size_t i = conns.size();
+            pinConns.emplace(pinp, i);
+            // A net with another driver drives the chain
+            conn.keep = ctx.drivenps.count(conn.netp) != 0;
             // Quadratic only in the ports written on one net, which are few
-            for (const size_t i : netConns[conn.netp]) {
-                if (rangesOverlap(conns[i].ranges, conn.ranges)) {
-                    conns[i].overlapped = true;
-                    conn.overlapped = true;
+            for (const size_t j : netConns[conn.netp]) {
+                if (rangesOverlap(conns[j].ranges, conn.ranges)) {
+                    conns[j].keep = true;
+                    conn.keep = true;
                 }
             }  // LCOV_EXCL_LINE
-            netConns[conn.netp].push_back(conns.size());
+            netConns[conn.netp].push_back(i);
             conns.push_back(conn);
+            if (fromi != SIZE_MAX) conns[driveChain(conns, fromi)].chain = driveChain(conns, i);
+            if (conns[i].keep || !conn.netp->isInput()) continue;
+            const auto it = ctx.inPinps.find(conn.netp);
+            if (it == ctx.inPinps.end()) continue;
+            for (const auto& inPin : it->second) work.emplace_back(i, inPin);
         }
-        for (const Conn& conn : conns) {
-            if (conn.overlapped) continue;
+        for (size_t i = 0; i < conns.size(); ++i) {
+            if (conns[i].keep) conns[driveChain(conns, i)].keep = true;
+        }
+        for (size_t i = 0; i < conns.size(); ++i) {
+            const DriveConn& conn = conns[i];
+            if (conns[driveChain(conns, i)].keep) continue;
             AstNodeExpr* const exprp = VN_AS(conn.pinp->exprp(), NodeExpr)->unlinkFrBack();
             linkCollapsedWrite(exprp);
             conn.netp->icoMaybeWritten(true);
@@ -15222,10 +15303,10 @@ public:
             AstVarXRef* const rhsp
                 = new AstVarXRef{flp, conn.pinp->modVarp(), conn.cellp->name(), VAccess::READ};
             conn.cellp->addNextHere(new AstAlways{new AstAssignW{flp, exprp, rhsp}});
-        }  // LCOV_EXCL_LINE
+        }
         // All written formals have now been classified. A true net connection may
         // carry the local continuous drive back even if a different pin is value-only.
-        for (const auto& cellPin : cellPinps) {
+        for (const auto& cellPin : visitedPinps) {
             AstPin* const pinp = cellPin.second;
             AstVar* const formalp = pinp->modVarp();
             if (!formalp->resolveWrittenInput() || formalp->isWiredNet() || formalp->delayp()) {
@@ -15250,12 +15331,12 @@ public:
             pinp->setReturnWrittenInput();
             linkCollapsedWrite(actualp);
         }
-        for (size_t i = 0; i < cellPinps.size(); ++i) {
-            AstPin* const pinp = cellPinps[i].second;
+        for (size_t i = 0; i < visitedPinps.size(); ++i) {
+            AstPin* const pinp = visitedPinps[i].second;
             if (pinp->modVarp()->isInput() && m_valueSyntaxPinps.count(pinp)
                 && !pinp->returnWrittenInput() && pinp->exprp() && !VN_IS(pinp->exprp(), Const)) {
                 // Keep the one-way assignment even if the expression later folds to a VarRef.
-                V3Inst::pinReconnectSimple(pinp, cellPinps[i].first, false, true);
+                V3Inst::pinReconnectSimple(pinp, visitedPinps[i].first, false, true);
             }
         }
     }
