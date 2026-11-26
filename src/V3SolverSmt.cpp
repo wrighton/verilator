@@ -1180,6 +1180,261 @@ static AstNodeStmt* newStagedTaskCallp(FileLine* const fl, AstTask* const taskp,
     return callp->makeStmt();
 }
 
+//######################################################################
+// Whether the randomized object reaches the static rand members of a class
+
+// A constraint takes a static rand member of another class, whose objects the objects of the
+// constraint's class may reach through rand class handles, as a random variable, but only
+// while the randomized object reaches one through handles that are not null and whose rand_mode
+// is on (IEEE 1800-2023 18.4, 18.8); else as a state variable, see newCallp(). For each class
+// of such members (owner), every class of the class hierarchies reached gets a virtual method
+// __Vstatic_members<N>(walk): whether its object is of the owner's class, or reaches one
+// through its rand class handles; the base-most class of each a method __Vstatic_reaches<N>(walk)
+// calling it, unless the walk already reached the object, so a walk reaches each object once,
+// also in a cycle; and the owner a static method __Vstatic_walk<N>() numbering the walks. The
+// bodies are made after the lowering, by makeBodies().
+class StaticReachFuncs final {
+    VMemberMap& m_memberMap;  // Member names cached for fast lookup
+    V3UniqueNames& m_uniqueNames;  // Unique names of loop variables
+    std::unordered_map<const AstClass*, size_t> m_ownerIds;  // Number of each owner
+    // The base-most classes of the hierarchies whose methods for an owner are called
+    std::vector<std::pair<AstClass*, AstClass*>> m_roots;  // (Owner, class)
+    // The classes extending each class
+    using DerivedMap = std::unordered_map<const AstClass*, std::vector<AstClass*>>;
+    std::unordered_map<const AstFunc*, AstVar*> m_walkVarps;  // Argument of each method
+
+    // The class extended by classp, if any
+    static AstClass* baseClassp(const AstClass* classp) {
+        const AstClassExtends* const extp = classp->extendsp();
+        return extp && !extp->isImplements() ? extp->classp() : nullptr;
+    }
+    static AstClass* rootClassp(AstClass* classp) {
+        while (AstClass* const basep = baseClassp(classp)) classp = basep;
+        return classp;
+    }
+    std::string ownerName(const char* prefix, const AstClass* ownerp) const {
+        return prefix + cvtToStr(m_ownerIds.at(ownerp));
+    }
+    // A member variable name of classp, static if isStatic
+    AstVar* getCreateVarp(AstClass* classp, const std::string& name, bool isStatic) {
+        if (AstVar* const varp = VN_CAST(m_memberMap.findMember(classp, name), Var)) return varp;
+        AstVar* const varp
+            = new AstVar{classp->fileline(), VVarType::MEMBER, name, classp->findUInt64DType()};
+        if (isStatic) varp->lifetime(VLifetime::STATIC_EXPLICIT);
+        varp->user2p(classp);
+        classp->addMembersp(varp);
+        m_memberMap.insert(classp, varp);
+        return varp;
+    }
+    // A method name of classp, taking the number of the walk unless static
+    AstFunc* getCreateFuncp(AstClass* classp, const std::string& name, bool isVirtual,
+                            bool isStatic) {
+        if (AstFunc* const funcp = VN_CAST(m_memberMap.findMember(classp, name), Func)) {
+            return funcp;
+        }
+        FileLine* const fl = classp->fileline();
+        AstFunc* const funcp
+            = new AstFunc{fl, name, isStatic ? classp->findUInt64DType() : classp->findBitDType()};
+        if (!isStatic) {
+            AstVar* const walkVarp
+                = new AstVar{fl, VVarType::MEMBER, "__Vwalk", classp->findUInt64DType()};
+            walkVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            walkVarp->funcLocal(true);
+            walkVarp->direction(VDirection::INPUT);
+            funcp->addDeclsp(walkVarp);
+            m_walkVarps.emplace(funcp, walkVarp);
+        }
+        funcp->classMethod(true);
+        funcp->isStatic(isStatic);
+        funcp->isVirtual(isVirtual);
+        classp->addMembersp(funcp);
+        m_memberMap.insert(classp, funcp);
+        return funcp;
+    }
+    // __Vstatic_members<N> of classp, dispatched to the object's class
+    AstFunc* getCreateMembersp(AstClass* classp, AstClass* ownerp) {
+        return getCreateFuncp(classp, ownerName("__Vstatic_members", ownerp), true, false);
+    }
+    AstFunc* getCreateReachesp(AstClass* classp, AstClass* ownerp) {
+        AstClass* const rootp = rootClassp(classp);
+        m_roots.emplace_back(ownerp, rootp);
+        return getCreateFuncp(rootp, ownerName("__Vstatic_reaches", ownerp), false, false);
+    }
+    // A call of funcp passing the number of the walk walkp
+    static AstNodeFTaskRef* newWalkCallp(AstNodeFTaskRef* callp, AstFunc* funcp,
+                                         AstNodeExpr* walkp) {
+        callp->taskp(funcp);
+        callp->addArgsp(new AstArg{callp->fileline(), "", walkp});
+        callp->dtypeSetBit();
+        return callp;
+    }
+    AstVarRef* newWalkRefp(AstFunc* funcp) const {
+        return new AstVarRef{funcp->fileline(), m_walkVarps.at(funcp), VAccess::READ};
+    }
+    void makeReachesBody(AstClass* rootp, AstClass* ownerp) {
+        AstFunc* const funcp = getCreateReachesp(rootp, ownerp);
+        FileLine* const fl = funcp->fileline();
+        AstVar* const fvarp = funcp->fvarp();
+        AstVar* const walkedVarp
+            = getCreateVarp(rootp, ownerName("__Vstatic_walked", ownerp), false);
+        // No walk reached a new object: the walks are numbered from 1
+        AstNodeFTask* const newp = VN_CAST(m_memberMap.findMember(rootp, "new"), NodeFTask);
+        UASSERT_OBJ(newp, rootp, "No constructor");
+        newp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, walkedVarp, VAccess::WRITE},
+                                      new AstConst{fl, AstConst::Unsized64{}, 0}});
+        AstFunc* const membersFuncp = getCreateMembersp(rootp, ownerp);
+        AstNodeExpr* const membersp
+            = newWalkCallp(new AstFuncRef{fl, membersFuncp}, membersFuncp, newWalkRefp(funcp));
+        AstNodeStmt* const stmtsp
+            = new AstAssign{fl, new AstVarRef{fl, walkedVarp, VAccess::WRITE}, newWalkRefp(funcp)};
+        stmtsp->addNext(new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE}, membersp});
+        funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE},
+                                       new AstConst{fl, AstConst::BitFalse{}}});
+        funcp->addStmtsp(new AstIf{
+            fl, new AstNeq{fl, new AstVarRef{fl, walkedVarp, VAccess::READ}, newWalkRefp(funcp)},
+            stmtsp});
+    }
+    // Statement: unless already true, whether the object of handle objp reaches the members
+    AstNodeStmt* newHandleReachp(AstFunc* funcp, AstNodeExpr* objp, AstClass* ownerp) {
+        FileLine* const fl = objp->fileline();
+        AstVar* const fvarp = funcp->fvarp();
+        AstClass* const classp = VN_AS(objp->dtypep()->skipRefp(), ClassRefDType)->classp();
+        AstFunc* const reachesp = getCreateReachesp(classp, ownerp);
+        AstNodeExpr* const callp = newWalkCallp(
+            new AstMethodCall{fl, objp->cloneTree(false), reachesp->name(), nullptr}, reachesp,
+            newWalkRefp(funcp));
+        AstNodeExpr* condp = new AstNot{fl, new AstVarRef{fl, fvarp, VAccess::READ}};
+        condp = new AstLogAnd{
+            fl, condp, new AstNeq{fl, objp->cloneTree(false), new AstConst{fl, AstConst::Null{}}}};
+        if (AstNodeExpr* const activep = newHandlesActivep(m_memberMap, objp, true, false)) {
+            condp = new AstLogAnd{fl, condp, activep};
+        }
+        VL_DO_DANGLING(objp->deleteTree(), objp);
+        return new AstIf{fl, condp,
+                         new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE}, callp}};
+    }
+    // Statement: unless already true, whether an object of array arrayRefp reaches the members
+    AstNodeStmt* newElementsReachp(AstFunc* funcp, AstVarRef* arrayRefp, AstNodeDType* elemDtp,
+                                   AstClass* ownerp) {
+        FileLine* const fl = arrayRefp->fileline();
+        AstNodeDType* const dtypep = arrayRefp->dtypep()->skipRefp();
+        const AstAssocArrayDType* const assocDtp = VN_CAST(dtypep, AssocArrayDType);
+        const AstUnpackArrayDType* const unpackDtp = VN_CAST(dtypep, UnpackArrayDType);
+        const bool wildcard = VN_IS(dtypep, WildcardArrayDType);
+        AstNodeDType* const idxDtp = assocDtp   ? assocDtp->keyDTypep()
+                                     : wildcard ? dtypep->findStringDType()
+                                                : dtypep->findIntDType();
+        AstVar* const idxVarp
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vindex"), idxDtp};
+        AstNodeExpr* idxp = new AstVarRef{fl, idxVarp, VAccess::READ};
+        AstNodeExpr* const fromp = arrayRefp->cloneTree(false);
+        AstNodeExpr* elemp;
+        if (assocDtp) {
+            elemp = new AstAssocSel{fl, fromp, idxp};
+        } else if (wildcard) {
+            elemp = new AstWildcardSel{fl, fromp, idxp};
+        } else if (unpackDtp) {
+            // The offset of the element from the low bound, as in ArraySel
+            idxp = new AstSub{fl, idxp, new AstConst{fl, static_cast<uint32_t>(unpackDtp->lo())}};
+            idxp->dtypeFrom(idxVarp);
+            elemp = new AstArraySel{fl, fromp, idxp};
+        } else {
+            elemp = new AstCMethodHard{fl, fromp, VCMethod::ARRAY_AT, idxp};
+        }
+        elemp->dtypep(elemDtp);
+        AstForeachHeader* const headerp = new AstForeachHeader{fl, arrayRefp, idxVarp};
+        return new AstForeach{fl, headerp, newHandleReachp(funcp, elemp, ownerp)};
+    }
+    // The body of __Vstatic_members<N> of classp, true if its objects have the members
+    void makeMembersBody(AstClass* classp, AstClass* ownerp, bool has) {
+        AstFunc* const funcp = getCreateMembersp(classp, ownerp);
+        FileLine* const fl = funcp->fileline();
+        AstVar* const fvarp = funcp->fvarp();
+        AstNodeExpr* initp = new AstConst{fl, AstConst::WidthedValue{}, 1, has};
+        AstClass* const basep = baseClassp(classp);
+        if (!has && basep) {
+            AstFunc* const superFuncp = getCreateMembersp(basep, ownerp);
+            AstFuncRef* const superp = new AstFuncRef{fl, superFuncp};
+            superp->classOrPackagep(basep);
+            superp->superReference(true);
+            VL_DO_DANGLING(initp->deleteTree(), initp);
+            initp = newWalkCallp(superp, superFuncp, newWalkRefp(funcp));
+        }
+        funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE}, initp});
+        if (has) return;
+        // The rand class handles it declares, and the arrays of them
+        for (AstNode* const memberp : classp->memberspList()) {
+            AstVar* const varp = VN_CAST(memberp, Var);
+            if (!varp || !varp->rand().isRandomizable()) continue;
+            AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+            AstNodeDType* const elemDtp
+                = dtypep->isNonPackedArray() ? dtypep->subDTypep()->skipRefp() : dtypep;
+            const AstClassRefDType* const refp = VN_CAST(elemDtp, ClassRefDType);
+            if (!refp || refp->classp()->isInterfaceClass()) continue;
+            AstVarRef* const varRefp = new AstVarRef{fl, classp, varp, VAccess::READ};
+            funcp->addStmtsp(elemDtp == dtypep
+                                 ? newHandleReachp(funcp, varRefp, ownerp)
+                                 : newElementsReachp(funcp, varRefp, elemDtp, ownerp));
+        }
+    }
+
+    // The bodies of __Vstatic_members<N> of classp and the classes derived from it, given
+    // whether its base class is or extends the owner
+    void makeMembersBodies(AstClass* classp, AstClass* ownerp, bool baseHas,
+                           const DerivedMap& derivedps) {
+        const bool has = baseHas || classp == ownerp;
+        makeMembersBody(classp, ownerp, has);
+        const auto it = derivedps.find(classp);
+        if (it != derivedps.end()) {
+            for (AstClass* const cp : it->second) makeMembersBodies(cp, ownerp, has, derivedps);
+        }
+    }
+
+public:
+    StaticReachFuncs(VMemberMap& memberMap, V3UniqueNames& uniqueNames)
+        : m_memberMap{memberMap}
+        , m_uniqueNames{uniqueNames} {}
+    // Whether the object of a method of classp reaches objects of class ownerp, in a new walk
+    AstNodeExpr* newCallp(FileLine* fl, AstClass* classp, AstClass* ownerp) {
+        const bool newOwner = m_ownerIds.emplace(ownerp, m_ownerIds.size()).second;
+        AstFunc* const walkFuncp
+            = getCreateFuncp(ownerp, ownerName("__Vstatic_walk", ownerp), false, true);
+        if (newOwner) {
+            // Number the walks from 1, see makeReachesBody()
+            AstVar* const walksVarp
+                = getCreateVarp(ownerp, ownerName("__Vstatic_walks", ownerp), true);
+            AstVarRef* const walksRefp = new AstVarRef{fl, walksVarp, VAccess::READ};
+            walkFuncp->addStmtsp(new AstAssign{
+                fl, new AstVarRef{fl, walksVarp, VAccess::WRITE},
+                new AstAdd{fl, walksRefp, new AstConst{fl, AstConst::Unsized64{}, 1}}});
+            walkFuncp->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, walkFuncp->fvarp(), VAccess::WRITE},
+                              new AstVarRef{fl, walksVarp, VAccess::READ}});
+        }
+        AstFuncRef* const walkp = new AstFuncRef{fl, walkFuncp};
+        walkp->classOrPackagep(ownerp);
+        walkp->dtypeFrom(walkFuncp);
+        AstFunc* const reachesp = getCreateReachesp(classp, ownerp);
+        return newWalkCallp(new AstFuncRef{fl, reachesp}, reachesp, walkp);
+    }
+    // Make the bodies of the methods of the hierarchies reached, each once per owner
+    void makeBodies() {
+        DerivedMap derivedps;
+        v3Global.rootp()->foreach([&](AstClass* const classp) {
+            if (AstClass* const basep = baseClassp(classp)) derivedps[basep].push_back(classp);
+        });
+        std::unordered_map<const AstClass*, std::unordered_set<const AstClass*>> made;
+        // Grows as the bodies reach other hierarchies
+        for (size_t i = 0; i < m_roots.size(); ++i) {
+            AstClass* const ownerp = m_roots[i].first;
+            AstClass* const rootp = m_roots[i].second;
+            if (!made[ownerp].insert(rootp).second) continue;
+            makeReachesBody(rootp, ownerp);
+            makeMembersBodies(rootp, ownerp, false, derivedps);
+        }
+    }
+};
+
 class ConstraintExprVisitor final : public VNVisitor {
 public:
     struct MemberSizeBindings final {
@@ -1207,6 +1462,7 @@ private:
     bool m_inSoftItem = false;  // Keep soft payload/name grouping when deferring array layouts
     AstNodeExpr* m_layoutRootp = nullptr;  // Positive hard conjunct currently allowed to split
     VMemberMap& m_memberMap;  // Member names cached for fast lookup
+    StaticReachFuncs& m_staticReaches;  // Methods telling whether the object reaches statics
     const std::map<const AstVar*, AstVar*>& m_memberSizeVars;  // Existing member SIZE proxies
     const std::set<std::string>& m_sizedMemberPaths;  // Paths resized by this solve
     std::map<std::string, AstMemberRef*>* const m_gatedMemberPathsp;  // Gated, see bindings
@@ -2605,15 +2861,15 @@ private:
         };
         AstNodeExpr* activep
             = memberRefp ? newHandlesActivep(m_memberMap, memberRefp->fromp(), true, false)
-                         : nullptr;
+                         : newStaticReachp(varp, memberRefp);
         AstNodeExpr* randModeArrayp = randMode.usesMode ? newStaticRandModeRefp(varp) : nullptr;
         if (randMode.usesMode && !randModeArrayp) {
             UASSERT_OBJ(!varp->lifetime().isStatic(), varp, "No static rand_mode array");
             UASSERT_OBJ(memberRefp, varp, "No member select for an object's rand_mode array");
             if (AstVar* const subRandModeVarp
                 = RandModeVars::randModeVarp(VN_AS(varp->user2p(), NodeModule))) {
-                AstMemberRef* const randModeRefp = new AstMemberRef{
-                    fl, memberRefp->fromp()->cloneTree(false), subRandModeVarp};
+                AstMemberRef* const randModeRefp
+                    = new AstMemberRef{fl, memberRefp->fromp()->cloneTree(false), subRandModeVarp};
                 randModeRefp->dtypep(subRandModeVarp->dtypep());
                 randModeArrayp = randModeRefp;
             }
@@ -2680,6 +2936,11 @@ private:
             return VN_AS(memberRefp->user2p(), NodeModule);
         }
         return VN_AS(varp->user2p(), NodeModule);
+    }
+    // For a foreign static, whether the randomized object reaches objects of its class
+    AstNodeExpr* newStaticReachp(const AstVar* varp, const AstMemberRef* memberRefp) {
+        if (memberRefp || !isForeignStatic(varp)) return nullptr;
+        return m_staticReaches.newCallp(varp->fileline(), m_classp, VN_AS(varp->user2p(), Class));
     }
     // A static member of a class neither base nor derived of this class, e.g. of a rand
     // sub-object, so not of this object
@@ -2975,7 +3236,7 @@ private:
         // Always call write_var (keeps variable in solver for constraint
         // evaluation), but toggle disabled state so the solver skips
         // write-back when rand_mode is off.
-        if (memberRefp || (foreignStatic && randMode.usesMode)) {
+        if (memberRefp || foreignStatic) {
             addMemberRefRegistration(methodp->makeStmt(), varp, memberRefp, smtName,
                                      foreignMode ? randMode : RandomizeMode{}, initp);
         } else {
@@ -3017,7 +3278,7 @@ private:
         AstNodeExpr* const handlesActivep
             = memberRefp && !classHandleArray && varp->rand().isRandomizable()
                   ? newHandlesActivep(m_memberMap, memberRefp->fromp(), true, false)
-                  : nullptr;
+                  : newStaticReachp(varp, memberRefp);
         if ((!randMode.usesMode || classHandleArray) && !handlesActivep) {
             // Global constraints keep nodep alive for write_var processing
             if (!isGlobalConstrained) VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -6850,6 +7111,7 @@ private:
 public:
     // CONSTRUCTORS
     explicit ConstraintExprVisitor(AstClass* classp, VMemberMap& memberMap,
+                                   StaticReachFuncs& staticReaches,
                                    const MemberSizeBindings& memberSizes, AstNode* nodep,
                                    AstBegin* inlineInitp, AstVar* genp, AstVar* randModeVarp,
                                    std::set<std::string>& writtenVars,
@@ -6865,6 +7127,7 @@ public:
         , m_genp{genp}
         , m_randModeVarp{randModeVarp}
         , m_memberMap{memberMap}
+        , m_staticReaches{staticReaches}
         , m_memberSizeVars{memberSizes.vars}
         , m_sizedMemberPaths{memberSizes.paths}
         , m_gatedMemberPathsp{memberSizes.gatedp}
@@ -6886,6 +7149,7 @@ public:
 
 class SolverSmtLowering final : public V3SolverLowering {
     // STATE
+    StaticReachFuncs m_staticReaches{m_memberMap, m_uniqueNames};
     FastDistGens m_fastDistGens;  // Original eligible dist -> generator recording its draw
     int m_distNum = 0;  // Dist bucket variable counter within a class for var naming
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
@@ -7391,8 +7655,8 @@ class SolverSmtLowering final : public V3SolverLowering {
         if (!sizeVarp) {
             // Declared next to the array, so every class constraining the array's size
             // (e.g. sibling classes extending the array's class) shares it
-            sizeVarp = newSizeVar(VN_AS(arrVarp->user2p(), Class),
-                                  SmtUtil::sizeVarName(arrVarp), fl, signed32DTypep);
+            sizeVarp = newSizeVar(VN_AS(arrVarp->user2p(), Class), SmtUtil::sizeVarName(arrVarp),
+                                  fl, signed32DTypep);
             arrVarp->user4p(sizeVarp);
         }
         return sizeVarp;
@@ -8721,6 +8985,7 @@ public:
 
     // V3SolverLowering
     void prepareClass(AstClass* classp) override { createRandomGenerator(classp); }
+    void finish() override { m_staticReaches.makeBodies(); }
     void startClass(AstClass*) override {
         m_writtenVars.clear();  // Each class has its own set of written variables
     }
@@ -8847,6 +9112,7 @@ public:
                     const ConstraintExprVisitor exprVisitor{
                         classp,
                         m_memberMap,
+                        m_staticReaches,
                         {m_memberSizeVars, paths, &m_gatedMemberPaths[classp]},
                         holderp->declsp(),
                         nullptr,
@@ -9237,6 +9503,7 @@ public:
         expandUniqueElementList(holderp->declsp());
         const ConstraintExprVisitor exprVisitor{classp,
                                                 m_memberMap,
+                                                m_staticReaches,
                                                 {m_memberSizeVars, memberSizePaths},
                                                 holderp->declsp(),
                                                 setupBlockp,
@@ -9471,6 +9738,7 @@ public:
             expandUniqueElementList(capturedClonep->declsp());
             ConstraintExprVisitor{classp,
                                   m_memberMap,
+                                  m_staticReaches,
                                   {m_memberSizeVars, memberSizePaths},
                                   capturedClonep->declsp(),
                                   elementSetupBlockp,
@@ -9574,9 +9842,11 @@ public:
         expandUniqueElementList(holderp->declsp());
         const std::set<std::string> memberSizePaths;
         const ConstraintExprVisitor exprVisitor{
-            nullptr,           m_memberMap,   {m_memberSizeVars, memberSizePaths},
-            holderp->declsp(), setupBlockp,   stdrandp,
-            nullptr,           m_writtenVars, &m_uniqueConstraintId,
+            nullptr,           m_memberMap,
+            m_staticReaches,   {m_memberSizeVars, memberSizePaths},
+            holderp->declsp(), setupBlockp,
+            stdrandp,          nullptr,
+            m_writtenVars,     &m_uniqueConstraintId,
             m_uniqueNames,     nullptr};
         SmtUtil::replaceWithLowered(holderp);
         m_stdFuncRounds[randomizeFuncp] = StdFuncRounds{roundsFirstp, exprVisitor.funcCalls()};
