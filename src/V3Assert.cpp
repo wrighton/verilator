@@ -178,6 +178,53 @@ bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
 }
 
 //######################################################################
+// AssertInferClockVisitor
+// Find the variables a procedure body uses other than in a clocking event or an assertion
+// statement, which prevent inferring a clock from an event expression of the procedure's
+// event control (IEEE 1800-2023 16.14.6). An event of the body counts as a clocking event, as
+// does the clock that assertion lowering gives a sampled value function.
+
+class AssertInferClockVisitor final : public VNVisitorConst {
+    // STATE
+    std::unordered_set<const AstVar*> m_usedVarps;  // Variables used in the body
+
+    // VISITORS
+    void visit(AstSenItem*) override {}
+    void visit(AstNodeCoverOrAssert*) override {}
+    void visit(AstVarRef* nodep) override { m_usedVarps.emplace(nodep->varp()); }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit AssertInferClockVisitor(AstNode* stmtsp) { iterateAndNextConstNull(stmtsp); }
+    ~AssertInferClockVisitor() override = default;
+    // True if the body uses a variable of the expression
+    bool usesVarOf(const AstNode* exprp) const {
+        return exprp->exists(
+            [&](const AstVarRef* refp) { return m_usedVarps.count(refp->varp()) != 0; });
+    }
+};
+
+AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
+    // The only event expression of the event control that is an edge event, possibly with iff,
+    // or solely an event variable or clocking block, whose variables the procedure body does
+    // not use (IEEE 1800-2023 16.14.6 c))
+    if (!alwaysp->sentreep() || !alwaysp->stmtsp()) return nullptr;
+    const AssertInferClockVisitor bodyUses{alwaysp->stmtsp()};
+    AstSenItem* clockp = nullptr;
+    for (AstSenItem* const itemp : alwaysp->sentreep()->sensespList()) {
+        // A clocking block is an event variable here
+        const bool isEvent = VN_IS(itemp->sensp(), NodeVarRef) && !itemp->condp()
+                             && itemp->sensp()->dtypep()->isEvent();
+        if (!itemp->edgeType().anEdge() && !isEvent) continue;
+        if (bodyUses.usesVarOf(itemp->sensp())) continue;
+        if (clockp) return nullptr;
+        clockp = itemp;
+    }
+    return clockp;
+}
+
+//######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,
 // see IEEE 1800-2023 16.9.4.
