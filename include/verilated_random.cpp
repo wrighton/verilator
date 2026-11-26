@@ -2592,8 +2592,8 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             os << ")))\n";
         }
         std::vector<int> slotIds;
-        settled = assumeDropping(sess, keep, lits, terms, dropped, checksLeft, nullptr, &slotIds,
-                                 &satisfiedLeft);
+        settled = assumeDropping(rngr, sess, keep, lits, terms, dropped, checksLeft, nullptr,
+                                 &slotIds, &satisfiedLeft);
         if (!settled) break;
         satisfied();
         std::vector<PinTerm> conflicted;
@@ -2637,7 +2637,8 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             os << ' ' << values[k] << "))))\n";
         }
         std::vector<bool> guessed;
-        settled = assumeDropping(sess, keep, lits, conflicted, dropped, checksLeft, &guessed);
+        settled
+            = assumeDropping(rngr, sess, keep, lits, conflicted, dropped, checksLeft, &guessed);
         if (!settled) break;
         satisfied();
         // A term dropped as a guess may still change on its own, which would leave its
@@ -2718,11 +2719,11 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
     applyModel(sess);
 }
 
-bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
-                                  const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
-                                  int& checksLeftr, std::vector<bool>* guessedp,
-                                  std::vector<int>* slotIdsp, int* satisfiedLeftp)
-    VL_REQUIRES(sess.m_mutex) {
+bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std::string& keep,
+                                  int first, const std::vector<PinTerm>& terms,
+                                  std::vector<bool>& droppedr, int& checksLeftr,
+                                  std::vector<bool>* guessedp, std::vector<int>* slotIdsp,
+                                  int* satisfiedLeftp) VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     droppedr.assign(terms.size(), false);
     if (guessedp) guessedp->assign(terms.size(), false);
@@ -2743,14 +2744,25 @@ bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep
         if (status != VlSolverStatus::UNSAT) return false;
         // Drop the narrowest term of the core: wide data rarely causes the conflict.
         // The core only names active literals; ones before first are kept literals.
-        // A core need not be minimal, so a pick among several is only a guess.
+        // A core need not be minimal, so a pick among several is only a guess. Among the
+        // same part of several elements of one array, the pick is random: the solver
+        // lists a core in its own order, so its first would be the one to change on every
+        // call.
         int pick = -1;
         int candidates = 0;
+        int ties = 0;  // Candidates like the pick, which is a random one of them
         for (const int idx : readUnsatAssumptions(sess)) {
             const int k = idx - first;
             if (k < 0 || k >= static_cast<int>(terms.size()) || droppedr[k]) continue;
             ++candidates;
-            if (pick < 0 || terms[k].width < terms[pick].width) pick = k;
+            if (pick < 0 || terms[k].width < terms[pick].width) {
+                pick = k;
+                ties = 1;
+            } else if (terms[k].width == terms[pick].width && terms[k].varp == terms[pick].varp
+                       && terms[k].lsb == terms[pick].lsb
+                       && VL_RANDOM_RNG_I(rngr) % static_cast<IData>(++ties) == 0) {
+                pick = k;
+            }
         }
         if (pick < 0) return false;
         droppedr[pick] = true;
