@@ -1838,6 +1838,54 @@ class WidthVisitor final : public VNVisitor {
         }
         nodep->v3fatalSrc("AstSelBit should disappear after widthSel");
     }
+    void visit(AstStreamWith* nodep) override {
+        // Streams the items it selects; unpacking into them, which can size the array, is not
+        // supported
+        AstNodePreSel* const selp = nodep->selp()->unlinkFrBack();
+        userIterateAndNext(selp->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());
+        const AstNodeDType* const fromDtp = selp->fromp()->dtypep()->skipRefp();
+        bool bad = false;  // Reported, so stream the whole array instead
+        if ((!VN_IS(fromDtp, UnpackArrayDType) && !VN_IS(fromDtp, DynArrayDType)
+             && !VN_IS(fromDtp, QueueDType))
+            || fromDtp->subDTypep()->skipRefp()->isNonPackedArray()) {
+            nodep->v3error("with[] stream expression of "
+                           << fromDtp->prettyDTypeNameQ()
+                           << ", which is not a one-dimensional unpacked array"
+                              " (IEEE 1800-2023 11.4.14.4).");
+            bad = true;
+        } else if (selp->fromp()->exists(
+                       [](const AstNodeVarRef* refp) { return refp->access().isWriteOrRW(); })) {
+            nodep->v3warn(E_UNSUPPORTED,
+                          "Unsupported: with[] stream expression as a stream target.");
+            bad = true;
+        } else if (VN_IS(fromDtp, UnpackArrayDType) && !VN_IS(selp, SelBit)) {
+            // A slice of a fixed-size array needs a constant position
+            userIterateAndNext(selp->rhsp(), WidthVP{CONTEXT_DET, PRELIM}.p());
+            userIterateAndNext(selp->thsp(), WidthVP{CONTEXT_DET, PRELIM}.p());
+            if (!VN_IS(V3Const::constifyEdit(selp->rhsp()), Const)
+                || (VN_IS(selp, SelExtract)
+                    && !VN_IS(V3Const::constifyEdit(selp->thsp()), Const))) {
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: with[] stream expression of a"
+                                             " fixed-size array at a non-constant position.");
+                bad = true;
+            }
+        }
+        if (bad) {
+            AstNodeExpr* const newp = selp->fromp()->unlinkFrBack();
+            VL_DO_DANGLING(pushDeletep(selp), selp);
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            userIterate(newp, m_vup);
+            return;
+        }
+        nodep->replaceWith(selp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        userIterateChildren(selp, WidthVP{CONTEXT_DET, PRELIM}.p());
+        // A range past the end of the array streams the whole array, then the default value for
+        // the items it lacks (IEEE 1800-2023 11.4.14.4), as a dynamic array slice reads them
+        AstNode* const newp = V3Width::widthSelNoIterEdit(selp, true);
+        userIterate(newp, m_vup);
+    }
     void visit(AstSelExtract* nodep) override {
         // Just a quick check as after V3Param these nodes instead are AstSel's
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
