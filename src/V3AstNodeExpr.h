@@ -2826,6 +2826,7 @@ public:
     }
     ASTGEN_MEMBERS_AstSchemaRef;
     std::string name() const override VL_MT_STABLE;
+    std::string prettyNameMsg() const override;
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     bool sameNode(const AstNode* samep) const override {

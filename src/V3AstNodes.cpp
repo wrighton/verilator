@@ -4753,6 +4753,7 @@ void AstSchemaRef::dumpJson(std::ostream& str) const {
     dumpJsonGen(str);
 }
 std::string AstSchemaRef::name() const { return schemap()->name(); }
+std::string AstSchemaRef::prettyNameMsg() const { return schemap()->prettyNameMsg(); }
 AstActive* AstScope::comboActivep(bool create) {
     // Use an existing one, but not the active of an AlwaysPostponed, which must stay alone
     for (AstNode* const nodep : blockspList()) {
