@@ -893,8 +893,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
             if (classp->user1()) markDerived(classp);
         }
     }
-    // Add the handles through which the constraints of classp select members of elements of
-    // arrays of class handles, and those through which they select sizes of arrays
+    // Add the handles through which the constraints of classp select value members, or members
+    // of elements of arrays of class handles, and those through which they select array sizes
     static void addSelectedHandles(const AstClass* classp,
                                    std::unordered_set<const AstVar*>& elemHandlesr,
                                    std::unordered_set<const AstVar*>& sizeHandlesr) {
@@ -902,7 +902,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
             const AstConstraint* const constrp = VN_CAST(memberp, Constraint);
             if (!constrp) continue;
             constrp->foreach([&](const AstMemberRef* refp) {
-                if (isHandleElemMember(refp)) addSelectHandles(refp->fromp(), elemHandlesr);
+                if (isHandleElemMember(refp) || isValueMember(refp)) {
+                    addSelectHandles(refp->fromp(), elemHandlesr);
+                }
             });
             constrp->foreach([&](const AstCMethodHard* methodp) {
                 if (isMemberArraySize(methodp)) addSelectHandles(methodp->fromp(), sizeHandlesr);
@@ -947,6 +949,13 @@ class RandomizeMarkVisitor final : public VNVisitor {
         const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
         return refp ? refp->varp() : nullptr;
     }
+    // Whether refp selects a rand value member of an object, not an array or a handle
+    static bool isValueMember(const AstMemberRef* refp) {
+        const AstNodeDType* const dtypep = refp->varp()->dtypep()->skipRefp();
+        return refp->varp()->rand().isRandomizable() && !VN_IS(dtypep, ClassRefDType)
+               && !VN_IS(dtypep, NodeArrayDType) && !VN_IS(dtypep, DynArrayDType)
+               && !VN_IS(dtypep, QueueDType) && !VN_IS(dtypep, AssocArrayDType);
+    }
     // Whether refp selects a member of an element of an array of class handles
     static bool isHandleElemMember(const AstMemberRef* refp) {
         const AstNodeExpr* arrp = nullptr;
@@ -990,7 +999,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         }
         std::vector<std::pair<AstClass*, AstVar*>> handles;  // Owner class and handle
-        // Handles through which a constraint selects members of array elements, or array sizes
+        // Handles through which a constraint selects members, or array sizes
         std::unordered_set<const AstVar*> elemHandleps;
         std::unordered_set<const AstVar*> sizeHandleps;
         for (const AstClass* const classp : m_classps)
@@ -1002,9 +1011,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 const AstClassRefDType* const classRefp
                     = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
                 if (!classRefp) continue;
-                // Unless another class's constraint selects the members of its arrays' objects,
-                // or the sizes its elements are solved for, which must be solved with it: then
-                // the clone reports the select unsupported
+                // Unless another class's constraint selects its value members, the members of
+                // its arrays' objects, or the sizes its elements are solved for, which must be
+                // solved with it: then the clone reports the select unsupported
                 const bool joint
                     = elemHandleps.count(varp)
                       || (sizeHandleps.count(varp) && constrainsElemsBySize(classRefp->classp()));

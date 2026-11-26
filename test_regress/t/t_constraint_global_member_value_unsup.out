@@ -1,0 +1,8 @@
+%Error-UNSUPPORTED: t/t_constraint_global_member_value_unsup.v:17:36: Unsupported: Multiple expressions inside indices of complex expression in constraint
+   17 |     foreach (arr[i]) if (i < 2) arr[(i * 2) / 2].x != arr[(i * 2) / 2 + 1].x;
+      |                                    ^
+                    t/t_constraint_global_member_value_unsup.v:17:58: ... Location of second expression
+   17 |     foreach (arr[i]) if (i < 2) arr[(i * 2) / 2].x != arr[(i * 2) / 2 + 1].x;
+      |                                                          ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
