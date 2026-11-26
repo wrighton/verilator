@@ -11134,6 +11134,10 @@ class WidthVisitor final : public VNVisitor {
         }
         AstNodeSchema* const copyp = origp->cloneTree(false);
         copyp->didWidth(false);  // As skipUntypedFormalDecl may have set it on the original
+        // Named apart from the declaration, as member lookups index both until it is deleted,
+        // but messages give the declared name
+        copyp->origName(origp->name());
+        copyp->name(origp->name() + "__Vtyped" + cvtToStr(copies.size()));
         for (size_t i = 0; i < portps.size(); ++i) {
             AstVar* const varp = portps[i]->clonep();
             pushDeletep(varp->childDTypep()->unlinkFrBack());
