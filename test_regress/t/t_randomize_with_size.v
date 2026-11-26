@@ -68,6 +68,15 @@ class QueueSizePacket;
   constraint contents {data.size() == length;}
 endclass
 
+// Its constraints on elements apply to those an inline size adds
+class InlineGrowPacket;
+  rand bit [6:0] data[$];
+  constraint c_data {foreach (data[i]) data[i] == 7'd7;}
+  function new;
+    data = '{1, 2};
+  endfunction
+endclass
+
 module t;
   initial begin
     repeat (20) begin
@@ -266,6 +275,19 @@ module t;
         foreach (data[index]) data[index] inside {[7'd123 : 7'd127]};
       };
       `checkd(res, 0);
+    end
+
+    begin
+      automatic InlineGrowPacket packet = new;
+      automatic int res;
+      res = packet.randomize() with {data.size() == 5;};
+      `checkd(res, 1);
+      `checkd(packet.data.size(), 5);
+      foreach (packet.data[i]) `checkd(packet.data[i], 7);
+      // Another inline size of the same array
+      res = packet.randomize() with {data.size() == 3;};
+      `checkd(res, 1);
+      `checkd(packet.data.size(), 3);
     end
 
     $write("*-* All Finished *-*\n");
