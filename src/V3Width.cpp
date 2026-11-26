@@ -2206,10 +2206,20 @@ class WidthVisitor final : public VNVisitor {
                           "Unsupported: with[] stream expression as a stream target");
             bad = true;
         }
-        AstNodeExpr* const newp = bad ? selp->fromp()->unlinkFrBack() : selp;
-        if (bad) VL_DO_DANGLING(pushDeletep(selp), selp);
-        nodep->replaceWith(newp);
+        if (bad) {
+            AstNodeExpr* const newp = selp->fromp()->unlinkFrBack();
+            VL_DO_DANGLING(pushDeletep(selp), selp);
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            userIterate(newp, m_vup);
+            return;
+        }
+        nodep->replaceWith(selp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        userIterateChildren(selp, WidthVP{CONTEXT_DET, PRELIM}.p());
+        // A range past the end of the array streams the whole array, then the default value for
+        // the items it lacks (IEEE 1800-2023 11.4.14.4), as a dynamic array slice reads them
+        AstNode* const newp = V3Width::widthSelNoIterEdit(selp, true);
         userIterate(newp, m_vup);
     }
     void visit(AstSelExtract* nodep) override {
