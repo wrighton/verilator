@@ -300,6 +300,22 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         constp->dtypep(dtypep);
         return constp;
     }
+    // Whether a constant can have the default value of the type: an integral type, or a
+    // fixed-size unpacked array of one
+    static bool hasConstant(const AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+            return hasConstant(arrayp->subDTypep());
+        }
+        return dtypep->isIntegralOrPacked();
+    }
+    void replaceWithTypeDefault(AstNodeExpr* nodep) {
+        m_defaulted = true;
+        // Before any process runs the expression has the default value of its type
+        if (!hasConstant(nodep->dtypep())) return;
+        nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
 
     void visitSelect(AstNodeExpr* nodep) {
         // A select of a replaced value or index is itself the default of its type
@@ -310,12 +326,7 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             iterateChildren(nodep);
             setDefaulted = m_defaulted;
         }
-        if (setDefaulted) {
-            m_defaulted = true;  // Propagate up that replacement was made
-            nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
-            VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return;
-        }
+        if (setDefaulted) replaceWithTypeDefault(nodep);  // Also propagates up
     }
 
     // VISITORS
@@ -338,9 +349,7 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             || (!varp->isNet() && varp->lifetime().isStatic() && varp->hasUserInit())) {
             return;
         }
-        m_defaulted = true;
-        nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
-        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        replaceWithTypeDefault(nodep);
     }
     void visit(AstArraySel* nodep) override { visitSelect(nodep); }
     void visit(AstSliceSel* nodep) override { visitSelect(nodep); }
@@ -349,6 +358,99 @@ class DefaultSampledValueVisitor final : public VNVisitor {
 
 public:
     explicit DefaultSampledValueVisitor(AstNode* nodep) { iterate(nodep); }
+};
+
+//######################################################################
+// AssertPastSplitVisitor
+// The past value of an automatic variable is its current value (IEEE 1800-2023 16.5.1).
+// Split a $past of an expression reading one, so the $past applies to each largest operand
+// that reads no automatic variable.
+
+class AssertPastSplitVisitor final : public VNVisitor {
+    // TYPES
+    struct Operand final {
+        AstNodeExpr* nodep;  // The operand
+        bool automatic;  // Reads an automatic variable
+        bool reads;  // Reads a variable
+    };
+
+    // STATE
+    const AstPast* const m_pastp;  // The $past being split
+    std::vector<Operand> m_operands;  // Operands of the expressions being visited, innermost last
+    std::vector<AstPast*> m_newPastps;  // $past created around operands
+    // Nested $past and their split expressions, replaced after the iteration, as replacing a node
+    // during it visits its replacement again
+    std::vector<std::pair<AstPast*, AstNodeExpr*>> m_splitPastps;
+    AstNodeExpr* m_splitp = nullptr;  // The split expression, if split
+
+    // METHODS
+    // Apply the $past being split to an operand
+    void applyPast(AstNodeExpr* nodep) {
+        VNRelinker relinker;
+        nodep->unlinkFrBack(&relinker);
+        AstNodeExpr* const ticksp
+            = m_pastp->ticksp() ? m_pastp->ticksp()->cloneTree(false) : nullptr;
+        AstPast* const pastp
+            = new AstPast{nodep->fileline(), nodep, ticksp, m_pastp->sentreep()->cloneTree(false)};
+        pastp->dtypeFrom(nodep);
+        relinker.relink(pastp);
+        m_newPastps.push_back(pastp);
+    }
+
+    // Replace a nested $past by its split expression
+    void replaceSplit(AstPast* pastp, AstNodeExpr* splitp) {
+        pastp->replaceWith(splitp);
+        VL_DO_DANGLING(pushDeletep(pastp), pastp);
+    }
+
+    // VISITORS
+    void visit(AstPast* nodep) override {
+        // A nested $past is split first. Every operand it then reads the past of is one of the
+        // $past it created, so this $past applies to those.
+        const AssertPastSplitVisitor nested{nodep};
+        if (AstNodeExpr* const newp = nested.m_splitp) {
+            for (AstPast* const pastp : nested.m_newPastps) applyPast(pastp);
+            m_splitPastps.emplace_back(nodep, newp);
+            m_operands.push_back({newp, true, true});
+            return;
+        }
+        m_operands.push_back({nodep, false, true});
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        m_operands.push_back({nodep, nodep->varp()->lifetime().isAutomatic(), true});
+    }
+    void visit(AstNodeExpr* nodep) override {
+        const size_t first = m_operands.size();
+        iterateChildren(nodep);
+        const auto beginIt = m_operands.begin() + first;
+        const bool automatic = std::any_of(
+            beginIt, m_operands.end(), [](const Operand& operand) { return operand.automatic; });
+        const bool reads = std::any_of(beginIt, m_operands.end(),
+                                       [](const Operand& operand) { return operand.reads; });
+        if (automatic) {
+            std::for_each(beginIt, m_operands.end(), [this](const Operand& operand) {
+                if (!operand.automatic && operand.reads) applyPast(operand.nodep);
+            });
+        }
+        m_operands.erase(beginIt, m_operands.end());
+        m_operands.push_back({nodep, automatic, reads});
+    }
+    // Operands below another node, such as a function argument, belong to the expression above
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+    // CONSTRUCTORS
+    explicit AssertPastSplitVisitor(AstPast* pastp)
+        : m_pastp{pastp} {
+        iterate(pastp->exprp());
+        for (const auto& entry : m_splitPastps) replaceSplit(entry.first, entry.second);
+        if (m_operands.front().automatic) m_splitp = pastp->exprp()->unlinkFrBack();
+    }
+
+public:
+    ~AssertPastSplitVisitor() override = default;
+    // Return the expression with the $past applied to its operands, or nullptr if it reads no
+    // automatic variable
+    static AstNodeExpr* split(AstPast* pastp) { return AssertPastSplitVisitor{pastp}.m_splitp; }
 };
 
 //######################################################################
@@ -394,6 +496,7 @@ class AssertVisitor final : public VNVisitor {
     VDouble0 m_statAssertOnCombined;  // Statistic tracking
     VDouble0 m_statAssertOnHoisted;  // Statistic tracking
     bool m_inSampled = false;  // True inside a sampled expression
+    bool m_inPast = false;  // True below a $past split for its automatic variables
     bool m_inRestrict = false;  // True inside restrict assertion
     AstNodeStmt* m_passsp = nullptr;  // Current pass statement
     AstNodeStmt* m_failsp = nullptr;  // Current fail statement
@@ -1409,7 +1512,19 @@ class AssertVisitor final : public VNVisitor {
 
     //========== Past
     void visit(AstPast* nodep) override {
+        VL_RESTORER(m_inPast);
         if (!nodep->propertyTiming()) {
+            // A $past below another one was already split with it
+            if (!m_inPast) {
+                if (AstNodeExpr* const newp = AssertPastSplitVisitor::split(nodep)) {
+                    nodep->replaceWith(newp);
+                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                    m_inPast = true;
+                    iterate(newp);
+                    return;
+                }
+            }
+            m_inPast = true;
             nodep->initp(nodep->exprp()->cloneTreePure(false));
             { DefaultSampledValueVisitor{nodep->initp()}; }
         }
@@ -1464,7 +1579,9 @@ class AssertVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void visit(AstNodeVarRef* nodep) override {
-        if (m_inSampled && !nodep->user2() && !nodep->varp()->isTemp()) {
+        // Sampled values of automatic variables are their current values (IEEE 1800-2023 16.5.1)
+        if (m_inSampled && !nodep->user2() && !nodep->varp()->isTemp()
+            && !nodep->varp()->lifetime().isAutomatic()) {
             if (!nodep->access().isReadOnly()) {
                 nodep->v3warn(E_UNSUPPORTED,
                               "Unsupported: Write to variable in sampled expression");
