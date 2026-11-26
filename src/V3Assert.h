@@ -39,6 +39,10 @@ public:
     // nullptr
     static AstVar* newSequenceEvent(FileLine* flp, AstNodeModule* modp, const string& name,
                                     AstSchemaRef* schemaRefp) VL_MT_DISABLED;
+    // Add a count to modp, incremented at each end point of sequence instance schemaRefp,
+    // unless nullptr
+    static AstVar* newSequenceEndCount(FileLine* flp, AstNodeModule* modp, const string& name,
+                                       AstSchemaRef* schemaRefp) VL_MT_DISABLED;
     static string assertCtlGetCall(VAssertCtlQuery query, VAssertType type,
                                    VAssertDirectiveType directiveType) VL_MT_DISABLED;
     // Direct per-instance query retaining its state reference as structured AST.
