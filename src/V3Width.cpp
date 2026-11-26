@@ -6397,14 +6397,12 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::arrayMethod("r_" + nodep->name())};
             newp->withp(withp);
             newp->dtypeFrom(withp ? withp->dtypep() : adtypep->subDTypep());
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "min" || nodep->name() == "max" || nodep->name() == "unique") {
             methodOkArguments(nodep, 0, 0);
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
                                       VCMethod::arrayMethod(nodep->name())};
             newp->dtypep(queueDTypeIndexedBy(adtypep->subDTypep()));
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "find" || nodep->name() == "find_first"
                    || nodep->name() == "find_last") {
             AstWith* const withp
@@ -6416,7 +6414,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::arrayMethod(nodep->name())};
             newp->withp(withp);
             newp->dtypep(queueDTypeIndexedBy(adtypep->subDTypep()));
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "map") {
             AstWith* const withp
                 = methodWithClause(nodep, true, false, adtypep->subDTypep(),
@@ -6427,7 +6424,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::ARRAY_MAP};
             newp->withp(withp);
             newp->dtypep(queueDTypeIndexedBy(withp ? withp->dtypep() : adtypep->subDTypep()));
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else {
             nodep->v3error("Unknown wildcard associative array method " << nodep->prettyNameQ());
             nodep->dtypeFrom(adtypep->subDTypep());  // Best guess
@@ -6492,7 +6488,6 @@ class WidthVisitor final : public VNVisitor {
                                      VCMethod::arrayMethod(nodep->name()),  // first/last/next/prev
                                      index_exprp->unlinkFrBack()};
             newp->dtypeSetInt();
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "exists") {  // function int exists(input index)
             // IEEE really should have made this a "bit" return
             methodOkArguments(nodep, 1, 1);
@@ -6535,7 +6530,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::arrayMethod("r_" + nodep->name())};
             newp->withp(withp);
             newp->dtypeFrom(withp ? withp->dtypep() : adtypep->subDTypep());
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "min" || nodep->name() == "max" || nodep->name() == "unique"
                    || nodep->name() == "unique_index") {
             AstWith* const withp = methodWithClause(nodep, false, true, nullptr,
@@ -6550,7 +6544,6 @@ class WidthVisitor final : public VNVisitor {
             } else {
                 newp->dtypep(queueDTypeIndexedBy(adtypep->subDTypep()));
             }
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "find" || nodep->name() == "find_first"
                    || nodep->name() == "find_last") {
             AstWith* const withp = methodWithClause(nodep, true, false, nodep->findBitDType(),
@@ -6561,7 +6554,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::arrayMethod(nodep->name())};
             newp->withp(withp);
             newp->dtypep(queueDTypeIndexedBy(adtypep->subDTypep()));
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "find_index" || nodep->name() == "find_first_index"
                    || nodep->name() == "find_last_index") {
             AstWith* const withp = methodWithClause(nodep, true, false, nodep->findBitDType(),
@@ -6572,7 +6564,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::arrayMethod(nodep->name())};
             newp->withp(withp);
             newp->dtypep(queueDTypeIndexedBy(adtypep->keyDTypep()));
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "map") {
             AstWith* const withp = methodWithClause(nodep, true, false, adtypep->subDTypep(),
                                                     adtypep->keyDTypep(), adtypep->subDTypep());
@@ -6582,7 +6573,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::ARRAY_MAP};
             newp->withp(withp);
             newp->dtypep(queueDTypeIndexedBy(withp ? withp->dtypep() : adtypep->subDTypep()));
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else {
             nodep->v3error("Unknown built-in associative array method " << nodep->prettyNameQ());
             nodep->dtypeFrom(adtypep->subDTypep());  // Best guess
@@ -6680,7 +6670,6 @@ class WidthVisitor final : public VNVisitor {
             } else {
                 newp->dtypep(queueDTypeIndexedBy(adtypep->subDTypep()));
             }
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "find" || nodep->name() == "find_first"
                    || nodep->name() == "find_last") {
             AstWith* const withp = methodWithClause(nodep, true, false, nodep->findBitDType(),
@@ -6691,7 +6680,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::arrayMethod(nodep->name())};
             newp->withp(withp);
             newp->dtypep(queueDTypeIndexedBy(adtypep->subDTypep()));
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "find_index" || nodep->name() == "find_first_index"
                    || nodep->name() == "find_last_index") {
             AstWith* const withp = methodWithClause(nodep, true, false, nodep->findBitDType(),
@@ -6702,7 +6690,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::arrayMethod(nodep->name())};
             newp->withp(withp);
             newp->dtypep(newp->findQueueIndexDType());
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if (nodep->name() == "map") {
             // map() - IEEE 1800-2023 7.12.5
             // Returns a queue with same element count, each element is the with expression result
@@ -6714,7 +6701,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::ARRAY_MAP};
             newp->withp(withp);
             newp->dtypep(queueDTypeIndexedBy(withp ? withp->dtypep() : adtypep->subDTypep()));
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         }
         return newp;
     }
@@ -6755,7 +6741,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::arrayMethod("r_" + nodep->name())};
             newp->withp(withp);
             newp->dtypeFrom(withp ? withp->dtypep() : adtypep->subDTypep());
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if ((newp = methodCallArray(nodep, adtypep))) {
         } else {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported/unknown built-in dynamic array method "
@@ -6856,7 +6841,6 @@ class WidthVisitor final : public VNVisitor {
                                       VCMethod::arrayMethod("r_" + nodep->name())};
             newp->withp(withp);
             newp->dtypeFrom(withp ? withp->dtypep() : adtypep->subDTypep());
-            if (!nodep->firstAbovep()) newp->dtypeSetVoid();
         } else if ((newp = methodCallArray(nodep, adtypep))) {
         } else {
             nodep->v3warn(E_UNSUPPORTED,
@@ -7217,7 +7201,6 @@ class WidthVisitor final : public VNVisitor {
                                          VCMethod::arrayMethod("r_" + nodep->name())};
                 newp->withp(withp);
                 newp->dtypeFrom(withp ? withp->dtypep() : adtypep->subDTypep());
-                if (!nodep->firstAbovep()) newp->dtypeSetVoid();
                 newp->protect(false);
                 newp->didWidth(true);
                 nodep->replaceWith(newp);
