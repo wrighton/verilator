@@ -34,6 +34,23 @@ class StateIndex;
   }
 endclass
 
+// Arrays with rand_mode(0) hold their elements
+class ModeOff;
+  rand int k;
+  rand int unsigned sum;
+  rand bit [7:0] yf, yd, yq;
+  rand bit [7:0] f[4];
+  rand bit [7:0] d[];
+  rand bit [7:0] q[$];
+  constraint c {
+    k inside {[0 : 3]};
+    yf == f[k];
+    yd == d[k];
+    yq == q[k];
+    sum == d.sum() with (32'(item));
+  }
+endclass
+
 class Big;
   rand int k;
   rand bit [15:0] y;
@@ -62,6 +79,24 @@ module t;
       `checkh(o.yq, o.k < 2 ? o.q[o.k] : 8'h0);
       `checkh(o.ya, o.aa.exists(o.ka) ? o.aa[o.ka] : 8'h4d);
       `checkh(o.yg, o.g[o.k2][o.k % 3]);
+    end
+    begin
+      automatic ModeOff m = new;
+      m.f = '{8'h60, 8'h61, 8'h62, 8'h63};
+      m.d = '{8'h70, 8'h71, 8'h72};
+      m.q = '{8'h80, 8'h81};
+      m.f.rand_mode(0);
+      m.d.rand_mode(0);
+      m.q.rand_mode(0);
+      repeat (20) begin
+        randomize_result = m.randomize();
+        `checkh(randomize_result, 1);
+        `checkh(m.yf, m.f[m.k]);
+        `checkh(m.yd, m.k < 3 ? m.d[m.k] : 8'h0);
+        `checkh(m.yq, m.k < 2 ? m.q[m.k] : 8'h0);
+        `checkh(m.sum, 32'h70 + 32'h71 + 32'h72);
+      end
+      `checkh(m.d[1], 8'h71);
     end
     b.t = new[BIG];
     foreach (b.t[i]) b.t[i] = 16'(i * 7 + 1);
