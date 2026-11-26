@@ -623,6 +623,10 @@ private:
     // Each instance of a module, as modp->user1p() keeps only the last
     std::unordered_map<const AstNodeModule*, std::vector<VSymEnt*>> m_modInstSyms;
     IfaceModSyms m_ifaceModSyms;  // List of AstIface+Symbols to be processed
+    // Defparam -> the symbol of its scope in each instance of its module
+    std::unordered_map<const AstDefParam*, std::vector<VSymEnt*>> m_defParamInstScopes;
+    // Cell -> its symbol in each instance of its module
+    std::unordered_map<const AstCell*, std::vector<const VSymEnt*>> m_cellInstSyms;
     // Generate block -> earlier same-named alternative it replaced in the symbol table
     std::unordered_map<const VSymEnt*, VSymEnt*> m_genAltPrev;
     // Symbol of every elaborated instance of each module, for assertion control targets
@@ -698,6 +702,23 @@ public:
     VSymGraph* symsp() { return &m_syms; }
     int stepNumber() const { return static_cast<int>(m_step); }
     bool forPrimary() const { return m_step == LDS_PRIMARY; }
+    void defParamInstScope(const AstDefParam* nodep, VSymEnt* symp) {
+        m_defParamInstScopes[nodep].push_back(symp);
+    }
+    void cellInstSym(const AstCell* nodep, const VSymEnt* symp) {
+        m_cellInstSyms[nodep].push_back(symp);
+    }
+    const std::vector<const VSymEnt*>& cellInstSyms(const AstCell* nodep) {
+        return m_cellInstSyms[nodep];
+    }
+    // Return the scopes of nodep in the instances of its module, and forget them
+    std::vector<VSymEnt*> takeDefParamInstScopes(const AstDefParam* nodep) {
+        const auto it = m_defParamInstScopes.find(nodep);
+        if (it == m_defParamInstScopes.end()) return {};
+        std::vector<VSymEnt*> scopes = std::move(it->second);
+        m_defParamInstScopes.erase(it);
+        return scopes;
+    }
     void ownDefparamVarAdd(const AstVar* varp) { m_ownDefparamVars.emplace(varp); }
     void defParamScope(const AstDefParam* nodep, VSymEnt* symp) {
         m_defParamScopes[nodep].push_back(symp);
@@ -2145,6 +2166,7 @@ class LinkDotFindVisitor final : public VNVisitor {
         {
             m_scope = m_scope + "." + nodep->name();
             m_curSymp = m_modSymp = m_statep->insertCell(aboveSymp, m_modSymp, nodep, m_scope);
+            if (m_statep->forPrimary()) m_statep->cellInstSym(nodep, m_curSymp);
             m_inRecursion = nodep->recursive();
             m_inPathBind = m_inPathBind || nodep->pathBind();
             // We don't report NotFoundModule, as may be a unused module in a generate
@@ -2176,6 +2198,7 @@ class LinkDotFindVisitor final : public VNVisitor {
     void visit(AstDefParam* nodep) override {  // FindVisitor::
         nodep->user1p(m_curSymp);
         if (nodep->checkTarget()) m_statep->defParamScope(nodep, m_curSymp);
+        if (m_statep->forPrimary()) m_statep->defParamInstScope(nodep, m_curSymp);
         iterateChildren(nodep);
     }
     void visit(AstRefDType* nodep) override {  // FindVisitor::
@@ -3552,12 +3575,82 @@ class LinkDotParamVisitor final : public VNVisitor {
         }
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
+    // Whether a generate block may not be built: in a generate if or case, or a loop's
+    static bool maybeUnbuilt(const AstGenBlock* blockp) {
+        if (blockp->genforp()) return true;
+        const AstNode* const abovep = blockp->aboveLoopp();
+        return VN_IS(abovep, GenIf) || VN_IS(abovep, GenCaseItem);
+    }
+    // Whether symp is in a generate block not also containing targetp, which may not be built
+    static bool underGenBlock(const VSymEnt* symp, const VSymEnt* targetp) {
+        for (; symp; symp = symp->parentp()) {
+            const AstGenBlock* const blockp = VN_CAST(symp->nodep(), GenBlock);
+            if (!blockp || !maybeUnbuilt(blockp)) continue;
+            const VSymEnt* abovep = targetp;
+            while (abovep && abovep != symp) abovep = abovep->parentp();
+            if (!abovep) return true;
+        }
+        return false;
+    }
+    // Whether V3Param gives an anchored defparam path's value to the instance of cellSymp, as
+    // in ParamProcessor::defParamNames: the instances and generate blocks of the path are those
+    // above it, directly under an instance of, or the top, module named by the anchor
+    static bool anchoredNames(const string& anchoredPath, const VSymEnt* cellSymp) {
+        std::deque<string> relNames = VString::split(anchoredPath, '.');
+        const string anchor = relNames.front();
+        relNames.pop_front();
+        const VSymEnt* symp = cellSymp;
+        for (auto it = relNames.crbegin(); it != relNames.crend(); ++it) {
+            while (symp && !VN_IS(symp->nodep(), Cell) && !VN_IS(symp->nodep(), GenBlock)) {
+                symp = symp->parentp();
+            }
+            if (!symp || symp->nodep()->name() != *it) return false;
+            symp = symp->parentp();
+        }
+        // The next must be the instance or top, not a generate block
+        for (; symp; symp = symp->parentp()) {
+            if (VN_IS(symp->nodep(), GenBlock)) return false;
+            if (const AstCell* const cellp = VN_CAST(symp->nodep(), Cell)) {
+                return cellp->modp() && cellp->modp()->origName() == anchor;
+            }
+            if (const AstNodeModule* const modp = VN_CAST(symp->nodep(), NodeModule)) {
+                return modp->origName() == anchor;
+            }
+        }
+        return false;
+    }
+    // Whether the defparam's path, from its scopes in the instances of its module, may not name
+    // foundp in exactly the instances of cellp V3Param gives the value to, as anchoredPath
+    // names them: if it names another scope, or foundp in an instance not given the value,
+    // from one; or names an instance given the value only from scopes in generate blocks,
+    // which may not be built
+    bool namesOtherInstances(AstDefParam* nodep, const string& lookupPath,
+                             const string& anchoredPath, const VSymEnt* foundp,
+                             const AstCell* cellp, const std::vector<VSymEnt*>& instScopes) {
+        std::unordered_set<const VSymEnt*> given;  // Instances given the value
+        for (const VSymEnt* const cellSymp : m_statep->cellInstSyms(cellp)) {
+            if (anchoredNames(anchoredPath, cellSymp)) given.emplace(cellSymp);
+        }
+        std::unordered_set<const VSymEnt*> namedBuilt;  // Instances named from a built scope
+        for (VSymEnt* const instSymp : instScopes) {
+            string baddot;
+            VSymEnt* okSymp = nullptr;
+            const VSymEnt* otherp = m_statep->findDotted(nodep->fileline(), instSymp, lookupPath,
+                                                         baddot, okSymp, true);
+            if (!otherp || otherp->nodep() != foundp->nodep()) return true;
+            while (otherp && otherp->nodep() != cellp) otherp = otherp->parentp();
+            if (!given.count(otherp)) return true;
+            if (!underGenBlock(instSymp, otherp)) namedBuilt.emplace(otherp);
+        }
+        return namedBuilt.size() != given.size();
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         if (!m_statep->forPrimary()) {
             checkDefParamPath(nodep);
             return;
         }
         iterateChildren(nodep);
+        const std::vector<VSymEnt*> instScopes = m_statep->takeDefParamInstScopes(nodep);
         AstParseRef* const targetp = VN_CAST(nodep->targetp(), ParseRef);
         UASSERT_OBJ(targetp, nodep, "verilog.y made defparam without parseref");
         const std::string name = targetp->name();
@@ -3672,6 +3765,20 @@ class LinkDotParamVisitor final : public VNVisitor {
                 // A path selecting generate loop iterations, found from one instance of this
                 // module, is checked from each once they are built (see checkDefParamPath)
                 const bool checkTarget = !below && path != lookupPath;
+                if (!below && !checkTarget && !VString::startsWith(lookupPath, "$root.")
+                    && namesOtherInstances(nodep, lookupPath, anchoredPath, foundp, cellp,
+                                           instScopes)) {
+                    // Found upwards (IEEE 1800-2023 23.8) from its scope in each instance of
+                    // its module, but V3Param gives the value to the one instance found from the
+                    // last
+                    nodep->v3warn(E_UNSUPPORTED, "Unsupported: defparam path "
+                                                     << AstNode::prettyNameQ(path)
+                                                     << " that may name different instances"
+                                                        " from different instances of its"
+                                                        " module");
+                    VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                    return;
+                }
                 // IEEE 1800-2023 23.10.1: Last defparam in source text wins, also over a kept
                 // defparam that would give V3Param its value. Two selecting generate loop
                 // iterations from different scopes are both kept, for V3Param to check that

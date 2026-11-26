@@ -1,0 +1,11 @@
+%Error-UNSUPPORTED: t/t_defparam_upward_bad.v:22:18: Unsupported: defparam path 't.u' that may name different instances from different instances of its module
+   22 |   defparam t.u.P = 8;
+      |                  ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_defparam_upward_bad.v:32:16: Unsupported: defparam path 's' that may name different instances from different instances of its module
+   32 |   defparam s.P = 47;
+      |                ^
+%Error-UNSUPPORTED: t/t_defparam_upward_bad.v:46:18: Unsupported: defparam path 't.u' that may name different instances from different instances of its module
+   46 |   defparam t.u.P = 47;
+      |                  ^
+%Error: Exiting due to
