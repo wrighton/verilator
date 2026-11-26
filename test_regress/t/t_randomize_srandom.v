@@ -81,6 +81,14 @@ class Bar extends Foo;
   endfunction
 endclass
 
+class Base;
+  rand int x;
+endclass
+
+class Derived extends Base;
+  rand int y;
+endclass
+
 module t;
 
   Cls ca;
@@ -139,6 +147,20 @@ module t;
     sa = b1.test2;
     sb = b2.test2;
     `checkeq(sa, sb);
+
+    // Direct calls on objects of a derived class of a class with rand members, whose
+    // srandom() is of the base class
+    $display("srandom - Derived class");
+    begin
+      automatic Derived d1 = new;
+      automatic Derived d2 = new;
+      d1.srandom(5);
+      d2.srandom(5);
+      void'(d1.randomize());
+      void'(d2.randomize());
+      `checkeq(d1.x, d2.x);
+      `checkeq(d1.y, d2.y);
+    end
 
     // Check using direct call
     $display("srandom");

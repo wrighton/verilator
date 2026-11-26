@@ -6174,6 +6174,17 @@ class WidthVisitor final : public VNVisitor {
         // check-only solve so constraints are validated against the current
         // values of every rand member (IEEE 1800-2023 18.11).
     }
+    // Mark the RNG of the objects of classp's handles as needed. An interface class has no RNG
+    // (IEEE 1800-2023 8.26): return true when its handles reach their object's by an accessor.
+    static bool markNeedRNG(AstClass* classp) {
+        AstClass* const basep = classp->baseMostClassp();
+        if (basep->isInterfaceClass()) {
+            basep->needRNGAccessor(true);
+            return true;
+        }
+        basep->needRNG(true);
+        return false;
+    }
     void methodCallClass(AstMethodCall* nodep, AstClassRefDType* adtypep) {
         // No need to width-resolve the class, as it was done when we did the child
         AstClass* const first_classp = adtypep->classp();
@@ -6253,11 +6264,12 @@ class WidthVisitor final : public VNVisitor {
                 return;
             } else if (nodep->name() == "get_randstate") {
                 methodOkArguments(nodep, 0, 0);
-                first_classp->baseMostClassp()->needRNG(true);
+                const bool accessor = markNeedRNG(first_classp);
                 v3Global.useRandomizeMethods(true);
-                AstCMethodHard* const newp
-                    = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
-                                         VCMethod::RNG_GET_RANDSTATE, nullptr};
+                AstCMethodHard* const newp = new AstCMethodHard{
+                    nodep->fileline(), nodep->fromp()->unlinkFrBack(),
+                    accessor ? VCMethod::RNG_GET_RANDSTATE_ACCESSOR : VCMethod::RNG_GET_RANDSTATE,
+                    nullptr};
                 newp->usePtr(true);
                 newp->dtypeSetString();
                 nodep->replaceWith(newp);
@@ -6268,11 +6280,12 @@ class WidthVisitor final : public VNVisitor {
                 AstNodeExpr* const expr1p = nodep->argsp()->exprp();  // May edit
                 iterateCheckString(nodep, "LHS", expr1p, BOTH);
                 AstNodeExpr* const exprp = nodep->argsp()->exprp();
-                first_classp->baseMostClassp()->needRNG(true);
+                const bool accessor = markNeedRNG(first_classp);
                 v3Global.useRandomizeMethods(true);
-                AstCMethodHard* const newp
-                    = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
-                                         VCMethod::RNG_SET_RANDSTATE, exprp->unlinkFrBack()};
+                AstCMethodHard* const newp = new AstCMethodHard{
+                    nodep->fileline(), nodep->fromp()->unlinkFrBack(),
+                    accessor ? VCMethod::RNG_SET_RANDSTATE_ACCESSOR : VCMethod::RNG_SET_RANDSTATE,
+                    exprp->unlinkFrBack()};
                 newp->usePtr(true);
                 newp->dtypeSetVoid();
                 nodep->replaceWith(newp);

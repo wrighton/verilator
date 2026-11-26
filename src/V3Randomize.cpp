@@ -1292,18 +1292,14 @@ class RandomizeVisitor final : public VNVisitor {
     }
     AstVar* getCreateRandModeVar(AstClass* const classp) {
         if (classp->user2p()) return VN_AS(classp->user2p(), Var);
-        if (AstClassExtends* const extendsp = classp->extendsp()) {
-            return getCreateRandModeVar(extendsp->classp());
-        }
+        if (AstClass* const basep = classp->baseClassp()) return getCreateRandModeVar(basep);
         AstVar* const randModeVarp = createModeVar(classp, "__Vrandmode");
         classp->user2p(randModeVarp);
         return randModeVarp;
     }
     AstVar* getCreateConstraintModeVar(AstClass* const classp) {
         if (classp->user4p()) return VN_AS(classp->user4p(), Var);
-        if (AstClassExtends* const extendsp = classp->extendsp()) {
-            return getCreateConstraintModeVar(extendsp->classp());
-        }
+        if (AstClass* const basep = classp->baseClassp()) return getCreateConstraintModeVar(basep);
         AstVar* const constraintModeVarp = createModeVar(classp, "__Vconstraintmode");
         classp->user4p(constraintModeVarp);
         return constraintModeVarp;
@@ -1315,8 +1311,8 @@ class RandomizeVisitor final : public VNVisitor {
         if (AstVar* const staticModeVarp = m_modeVars.staticConstraintModeVarp(classp)) {
             return staticModeVarp;
         }
-        if (AstClassExtends* const extendsp = classp->extendsp()) {
-            return getCreateStaticConstraintModeVar(extendsp->classp());
+        if (AstClass* const basep = classp->baseClassp()) {
+            return getCreateStaticConstraintModeVar(basep);
         }
         AstVar* const staticModeVarp = createStaticModeVar(classp, "__Vstaticconstraintmode");
         m_modeVars.addStaticConstraintModeVar(classp, staticModeVarp);
@@ -1329,9 +1325,7 @@ class RandomizeVisitor final : public VNVisitor {
         if (AstVar* const staticModeVarp = m_modeVars.staticRandModeVarp(classp)) {
             return staticModeVarp;
         }
-        if (AstClassExtends* const extendsp = classp->extendsp()) {
-            return getCreateStaticRandModeVar(extendsp->classp());
-        }
+        if (AstClass* const basep = classp->baseClassp()) return getCreateStaticRandModeVar(basep);
         AstVar* const staticModeVarp = createStaticModeVar(classp, "__Vstaticrandmode");
         m_modeVars.addStaticRandModeVar(classp, staticModeVarp);
         return staticModeVarp;
@@ -1467,9 +1461,7 @@ class RandomizeVisitor final : public VNVisitor {
             }
             if (staticRandModeCount > 0) {
                 getCreateStaticRandModeVar(classp);
-                AstClass* rootp = classp;
-                while (AstClassExtends* const ep = rootp->extendsp()) rootp = ep->classp();
-                uint32_t& slot = rootStaticRandModeCount[rootp];
+                uint32_t& slot = rootStaticRandModeCount[classp->baseMostClassp()];
                 if (staticRandModeCount > slot) slot = staticRandModeCount;
             }
         });
@@ -2434,12 +2426,17 @@ class RandomizeVisitor final : public VNVisitor {
         m_solverp->startClass(nodep);
 
         iterateChildren(nodep);
+        // Provides the RNG for the handles of an interface class it implements
+        if (!nodep->isInterfaceClass() && nodep->implementsRNGAccessor()) {
+            nodep->baseMostClassp()->needRNG(true);
+        }
         if (!nodep->user1()) return;  // Doesn't need randomize, or already processed
         // Clear now so a cycle of rand class handles does not revisit this class
         nodep->user1(false);
         m_activeClasses.insert(nodep);
         UINFO(9, "Define randomize() for " << nodep);
-        nodep->baseMostClassp()->needRNG(true);
+        // An interface class has no data members, the RNG is in each implementing class
+        if (!nodep->isInterfaceClass()) nodep->baseMostClassp()->needRNG(true);
 
         // Detect global-constraint ownership BEFORE the constraint items are
         // unlinked into setup tasks below (after that the member-selects are gone).
@@ -2960,7 +2957,7 @@ AstFunc* V3Randomize::newSRandomFunc(VMemberMap& memberMap, AstClass* nodep) {
         funcp->classMethod(true);
         funcp->isVirtual(false);
         basep->addMembersp(funcp);
-        memberMap.insert(nodep, funcp);
+        memberMap.insert(basep, funcp);
         // For std::process, seed the per-process RNG via m_process->srandom()
         // For regular classes, seed the per-object RNG via __Vm_rng
         AstCStmt* const cstmtp = new AstCStmt{basep->fileline()};

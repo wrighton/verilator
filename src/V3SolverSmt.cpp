@@ -69,7 +69,7 @@ public:
     // with no constraints of its own has no user3p() and defers to its base.
     static AstVar* getRandomGenerator(AstClass* const classp) {
         if (classp->user3p()) return VN_AS(classp->user3p(), Var);
-        if (classp->extendsp()) return getRandomGenerator(classp->extendsp()->classp());
+        if (AstClass* const basep = classp->baseClassp()) return getRandomGenerator(basep);
         return nullptr;
     }
 
@@ -299,9 +299,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                 = VN_CAST(m_memberMap.findMember(classp, "__Vstaticrandmode"), Var)) {
                 return varp;
             }
-            AstClassExtends* const extendsp = classp->extendsp();
-            if (!extendsp) return nullptr;
-            classp = extendsp->classp();
+            classp = classp->baseClassp();
+            if (!classp) return nullptr;
         }
     }
     // Reference to the static rand_mode array of a static variable's own class, if any
@@ -3170,8 +3169,9 @@ class SolverSmtLowering final : public V3SolverLowering {
     }
     void createRandomGenerator(AstClass* const classp) {
         if (classp->user3p()) return;
-        if (classp->extendsp()) {
-            createRandomGenerator(classp->extendsp()->classp());
+        // The generator is shared with the base class
+        if (AstClass* const basep = classp->baseClassp()) {
+            createRandomGenerator(basep);
             return;
         }
         AstVar* const genp = new AstVar{classp->fileline(), VVarType::MEMBER, "constraint",
@@ -3347,8 +3347,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         nodep->addMembersp(updatep);
         nodep->hasRandVarsUpdate(true);
 
-        for (AstClass* classp = nodep; classp;
-             classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr) {
+        for (AstClass* classp = nodep; classp; classp = classp->baseClassp()) {
             AstNodeFTask* const newp = VN_AS(m_memberMap.findMember(classp, "new"), NodeFTask);
             addUpdateRandVarsStmts(updatep, newp->stmtsp());
         }

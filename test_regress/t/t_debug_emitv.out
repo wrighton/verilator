@@ -395,7 +395,7 @@ module t;
                 if ((SUB_B !== 2'h1)) begin
                     begin
                         $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", "t/t_debug_emitv.v", 
-                               32'sh1a2, SUB_B, 2'h1);
+                               32'sh1ad, SUB_B, 2'h1);
                         $stop;
                     end
                 end
@@ -1567,6 +1567,20 @@ module t;
             end
         end
     end
+    initial begin
+        begin : unnamedblk5
+            IfcRng ifc;
+            ImplRng impl;
+            string state;
+            ifc = /*CRESET*/;
+            impl = /*CRESET*/;
+            state = /*CRESET*/;
+            impl = new();
+            ifc = impl;
+            state = ifc.__Vrng().get_randstate();
+            ifc.__Vrng().set_randstate(state);
+        end
+    end
     class ProcessKiller;
         function new(input process victim);
             kill_virtual(victim);
@@ -1576,7 +1590,7 @@ module t;
         endtask
     endclass
     initial begin
-        begin : unnamedblk5
+        begin : unnamedblk6
             ProcessKiller killer;
             killer = /*CRESET*/;
             killer = new(self());
@@ -1781,16 +1795,33 @@ class VDer extends VBase;
     virtual function bit signed [31:0]  randomize();
     endfunction
 endclass
+class IfcRng;
+    pure virtual function int ifunc();
+    function new();
+    endfunction
+endclass
+class ImplRng implements IfcRng;
+    rand int iv;
+    virtual function int ifunc();
+        begin : label8
+            ifunc = /*CRESET*/;
+            ifunc = iv;
+            disable label8;
+        end
+    endfunction
+    function new();
+    endfunction
+endclass
 class ClsExt extends Cls;
     constraint :extends init_c {
 
         ???? // CONSTRAINTEXPR
         (rmember1 < 32'sh64)}
     function int inherited();
-        begin : label8
+        begin : label9
             inherited = /*CRESET*/;
             inherited = (rmember1 + member);
-            disable label8;
+            disable label9;
         end
     endfunction
     function new();
@@ -1813,11 +1844,11 @@ class ClsParam2__Tzc7cce3e0_P1_PB2;
     endfunction
 endclass
 function int rand_restricted(input Cls obj, input int member);
-    begin : label9
+    begin : label10
         rand_restricted = obj.randomize() with (
             ???? // CONSTRAINTEXPR
             (__Vrandwith_obj.rmember1 < member)) ;
-        disable label9;
+        disable label10;
     end
 endfunction
 typedef enum int{
@@ -1861,13 +1892,13 @@ module sub;
         o = ({32'h1{{1'h0, i[31:1]}}} + 32'h1);
     endtask
     function int f(input int v);
-        begin : label10
+        begin : label11
             if ((v == 32'sh0)) begin
                 f = 32'sh21;
-                disable label10;
+                disable label11;
             end
             f = ({32'h1{{31'h0, v[2]}}} + 32'h1);
-            disable label10;
+            disable label11;
         end
     endfunction
     real r;
@@ -2068,7 +2099,7 @@ package std;
         protected chandle m_process;
         static function process self();
             process p;
-            begin : label11
+            begin : label12
                 self = /*CRESET*/;
                 p = /*CRESET*/;
                 $c(vlProcess->initFromSelf(p););
@@ -2080,17 +2111,17 @@ package std;
                     end
                 end
                 self = p;
-                disable label11;
+                disable label12;
             end
         endfunction
         protected task set_status(input int s);
             $c(m_process->state(s););
         endtask
         function int status();
-            begin : label12
+            begin : label13
                 status = /*CRESET*/;
                 status = $c(m_process->state());
-                disable label12;
+                disable label13;
             end
         endfunction
         protected task disable_process();
@@ -2133,12 +2164,12 @@ package std;
         endtask
         function string get_randstate();
             string s;
-            begin : label13
+            begin : label14
                 get_randstate = /*CRESET*/;
                 s = string'($c(0));
                 $c(s = m_process->randstate(););
                 get_randstate = s;
-                disable label13;
+                disable label14;
             end
         endfunction
         task set_randstate(input string s);
@@ -2175,7 +2206,7 @@ package std;
             m_keyCount = (m_keyCount + keyCount);
         endtask
         task get(input int keyCount);
-            begin : label14
+            begin : label15
                 dropKilled();
                 if (((m_keyCount >= keyCount) && ((
                                                    m_queue.size() 
@@ -2189,7 +2220,7 @@ package std;
                     begin
                         m_keyCount = (m_keyCount - 
                                       keyCount);
-                        disable label14;
+                        disable label15;
                     end
                 end
                 m_queue.push_back(
@@ -2214,15 +2245,15 @@ package std;
             end
         endtask
         function int try_get(input int keyCount);
-            begin : label15
+            begin : label16
                 try_get = /*CRESET*/;
                 if ((m_keyCount < keyCount)) begin
                     try_get = 32'sh0;
-                    disable label15;
+                    disable label16;
                 end
                 m_keyCount = (m_keyCount - keyCount);
                 try_get = 32'sh1;
-                disable label15;
+                disable label16;
             end
         endfunction
     endclass
