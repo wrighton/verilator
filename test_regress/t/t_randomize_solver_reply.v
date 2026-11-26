@@ -62,6 +62,32 @@ class Pinned;
   }
 endclass
 
+// Elements that can take one value only: the pin of each element drawn 1 conflicts, and
+// once a few of them did, the others of the array are checked one by one
+class Bits;
+  rand bit a[64];
+  constraint bc {foreach (a[i]) a[i] == 1'b0;}
+endclass
+
+// A wide value that is one of two constants: once both its halves conflict, the one
+// dropped is a guess, checked again alone
+class Either;
+  rand bit [199:0] z;
+  constraint zc {z inside {200'h5, 200'h7};}
+endclass
+
+// A wide value picked among constants, with a soft constraint (no UniGen2): whether it
+// can change at all is checked over its parts together
+class Consts;
+  rand bit [255:0] d;
+  rand bit s;
+  constraint dc {
+    d inside {256'hd76d4330f1446beab0c11fdecb91ce375bc8fbbcbde5c0994164d8399f767c45,
+              256'hc6a5387777330bdbd7210dff076ce2ef87b0b125ec1d7da0a6eb8c9ebd69fe29};
+    soft s;
+  }
+endclass
+
 // A space large enough that every call must give a new value
 class Wide;
   rand bit [14:0] w;
@@ -70,6 +96,32 @@ class Wide;
 endclass
 
 module t;
+  // t_randomize_solver_reply runs each +MODE=cut_* row alone, so TAMPER_AT counts the
+  // replies of its one call
+  task automatic cut_round;
+    automatic Bits bt = new;
+    automatic Either ei = new;
+    automatic Consts cs = new;
+    automatic int rc;
+    if ($test$plusargs("MODE=cut_bits")) begin
+      bt.srandom(63);
+      rc = bt.randomize();
+      foreach (bt.a[i]) `checkd(bt.a[i], 1'b0);
+    end else if ($test$plusargs("MODE=cut_either")) begin
+      ei.srandom(1);
+      rc = ei.randomize();
+      `checkd(ei.z inside {200'h5, 200'h7}, 1'b1);
+    end else begin
+      cs.srandom(1);
+      rc = cs.randomize();
+      `checkd(cs.d inside {256'hd76d4330f1446beab0c11fdecb91ce375bc8fbbcbde5c0994164d8399f767c45,
+                           256'hc6a5387777330bdbd7210dff076ce2ef87b0b125ec1d7da0a6eb8c9ebd69fe29},
+              1'b1);
+    end
+    `checkd(rc, 1);
+    $write("NPASS=%0d\n", rc);
+  endtask
+
   // t_randomize_solver_reply runs the +MODE=pins rows alone, so the replies their
   // TAMPER_AT counts start at the first Pinned call
   task automatic pin_rounds;
@@ -114,6 +166,12 @@ module t;
       $write("*-* All Finished *-*\n");
       $finish;
       // $finish ends the run only after this process stops, so leave before the checks
+      disable checks;
+    end
+    if ($test$plusargs("MODE=cut_")) begin
+      cut_round();
+      $write("*-* All Finished *-*\n");
+      $finish;
       disable checks;
     end
     if ($test$plusargs("MODE=wide")) begin
