@@ -90,6 +90,20 @@ module t (
     @(posedge clk);
   end
 
+  // In an assertion, the sampled value is the current value (IEEE 1800-2023 16.13.6)
+  int n_mismatch = 0;
+  assert property (@(posedge clk) s_ab.triggered == ($past(a) && b))
+  else ++n_mismatch;
+  int n_assert = 0;
+  assert property (@(posedge clk) !s_ab.triggered)
+  else ++n_assert;
+  int n_assert_args = 0;
+  assert property (@(posedge clk) !s_xy(a, b).triggered)
+  else ++n_assert_args;
+  int n_past_mismatch = 0;
+  assert property (@(posedge clk) ##1 $past(s_ab.triggered) == ($past(a, 2) && $past(b)))
+  else ++n_past_mismatch;
+
   // Only true in the time step of the end point
   int n_later = 0;
   always @(negedge clk) if (s_ab.triggered) ++n_later;
@@ -114,6 +128,10 @@ module t (
     `checkd(n_args, n_ref);
     `checkd(n_pkg, n_ref);
     `checkd(n_later, 0);
+    `checkd(n_mismatch, 0);
+    `checkd(n_assert, n_ref);
+    `checkd(n_assert_args, n_ref);
+    `checkd(n_past_mismatch, 0);
     `checkd(n_ref, 8);
     $write("*-* All Finished *-*\n");
   end
