@@ -116,6 +116,17 @@ Options:
    Disable printing the simulation summary report, see :ref:`Simulation
    Summary Report`.
 
+.. option:: +verilator+rand+array+max+<value>
+
+   Sets the most elements ``randomize()`` may give a dynamic array or
+   queue. A size constraint with no upper bound otherwise lets the solver
+   pick a size of billions of elements, which cannot be allocated
+   (IEEE 1800-2023 18.4 leaves the size the solver picks to the
+   implementation). Over this, ``randomize()`` reports a warning naming the
+   array, and returns 0 without resizing any array. Other values it solved
+   may still have changed, as a failed ``randomize()`` does not yet restore
+   every variable (IEEE 1800-2023 18.6.3). Default is 1048576.
+
 .. option:: +verilator+rand+reset+<value>
 
    When a model was Verilated using :vlopt:`--x-initial unique

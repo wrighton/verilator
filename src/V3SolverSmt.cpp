@@ -3257,6 +3257,8 @@ class SolverSmtLowering final : public V3SolverLowering {
     int m_distNum = 0;  // Dist bucket variable counter within a class for var naming
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
     std::map<AstClass*, VInsertionSet<AstVar*>> m_sizeConstrainedArrays;  // Per-class arrays
+    // Per constraint sizing arrays, the task checking their solved sizes
+    std::map<const AstConstraint*, AstTask*> m_constraintCheckTasks;
     uint32_t m_uniqueConstraintId = 0;  // current ID of unique call
 
     // METHODS
@@ -4227,6 +4229,48 @@ class SolverSmtLowering final : public V3SolverLowering {
                                             newSolverCallp(genp)});
         return sizeOkVarp;
     }
+    // Whether the solved size 'sizeRefp' of 'arrVarp' is one its elements can be allocated
+    // for, recording a failure of randomize() in the generator if not
+    static AstCExpr* newArraySizeOkp(FileLine* const fl, const AstVar* const arrVarp,
+                                     AstNodeExpr* const sizeRefp, AstVar* const genp) {
+        AstCExpr* const callp = new AstCExpr{fl};
+        callp->dtypeSetBit();
+        callp->add(
+            new AstVarRef{fl, VN_CAST(genp->user2p(), NodeModule), genp, VAccess::READWRITE});
+        callp->add(".array_size_ok(");
+        callp->add(sizeRefp);
+        callp->add(", \"" + arrVarp->prettyName() + "\", \"" + fl->filename() + "\", "
+                   + cvtToStr(fl->lineno()) + ")");
+        return callp;
+    }
+    // Whether randomize() has not failed for a reason the generator recorded
+    static AstNodeExpr* newNotFailedp(FileLine* const fl, AstVar* const genp) {
+        AstCExpr* const callp = new AstCExpr{fl};
+        callp->dtypeSetBit();
+        callp->add("!");
+        callp->add(
+            new AstVarRef{fl, VN_CAST(genp->user2p(), NodeModule), genp, VAccess::READWRITE});
+        callp->add(".failed()");
+        return callp;
+    }
+    // 'okVarp' &&= no failure recorded in 'genp'
+    static AstNodeStmt* newAndNotFailedp(FileLine* const fl, AstVar* const okVarp,
+                                         AstVar* const genp) {
+        return new AstAssign{
+            fl, new AstVarRef{fl, okVarp, VAccess::WRITE},
+            new AstAnd{fl, new AstVarRef{fl, okVarp, VAccess::READ}, newNotFailedp(fl, genp)}};
+    }
+    AstTask* getCreateAggrCheckTask(AstClass* const classp) {
+        static constexpr const char* const name = "__Vcheck_constrained_arrays";
+        AstTask* checkTaskp = VN_AS(m_memberMap.findMember(classp, name), Task);
+        if (checkTaskp) return checkTaskp;
+        checkTaskp = new AstTask{classp->fileline(), name};
+        checkTaskp->classMethod(true);
+        checkTaskp->isVirtual(true);
+        classp->addMembersp(checkTaskp);
+        m_memberMap.insert(classp, checkTaskp);
+        return checkTaskp;
+    }
 
     // Rebuild constraints after resize
     void addConstraintRebuild(AstFunc* const randomizep, AstVar* const setupGenp,
@@ -4287,6 +4331,21 @@ public:
                         fl, nodep->fromp()->unlinkFrBack(), VCMethod::DYN_RESIZE, sizeVarRefp};
                     resizep->dtypep(nodep->findVoidDType());
                     resizerTaskp->addStmtsp(new AstStmtExpr{fl, resizep});
+                    // An unbounded size constraint lets the solver give the array more
+                    // elements than can be allocated, so each size is checked before any
+                    // array is resized
+                    AstTask*& checkTaskp = m_constraintCheckTasks[constrp];
+                    if (!checkTaskp) {
+                        checkTaskp = new AstTask{fl, constrp->name() + "_check_array_size"};
+                        checkTaskp->classMethod(true);
+                        classp->addMembersp(checkTaskp);
+                    }
+                    checkTaskp->addStmtsp(new AstStmtExpr{
+                        fl,
+                        newArraySizeOkp(fl, queueVarp,
+                                        new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule),
+                                                      sizeVarp, VAccess::READ},
+                                        SmtUtil::getRandomGenerator(classp))});
                 }
 
                 // Since size variable is signed int, we need additional constraint
@@ -4318,11 +4377,21 @@ public:
                 }
 
                 if (AstTask* const resizeTaskp = VN_CAST(constrp->user3p(), Task)) {
+                    // A constraint turned off neither resizes nor checks its arrays
                     AstTask* const resizeAllTaskp = getCreateAggrResizeTask(nodep);
                     AstTaskRef* const resizeTaskRefp
                         = new AstTaskRef{constrp->fileline(), resizeTaskp};
                     resizeTaskRefp->classOrPackagep(classp);
-                    resizeAllTaskp->addStmtsp(resizeTaskRefp->makeStmt());
+                    resizeAllTaskp->addStmtsp(
+                        wrapIfConstraintMode(nodep, constrp, resizeTaskRefp->makeStmt()));
+                    const auto checkIt = m_constraintCheckTasks.find(constrp);
+                    if (checkIt != m_constraintCheckTasks.end()) {
+                        AstTaskRef* const checkTaskRefp
+                            = new AstTaskRef{constrp->fileline(), checkIt->second};
+                        checkTaskRefp->classOrPackagep(classp);
+                        getCreateAggrCheckTask(nodep)->addStmtsp(
+                            wrapIfConstraintMode(nodep, constrp, checkTaskRefp->makeStmt()));
+                    }
                 }
 
                 if (constrp->itemsp()) expandUniqueElementList(constrp->itemsp());
@@ -4418,6 +4487,14 @@ public:
                 AstNodeStmt* const undosp = newResizeUndop(randomizep, nodep, sizeArrayVars);
                 AstVar* const sizeOkVarp
                     = addSizeSolvep(randomizep, genp, randModeVarp, sizeArrayVars);
+                // Every solved size is checked before any array is resized
+                if (AstTask* const checkAllTaskp
+                    = VN_AS(m_memberMap.findMember(nodep, "__Vcheck_constrained_arrays"), Task)) {
+                    randomizep->addStmtsp(
+                        new AstIf{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
+                                  (new AstTaskRef{fl, checkAllTaskp})->makeStmt(), nullptr});
+                    randomizep->addStmtsp(newAndNotFailedp(fl, sizeOkVarp, genp));
+                }
                 if (AstTask* const resizeAllTaskp
                     = VN_AS(m_memberMap.findMember(nodep, "__Vresize_constrained_arrays"), Task)) {
                     randomizep->addStmtsp(
@@ -4431,8 +4508,13 @@ public:
                                                        nodep->findBasicDType(VBasicDTypeKwd::BIT)};
                 finalOkVarp->funcLocal(true);
                 randomizep->addDeclsp(finalOkVarp);
-                randomizep->addStmtsp(new AstAssign{
-                    fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE}, newSolverCallp(genp)});
+                // Not after a failed size solve or check, so nothing more is written
+                randomizep->addStmtsp(
+                    new AstIf{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
+                              new AstAssign{fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE},
+                                            newSolverCallp(genp)},
+                              new AstAssign{fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE},
+                                            new AstConst{fl, AstConst::BitFalse{}}}});
                 if (undosp) {
                     randomizep->addStmtsp(new AstIf{
                         fl, new AstLogNot{fl, new AstVarRef{fl, finalOkVarp, VAccess::READ}},
@@ -4473,8 +4555,19 @@ public:
         if (needsSizePhase) return;
         if (AstTask* const resizeAllTaskp
             = VN_AS(m_memberMap.findMember(nodep, "__Vresize_constrained_arrays"), Task)) {
-            AstTaskRef* const resizeTaskRefp = new AstTaskRef{nodep->fileline(), resizeAllTaskp};
-            randomizep->addStmtsp(resizeTaskRefp->makeStmt());
+            FileLine* const fl = nodep->fileline();
+            // Every solved size is checked before any array is resized
+            if (AstTask* const checkAllTaskp
+                = VN_AS(m_memberMap.findMember(nodep, "__Vcheck_constrained_arrays"), Task)) {
+                AstVar* const genp = SmtUtil::getRandomGenerator(nodep);
+                randomizep->addStmtsp((new AstTaskRef{fl, checkAllTaskp})->makeStmt());
+                randomizep->addStmtsp(newAndNotFailedp(fl, randomizep->fvarp(), genp));
+                randomizep->addStmtsp(new AstIf{fl, newNotFailedp(fl, genp),
+                                                (new AstTaskRef{fl, resizeAllTaskp})->makeStmt(),
+                                                nullptr});
+            } else {
+                randomizep->addStmtsp((new AstTaskRef{fl, resizeAllTaskp})->makeStmt());
+            }
         }
     }
     void lowerInlineRandomize(AstNodeFTaskRef* nodep, AstClass* classp, AstFunc* randomizeFuncp,
@@ -4532,10 +4625,17 @@ public:
         // Collect the class-wide resize call and the with-block's own resize
         // statements to run after a successful solver call.
         AstNodeStmt* resizeStmtsp = nullptr;
+        // Checks of the sizes so resized, run before any of them, recording a failure in the
+        // generators they name
+        AstNodeStmt* checkStmtsp = nullptr;
         VInsertionSet<AstVar*> inlineSizedArrays;  // Arrays of the class this with-block sizes
         if (AstTask* const resizeAllTaskp
             = VN_AS(m_memberMap.findMember(classp, "__Vresize_constrained_arrays"), Task)) {
             resizeStmtsp = (new AstTaskRef{nodep->fileline(), resizeAllTaskp})->makeStmt();
+        }
+        if (AstTask* const checkAllTaskp
+            = VN_AS(m_memberMap.findMember(classp, "__Vcheck_constrained_arrays"), Task)) {
+            checkStmtsp = (new AstTaskRef{nodep->fileline(), checkAllTaskp})->makeStmt();
         }
         {
             std::unordered_set<const AstVar*> blockResizedps;  // Arrays this with-block resizes
@@ -4573,6 +4673,9 @@ public:
                 if (!arrVarp) continue;
                 // Only handle rand-declared dynamic/assoc array variables
                 if (!arrVarp->rand().isRandomizable()) continue;
+                // The size of an array of an object not reached through rand handles is a state
+                // value (IEEE 1800-2023 18.4), as on integ
+                if (VN_IS(rootExprp, MemberRef) && !rootExprp->user1()) continue;
                 // Do not randomize associative array size (IEEE 18.4)
                 if (VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)) continue;
                 FileLine* const fl = methodp->fileline();
@@ -4593,6 +4696,11 @@ public:
                     AstNodeExpr* const sizeExprp = buildMemberRefExprp(rootExprp, sizeVarp);
                     // Append size >= 0 constraint so ConstraintExprVisitor processes it
                     capturedTreep->addNext(createSizeGteZeroConstraint(fl, sizeVarp, rootExprp));
+                    checkStmtsp = AstNode::addNext(
+                        checkStmtsp,
+                        new AstStmtExpr{
+                            fl,
+                            newArraySizeOkp(fl, arrVarp, sizeExprp->cloneTree(false), localGenp)});
                     AstCMethodHard* const resizep
                         = new AstCMethodHard{fl, resizeVarRefp, VCMethod::DYN_RESIZE, sizeExprp};
                     resizep->dtypep(methodp->findVoidDType());
@@ -4663,6 +4771,14 @@ public:
             AstVar* const sizeOkVarp
                 = addSizeSolvep(randomizeFuncp, localGenp, randModeVarp, allSizeArrays);
 
+            // Every solved size is checked before any array is resized
+            if (checkStmtsp) {
+                randomizeFuncp->addStmtsp(
+                    new AstIf{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ}, checkStmtsp});
+                randomizeFuncp->addStmtsp(newAndNotFailedp(fl, sizeOkVarp, localGenp));
+                if (classGenp)
+                    randomizeFuncp->addStmtsp(newAndNotFailedp(fl, sizeOkVarp, classGenp));
+            }
             // Resize constrained arrays before rebuilding constraints: both any
             // class-wide resize task (class-level size constraints) and this
             // with-block's own inline-size resize statements.
@@ -4787,9 +4903,13 @@ public:
             }
 
             // Final solve: element values with sizes pinned
-            AstCExpr* const solverCall2p = newSolverCallp(localGenp);
+            // Not after a failed size solve or check, so nothing more is written
             randomizeFuncp->addStmtsp(
-                new AstAssign{fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE}, solverCall2p});
+                new AstIf{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
+                          new AstAssign{fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE},
+                                        newSolverCallp(localGenp)},
+                          new AstAssign{fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE},
+                                        new AstConst{fl, AstConst::BitFalse{}}}});
             if (undosp) {
                 randomizeFuncp->addStmtsp(new AstIf{
                     fl, new AstLogNot{fl, new AstVarRef{fl, finalOkVarp, VAccess::READ}}, undosp});
@@ -4810,6 +4930,13 @@ public:
                 new AstAssign{fl, new AstVarRef{fl, retVarp, VAccess::WRITE},
                               new AstAnd{fl, basicRandomizeFuncCallp, solverCallp}});
 
+            // Every solved size is checked before any array is resized
+            if (checkStmtsp) {
+                randomizeFuncp->addStmtsp(
+                    new AstIf{fl, new AstVarRef{fl, retVarp, VAccess::READ}, checkStmtsp});
+                randomizeFuncp->addStmtsp(newAndNotFailedp(fl, retVarp, localGenp));
+                if (classGenp) randomizeFuncp->addStmtsp(newAndNotFailedp(fl, retVarp, classGenp));
+            }
             // Resize constrained arrays only when solver succeeds
             if (resizeStmtsp) {
                 AstIf* const ifp

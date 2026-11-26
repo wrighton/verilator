@@ -663,6 +663,7 @@ description of these arguments.
      +verilator+prof+exec+window+<value>   Set execution profile duration
      +verilator+prof+vlt+file+<filename>   Set PGO profile filename
      +verilator+quiet                      Minimize additional printing
+     +verilator+rand+array+max+<value>     Set max randomize() array size
      +verilator+rand+reset+<value>         Set random reset technique
      +verilator+rand+sampler+<name>        Choose what samples randomize() results
      +verilator+seed+<value>               Set random seed

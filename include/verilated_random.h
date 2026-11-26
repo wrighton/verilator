@@ -285,9 +285,12 @@ class VlRandomizer VL_NOT_FINAL {
     bool m_checkOnly = false;  // Set for randomize(null)
     // Members of null handles constraints may read, by solver name, with their source names
     std::vector<std::pair<std::string, std::string>> m_nullReads;
-    std::string m_nullRead;  // Warning for a constraint reading one of them
-    const char* m_nullReadFilename = nullptr;  // Where that constraint is
-    uint32_t m_nullReadLinenum = 0;  // And line
+    // Why this randomize() fails without solving, e.g. a constraint reading one of them;
+    // empty if it does not
+    std::string m_failPending;
+    const char* m_failFilename = nullptr;  // Where the cause is
+    uint32_t m_failLinenum = 0;  // And line
+    bool m_failWarned = false;  // The cause was reported where it was found
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
@@ -954,6 +957,16 @@ public:
         }
     }
 
+    /// Make this randomize() fail without solving, for the reason 'msg' at filename:linenum,
+    /// unless a reason is recorded already. 'warned' if the reason was reported already.
+    void fail_pending(const std::string& msg, const char* filename, uint32_t linenum,
+                      bool warned = false);
+    /// Whether this randomize() fails for a reason fail_pending() recorded
+    bool failed() const { return !m_failPending.empty(); }
+    /// Whether randomize() may give the array 'name' the 'size' elements its constraints
+    /// solved for, see VerilatedContext::randArrayMax. If not, warns, naming the array
+    /// declared at filename:linenum, and makes this randomize() fail.
+    bool array_size_ok(IData size, const char* name, const char* filename, uint32_t linenum);
     // varNames are the solver variables the constraint names, kept without copying until
     // clearConstraints(), so they must live that long (the generated code passes literals)
     void hard(std::string constraint, std::initializer_list<const char*> varNames = {},

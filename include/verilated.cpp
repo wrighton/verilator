@@ -3385,6 +3385,10 @@ void VerilatedContext::errorCountInc() VL_MT_SAFE {
     const VerilatedLockGuard lock{m_mutex};
     ++m_s.m_errorCount;
 }
+void VerilatedContext::randArrayMax(int val) VL_MT_SAFE {
+    const VerilatedLockGuard lock{m_mutex};
+    m_s.m_randArrayMax = val;
+}
 void VerilatedContext::errorLimit(int val) VL_MT_SAFE {
     const VerilatedLockGuard lock{m_mutex};
     m_s.m_errorLimit = val;
@@ -3762,6 +3766,9 @@ void VerilatedContextImp::commandArgVl(const std::string& arg) {
             profVltFilename(str);
         } else if (arg == "+verilator+quiet") {
             quiet(true);
+        } else if (commandArgVlUint64(arg, "+verilator+rand+array+max+", u64, 0,
+                                      std::numeric_limits<int>::max())) {
+            randArrayMax(static_cast<int>(u64));
         } else if (commandArgVlUint64(arg, "+verilator+rand+reset+", u64, 0, 2)) {
             randReset(static_cast<int>(u64));
         } else if (commandArgVlString(arg, "+verilator+rand+sampler+", str)) {
