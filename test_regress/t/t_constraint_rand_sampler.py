@@ -31,8 +31,8 @@ test.file_grep(log, r'\(declare-fun __Vd0 ')
 test.file_grep(log, r'^  \(assert \(not \(= v +#b[01]+\)\)\)$')
 test.file_grep(log, r'^  \(assert \(not \(and \(= a0 +#b[01]+\) \(= b +#b[01]+\)\)\)\)$')
 test.file_grep(
-    log, r'^  \(assert \(not \(and \(= \(select d0 #x00000000\) +#b[01]+\)'
-    r' \(= \(select d0 #x00000001\) +#b[01]+\) \(= \(select d0 #x00000002\) +#b[01]+\)\)\)\)$')
+    log, r'^  \(assert \(not \(and \(= d0__Vs00000000 +#b[01]+\)'
+    r' \(= d0__Vs00000001 +#b[01]+\) \(= d0__Vs00000002 +#b[01]+\)\)\)\)$')
 term = r'\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)'
 test.file_grep_not(log, r'\(and +' + term + r'\)')
 

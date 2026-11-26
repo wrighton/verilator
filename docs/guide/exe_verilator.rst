@@ -979,6 +979,18 @@ Summary:
    requires. This option is useful when testing the solver protocol itself. The
    optimization is experimental and for internal use only.
 
+.. option:: -fno-constraint-scalar
+
+   Disable declaring a random array to the constraint solver element by
+   element. By default, a one-dimensional random array of integral elements
+   that every constraint reads only by element, each at an index known
+   before solving, is given to the solver as one bit-vector variable per
+   element rather than as an array, so a problem with no other array is
+   solved in the faster bit-vector logic. Any other use of the array keeps it
+   an array. Random values from a given seed may differ when this
+   optimization is enabled. This option is useful when testing the solver
+   protocol itself.
+
 .. option:: -fno-dead-assigns
 
    Rarely needed. Disable removing assignments to variables that are never

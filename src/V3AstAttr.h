@@ -1098,6 +1098,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_CLEAR_ELEM_VARS,         "clear_elem_vars",        false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_CLEAR_VAR,               "clear_var",              false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_DISABLE_SOFT,            "disable_soft",           false,  CLEAN,  false,      "r", "") \
+    macro(RANDOMIZER_ELEM_TERM,               "elemTerm",               false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_END_PRIOR,               "end_prior",              false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_ENUM_DOMAIN,             "enum_domain",            false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_FAST_BEGIN,              "fast_begin",             false,  CLEAN,  false,      "mrrrrrrrr", "") \
@@ -1114,6 +1115,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_HARD,                    "hard",                   false,  CLEAN,  false,      "r+", "") \
     macro(RANDOMIZER_KEEP_PRIOR,              "keep_prior",             false,  CLEAN,  false,      "", "") \
     macro(RANDOMIZER_KEEP_SOLUTION,           "keep_solution",          false,  CLEAN,  false,      "", "") \
+    macro(RANDOMIZER_MARK_SCALAR,             "markScalar",             false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_NULL_READ,               "null_read",              false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_PIN_FROZEN,              "pin_frozen",             false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_RANDC_HISTORY_FROM,      "randc_history_from",     false,  CLEAN,  false,      "r", "") \

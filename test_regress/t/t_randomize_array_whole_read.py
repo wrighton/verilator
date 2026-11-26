@@ -16,7 +16,8 @@ test.scenarios('simulator')
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
-test.compile()
+# The arrays are read only by element, which -fconstraint-scalar would declare by element
+test.compile(verilator_flags2=['-fno-constraint-scalar'])
 
 
 def reads(log):
