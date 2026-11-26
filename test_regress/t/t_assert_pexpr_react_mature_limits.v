@@ -11,6 +11,8 @@
 // which runs in a process of its own, follows them. Each is followed by a flush point of its
 // process, or a Kill, in the time step, which a matured instance would not survive.
 module t;
+  // Procedural assertion after a delay: no clock inference (IEEE 1800-2023 16.14.6)
+  // verilator lint_off NONSTD
   bit clk = 0;
   int cyc = 0;
   bit p = 1;
