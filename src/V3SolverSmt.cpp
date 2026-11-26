@@ -366,7 +366,9 @@ class FastConstraintBuilder final {
         uint64_t lo;
         uint64_t hi;
         uint64_t weight = 1;
-        uint64_t divisor = 1;
+        // Per value: the original :/ size dividing the weight, else 1. Range
+        // mass: the original := size multiplying the weight, else 1; 0 is 2^64.
+        uint64_t scale = 1;
     };
     using Ranges = std::vector<Range>;
     AstVar* const m_genp;
@@ -580,6 +582,11 @@ class FastConstraintBuilder final {
         m_supported = false;
         return {};
     }
+    // IEEE 1800-2023 18.5.3 weighs a range as a whole, counting values that other
+    // constraints exclude. Earlier editions give each surviving value its weight.
+    static bool rangeMass(const AstDist* distp) {
+        return distp->fileline()->language() > V3LangCode::L1800_2017;
+    }
     Ranges distribution(AstDist* distp) {
         if (!isTarget(distp->exprp())) m_supported = false;
         Ranges ranges;
@@ -603,6 +610,10 @@ class FastConstraintBuilder final {
             const uint64_t lo = key(lop->toUQuad());
             const uint64_t hi = key(hip->toUQuad());
             if (lo > hi || !weightp->toUQuad()) continue;
+            if (rangeMass(distp)) {
+                ranges.push_back({lo, hi, weightp->toUQuad(), itemp->isWhole() ? 1 : hi - lo + 1});
+                continue;
+            }
             if (itemp->isWhole() && hi - lo == std::numeric_limits<uint64_t>::max()) {
                 m_supported = false;  // The original :/ cardinality is 2^64
                 return {};
@@ -619,7 +630,7 @@ class FastConstraintBuilder final {
         callp->dtypeSetVoid();
         return callp;
     }
-    AstNodeStmt* newDomainp(FileLine* fl, const Ranges& ranges, bool soft, bool dist,
+    AstNodeStmt* newDomainp(FileLine* fl, const Ranges& ranges, bool soft, const AstDist* distp,
                             bool isEnum = false) const {
         AstCMethodHard* const beginp = newCallp(fl, VCMethod::RANDOMIZER_FAST_BEGIN);
         AstNodeExpr* const targetp = m_targetp->cloneTreePure(false);
@@ -630,14 +641,15 @@ class FastConstraintBuilder final {
         beginp->addPinsp(new AstConst{fl, static_cast<uint32_t>(m_varp->width())});
         beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, m_viewSigned});
         beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, soft});
-        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, dist});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, distp != nullptr});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, distp && rangeMass(distp)});
         beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, isEnum});
         beginp->addPinsp(new AstConst{fl, static_cast<uint32_t>(m_viewLsb)});
         beginp->addPinsp(new AstConst{fl, static_cast<uint32_t>(m_viewWidth)});
         AstNodeStmt* const stmtp = beginp->makeStmt();
         for (const Range& range : ranges) {
             AstCMethodHard* const callp = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
-            for (const uint64_t value : {range.lo, range.hi, range.weight, range.divisor}) {
+            for (const uint64_t value : {range.lo, range.hi, range.weight, range.scale}) {
                 callp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, value});
             }
             stmtp->addNext(callp->makeStmt());
@@ -715,7 +727,7 @@ class FastConstraintBuilder final {
             || elemDtp->isSigned() != m_viewSigned)
             return nullptr;
         FileLine* const fl = exprp->fileline();
-        AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), false);
+        AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), nullptr);
         AstCMethodHard* const callp = newCallp(fl, VCMethod::RANDOMIZER_FAST_QUEUE);
         callp->addPinsp(queuep->cloneTreePure(false));
         callp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, exclude});
@@ -752,7 +764,7 @@ class FastConstraintBuilder final {
             return nullptr;
         }
         FileLine* const fl = exprp->fileline();
-        AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), false);
+        AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), nullptr);
         AstNodeExpr* const valuep = newBoundKeyp(boundp);
         AstCMethodHard* const rangep = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
         rangep->addPinsp(valuep);
@@ -915,7 +927,7 @@ class FastConstraintBuilder final {
             VL_DO_DANGLING(blockp->deleteTree(), blockp);
             return nullptr;
         }
-        blockp->addStmtsp(newDomainp(fl, {}, exprp->isSoft(), false));
+        blockp->addStmtsp(newDomainp(fl, {}, exprp->isSoft(), nullptr));
         AstCMethodHard* const rangep = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
         rangep->addPinsp(interval.lop);
         rangep->addPinsp(interval.hip);
@@ -961,7 +973,7 @@ class FastConstraintBuilder final {
         }
         FileLine* const fl = exprp->fileline();
         AstBegin* const blockp = new AstBegin{fl, m_names.get("__Vfast_dist"), nullptr, true};
-        blockp->addStmtsp(newDomainp(fl, {}, exprp->isSoft(), true));
+        blockp->addStmtsp(newDomainp(fl, {}, exprp->isSoft(), distp));
         const uint64_t min = viewSigned ? ~((uint64_t{1} << (m_viewWidth - 1)) - 1) : 0;
         const uint64_t max = viewSigned ? (uint64_t{1} << (m_viewWidth - 1)) - 1 : mask();
         bool hasPositiveWeight = false;
@@ -1017,13 +1029,16 @@ class FastConstraintBuilder final {
             AstNodeExpr* const hikeyp
                 = new AstCond{fl, newLimitComparep(hip, max, false, false, viewSigned),
                               new AstConst{fl, AstConst::Unsized64{}, mask()}, newBoundKeyp(hip)};
-            AstNodeExpr* const divisorp
-                = itemp->isWhole() ? static_cast<AstNodeExpr*>(new AstAdd{
-                                         fl,
-                                         new AstSub{fl, originalBoundKey(hip, viewSigned),
-                                                    originalBoundKey(lop, viewSigned)},
-                                         new AstConst{fl, AstConst::Unsized64{}, 1}})
-                                   : new AstConst{fl, AstConst::Unsized64{}, 1};
+            // Per value scales a :/ item, range mass a := item, by its size before
+            // clipping to the view
+            const bool scaled = itemp->isWhole() != rangeMass(distp);
+            AstNodeExpr* const scalep
+                = scaled ? static_cast<AstNodeExpr*>(
+                               new AstAdd{fl,
+                                          new AstSub{fl, originalBoundKey(hip, viewSigned),
+                                                     originalBoundKey(lop, viewSigned)},
+                                          new AstConst{fl, AstConst::Unsized64{}, 1}})
+                         : new AstConst{fl, AstConst::Unsized64{}, 1};
             AstNodeExpr* const orderedp
                 = viewSigned
                       ? static_cast<AstNodeExpr*>(
@@ -1037,7 +1052,7 @@ class FastConstraintBuilder final {
             rangep->addPinsp(lokeyp);
             rangep->addPinsp(hikeyp);
             rangep->addPinsp(new AstExtend{fl, weightp->cloneTreePure(false), 64});
-            rangep->addPinsp(divisorp);
+            rangep->addPinsp(scalep);
             blockp->addStmtsp(new AstIf{fl, validp, rangep->makeStmt()});
             VL_DO_DANGLING(lop->deleteTree(), lop);
             VL_DO_DANGLING(hip->deleteTree(), hip);
@@ -1064,7 +1079,7 @@ class FastConstraintBuilder final {
             m_supported = false;
         FileLine* const fl = exprp->fileline();
         if (!m_supported) return newCallp(fl, VCMethod::RANDOMIZER_FAST_DISABLE)->makeStmt();
-        if (!stmtp) stmtp = newDomainp(fl, ranges, exprp->isSoft(), distp != nullptr);
+        if (!stmtp) stmtp = newDomainp(fl, ranges, exprp->isSoft(), distp);
         if (const AstEnumDType* const enumDtp
             = VN_CAST(m_varp->dtypep()->skipRefToEnump(true), EnumDType)) {
             Ranges enumRanges;
@@ -1074,7 +1089,7 @@ class FastConstraintBuilder final {
                 const uint64_t value = key(valuep->toUQuad());
                 enumRanges.push_back({value, value});
             }
-            stmtp->addNext(newDomainp(fl, enumRanges, false, false, true));
+            stmtp->addNext(newDomainp(fl, enumRanges, false, nullptr, true));
         }
         V3Stats::addStat("Optimizations, Randomize structured domains", 1);
         return stmtp;
