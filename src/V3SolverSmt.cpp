@@ -1264,7 +1264,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
             // VL_RESTORER restores m_selGuardsp before 'guards' goes out of scope
             // cppcheck-suppress danglingLifetime
-            const bool guarded = m_selGuardsp && countableArray(nodep->fromp())
+            const bool guarded = m_selGuardsp && boundableArray(nodep->fromp())
                                  && !isForeachElement(nodep->fromp(), nodep->bitp());
             const bool indexSolved = isSolvedIndex(nodep->bitp());
             const int elemWidth = nodep->width();
@@ -1276,8 +1276,10 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstNodeExpr* const indexp = nodep->bitp();
                 const int guardWidth = guardedIndexWidth(indexWidth);
                 const AstVarRef* const varRefp = VN_CAST(arrayp, VarRef);
-                // A solved size is a solver term, and the index may be one with it
-                if (indexSolved || (varRefp && VN_IS(varRefp->varp()->user4p(), Var))) {
+                // A solved size is a solver term, and the index may be one with it, as is the
+                // size of an array selected by a solved index
+                if (indexSolved || (varRefp && VN_IS(varRefp->varp()->user4p(), Var))
+                    || !countableArray(arrayp)) {
                     sizeTextp = newArraySizeTextp(arrayp, guardWidth);
                 } else {
                     addStateSelGuard(
@@ -2188,6 +2190,14 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         return !isSolvedIndex(indexp) && countableArray(fromp);
     }
+    // Whether the elements of queue or dynamic array 'arrayp' can be counted as a solver term: it
+    // is countable, or an element of a fixed-size array of such arrays, also selected by a solved
+    // index
+    static bool boundableArray(const AstNodeExpr* arrayp) {
+        if (countableArray(arrayp)) return true;
+        const AstArraySel* const selp = VN_CAST(arrayp, ArraySel);
+        return selp && boundableArray(selp->fromp());
+    }
     // Whether index 'indexp' is solved, as it reads a random variable or a std::randomize()
     // with-clause argument
     static bool isSolvedIndex(const AstNodeExpr* indexp) {
@@ -2232,6 +2242,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     // size variable if its size is constrained, as that is solved with the elements
     AstNodeExpr* newArraySizeTextp(AstNodeExpr* arrayp, int width) {
         FileLine* const fl = arrayp->fileline();
+        if (!countableArray(arrayp)) return newSelectedSizeTextp(arrayp, width);
         const AstVarRef* const varRefp = VN_CAST(arrayp, VarRef);
         if (AstVar* const sizeVarp = varRefp ? VN_CAST(varRefp->varp()->user4p(), Var) : nullptr) {
             AstVarRef* const sizeRefp = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule),
@@ -2242,6 +2253,67 @@ class ConstraintExprVisitor final : public VNVisitor {
             return VN_AS(iterateSubtreeReturnEdits(extendp), NodeExpr);
         }
         return getConstFormat(new AstExtend{fl, newArraySizep(arrayp), width});
+    }
+    // Append to 'fmt' a test of the bits of '?o' from 'bit' down, choosing among positions 'lo'
+    // and above, below 'elements'. Each position chosen is a '%s', recorded in 'leavesr'.
+    static void appendBitTests(std::string& fmt, std::vector<uint32_t>& leavesr, uint32_t lo,
+                               int bit, uint32_t elements) {
+        while (bit >= 0 && lo + (1U << bit) >= elements) --bit;  // No upper half
+        if (bit < 0) {
+            fmt += "%s";
+            leavesr.push_back(lo);
+            return;
+        }
+        fmt += "(ite (= ((_ extract " + cvtToStr(bit) + " " + cvtToStr(bit) + ") ?o) #b1) ";
+        appendBitTests(fmt, leavesr, lo + (1U << bit), bit - 1, elements);
+        fmt += ' ';
+        appendBitTests(fmt, leavesr, lo, bit - 1, elements);
+        fmt += ')';
+    }
+    // Number of elements of the queue or dynamic array 'arrayp' selected from fixed-size arrays of
+    // them by an index that is solved, as a 'width' bit solver term: a lookup, by the first such
+    // index from the variable on, of the number of elements of each array it may select. The
+    // lookup tests the bits of the index, so a solve splits on those rather than on each
+    // position.
+    AstNodeExpr* newSelectedSizeTextp(AstNodeExpr* arrayp, int width) {
+        FileLine* const fl = arrayp->fileline();
+        // The select by that index, and its depth below 'arrayp'
+        int depth = 0;
+        AstArraySel* selp = nullptr;
+        for (AstNodeExpr* pathp = arrayp; !countableArray(pathp); ++depth) {
+            selp = VN_AS(pathp, ArraySel);
+            pathp = selp->fromp();
+        }
+        --depth;
+        const uint32_t elements
+            = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+        const int indexWidth = guardedIndexWidth(selp->bitp()->width());
+        AstNodeExpr* const indexp = newGuardedIndexp(selp->bitp()->cloneTree(false));
+        indexp->user1(true);
+        int bits = 0;
+        while ((uint64_t{1} << bits) < elements) ++bits;
+        // The index, bound once as '?o'
+        std::string fmt = "(let ((?o %s)) (ite (bvult ?o (_ bv" + cvtToStr(elements) + " "
+                          + cvtToStr(indexWidth) + ")) ";
+        std::vector<uint32_t> leaves;
+        appendBitTests(fmt, leaves, 0, bits - 1, elements);
+        fmt += " (_ bv0 " + cvtToStr(width) + ")))";
+        AstNodeExpr* const argsp = VN_AS(iterateSubtreeReturnEdits(indexp), NodeExpr);
+        for (size_t leaf = 0; leaf < leaves.size(); ++leaf) {
+            const uint32_t i = leaves[leaf];
+            // The array with the index replaced by the element's
+            AstNodeExpr* const elemArrayp = arrayp->cloneTree(false);
+            AstNode* levelp = elemArrayp;
+            for (int level = 0; level < depth; ++level) {
+                levelp = VN_AS(levelp, NodeExpr)->op1p();
+            }
+            AstNodeExpr* const oldIndexp = VN_AS(levelp, ArraySel)->bitp()->unlinkFrBack();
+            VL_DO_DANGLING(pushDeletep(oldIndexp), oldIndexp);
+            VN_AS(levelp, ArraySel)->bitp(new AstConst{fl, i});
+            argsp->addNext(newArraySizeTextp(elemArrayp, width));
+            VL_DO_DANGLING(pushDeletep(elemArrayp), elemArrayp);
+        }
+        return new AstSFormatF{fl, fmt, false, argsp};
     }
     // Name an element of an array of structs or objects the way the solver registers it
     void renameArrayExpr(AstSFormatF* const newp, const bool objectElem) const {
