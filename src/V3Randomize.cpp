@@ -371,6 +371,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
         m_handleHolders;  // Classes holding a rand class handle of each class
     bool m_handleHoldersBuilt = false;  // m_handleHolders is complete
     std::vector<AstClass*> m_classps;  // All classes, in tree order
+    const RandDispatch& m_dispatch;  // Rand class handles whose objects' constraints dispatch
     AstClass* m_classp = nullptr;  // Current class
     AstNode* m_constraintExprGenp = nullptr;  // Current constraint or constraint if expression
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -626,6 +627,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
                     continue;
                 }
                 markGlobalConstrainedVars(classRefp->classp());
+                // Its object's own class solves it (see V3SolverSmt), not the handle's class
+                if (m_dispatch.mergesHandle(classp, classRefp->classp())) continue;
                 handles.emplace_back(classp, varp);
             }
         }
@@ -924,6 +927,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
 
             AstClass* nestedClassp = memberClassRefp->classp();
+            // Its object's own class solves it (see V3SolverSmt), not the handle's class
+            if (m_dispatch.mergesHandle(classp, nestedClassp)) return;
             if (!activeClasses.insert(nestedClassp).second) return;
 
             // Replace all variable references inside the cloned constraint with proper
@@ -1437,8 +1442,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
 public:
     // CONSTRUCTORS
     RandomizeMarkVisitor(AstNode* nodep, ClonedConstraints& cloneObjps,
-                         std::unordered_set<AstVar*>& elemModeArrays)
-        : m_cloneObjps{cloneObjps}
+                         std::unordered_set<AstVar*>& elemModeArrays, const RandDispatch& dispatch)
+        : m_dispatch{dispatch}
+        , m_cloneObjps{cloneObjps}
         , m_elemModeArrays{elemModeArrays} {
         // Derived classes are needed while marking constraints, so record them first
         nodep->foreach([&](AstClass* classp) {
@@ -1801,6 +1807,7 @@ class RandomizeVisitor final : public VNVisitor {
     RandModeVars m_modeVars;  // Static rand_mode/constraint_mode state vars per class
     ElemRandModes m_elemModes;  // Per-element rand_mode() state
     std::map<AstClass*, std::vector<AstClass*>> m_derivedClasses;  // Directly derived classes
+    const RandDispatch& m_dispatch;  // Rand class handles whose objects' constraints dispatch
     const std::unique_ptr<V3SolverLowering> m_solverp;  // Constraint solver lowering
 
     // METHODS
@@ -1980,6 +1987,10 @@ class RandomizeVisitor final : public VNVisitor {
                     if (!classRefp) return;
                     findSubObjRandModes(classRefp->classp());
                 });
+            }
+            // A randomizer also solves the objects of the rand handles of merged classes
+            if (!hasConstraints && classp->user1()) {
+                hasConstraints = !m_dispatch.mergedPaths(classp).empty();
             }
             if (hasConstraints) m_solverp->prepareClass(classp);
             if (randModeCount > 0) {
@@ -3859,11 +3870,14 @@ class RandomizeVisitor final : public VNVisitor {
 public:
     // CONSTRUCTORS
     RandomizeVisitor(AstNetlist* nodep, const ClonedConstraints& cloneObjps,
-                     const std::unordered_set<AstVar*>& elemModeArrays)
+                     const std::unordered_set<AstVar*>& elemModeArrays,
+                     const RandDispatch& dispatch)
         : m_inlineUniqueNames{"__Vrandwith"}
         , m_elemModes{elemModeArrays}
+        , m_dispatch{dispatch}
         , m_solverp{v3Global.solverBackendp()->newLowering(m_memberMap, m_uniqueNames, m_modeVars,
-                                                           m_elemModes, cloneObjps, deleter())} {
+                                                           m_elemModes, cloneObjps, dispatch,
+                                                           deleter())} {
         nodep->foreach([&](AstClass* const classp) {
             if (classp->extendsp())
                 m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
@@ -3978,8 +3992,10 @@ void V3Randomize::randomizeNetlist(AstNetlist* nodep) {
         // Keyed by constraints, which are not deleted until RandomizeVisitor's end
         ClonedConstraints cloneObjps;
         std::unordered_set<AstVar*> elemModeArrays;
-        const RandomizeMarkVisitor markVisitor{nodep, cloneObjps, elemModeArrays};
-        const RandomizeVisitor randomizeVisitor{nodep, cloneObjps, elemModeArrays};
+        // Before constraints are cloned, which would declare more in their classes
+        const RandDispatch dispatch{nodep};
+        const RandomizeMarkVisitor markVisitor{nodep, cloneObjps, elemModeArrays, dispatch};
+        const RandomizeVisitor randomizeVisitor{nodep, cloneObjps, elemModeArrays, dispatch};
         for (const auto& it : cloneObjps) it.second.objp->deleteTree();
     }
     addEnumDomains(nodep);

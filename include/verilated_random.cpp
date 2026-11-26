@@ -2907,6 +2907,128 @@ void VlRandomizer::disable_soft(const std::string& varName) {
     m_softVarEnds.resize(kept);
 }
 
+void VlRandomizer::set_nested_busy(bool flag) {
+    m_nestedBusy = flag;
+    m_nestedNames.clear();
+    if (flag) {
+        for (const auto& pair : m_vars) {
+            if (!pair.second->isArray()) m_nestedNames.emplace(pair.second->datap(0), pair.first);
+        }
+    }
+}
+
+void VlRandomizer::merge_nested(const VlRandomizer& from, const std::string& path) {
+    m_fastDisabled = true;  // The merged constraints are solved, not sampled
+    auto& nested = m_nested[path];
+    // The constraints of 'from' are kept as they are, in an SMT let binding the names of its
+    // variables to their names here: those registered here for the same storage, else the
+    // names prefixed by the path. All its variables are bound, as the names each constraint
+    // records (for randc) are not complete, e.g. not those formatted at runtime.
+    std::string bindings;
+    std::unordered_map<std::string, std::string> renames;  // Its variable names to names here
+    for (const auto& pair : from.m_vars) {
+        const VlRandomVar& var = *pair.second;
+        const std::string name = mergeVar(from, pair.first, path, nested.first);
+        if (from.isFrozenVar(pair.first, var) && m_disabledVars.insert(name).second) {
+            nested.second.push_back(name);
+        }
+        if (from.m_randcVarNames.count(pair.first)) m_randcVarNames.insert(name);
+        bindings += " (" + pair.first + " " + name + ")";
+        renames.emplace(pair.first, name);
+    }
+    const std::string letBegin = bindings.empty() ? "" : "(let (" + bindings + ") ";
+    const std::string letEnd = bindings.empty() ? "" : ")";
+    for (size_t i = 0; i < from.m_constraints.size(); ++i) {
+        m_constraints.push_back(letBegin + from.m_constraints[i] + letEnd);
+        m_constraintVarEnds.push_back(m_constraintVarNames.size());
+        if (i < from.m_constraints_line.size()) {
+            m_constraints_line.push_back(from.m_constraints_line[i]);
+        }
+    }
+    size_t softBegin = 0;
+    for (size_t i = 0; i < from.m_softConstraints.size(); ++i) {
+        m_softConstraints.push_back(letBegin + from.m_softConstraints[i] + letEnd);
+        for (size_t n = softBegin; n < from.m_softVarEnds[i]; ++n) {
+            m_softVarNames.push_back(renamedVar(renames, from.m_softVarNames[n]));
+        }
+        m_softVarEnds.push_back(m_softVarNames.size());
+        softBegin = from.m_softVarEnds[i];
+    }
+    for (const auto& pin : from.m_frozenPins) {
+        m_frozenPins.emplace_back(renamedVar(renames, pin.first), letBegin + pin.second + letEnd);
+    }
+    // Arrays whose elements are to be distinct, under keys of their own here, above those the
+    // holder's own constraints use
+    uint32_t key = std::max(m_uniqueArrays.empty() ? 0 : m_uniqueArrays.rbegin()->first + 1,
+                            uint32_t{s_mergedUniqueKey});
+    for (const auto& keyNames : from.m_uniqueArrays) {
+        std::unordered_set<std::string>& names = m_uniqueArrays[key++];
+        for (const std::string& name : keyNames.second) names.insert(renamedVar(renames, name));
+    }
+    for (const auto& pair : from.m_solveBefore) {
+        m_solveBefore.emplace_back(
+            SolveBeforeRef{renamedVar(renames, pair.first.name), pair.first.lsb, pair.first.width},
+            SolveBeforeRef{renamedVar(renames, pair.second.name), pair.second.lsb,
+                           pair.second.width});
+    }
+}
+
+std::string VlRandomizer::mergeVar(const VlRandomizer& from, const std::string& fromName,
+                                   const std::string& path, std::vector<std::string>& addedr) {
+    const VlRandomVar& var = *from.m_vars.at(fromName);
+    const std::string name = path + "." + fromName;
+    if (var.isArray()) {
+        // Named by its elements, so registered here by name
+        if (m_vars.emplace(name, var.renamed(name)).second) {
+            mergeArrayElements(from, fromName, name);
+            addedr.push_back(name);
+        }
+        return name;
+    }
+    // One registered here for the same storage keeps its name
+    const auto pair = m_nestedNames.emplace(var.datap(0), name);
+    if (pair.second) {
+        m_vars[name] = var.renamed(name);
+        addedr.push_back(name);
+    }
+    return pair.first->second;
+}
+
+void VlRandomizer::mergeArrayElements(const VlRandomizer& from, const std::string& fromName,
+                                      const std::string& name) {
+    for (int idx = 0;; ++idx) {
+        const auto it = from.m_arr_vars.find(generateKey(fromName, idx));
+        if (it == from.m_arr_vars.end()) break;
+        const ArrayInfo& info = *it->second;
+        // The element's name is the array's, possibly with its indices
+        m_arr_vars[generateKey(name, idx)] = std::make_shared<const ArrayInfo>(
+            name + info.m_name.substr(fromName.size()), info.m_datap, info.m_index, info.m_indices,
+            info.m_idxWidths);
+    }
+}
+
+std::string VlRandomizer::renamedVar(const std::unordered_map<std::string, std::string>& renames,
+                                     const std::string& name) {
+    const auto it = renames.find(name);
+    return it == renames.end() ? name : it->second;
+}
+
+void VlRandomizer::clear_nested(const std::string& path) {
+    const auto it = m_nested.find(path);
+    if (it == m_nested.end()) return;
+    for (const std::string& name : it->second.first) {
+        const auto varIt = m_vars.find(name);
+        if (varIt != m_vars.end() && !varIt->second->isArray()) {
+            m_nestedNames.erase(varIt->second->datap(0));
+        }
+        clear_arr_table(name);
+        m_vars.erase(name);
+        m_randcVarNames.erase(name);
+    }
+    for (const std::string& name : it->second.second) m_disabledVars.erase(name);
+    m_nested.erase(it);
+}
+
 void VlRandomizer::clearConstraints() {
     m_fastConstraints.clear();
     m_fastDisabled = false;
