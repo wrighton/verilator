@@ -3091,6 +3091,7 @@ class SvaNfaLowering final {
     size_t m_statDelayRingEdgeVisits = 0;  // Delay-ring incoming edges visited
     size_t m_statLinkEdgeVisits = 0;  // Incoming edges visited while resolving Links
     size_t m_statVertices = 0;  // NFA state vertices lowered
+    size_t m_statLinkCloneNodes = 0;  // Nodes of source signals cloned while resolving Links
 
     // Per-lowering shared context (passed to phase sub-functions)
     // Per-vertex lowering state is stored in SvaVertexData and accessed via
@@ -4034,11 +4035,31 @@ class SvaNfaLowering final {
     // Progress of resolveLinkState on one vertex
     enum class LinkVisit : uint8_t { UNVISITED, IN_PROGRESS, RESOLVED };
 
+    // Whether the state signal of a vertex other than an SAnd combiner is built from its
+    // incoming Links by resolveLinkState
+    static bool isLinkOnly(const LowerCtx& c, const SvaStateVertex* const vtxp) {
+        return vtxp != c.graph.m_startVertexp && !vtxp->datap()->stateVarp
+               && !vtxp->datap()->delayRingVarp && !vtxp->m_isMatch && !vtxp->m_isRejectSink
+               && !vtxp->m_isAndCombiner;
+    }
+    // Move sigp out of its owner if move, else clone it
+    AstNodeExpr* takeSig(AstNodeExpr*& sigp, const bool move) {
+        if (!move) {
+            m_statLinkCloneNodes += sigp->nodeCount();
+            return sigp->cloneTreePure(false);
+        }
+        AstNodeExpr* const resultp = sigp;
+        sigp = nullptr;
+        return resultp;
+    }
+
     // Build the state signal of a link-only or SAnd combiner vertex once, after every
     // vertex it reads. Start, register and delay-ring vertices are seeded beforehand, and
     // match and reject sinks get no state signal here, so the recursion stops at them.
+    // pinned holds the vertices whose state signal is also read other than through their
+    // out-edges, see resolveLinks.
     void resolveLinkState(LowerCtx& c, SvaStateVertex* const vtxp, std::vector<LinkVisit>& visits,
-                          const bool countMatches) {
+                          const std::vector<bool>& pinned, const bool countMatches) {
         LinkVisit& visit = visits[vtxp->color()];
         if (visit == LinkVisit::RESOLVED) return;
         UASSERT_OBJ(visit == LinkVisit::UNVISITED, vtxp,
@@ -4049,8 +4070,8 @@ class SvaNfaLowering final {
             SvaStateVertex* const rhsTermp = vtxp->m_andRhsTermp;
             // AndCombiner vertices always have both terminal pointers set.
             UASSERT_OBJ(lhsTermp && rhsTermp, vtxp, "AndCombiner vertex missing LHS/RHS terminal");
-            resolveLinkState(c, lhsTermp, visits, countMatches);
-            resolveLinkState(c, rhsTermp, visits, countMatches);
+            resolveLinkState(c, lhsTermp, visits, pinned, countMatches);
+            resolveLinkState(c, rhsTermp, visits, pinned, countMatches);
             UASSERT_OBJ(lhsTermp->datap()->stateSigp && rhsTermp->datap()->stateSigp, vtxp,
                         "AndCombiner operand terminal has no state signal");
             AstNodeExpr* const matchLp
@@ -4066,8 +4087,7 @@ class SvaNfaLowering final {
             vtxp->datap()->stateSigp = new AstLogAnd{c.flp, doneLOrp, doneROrp};
             vtxp->datap()->stateCountSigp = new AstExtend{
                 c.flp, vtxp->datap()->stateSigp->cloneTreePure(false), m_u32DTypep->width()};
-        } else if (vtxp != c.graph.m_startVertexp && !vtxp->datap()->stateVarp
-                   && !vtxp->datap()->delayRingVarp && !vtxp->m_isMatch && !vtxp->m_isRejectSink) {
+        } else if (isLinkOnly(c, vtxp)) {
             // OR of the active sources of the incoming Links, each gated by its Link
             // condition, together with the summed thread count
             AstNodeExpr* nextStatep = nullptr;
@@ -4077,17 +4097,21 @@ class SvaNfaLowering final {
                 ++m_statLinkEdgeVisits;
                 const SvaTransEdge& te = static_cast<const SvaTransEdge&>(er);
                 SvaStateVertex* const fromVtxp = te.fromVtxp();
-                resolveLinkState(c, fromVtxp, visits, countMatches);
-                UASSERT_OBJ(fromVtxp->datap()->stateSigp && fromVtxp->datap()->stateCountSigp,
-                            fromVtxp, "Link source missing state signal");
-                AstNodeExpr* const contributionp = andCond(
-                    c.flp, fromVtxp->datap()->stateSigp->cloneTreePure(false), te.m_condp);
+                resolveLinkState(c, fromVtxp, visits, pinned, countMatches);
+                SvaVertexData* const fromDatap = fromVtxp->datap();
+                UASSERT_OBJ(fromDatap->stateSigp && fromDatap->stateCountSigp, fromVtxp,
+                            "Link source missing state signal");
+                // The signals of a Link-only source read only by this Link move here, as
+                // cloning them along a chain of such vertices grows quadratically
+                const bool move = fromVtxp->outSize1() && !te.m_rejectOnFail
+                                  && !pinned[fromVtxp->color()] && isLinkOnly(c, fromVtxp);
+                AstNodeExpr* const contributionp
+                    = andCond(c.flp, takeSig(fromDatap->stateSigp, move), te.m_condp);
                 nextStatep = orExprs(c.flp, nextStatep, contributionp);
-                AstNodeExpr* countContributionp
-                    = fromVtxp->datap()->stateCountSigp->cloneTreePure(false);
+                AstNodeExpr* countContributionp = takeSig(fromDatap->stateCountSigp, move);
                 AstNodeExpr* countContributionOverflowp
-                    = countMatches && fromVtxp->datap()->stateCountOverflowSigp
-                          ? fromVtxp->datap()->stateCountOverflowSigp->cloneTreePure(false)
+                    = countMatches && fromDatap->stateCountOverflowSigp
+                          ? takeSig(fromDatap->stateCountOverflowSigp, move)
                           : nullptr;
                 if (te.m_condp) {
                     AstNodeExpr* const enablep = te.m_condp->cloneTreePure(false);
@@ -4144,8 +4168,30 @@ class SvaNfaLowering final {
         }
         // Indexed by the vertex colors numbered in lower()
         std::vector<LinkVisit> visits(c.graph.m_graph.vertices().size(), LinkVisit::UNVISITED);
+        // SAnd combiners read the state of their operand terminals, Links with a condition
+        // vertex its state, throughout and abort rejects the state of their vertex, and
+        // vacuous successes the state of their terminals
+        std::vector<bool> pinned(c.graph.m_graph.vertices().size(), false);
+        for (const SvaStateVertex* const vtxp : c.graph.m_vacuousVertices) {
+            pinned[vtxp->color()] = true;
+        }
+        for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
+            const SvaStateVertex* const vtxp = static_cast<const SvaStateVertex*>(&vtxr);
+            if (vtxp->m_isAndCombiner) {
+                pinned[vtxp->m_andLhsTermp->color()] = true;
+                pinned[vtxp->m_andRhsTermp->color()] = true;
+            }
+            if ((!vtxp->m_throughoutConds.empty() && !vtxp->m_isAntecedent)
+                || vtxp->m_abortRejectp) {
+                pinned[vtxp->color()] = true;
+            }
+            for (const V3GraphEdge& er : vtxp->outEdges()) {
+                const SvaTransEdge& te = static_cast<const SvaTransEdge&>(er);
+                if (te.m_condVtxp) pinned[te.m_condVtxp->color()] = true;
+            }
+        }
         for (V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
-            resolveLinkState(c, static_cast<SvaStateVertex*>(&vtxr), visits, countMatches);
+            resolveLinkState(c, static_cast<SvaStateVertex*>(&vtxr), visits, pinned, countMatches);
         }
     }
 
@@ -4253,6 +4299,7 @@ public:
         V3Stats::addStatSum("Assertions, NFA delay ring edge visits", m_statDelayRingEdgeVisits);
         V3Stats::addStatSum("Assertions, NFA link edge visits", m_statLinkEdgeVisits);
         V3Stats::addStatSum("Assertions, NFA state vertices", m_statVertices);
+        V3Stats::addStatSum("Assertions, NFA link signal nodes cloned", m_statLinkCloneNodes);
     }
 
     // Return the statements run by an assertion failing at end of simulation
