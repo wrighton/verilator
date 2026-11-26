@@ -313,6 +313,7 @@ class VlRandomizer VL_NOT_FINAL {
     // The tables being built, innermost last, as an entry's value may read another
     struct TableBuilder final {
         std::string head;  // See m_tableHeads
+        int indexWidth;  // Of the key
         bool positional;  // Whether the keys are the positions 0, 1, ... in order, none missing
         uint8_t needs;  // See TableNeeds
         std::vector<std::string> keys;

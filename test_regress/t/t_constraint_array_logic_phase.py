@@ -36,7 +36,8 @@ test.file_grep(
     r'(?:(?!\(reset\)|:produce-unsat-assumptions).)*'
     r'\(set-logic QF_[A-Z]+\)(?:(?!\(reset\)).)*'
     r'\(define-fun (__Vt\d+) \(\(\?i \(_ BitVec 32\)\)\) \(_ BitVec 7\) '
-    r'\(ite \(= \?i #x00000000\) #b0010010 (?:(?!\(reset\)).)*\(\1 idx\)')
+    r'\(ite \(bvult \?i \(_ bv[0-9]+ 32\)\) \(ite \(= \(\(_ extract [0-9]+ [0-9]+\) \?i\) #b1\) '
+    r'(?:(?!\(reset\)).)*\(\1 idx\)')
 test.file_grep_not(solver_log,
                    r'(?s)\(set-logic (?!ALL\))[^)]*\)(?:(?!\(reset\)).)*\(as const \(Array ')
 

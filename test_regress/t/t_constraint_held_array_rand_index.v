@@ -98,6 +98,24 @@ class Holder;
   endfunction
 endclass
 
+// A held table read with another array solved, so the solve uses array logic
+class TableSolved;
+  rand bit [15:0] table_[];
+  rand bit [15:0] other[];
+  rand int unsigned j;
+  rand bit [15:0] v, w, x;
+  constraint c_v {
+    j < 256;
+    v == table_[j];
+    other.size() == 3;
+    w == other[0] + x;
+  }
+  function new();
+    table_ = new[256];
+    foreach (table_[i]) table_[i] = 16'(i * 5);
+  endfunction
+endclass
+
 // Read whole as well
 class Summed;
   rand bit [7:0] arr[4];
@@ -131,6 +149,7 @@ module t;
   Holder hold;
   Summed sum;
   Distinct dis;
+  TableSolved solved;
   int ok;
   bit [15:0] saved[];
   initial begin
@@ -205,6 +224,14 @@ module t;
       ok = dis.randomize();
       `checkh(ok, 1);
       `checkh(dis.e, dis.arr[dis.i]);
+    end
+    solved = new;
+    solved.table_.rand_mode(0);
+    repeat (3) begin
+      ok = solved.randomize();
+      `checkh(ok, 1);
+      `checkh(solved.v, solved.table_[solved.j]);
+      `checkh(solved.w, 16'(solved.other[0] + solved.x));
     end
     $write("*-* All Finished *-*\n");
     $finish;
