@@ -9,6 +9,8 @@ module t (
 );
   int got[$];
 
+  // Not queued by the calling process, as lowered by V3AssertNfa: the variables of the task are
+  // out of its scope
   task automatic loop_var();
     for (int i = 0; i < 3; i++) begin
       assert property (@(posedge clk) 1'b0 ##1 1'b1)
@@ -16,10 +18,7 @@ module t (
     end
   endtask
 
-  task automatic argument(input int k);
-    assert property (@(posedge clk) k == 0);
-  endtask
-
+  // Queued, but a static variable of the task is read after the task returned
   task static_local();
     int n;
     n = 1;
@@ -38,7 +37,6 @@ module t (
   initial begin
     action_static();
     loop_var();
-    argument(0);
     static_local();
   end
 endmodule

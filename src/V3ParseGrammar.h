@@ -51,6 +51,7 @@ public:
     bool m_tracingParse = true;  // Tracing disable for parser
     bool m_inImplements = false;  // Is inside class implements list
     bool m_insideProperty = false;  // Is inside property or sequence declaration
+    bool m_insideTask = false;  // Is inside a task declaration
     bool m_specifyignWarned = false;  // Issued a SPECIFYIGN warning
     bool m_typedPropertyPort = false;  // Typed property port occurred on port lists
     bool m_modportImpExpActive
