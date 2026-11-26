@@ -18,6 +18,10 @@
 //  Runs after V3Width and before V3WidthCommit, so that V3WidthCommit checks
 //  each inlined body in the context of its instance, e.g. that a function
 //  holds no cycle delay (IEEE 1800-2023 13.4).
+//  - Report a cyclic dependency among named sequences through a sequence
+//    method (IEEE 1800-2023 16.8). V3LinkDot made the method read a variable
+//    set by an internal cover sequence of the instance, so V3Width does not
+//    follow it to the instance.
 //  - Lower a sequence used as an event control into a cover sequence firing
 //    a synthesized event (IEEE 1800-2023 9.4.2.4), so its instance is
 //    inlined like the others.
@@ -57,7 +61,9 @@
 #include "V3Task.h"
 #include "V3UniqueNames.h"
 
+#include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -107,6 +113,80 @@ class SeqEventLowerVisitor final : public VNVisitor {
 
 public:
     explicit SeqEventLowerVisitor(AstNetlist* nodep) { iterate(nodep); }
+};
+
+//######################################################################
+// Search the named sequences for a cyclic dependency, depth first, also through the variables
+// that internal cover sequences set for sequence methods
+
+class AssertElabSeqCycleVisitor final : public VNVisitorConst {
+    // STATE
+    // Variable an internal cover sequence sets -> the instance it covers
+    std::unordered_map<const AstVar*, AstSchemaRef*> m_coverVars;
+    // Sequences whose dependencies are searched, outermost first
+    std::vector<AstSequence*> m_path;
+    std::unordered_set<const AstSequence*> m_onPathps;  // The sequences of m_path
+    std::unordered_set<const AstSequence*> m_searchedps;  // Sequences searched or on m_path
+    // Sequence method read of the instance being iterated, see visit(AstVarRef)
+    AstNode* m_methodp = nullptr;
+
+    // METHODS
+    void dependsOn(AstNode* nodep, AstSequence* seqp) {
+        if (!m_onPathps.count(seqp)) {
+            search(seqp);
+            return;
+        }
+        // As V3Width reports an instance cycle; each sequence from seqp instantiates the next
+        const auto it = std::find(m_path.begin(), m_path.end(), seqp);
+        std::string cycle;
+        std::for_each(it, m_path.end(), [&cycle](const AstSequence* const pathp) {
+            cycle += pathp->prettyNameQ() + " -> ";
+        });
+        nodep->v3error("Sequence instance " << seqp->prettyNameQ()
+                                            << " forms a cyclic dependency among named sequences"
+                                               " (IEEE 1800-2023 16.8).\n"
+                                            << nodep->warnMore() << "... Cycle: " << cycle
+                                            << seqp->prettyNameQ());
+    }
+    void search(AstSequence* seqp) {
+        if (!m_searchedps.insert(seqp).second) return;
+        VL_RESTORER(m_methodp);
+        m_methodp = nullptr;
+        m_path.push_back(seqp);
+        m_onPathps.insert(seqp);
+        iterateChildrenConst(seqp);
+        m_onPathps.erase(seqp);
+        m_path.pop_back();
+    }
+
+    // VISITORS
+    void visit(AstSequence* nodep) override { search(nodep); }
+    void visit(AstSchemaRef* nodep) override {
+        iterateChildrenConst(nodep);
+        AstSequence* const seqp = VN_CAST(nodep->schemap(), Sequence);
+        if (seqp && !m_path.empty()) dependsOn(m_methodp ? m_methodp : nodep, seqp);
+    }
+    void visit(AstVarRef* nodep) override {
+        const auto it = m_coverVars.find(nodep->varp());
+        if (m_path.empty() || it == m_coverVars.end()) return;
+        // A sequence method depends on its instance, and the instances in its arguments
+        VL_RESTORER(m_methodp);
+        m_methodp = nodep;
+        iterateConst(it->second);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    explicit AssertElabSeqCycleVisitor(AstNetlist* nodep) {
+        nodep->foreach([this](AstCover* coverp) {
+            if (!coverp->isSeqEvent()) return;
+            AstSchemaRef* const refp = VN_AS(VN_AS(coverp->propp(), PropSpec)->propp(), SchemaRef);
+            coverp->foreach([&](const AstVarRef* varRefp) {
+                if (varRefp->access().isWriteOrRW()) m_coverVars.emplace(varRefp->varp(), refp);
+            });
+        });
+        iterateConst(nodep);
+    }
 };
 
 //######################################################################
@@ -404,6 +484,7 @@ public:
 
 void V3AssertElab::assertElabAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
+    { AssertElabSeqCycleVisitor{nodep}; }
     { SeqEventLowerVisitor{nodep}; }
     { AssertElabVisitor{nodep}; }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("assertelab", 0, dumpTreeEitherLevel() >= 3);
