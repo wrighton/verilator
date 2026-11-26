@@ -4140,13 +4140,58 @@ bool VlRandomizer::readPhaseValues(VlSolverSession& sess, const std::string& ter
     return parsePhaseValues(is, terms, solvedValuesr);
 }
 
+// The key of a part of a variable or element, ((_ extract H L) <term>), parsed whatever the
+// whitespace between its tokens: as buildSolveLayers names it, single-spaced, with each index
+// in hex of its width, the notation solveBeforeVarp names an element by. Empty for any other
+// term; an index of another width or form stays as answered, for the match to reject.
+std::string VlRandomizer::partTermKey(const std::string& term) const {
+    // Only a term opening with two '(' can be one: names and selects skip the parse
+    const size_t open = term.find_first_not_of(" \t\r\n");
+    const size_t inner
+        = open == std::string::npos ? open : term.find_first_not_of(" \t\r\n", open + 1);
+    if (inner == std::string::npos || term[open] != '(' || term[inner] != '(') return "";
+    std::istringstream is{term};
+    is.ignore(static_cast<std::streamsize>(open + 1));
+    const std::string indexed = readSMTTerm(is);
+    const std::string operand = readSMTTerm(is);
+    std::string close;
+    std::getline(is >> std::ws, close);
+    if (close != ")" || indexed.size() < 2) return "";
+    std::istringstream its{indexed.substr(1, indexed.size() - 2)};
+    std::string under, op, hi, lo, extra;
+    its >> under >> op >> hi >> lo;
+    if (under != "_" || op != "extract" || lo.empty() || its >> extra) return "";
+    std::vector<std::string> indices;
+    const std::string base = parseSelect(operand, indices);
+    const auto firstIt = m_arr_vars.find(generateKey(base, 0));
+    std::string select = base;
+    for (size_t i = 0; i < indices.size(); ++i) {
+        const size_t width = firstIt != m_arr_vars.end() && i < firstIt->second->m_idxWidths.size()
+                                 ? firstIt->second->m_idxWidths[i]
+                                 : 0;
+        std::string index = indices[i];
+        smtIndexedToBinary(index, static_cast<int>(width));
+        if (width && width <= 32 && !(width % 4) && validSMTNum(index)
+            && smtNumWidth(index) == width) {
+            IData value = 0;
+            parseSMTNum(static_cast<int>(width), WDataOutP::external(&value), index);
+            std::ostringstream hex;
+            hex << "#x" << std::hex << std::setfill('0') << std::setw(width / 4) << value;
+            index = hex.str();
+        }
+        select = "(select " + select + " " + index + ")";
+    }
+    return "((_ extract " + hi + " " + lo + ") " + select + ")";
+}
+
 // The variable or element a phase term names, by its key; the key is what parseModel names
 // it, so a term the solver writes in another notation still matches
 const VlRandomVar* VlRandomizer::phaseTermKey(const std::string& term, std::string& keyr) const {
-    // A part of a variable solved before another is named by its own term
-    if (term.compare(0, 11, "((_ extract") == 0) {
-        const auto it = m_solveBeforeElems.find(term);
-        keyr = term;
+    // A part of a variable solved before another is named by its own term, as asked
+    const std::string partKey = partTermKey(term);
+    if (!partKey.empty()) {
+        keyr = partKey;
+        const auto it = m_solveBeforeElems.find(keyr);
         return it == m_solveBeforeElems.end() ? nullptr : it->second.get();
     }
     std::vector<std::string> indices;
