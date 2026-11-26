@@ -64,6 +64,32 @@ module t (
   always_comb if (s == 0) s = 4'd7;
   // verilator lint_on ALWCOMBORDER
 
+  // Test: reading what it writes before writing it gives the value from the previous run
+  bit [6:0] in = 0;
+  bit [6:0] inPrev = 0;
+  bit [6:0] y1;
+  bit [6:0] xo;
+  // verilator lint_off ALWCOMBORDER
+  always_comb begin
+    y1 = xo;
+    xo = in;
+  end
+  // verilator lint_on ALWCOMBORDER
+
+  // Test: sensitive to nothing, runs only at time zero
+  bit [3:0] s5;
+  // verilator lint_off ALWCOMBORDER
+  always_comb s5 = s5 + 4'd1;
+  // verilator lint_on ALWCOMBORDER
+
+  // Test: accumulating, one run per change
+  bit [6:0] yv = 7'd1;
+  bit [6:0] acc;
+  bit [6:0] accExp = 7'd1;
+  // verilator lint_off ALWCOMBORDER
+  always_comb acc = acc | yv;
+  // verilator lint_on ALWCOMBORDER
+
   always @(negedge clk) g <= !g;
   always @(posedge clk2) h <= !h;
   always @(posedge clk) begin
@@ -75,8 +101,16 @@ module t (
     `checkd(hSeen, h);
     `checkd(q, g ^ h);
     `checkd(s, 4'd7);
+    `checkd(y1, inPrev);
+    `checkd(xo, in);
+    `checkd(s5, 4'd1);
+    `checkd(acc, accExp);
     cyc <= cyc + 1;
     a <= !a;
+    in <= in + 7'd3;
+    inPrev <= in;
+    yv <= 7'(1 << ((cyc + 1) % 7));
+    accExp <= accExp | 7'(1 << ((cyc + 1) % 7));
     if (cyc % 2 == 1) clk2 <= !clk2;
     if (cyc == 20) begin
       $write("*-* All Finished *-*\n");
