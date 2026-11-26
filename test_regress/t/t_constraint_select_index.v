@@ -111,6 +111,96 @@ class CondIndex;
   }
 endclass
 
+class NearMax;
+  rand bit [7:0] x;
+  rand bit [15:8] c;
+  rand bit [31:0] u;
+  rand bit [32:0] v;
+  rand bit [63:0] w;
+  rand bit signed [39:0] sw;
+  bit [31:0] su;
+  rand bit [2:0] yu, yv, yw, yc, ys, yk3, ysw, ykn;
+  rand bit yk;
+  constraint c_near {
+    u inside {32'hffff_ffff, 32'hffff_fffe, 32'h8000_0000, 32'h7fff_ffff};
+    v inside {33'h0_ffff_ffff, 33'h1_0000_0001, 33'h1_ffff_ffff};
+    w inside {64'hffff_ffff_ffff_ffff, 64'hffff_ffff_ffff_fffe, 64'h8000_0000_0000_0001};
+    sw inside {-40'sd1, -40'sd2, 40'sh7f_ffff_ffff, 40'sh80_0000_0000};
+    yu == x[u+:3];
+    yv == x[v+:3];
+    yw == x[w-:3];
+    yc == c[u+:3];
+    ys == x[su+:3];
+    yk == x[33'h1_0000_0001];
+    yk3 == x[64'hffff_ffff_ffff_fffe+:3];
+    ysw == x[sw+:3];
+    ykn == x[64'sh8000_0000_0000_0000+:3];
+  }
+endclass
+
+class PackedIndex;
+  rand bit [3:0][6:0] pa;
+  rand bit [5:2][6:0] po;
+  rand bit [39:0] l;
+  rand bit [2:0] i;
+  rand bit [6:0] yl, yo;
+  constraint c {
+    l < 6 || l[39:32] == 8'h01;
+    yl == pa[l];
+    yo == po[i];
+  }
+endclass
+
+function automatic bit [2:0] pick3(bit [7:0] v, bit [2:0] k);
+  return v[k+:3];
+endfunction
+
+class Forms;
+  rand bit [7:0] x;
+  rand bit [0:7] b;
+  rand int v;
+  rand bit [2:0] k;
+  rand bit [4:0] q;
+  rand bit [2:0] yf;
+  rand bit yb, yv;
+  constraint c {
+    yf == pick3(x, k);
+    yb == b[3];
+    yv == v[q];
+  }
+endclass
+
+// verilator lint_on WIDTH
+class NegRange;
+  rand bit [-6:0] an;
+  rand bit [0:-6] ad;
+  rand bit [-3:4] az;
+  rand bit [7:-2] aw;
+  rand int idx;
+  rand bit yn, yd;
+  rand bit [2:0] ynp, ydp, yzm, ywm;
+  constraint c {
+    idx inside {[-10 : 10]};
+    yn == an[idx];
+    ynp == an[idx+:3];
+    yd == ad[idx];
+    ydp == ad[idx+:3];
+    yzm == az[idx-:3];
+    ywm == aw[idx-:3];
+  }
+endclass
+// verilator lint_off WIDTH
+
+class NearMaxForce;
+  rand bit [7:0] x;
+  rand bit [32:0] v;
+  constraint c {
+    x == 8'hff;
+    v == 33'h0_ffff_ffff;
+    x[v+:3] == 3'b010;
+  }
+endclass
+
 class Solved;
   rand bit [7:0] x;
   int i;
@@ -229,6 +319,68 @@ module t;
       randomize_result = o.randomize();
       `checkd(randomize_result, 1);
       `checkh(o.y, 1'b1);
+    end
+
+    // Test: positions near the maximum. An index of up to 32 bits is an integer, so an unsigned
+    // one with its top bit set is negative, as major simulators read it (strict IEEE unsigned
+    // would put 32'hffff_ffff out of range). A wider index keeps its whole value.
+    begin
+      automatic NearMax o = new;
+      automatic NearMaxForce force_o = new;
+      o.su = 32'hffff_ffff;
+      repeat (20) begin
+        randomize_result = o.randomize();
+        `checkd(randomize_result, 1);
+        `checkrd(o.yu, o.x, 8, int'(o.u), 3);
+        `checkh(o.yv, 3'b0);
+        `checkh(o.yw, 3'b0);
+        `checkrd(o.yc, o.c, 8, int'(o.u) - 8, 3);
+        `checkrd(o.ys, o.x, 8, -1, 3);
+        `checkh(o.yk, 1'b0);
+        `checkh(o.yk3, 3'b0);
+        `checkrd(o.ysw, o.x, 8, o.sw, 3);
+        `checkh(o.ykn, 3'b0);
+      end
+      randomize_result = force_o.randomize();
+      `checkd(randomize_result, 0);
+    end
+
+    // Test: a select in a called function, an ascending constant select, and an int select
+    begin
+      automatic Forms o = new;
+      repeat (20) begin
+        randomize_result = o.randomize();
+        `checkd(randomize_result, 1);
+        `checkrd(o.yf, o.x, 8, o.k, 3);
+        `checkh(o.yb, o.b[3]);
+        `checkh(o.yv, o.v[o.q]);
+      end
+    end
+
+    // Test: negative and zero-spanning declared ranges, ascending and descending
+    begin
+      automatic NegRange o = new;
+      repeat (40) begin
+        randomize_result = o.randomize();
+        `checkd(randomize_result, 1);
+        `checkrd(o.yn, o.an, 7, -o.idx, 1);
+        `checkrd(o.ynp, o.an, 7, -o.idx - 2, 3);
+        `checkrd(o.yd, o.ad, 7, o.idx + 6, 1);
+        `checkrd(o.ydp, o.ad, 7, o.idx + 6, 3);
+        `checkrd(o.yzm, o.az, 8, 4 - o.idx, 3);
+        `checkrd(o.ywm, o.aw, 10, o.idx, 3);
+      end
+    end
+
+    // Test: packed array elements out of range read zero
+    begin
+      automatic PackedIndex o = new;
+      repeat (20) begin
+        randomize_result = o.randomize();
+        `checkd(randomize_result, 1);
+        `checkh(o.yl, o.l < 4 ? o.pa[o.l[1:0]] : 7'h0);
+        `checkh(o.yo, o.i >= 2 && o.i <= 5 ? o.po[o.i] : 7'h0);
+      end
     end
 
     // Test: the selected value is solved, and bits out of range stay zero
