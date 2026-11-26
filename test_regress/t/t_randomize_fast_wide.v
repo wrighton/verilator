@@ -35,6 +35,23 @@ class FastGapSlice;
   }
 endclass
 
+// A 64-bit := item of 2^64-1 or 2^64 values competes with a point. Only
+// values below 10 are legal, but the item keeps its whole range weight, so
+// 0 has probability just above 1/10.
+class FastCompetingMass;
+  rand bit [63:0] x;
+  rand bit [6:0] pinned;
+  bit [63:0] hi;
+  constraint c {
+    x dist {
+      [64'd0 : hi] := 1,
+      64'd0 := 9
+    };
+    x < 64'd10;
+    pinned == 7'd23;
+  }
+endclass
+
 module t_wide;
   localparam int N = 8192;
   function automatic int pick(ref longint unsigned value, input longint unsigned lo,
@@ -53,7 +70,7 @@ module t_wide;
   function automatic int pick_signed(ref longint value, input longint lo, input longint hi);
     return std::randomize(value) with {value inside {[lo : hi]};};
   endfunction
-  function automatic int mass_fallback(ref longint unsigned value, input int zero_weight);
+  function automatic int heavy_mass(ref longint unsigned value, input int zero_weight);
     return std::randomize(value) with {
       value inside {[64'd0 : 64'd7]};
       value dist {[64'd0 : 64'd7] := 64'h8000_0000_0000_0000, 64'd100 := zero_weight};
@@ -98,10 +115,11 @@ module t_wide;
       `check_range(value, 64'hffff_ffff_ffff_fff1, 64'hffff_ffff_ffff_fff5);
       overlap_counts[int'(value - 64'hffff_ffff_ffff_fff0)]++;
     end
+    // Whole range masses 5 and 6 over four and two legal values
     for (int i = 1; i < 4; i++)
-      `check_range(overlap_counts[i], N / 8 - 200, N / 8 + 200);
-    `check_range(overlap_counts[4], 3 * N / 8 - 200, 3 * N / 8 + 200);
-    `check_range(overlap_counts[5], 2 * N / 8 - 200, 2 * N / 8 + 200);
+      `check_range(overlap_counts[i], 5 * N / 44 - 200, 5 * N / 44 + 200);
+    `check_range(overlap_counts[4], 17 * N / 44 - 200, 17 * N / 44 + 200);
+    `check_range(overlap_counts[5], 12 * N / 44 - 200, 12 * N / 44 + 200);
     repeat (128) begin
       randomize_result = std::randomize(value) with {
         value inside {[64'hffff_ffff_ffff_fff8 : 64'hffff_ffff_ffff_ffff],
@@ -170,9 +188,27 @@ module t_wide;
     `checkd(value <= 64'd7, 1);
     value = 64'h1234_5678_9abc_def0;
     // A state zero-weight source bucket has no recorded single-bucket proposal;
-    // the same legal8-value distribution then reaches exact mass overflow.
-    `checkd(mass_fallback(value, 0), 0);
-    `checkd(value, 64'h1234_5678_9abc_def0);
+    // the same legal 8-value distribution has a 2^66 mass, still sampled.
+    `checkd(heavy_mass(value, 0), 1);
+    `checkd(value <= 64'd7, 1);
+    begin
+      FastCompetingMass obj;
+      int zeros;
+      obj = new;
+      obj.srandom(5);
+      for (int i = 0; i < 2; ++i) begin
+        obj.hi = 64'hffff_ffff_ffff_fffe + 64'(i);
+        zeros = 0;
+        repeat (N) begin
+          randomize_result = obj.randomize();
+          `checkd(randomize_result, 1);
+          `checkd(obj.x < 64'd10, 1);
+          `checkd(obj.pinned, 7'd23);
+          zeros += int'(obj.x == 64'd0);
+        end
+        `check_range(zeros, N / 10 - 200, N / 10 + 200);
+      end
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end
@@ -225,13 +261,9 @@ module t_slice;
         default: `stop;
       endcase
     end
-    // Keep the original band spans 52429/419430/52429 after hard clipping.
-    `check_range(longint'(restricted_counts[0]), 64'd419430 * N / 64'd891289 - 200,
-                 64'd419430 * N / 64'd891289 + 200);
-    `check_range(longint'(restricted_counts[1]), 64'd52429 * N / 64'd891289 - 200,
-                 64'd52429 * N / 64'd891289 + 200);
-    `check_range(longint'(restricted_counts[2]), 64'd419430 * N / 64'd891289 - 200,
-                 64'd419430 * N / 64'd891289 + 200);
+    // Each :/ band keeps its whole range weight with one legal value left.
+    foreach (restricted_counts[i])
+      `check_range(restricted_counts[i], N / 3 - 200, N / 3 + 200);
     randomize_result = nonzero_pins.randomize() with {
       soft addr[31:13] inside {19'd1, 19'd2};
     };
