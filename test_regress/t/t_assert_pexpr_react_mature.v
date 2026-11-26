@@ -17,6 +17,8 @@
 // not affected by the procedure's later execution, such as a disable fork.
 // Six clocks, at 5, 15, ..., 55; p is always true, q always true, q2 true from the clock of cyc 3.
 module t;
+  // Procedural assertion after a delay: no clock inference (IEEE 1800-2023 16.14.6)
+  // verilator lint_off NONSTD
   bit clk = 0;
   int cyc = 0;
   bit p = 1;

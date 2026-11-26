@@ -13,6 +13,8 @@
 // begins at the next one; one whose clock occurs later in its time step begins there.
 `timescale 1ns / 1ps
 module t;
+  // Procedural assertion after a delay: no clock inference (IEEE 1800-2023 16.14.6)
+  // verilator lint_off NONSTD
   bit clk = 0;
   int cyc = 0;
   bit p = 1;

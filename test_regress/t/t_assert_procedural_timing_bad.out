@@ -1,0 +1,59 @@
+%Warning-NONSTD: t/t_assert_procedural_timing_bad.v:47:5: Non-standard clock inferred from a procedure with a blocking timing control or another event control (IEEE 1800-2023 16.14.6).
+                                                        : ... note: In instance 't'
+   47 |     assert property (a);
+      |     ^~~~~~
+                 t/t_assert_procedural_timing_bad.v:46:5: ... Location of the timing control
+   46 |     #1;
+      |     ^
+                                                        : ... Suggest declare default clocking with the same event
+                 ... For warning description see https://verilator.org/warn/NONSTD?v=latest
+                 ... Use "/* verilator lint_off NONSTD */" and lint_on around source to disable this message.
+%Warning-NONSTD: t/t_assert_procedural_timing_bad.v:52:9: Non-standard clock inferred from a procedure with a blocking timing control or another event control (IEEE 1800-2023 16.14.6).
+                                                        : ... note: In instance 't'
+   52 |     if ($rose(a)) x = 1;
+      |         ^~~~~
+                 t/t_assert_procedural_timing_bad.v:51:5: ... Location of the timing control
+   51 |     wait (b);
+      |     ^~~~
+                                                        : ... Suggest declare default clocking with the same event
+%Warning-NONSTD: t/t_assert_procedural_timing_bad.v:59:5: Non-standard clock inferred from a procedure with a blocking timing control or another event control (IEEE 1800-2023 16.14.6).
+                                                        : ... note: In instance 't'
+   59 |     assert property (a);
+      |     ^~~~~~
+                 t/t_assert_procedural_timing_bad.v:55:5: ... Location of the timing control
+   55 |     fork
+      |     ^~~~
+                                                        : ... Suggest declare default clocking with the same event
+%Warning-NONSTD: t/t_assert_procedural_timing_bad.v:63:5: Non-standard clock inferred from a procedure with a blocking timing control or another event control (IEEE 1800-2023 16.14.6).
+                                                        : ... note: In instance 't'
+   63 |     assert property (a);
+      |     ^~~~~~
+                 t/t_assert_procedural_timing_bad.v:62:5: ... Location of the timing control
+   62 |     wait_clk();
+      |     ^~~~~~~~
+                                                        : ... Suggest declare default clocking with the same event
+%Warning-NONSTD: t/t_assert_procedural_timing_bad.v:67:5: Non-standard clock inferred from a procedure with a blocking timing control or another event control (IEEE 1800-2023 16.14.6).
+                                                        : ... note: In instance 't'
+   67 |     assert property (a);
+      |     ^~~~~~
+                 t/t_assert_procedural_timing_bad.v:66:5: ... Location of the timing control
+   66 |     wait_clk();
+      |     ^~~~~~~~
+                                                        : ... Suggest declare default clocking with the same event
+%Warning-NONSTD: t/t_assert_procedural_timing_bad.v:73:5: Non-standard clock inferred from a procedure with a blocking timing control or another event control (IEEE 1800-2023 16.14.6).
+                                                        : ... note: In instance 't'
+   73 |     assert property (a);
+      |     ^~~~~~
+                 t/t_assert_procedural_timing_bad.v:71:7: ... Location of the timing control
+   71 |       @(negedge clk) x = 1;
+      |       ^
+                                                        : ... Suggest declare default clocking with the same event
+%Warning-NONSTD: t/t_assert_procedural_timing_bad.v:77:5: Non-standard clock inferred from a procedure with a blocking timing control or another event control (IEEE 1800-2023 16.14.6).
+                                                        : ... note: In instance 't'
+   77 |     assert property (a);
+      |     ^~~~~~
+                 t/t_assert_procedural_timing_bad.v:76:7: ... Location of the timing control
+   76 |     x <= @(negedge clk) a;
+      |       ^~
+                                                        : ... Suggest declare default clocking with the same event
+%Error: Exiting due to
