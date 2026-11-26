@@ -3895,6 +3895,7 @@ public:
                                  std::get<1>(m_randomizeNullFuncs[i]),
                                  std::get<2>(m_randomizeNullFuncs[i]));
         }
+        m_solverp->finish();
         nodep->foreach([&](AstConstraint* constrp) {
             VL_DO_DANGLING(pushDeletep(constrp->unlinkFrBack()), constrp);
         });
