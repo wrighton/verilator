@@ -1,0 +1,5 @@
+%Error: t/t_fork_xref_auto_inst_bad.v:23:45: Hierarchical reference to automatic variable 'payload' from outside its scope (IEEE 1800-2023 6.21).
+   23 |             result = $root.t.v.worker.frame.payload;
+      |                                             ^~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

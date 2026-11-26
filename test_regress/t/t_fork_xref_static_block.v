@@ -25,9 +25,23 @@ endmodule
 module t;
   localparam realtime STEP = 1;
   int got_sib, got_rel, got_abs, got_any, got_cnt;
-  int got_mid, got_mid_abs, got_mid2;
+  int got_mid, got_mid_abs, got_mid2, got_auto, got_outer;
   int k;
   other u_other ();
+
+  // An automatic variable of a fork branch, from a block enclosing the fork
+  initial begin : outer
+    fork
+      begin : br2
+        automatic int v;
+        v = 6;
+        for (int i = 0; i < 1; i++) begin
+          #(STEP);
+          got_outer = outer.br2.v;
+        end
+      end
+    join_none
+  end
   initial begin
     fork
       begin : vb
@@ -43,6 +57,17 @@ module t;
         for (int i = 0; i < 1; i++) begin
           #(2 * STEP);
           got_sib = t.vb.x;  // From another branch
+        end
+      end
+      // An automatic variable, from within its scope: the current activation's
+      begin : vauto
+        begin : am
+          automatic int w;
+          w = 8;
+          for (int i = 0; i < 1; i++) begin
+            #(STEP);
+            got_auto = am.w;
+          end
         end
       end
       // Blocks nested in the branch, moved into its task with their statements
@@ -86,6 +111,8 @@ module t;
     got_any = t.va.y;
     got_cnt = t.lp.vc.cnt;
     `checkd(got_cnt, 13);
+    `checkd(got_auto, 8);
+    `checkd(got_outer, 6);
     `checkd(got_mid, 101);
     `checkd(got_mid_abs, 101);
     `checkd(got_mid2, 3 + 101);

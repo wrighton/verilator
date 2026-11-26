@@ -1,5 +1,5 @@
-%Error: t/t_fork_xref_auto_bad.v:20:21: Hierarchical reference to automatic variable 'w' (IEEE 1800-2023 6.21).
-   20 |             r = mid.w;
-      |                     ^
+%Error: t/t_fork_xref_auto_bad.v:23:20: Hierarchical reference to automatic variable 'w' from outside its scope (IEEE 1800-2023 6.21).
+   23 |             r = sa.w;
+      |                    ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: Exiting due to

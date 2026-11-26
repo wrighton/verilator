@@ -585,6 +585,89 @@ public:
     }
 };
 
+// Hierarchical references to automatic variables in a fork branch task. Only static variables can
+// be referenced hierarchically (IEEE 1800-2023 6.21), but a path from within an automatic
+// variable's scope through the scopes enclosing the reference refers to the variable of the
+// current activation, so becomes a reference to it; any other, e.g. into another instance, is
+// reported.
+class ForkAutomaticXRefVisitor final : public VNVisitor {
+    // TYPES
+    struct Scope final {
+        const std::string m_name;  // Name, empty if none
+        const AstNode* const m_declsp;  // Its declarations
+    };
+
+    // STATE
+    std::vector<Scope> m_scopes;  // The branch's scopes enclosing the current position
+
+    // METHODS
+    // Whether the path names the scopes enclosing the reference down to the variable's
+    bool isEnclosingPath(const AstVar* varp, const std::string& dotted) const {
+        // Innermost scope declaring the variable
+        size_t declIndex = m_scopes.size();
+        while (declIndex) {
+            const AstNode* declp = m_scopes[declIndex - 1].m_declsp;
+            for (; declp && declp != varp; declp = declp->nextp()) {}
+            if (declp) break;
+            --declIndex;
+        }
+        if (!declIndex) return false;
+        // The path's names, last first, are those from that scope upwards
+        size_t index = declIndex;
+        std::string::size_type end = dotted.size();
+        while (true) {
+            if (!index) return false;
+            const std::string::size_type pos
+                = end ? dotted.rfind('.', end - 1) : std::string::npos;
+            const std::string::size_type begin = pos == std::string::npos ? 0 : pos + 1;
+            if (m_scopes[index - 1].m_name != dotted.substr(begin, end - begin)) return false;
+            if (!begin) return true;
+            end = begin - 1;
+            --index;
+        }
+    }
+
+    // VISITORS
+    void visit(AstNodeBlock* nodep) override {
+        m_scopes.push_back(Scope{nodep->name(), nodep->declsp()});
+        iterateChildren(nodep);
+        m_scopes.pop_back();
+    }
+    void visit(AstVarXRef* nodep) override {
+        AstVar* const varp = nodep->varp();
+        if (!varp || !varp->lifetime().isAutomatic() || varp->isClassMember()) return;
+        if (!isEnclosingPath(varp, nodep->dotted())) {
+            nodep->v3error("Hierarchical reference to automatic variable "
+                           << varp->prettyNameQ()
+                           << " from outside its scope (IEEE 1800-2023 6.21).");
+        }
+        nodep->replaceWith(new AstVarRef{nodep->fileline(), varp, nodep->access()});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+    // CONSTRUCTORS
+    ForkAutomaticXRefVisitor(AstTask* taskp, const std::string& forkScope,
+                             const std::string& blockName) {
+        // The blocks enclosing the fork, as recorded, have no variables moved into the task
+        std::string::size_type pos = 0;
+        while (!forkScope.empty()) {
+            const std::string::size_type next = forkScope.find("__DOT__", pos);
+            m_scopes.push_back(Scope{forkScope.substr(pos, next - pos), nullptr});
+            if (next == std::string::npos) break;
+            pos = next + std::strlen("__DOT__");
+        }
+        // The task has the declarations of the block kept at the call, if any
+        m_scopes.push_back(Scope{blockName, taskp->declsp()});
+        iterateChildren(taskp);
+    }
+
+public:
+    static void apply(AstTask* taskp, const std::string& forkScope, const std::string& blockName) {
+        ForkAutomaticXRefVisitor{taskp, forkScope, blockName};
+    }
+};
+
 // Collect the static variables of blocks moved into a fork branch task, with the names of the
 // blocks above them in the task
 class ForkStaticVarsVisitor final : public VNVisitorConst {
@@ -691,17 +774,9 @@ class ForkVisitor final : public VNVisitor {
         }
         return paths;
     }
-    // Report hierarchical references to automatic variables moved into a fork branch task, which
-    // only static variables may have (IEEE 1800-2023 6.21)
-    void checkAutomaticXRefs(AstTask* taskp) {
-        taskp->foreach([this](AstVarXRef* refp) {
-            AstVar* const varp = refp->varp();
-            if (!varp || !varp->lifetime().isAutomatic() || varp->isClassMember()) return;
-            refp->v3error("Hierarchical reference to automatic variable "
-                          << varp->prettyNameQ() << " (IEEE 1800-2023 6.21).");
-            refp->replaceWith(new AstVarRef{refp->fileline(), varp, refp->access()});
-            VL_DO_DANGLING(pushDeletep(refp), refp);
-        });
+    // Hierarchical references to automatic variables moved into a fork branch task
+    void checkAutomaticXRefs(AstTask* taskp, const std::string& blockName) {
+        ForkAutomaticXRefVisitor::apply(taskp, m_scope, blockName);
     }
 
     // Wrap body of the given AstFork branch in an AstTask, and replace body with a call to that
@@ -766,7 +841,7 @@ class ForkVisitor final : public VNVisitor {
         std::unordered_set<std::string> keptPaths;
         if (!m_ftaskp && !VN_IS(m_modp, Class)) {
             keptPaths = keepStaticBlocks(taskp, callStmtp);
-            checkAutomaticXRefs(taskp);
+            checkAutomaticXRefs(taskp, beginp && !beginp->name().empty() ? beginp->name() : "");
         }
 
         // Variables were moved under the task, so make sure they are marked as funcLocal
