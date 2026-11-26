@@ -888,17 +888,23 @@ WDataOutP VL_POWSS_WWW(int obits, int, int rbits, WDataOutP owp, const WDataInP 
     if (rsign && VL_SIGN_W(rbits, rwp)) {
         const int words = VL_WORDS_I(obits);
         VL_ZERO_W(obits, owp);
-        EData lor = 0;  // 0=all zeros, ~0=all ones, else mix
-        for (int i = 1; i < (words - 1); ++i) lor |= lwp[i];
-        lor |= ((lwp[words - 1] == VL_MASK_E(rbits)) ? ~VL_EUL(0) : 0);
-        if (lor == 0 && lwp[0] == 0) {  // "X" so return 0
+        // Whether every word above word 0 is zero, and whether it has all its bits set; the base
+        // has the width of the power, obits, as there is no lbits
+        bool upperZero = true;
+        bool upperOnes = true;
+        for (int i = 1; i < words; ++i) {
+            const EData mask = (i == words - 1) ? VL_MASK_E(obits) : ~VL_EUL(0);
+            upperZero = upperZero && (lwp[i] & mask) == 0;
+            upperOnes = upperOnes && (lwp[i] & mask) == mask;
+        }
+        if (upperZero && lwp[0] == 0) {  // "X" so return 0
             return owp;
         }
-        if (lor == 0 && lwp[0] == 1) {  // 1
+        if (upperZero && lwp[0] == 1) {  // 1
             owp[0] = 1;
             return owp;
         }
-        if (lsign && lor == ~VL_EUL(0) && lwp[0] == ~VL_EUL(0)) {  // -1
+        if (lsign && upperOnes && lwp[0] == ~VL_EUL(0)) {  // -1
             if (rwp[0] & 1) {  // -1^odd=-1
                 return VL_ALLONES_W(obits, owp);
             }
