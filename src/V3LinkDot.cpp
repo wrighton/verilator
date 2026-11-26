@@ -5767,8 +5767,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
     void visit(AstTypeTable*) override {}
     // True if nodep is declared directly in the current module or in a package
     bool isModuleScope(AstNode* nodep) const {
-        const AstNode* const parentp = LinkDotState::getNodeSym(nodep)->parentp()->nodep();
-        return parentp == m_modp || VN_IS(parentp, Package);
+        // The symbol of a module below the top is that of its instance, as is the parent symbol
+        // of each of its declarations
+        const VSymEnt* const parentSymp = LinkDotState::getNodeSym(nodep)->parentp();
+        return parentSymp == m_modSymp || VN_IS(parentSymp->nodep(), Package);
     }
     // Replace sequence method 'triggered' nodep with an event's state, returning the event
     AstVar* replaceSequenceTriggered(AstParseRef* nodep, AstSchemaRef* refp) {
