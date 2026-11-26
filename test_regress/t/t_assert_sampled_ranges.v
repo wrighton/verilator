@@ -50,4 +50,106 @@ module t (
   end
 
   assert property (@(posedge clk) cyc == 0 || arr[5] == 100'((cyc - 1) * 8 + 5));
+
+  // Sampled by selections: element and size reads of containers (IEEE 1800-2023 16.6), each
+  // container written after the reads, so its sampled value is from the previous edge
+  int mem[1000000];
+  int mi = 0;  // Out of bounds every third cycle
+  always @(posedge clk) begin
+    if (cyc > 0) `checkh($sampled(mem[mi]), mi < 1000000 ? cyc * 3 - 2 : 0);
+    mem[0] = 32'h5a5a;
+    mem[5] = cyc;
+    mi = cyc % 3 == 2 ? 1000003 : cyc * 7 + 1;
+    if (mi < 1000000) mem[mi] = cyc * 3 + 1;
+  end
+  assert property (@(posedge clk) cyc == 0 || mem[5] == cyc - 1);
+  assert property (@(posedge clk) cyc == 0 || mem[5] + 1 == cyc);
+  assert property (@(posedge clk) cyc < 2 || $past(mem[5]) == cyc - 2);
+  assert property (@(posedge clk) cyc == 0 || mem[mi] == (mi < 1000000 ? cyc * 3 - 2 : 0));
+
+  int q[$];
+  int qi = 0;  // Beyond the size every other cycle
+  // Element 'i' of 'q' sampled at cycle 'n'
+  function automatic int qElement(int i, int n);
+    if (i < 1000000) return i;
+    if (i < 1000000 + n) return 1000000 - i;
+    return 0;
+  endfunction
+  initial for (int i = 0; i < 1000000; ++i) q.push_back(i);
+  always @(posedge clk) begin
+    q.push_back(-cyc);
+    qi = cyc % 2 == 1 ? 1000000 + cyc + 5 : 999998 + cyc;
+  end
+  assert property (@(posedge clk) cyc == 0 || q.size() == 1000000 + cyc);
+  assert property (@(posedge clk) cyc == 0 || q[$] == 1 - cyc);
+  assert property (@(posedge clk) cyc == 0 || q[qi] == qElement(qi, cyc));
+  assert property (@(posedge clk) $rose(cyc[0]) |-> q[0] == 0);
+
+  int d[];
+  initial d = new[1000000];
+  always @(posedge clk) d[5] = cyc;
+  assert property (@(posedge clk) cyc == 0 || (d.size() == 1000000 && d[5] == cyc - 1));
+
+  int mm[3][5];
+  int mc = 0;  // Out of bounds every third cycle
+  typedef struct {
+    int a[7];
+    bit [5:0] b;
+  } s_t;
+  s_t s;
+  int aq[3][$];
+  int aa[int];
+  int p2[8];
+  always @(posedge clk) begin
+    mc = cyc % 3 == 1 ? 6 : cyc % 5;
+    if (mc < 5) mm[2][mc] = cyc;
+    s.a[4] = cyc;
+    aq[1].push_back(cyc);
+    aa[cyc] = cyc;
+    p2[cyc%8] = cyc;
+  end
+  assert property (@(posedge clk) cyc == 0 || mm[2][mc] == (mc < 5 ? cyc - 1 : 0));
+  assert property (@(posedge clk) cyc == 0 || (s.a[4] == cyc - 1 && aq[1].size() == cyc));
+  assert property (@(posedge clk) cyc == 0 || aa.size() == cyc);
+  assert property (@(posedge clk) cyc < 8 || p2[cyc%8] == cyc - 8);
+
+  // Sampled whole: also read whole, or read with a function or associative array index
+  int wh[6];
+  function automatic int total(int v[6]);
+    total = 0;
+    foreach (v[k]) total += v[k];
+  endfunction
+  int ur[7] = '{7, 7, 7, 7, 7, 7, 7};
+  int am[7] = '{7, 7, 7, 7, 7, 7, 7};
+  int ab[int];
+  always @(posedge clk) begin
+    wh[cyc%6] = cyc;
+    ab[cyc] = cyc % 7;
+    `checkh($sampled(ur[$urandom_range(6, 0)]), 7);
+  end
+  assert property (@(posedge clk) cyc < 6 || (wh[cyc%6] == cyc - 6 && total(wh) == cyc * 6 - 21));
+  assert property (@(posedge clk) cyc == 0 || am[ab[cyc-1]] == 7);
+
+  // Sampled by selections in each instance
+  sub sub1 (
+      .clk(clk),
+      .cyc(cyc),
+      .base(100)
+  );
+  sub sub2 (
+      .clk(clk),
+      .cyc(cyc),
+      .base(200)
+  );
+endmodule
+
+module sub (
+    input clk,
+    input int cyc,
+    input int base
+);
+  // verilator no_inline_module
+  int sm[9];
+  always @(posedge clk) sm[3] = cyc + base;
+  assert property (@(posedge clk) cyc == 0 || sm[3] == cyc - 1 + base);
 endmodule
