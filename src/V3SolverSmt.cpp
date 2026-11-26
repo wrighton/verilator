@@ -87,7 +87,9 @@ public:
         return setupAllTaskp;
     }
 
-    // Solver variable name for a constrained dynamic or queue size.
+    // Solver variable name for a constrained dynamic or queue size. VlRandomizer::sizeVarp()
+    // in verilated_random.cpp looks it up to pin the array by element between solve-before
+    // phases; keep the two the same (t_constraint_solve_before_array_pins checks it).
     static std::string sizeVarName(const AstVar* const varp) {
         return "__V" + varp->name() + "_size";
     }
