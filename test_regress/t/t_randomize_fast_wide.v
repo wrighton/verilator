@@ -35,6 +35,22 @@ class FastGapSlice;
   }
 endclass
 
+// A 64-bit := item of 2^64-1 or 2^64 values competes with a point. Only
+// values below 10 are legal, so 0 weighs 10 and 1..9 weigh 1 each.
+class FastCompetingMass;
+  rand bit [63:0] x;
+  rand bit [6:0] pinned;
+  bit [63:0] hi;
+  constraint c {
+    x dist {
+      [64'd0 : hi] := 1,
+      64'd0 := 9
+    };
+    x < 64'd10;
+    pinned == 7'd23;
+  }
+endclass
+
 module t_wide;
   localparam int N = 8192;
   function automatic int pick(ref longint unsigned value, input longint unsigned lo,
@@ -53,7 +69,7 @@ module t_wide;
   function automatic int pick_signed(ref longint value, input longint lo, input longint hi);
     return std::randomize(value) with {value inside {[lo : hi]};};
   endfunction
-  function automatic int mass_fallback(ref longint unsigned value, input int zero_weight);
+  function automatic int heavy_mass(ref longint unsigned value, input int zero_weight);
     return std::randomize(value) with {
       value inside {[64'd0 : 64'd7]};
       value dist {[64'd0 : 64'd7] := 64'h8000_0000_0000_0000, 64'd100 := zero_weight};
@@ -170,9 +186,27 @@ module t_wide;
     `checkd(value <= 64'd7, 1);
     value = 64'h1234_5678_9abc_def0;
     // A state zero-weight source bucket has no recorded single-bucket proposal;
-    // the same legal8-value distribution then reaches exact mass overflow.
-    `checkd(mass_fallback(value, 0), 0);
-    `checkd(value, 64'h1234_5678_9abc_def0);
+    // the same legal 8-value distribution has a 2^66 mass, still sampled.
+    `checkd(heavy_mass(value, 0), 1);
+    `checkd(value <= 64'd7, 1);
+    begin
+      FastCompetingMass obj;
+      int zeros;
+      obj = new;
+      obj.srandom(5);
+      for (int i = 0; i < 2; ++i) begin
+        obj.hi = 64'hffff_ffff_ffff_fffe + 64'(i);
+        zeros = 0;
+        repeat (N) begin
+          randomize_result = obj.randomize();
+          `checkd(randomize_result, 1);
+          `checkd(obj.x < 64'd10, 1);
+          `checkd(obj.pinned, 7'd23);
+          zeros += int'(obj.x == 64'd0);
+        end
+        `check_range(zeros, 10 * N / 19 - 200, 10 * N / 19 + 200);
+      end
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end
