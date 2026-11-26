@@ -5671,6 +5671,9 @@ argsExprListE<argp>:       // IEEE: part of list_of_arguments
 argsExprOneE<argp>:        // IEEE: part of list_of_arguments
                 /*empty*/                               { $$ = new AstArg{CRELINE(), "", nullptr}; }
         |       expr                                    { $$ = new AstArg{$1->fileline(), "", $1}; }
+        //                      // IEEE: part of sequence_actual_arg
+        |       senitemEdge
+                        { $$ = new AstArg{$1->fileline(), "", new AstEventArg{$1->fileline(), $1}}; }
         ;
 
 //UNSUPpev_argsExprOneE<nodeExprp>:  // IEEE: part of list_of_arguments - pev_expr at bottom
@@ -5691,6 +5694,9 @@ argsDottedList<argp>:      // IEEE: part of list_of_arguments
 argsDotted<argp>:          // IEEE: part of list_of_arguments
                 '.' idAny '(' ')'                       { $$ = new AstArg{$<fl>2, *$2, nullptr}; }
         |       '.' idAny '(' expr ')'                  { $$ = new AstArg{$<fl>2, *$2, $4}; }
+        //                      // IEEE: part of sequence_actual_arg
+        |       '.' idAny '(' senitemEdge ')'
+                        { $$ = new AstArg{$<fl>2, *$2, new AstEventArg{$4->fileline(), $4}}; }
         ;
 
 //UNSUPpev_argsDotted<argp>:  // IEEE: part of list_of_arguments - pev_expr at bottom

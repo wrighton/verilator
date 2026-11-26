@@ -10930,6 +10930,13 @@ class WidthVisitor final : public VNVisitor {
                          << "... Suggest passing a local variable of the enclosing property or"
                             " sequence.");
     }
+    void visit(AstEventArg* nodep) override {
+        // visit(AstSchemaRef) takes those of a sequence or property instance
+        nodep->v3error("Event expression as an argument of a call that is not a sequence or"
+                       " property instance (IEEE 1800-2023 16.8.1).");
+        nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstSchemaRef* nodep) override {
         const AstProperty* const propp = VN_CAST(nodep->schemap(), Property);
         if (propp && hasPropertyOperator(propp) && replacePropertyInSExpr(nodep)) return;
@@ -10957,9 +10964,23 @@ class WidthVisitor final : public VNVisitor {
                 checkAssignedActual(portp, argp->exprp(), writtenVars[argn]);
             }
             ++argn;
+            const bool untyped = portp->basicp() && portp->basicp()->untyped();
+            // An event expression is the actual of an event or untyped formal, substituted
+            // where the formal is a clocking event (IEEE 1800-2023 16.8.1)
+            if (AstEventArg* const eventp = VN_CAST(argp->exprp(), EventArg)) {
+                if (!untyped && !portp->dtypep()->isEvent()) {
+                    eventp->v3error("Event expression as the actual argument of formal "
+                                    << portp->prettyNameQ()
+                                    << ", which is not of type event or untyped"
+                                       " (IEEE 1800-2023 16.8.1).");
+                }
+                userIterate(eventp->senItemp(), nullptr);
+                eventp->dtypeSetBit();
+                continue;
+            }
             // An untyped formal preserves the actual argument's self-determined type, a typed
             // one casts it to its type (IEEE 1800-2023 16.8.1)
-            if (portp->basicp() && portp->basicp()->untyped()) {
+            if (untyped) {
                 userIterate(argp->exprp(), WidthVP{SELF, PRELIM}.p());
                 AstNodeExpr* const pinp = argp->exprp();
                 if (pinp->isDouble()) {
@@ -11135,8 +11156,13 @@ class WidthVisitor final : public VNVisitor {
         std::vector<AstNodeDType*> dtypeps;  // Their actual argument types
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
             if (!isUntypedFormal(tconnect.first)) continue;
-            userIterateAndNext(tconnect.second->exprp(), WidthVP{SELF, BOTH}.p());
             portps.push_back(tconnect.first);
+            // An event expression actual makes it an event, see visit(AstSchemaRef)
+            if (VN_IS(tconnect.second->exprp(), EventArg)) {
+                dtypeps.push_back(nodep->findBasicDType(VBasicDTypeKwd::EVENT));
+                continue;
+            }
+            userIterateAndNext(tconnect.second->exprp(), WidthVP{SELF, BOTH}.p());
             dtypeps.push_back(tconnect.second->exprp()->dtypep()->skipRefp());
         }
         std::vector<TypedFormalCopy>& copies = m_typedFormalCopies[origp];

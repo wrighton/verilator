@@ -335,10 +335,31 @@ class AssertElabVisitor final : public VNVisitor {
                 bodyp = it->second->cloneTree(false);
             }
         }
+        // An event expression replaces the clocking event that is its formal
+        // (IEEE 1800-2023 16.8.1)
+        bodyp->foreach([&](AstSenItem* senItemp) {
+            const AstVarRef* const refp = VN_CAST(senItemp->sensp(), VarRef);
+            if (!refp || senItemp->edgeType().anEdge() || senItemp->condp()) return;
+            const auto portIt = portMap.find(refp->varp());
+            const AstEventArg* const eventp
+                = portIt == portMap.end() ? nullptr : VN_CAST(portIt->second, EventArg);
+            if (!eventp) return;
+            senItemp->replaceWith(eventp->senItemp()->cloneTree(false));
+            VL_DO_DANGLING(pushDeletep(senItemp), senItemp);
+        });  // LCOV_EXCL_LINE -- gcov attributes lambda's implicit return to `})`
         std::vector<AstNodeExpr*> actualps;
         bodyp->foreach([&](AstVarRef* refp) {
             const auto portIt = portMap.find(refp->varp());
             if (portIt != portMap.end()) {
+                if (VN_IS(portIt->second, EventArg) && !VN_IS(refp->firstAbovep(), Arg)) {
+                    refp->v3error("Formal " << refp->prettyNameQ()
+                                            << " with an event expression actual is referenced"
+                                               " where an event expression cannot be written"
+                                               " (IEEE 1800-2023 16.8.1).");
+                    refp->replaceWith(new AstConst{refp->fileline(), AstConst::BitFalse{}});
+                    VL_DO_DANGLING(pushDeletep(refp), refp);
+                    return;
+                }
                 AstNodeExpr* const actualp = portIt->second->cloneTree(false);
                 actualps.push_back(actualp);
                 // An assigned formal makes the actual an lvalue
