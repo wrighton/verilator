@@ -275,6 +275,12 @@ class OrderGraphBuilder final : public VNVisitorConst {
                 // Add edge from consuming LogicVertex -> to consumed VarPostVertex
                 OrderVarVertex* const postVxp = getVarVertex(varscp, VarVertexType::POST);
                 m_graphp->addHardEdge(m_logicVxp, postVxp, WEIGHT_POST);
+                // The triggered state of an event is read after the event is triggered earlier
+                // in the time step (IEEE 1800-2023 15.5.3), unless that forms a cycle
+                if (varscp->varp()->isEvent()) {
+                    OrderVarVertex* const varVxp = getVarVertex(varscp, VarVertexType::STD);
+                    m_graphp->addSoftEdge(varVxp, m_logicVxp, WEIGHT_MEDIUM);
+                }
             }
         }
     }
