@@ -348,6 +348,71 @@ static bool reachesThroughRandHandle(const AstClass* classp, const AstClass* dec
 //######################################################################
 // Visitor that marks classes needing a randomize() method
 
+// Whether a constraint selects members of array elements in a way a constraint cloned for an
+// object of its class does not support: by an index other than a constant, an enclosing foreach
+// constraint's index, or an expression of those, or by two such expressions in the constraint
+// ("Multiple expressions inside indices"). The foreach indices are tracked top-down, so the cost
+// is linear in the constraint's size.
+class ElementIndexVisitor final : public VNVisitorConst {
+    // STATE
+    std::unordered_set<const AstVar*> m_idxVarps;  // Indices of the enclosing foreach constraints
+    int m_exprs = 0;  // Selects by an expression of constants and foreach indices
+    bool m_other = false;  // A select by another index
+    VDouble0& m_statNodesr;  // Nodes visited
+
+    // METHODS
+    void addIndex(const AstNode* nodep, std::vector<const AstVar*>& addedps) {
+        const AstVar* const varp = VN_CAST(nodep, Var);
+        if (varp && m_idxVarps.insert(varp).second) addedps.push_back(varp);
+    }
+    bool isOtherRef(const AstNode* nodep) const {
+        const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef);
+        return VN_IS(nodep, NodeFTaskRef) || (refp && !m_idxVarps.count(refp->varp()));
+    }
+    void classify(const AstNodeExpr* indexp) {
+        if (VN_IS(indexp, Const)) return;
+        const AstNodeVarRef* const refp = VN_CAST(indexp, NodeVarRef);
+        if (refp && m_idxVarps.count(refp->varp())) return;
+        if (indexp->exists([this](const AstNode* nodep) { return isOtherRef(nodep); })) {
+            m_other = true;
+        } else {
+            ++m_exprs;
+        }
+    }
+
+    // VISITORS
+    void visit(AstConstraintForeach* nodep) override {
+        ++m_statNodesr;
+        std::vector<const AstVar*> addedps;
+        for (const AstNode* elemp = nodep->headerp()->elementsp(); elemp; elemp = elemp->nextp())
+            addIndex(elemp, addedps);
+        iterateChildrenConst(nodep);
+        for (const AstVar* const varp : addedps) m_idxVarps.erase(varp);
+    }
+    void visit(AstMemberRef* nodep) override {
+        ++m_statNodesr;
+        if (const AstArraySel* const selp = VN_CAST(nodep->fromp(), ArraySel)) {
+            classify(selp->bitp());
+        } else if (const AstCMethodHard* const methodp = VN_CAST(nodep->fromp(), CMethodHard)) {
+            if (methodp->pinsp()) classify(methodp->pinsp());
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override {
+        ++m_statNodesr;
+        iterateChildrenConst(nodep);
+    }
+
+public:
+    // CONSTRUCTORS
+    ElementIndexVisitor(const AstConstraint* constrp, VDouble0& statNodesr)
+        : m_statNodesr{statNodesr} {
+        iterateConst(const_cast<AstConstraint*>(constrp));
+    }
+    ~ElementIndexVisitor() override = default;
+    bool unsupported() const { return m_other || m_exprs > 1; }
+};
+
 class RandomizeMarkVisitor final : public VNVisitor {
     // NODE STATE
     // Cleared on Netlist
@@ -367,6 +432,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
     BaseToDerivedMap m_baseToDerivedMap;  // Mapping from base classes to classes that extend them
     BaseToDerivedMap m_allDerivedMap;  // As m_baseToDerivedMap, but complete before traversal
+    // Whether a class's constraints select element members unsupported in clones, as computed
+    std::unordered_map<const AstClass*, bool> m_byIndexClasses;
+    VDouble0 m_statElementIndexNodes;  // Statistic tracking
     std::unordered_map<const AstClass*, ActiveSet>
         m_classesReaching;  // Classes reaching a class's statics through rand handles
     std::unordered_map<const AstClass*, std::vector<const AstClass*>>
@@ -466,18 +534,18 @@ class RandomizeMarkVisitor final : public VNVisitor {
             return (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef)) && nodep->user1();
         });
     }
-    // Whether a constraint of the class has two member selects not from a variable or member
-    static bool selectsElementMembersTwice(const AstClass* classp) {
-        // Such as selects of object array elements, which a constraint cloned for an object of
-        // the class may not support ("Multiple expressions inside indices"), so such an object
-        // keeps its own randomize()
-        return classp->existsMember([](const AstClass*, const AstConstraint* constrp) {
-            int count = 0;
-            constrp->foreach([&](const AstMemberRef* selp) {
-                if (!VN_IS(selp->fromp(), NodeVarRef) && !VN_IS(selp->fromp(), MemberRef)) ++count;
-            });
-            return count > 1;
-        });
+    // Whether the constraints of the class select members of array elements in a way a
+    // constraint cloned for an object of the class does not support (see ElementIndexVisitor)
+    bool selectsElementMembersByIndex(const AstClass* classp) {
+        // Such an object keeps its own randomize(). Otherwise its constraints are solved with
+        // the containing object's, e.g. as that may constrain the size of the array.
+        const auto pair = m_byIndexClasses.emplace(classp, false);
+        if (!pair.second) return pair.first->second;
+        pair.first->second
+            = classp->existsMember([this](const AstClass*, const AstConstraint* constrp) {
+                  return ElementIndexVisitor{constrp, m_statElementIndexNodes}.unsupported();
+              });
+        return pair.first->second;
     }
     // Class of a rand class handle, or of a rand array of class handles, else nullptr
     static AstClass* randHandleClassp(const AstVar* varp) {
@@ -830,7 +898,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 const AstClassRefDType* const classRefp
                     = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
                 if (!classRefp) continue;
-                if (selectsElementMembersTwice(classRefp->classp())) {
+                if (selectsElementMembersByIndex(classRefp->classp())) {
                     varp->globalConstrained(false);
                     continue;
                 }
@@ -1686,6 +1754,7 @@ public:
     }
     ~RandomizeMarkVisitor() override {
         V3Stats::addStat("Randomize, static rand member reachability steps", m_staticReachSteps);
+        V3Stats::addStatSum("Randomize, Element index nodes visited", m_statElementIndexNodes);
     }
 };
 
