@@ -673,6 +673,9 @@ class AssertVisitor final : public VNVisitor {
                 return new AstBegin{nodep->fileline(), "", nullptr, false};
             }
             AstFork* const forkp = new AstFork{nodep->fileline(), VJoinType::JOIN_NONE};
+            // The action uses the values of automatic variables when the assertion runs
+            // (IEEE 1800-2023 16.14.6.1)
+            forkp->capturesValues(true);
             forkp->addForksp(new AstForkItem{nodep->fileline(), pexprp->bodyp()->unlinkFrBack()});
             if (AstNodeStmt* const finalp = pexprp->finalp()) {
                 if (!m_finalp) {
