@@ -13,7 +13,7 @@ test.scenarios('simulator')
 
 test.sim_time = 100000
 
-test.compile()
+test.compile(verilator_flags2=['-Wno-ASYNCABORT'])
 
 test.execute()
 

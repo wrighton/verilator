@@ -11,6 +11,8 @@ import vltest_bootstrap
 
 test.scenarios('linter')
 
-test.lint(expect_filename=test.golden_filename, verilator_flags2=['--assert'], fails=True)
+test.lint(expect_filename=test.golden_filename,
+          verilator_flags2=['--assert', '-Wno-ASYNCABORT'],
+          fails=True)
 
 test.passes()
