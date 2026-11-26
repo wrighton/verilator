@@ -64,4 +64,10 @@ module t (
   // Sequence of an interface instance
   ifc u_if (.clk);
   always @(posedge clk) if (u_if.s_if.triggered) $display("s_if");
+
+  // Method 'matched', formal of the enclosing property
+  property p_matched(y);
+    @(posedge clk) 1'b1 |-> s(y).matched;
+  endproperty
+  assert property (p_matched(a));
 endmodule
