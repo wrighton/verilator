@@ -128,6 +128,8 @@ class AssertElabVisitor final : public VNVisitor {
     // In the property expression of an assertion, the only place left where a sequence or
     // property instance is legal, as SeqEventLowerVisitor lowered the sequence event controls
     bool m_inPropExpr = false;
+    // An asynchronous abort was reported, see visit(AstAbortOn)
+    bool m_asyncAbortReported = false;
     V3UniqueNames m_propVarNames{"__Vpropvar"};  // Property-local variable names
     // Declaration file line -> its copy with coverage off, for inlined bodies
     std::unordered_map<FileLine*, FileLine*> m_noCoverFileLines;
@@ -374,6 +376,24 @@ class AssertElabVisitor final : public VNVisitor {
         // A clocking event inside a property expression has an expression condition
         VL_RESTORER(m_inPropExpr);
         m_inPropExpr = false;
+        iterateChildren(nodep);
+    }
+    void visit(AstAbortOn* nodep) override {
+        // An asynchronous abort condition is evaluated as a synchronous one, so a change between
+        // clock ticks is missed (IEEE 1800-2023 16.12.14). Reported once, as it is not an error.
+        if (nodep->kind().isAsync() && !m_asyncAbortReported
+            && !nodep->fileline()->warnIsOff(V3ErrorCode::ASYNCABORT)) {
+            m_asyncAbortReported = true;
+            nodep->v3warn(ASYNCABORT, "Asynchronous '"
+                                          << nodep->kind().ascii()
+                                          << "' evaluated only at the clock ticks of its"
+                                             " property, as 'sync_"
+                                          << nodep->kind().ascii()
+                                          << "' (IEEE 1800-2023 16.12.14).\n"
+                                          << nodep->warnMore()
+                                          << "... Later asynchronous aborts are evaluated the"
+                                             " same way, and not reported.");
+        }
         iterateChildren(nodep);
     }
     void visit(AstSchemaRef* nodep) override {

@@ -216,6 +216,23 @@ List Of Warnings
    simulate correctly.
 
 
+.. option:: ASYNCABORT
+
+   Warns that an asynchronous abort property, ``accept_on`` or
+   ``reject_on``, is evaluated only at the clock ticks of its property, as
+   if it were the synchronous ``sync_accept_on`` or ``sync_reject_on``.
+   IEEE 1800-2023 16.12.14 evaluates the abort condition of an
+   asynchronous abort at every time step, so a change of the condition
+   between clock ticks does not abort the evaluation in Verilator.
+
+   Only the first asynchronous abort in the design is reported; the others
+   are evaluated the same way.
+
+   Ignoring this warning only suppresses the message. The result is the
+   same as from other simulators when the abort condition only changes at
+   the clock ticks of the property.
+
+
 .. option:: BADSTDPRAGMA
 
    An error that a pragma is badly formed, for pragmas defined by IEEE
