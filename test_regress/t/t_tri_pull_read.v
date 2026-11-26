@@ -83,6 +83,20 @@ module relay1 (
   );
 endmodule
 
+// An inout port pulled on one bit, and driving another, reads the other bits as its
+// connection drives them
+module leafio (
+    inout wire [3:0] pb,
+    input logic en,
+    output logic [3:0] zs
+);
+  pullup (pb[2]);
+  assign pb[1] = en ? 1'b1 : 1'bz;
+  for (genvar i = 0; i < 4; ++i) begin : g
+    assign zs[i] = (pb[i] === 1'bz);
+  end
+endmodule
+
 module t;
   localparam realtime STEP = 1ns;
   // Pulled nets with a driver, or without one, never read as z
@@ -152,6 +166,14 @@ module t;
       .p(dr8[3:0]),
       .z(zsel)
   );
+  wire [3:0] dio = d ? 4'h0 : 4'hz;
+  logic ioen;
+  logic [3:0] zsio;
+  leafio uio (
+      .pb(dio),
+      .en(ioen),
+      .zs(zsio)
+  );
   leaf4 u4n (
       .pb(),
       .zs(zs4n)
@@ -163,6 +185,7 @@ module t;
   initial begin
     for (int i = 0; i < 4; ++i) begin
       d = i[0];
+      ioen = i[1];
       #STEP;
       `checkh(isz, 1'b0);
       `checkh(val, d);
@@ -181,6 +204,7 @@ module t;
       `checkh(zs4mc, 4'b1001);
       `checkh(zr, ~d);
       `checkh(zsel, ~d);
+      `checkh(zsio, d ? 4'b0000 : ioen ? 4'b1001 : 4'b1011);
     end
     $write("*-* All Finished *-*\n");
     $finish;
