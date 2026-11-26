@@ -238,6 +238,8 @@ public:
     virtual void finishStdRandomizeWith(AstFunc* randomizep, AstVar* stdrandp) = 0;
     // randomize(null): add the constraint check to funcp, and return its result
     virtual AstNodeExpr* lowerCheckOnly(AstClass* classp, AstFunc* funcp) = 0;
+    // After every class and site is lowered
+    virtual void finish() = 0;
 };
 
 //######################################################################
