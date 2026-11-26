@@ -730,6 +730,22 @@ class TristateVisitor final : public TristateBaseVisitor {
         refp->classOrPackagep(origp->classOrPackagep());
         return refp;
     }
+    // Enable of a read given the enable of the drivers of its variable: a top-level input is
+    // driven by the caller, and pulled bits are never z
+    AstNodeExpr* newReadEnp(const AstNodeVarRef* refp, AstNodeExpr* enp) {
+        AstVar* const varp = refp->varp();
+        if (VN_IS(refp, VarRef) && m_modp->isTop() && varp->isIO()
+            && varp->direction() == VDirection::INPUT) {
+            VL_DO_DANGLING(enp->deleteTree(), enp);
+            return newAllZerosOrOnes(varp, true);
+        }
+        const AuxAstVar& aux = m_varAux(varp);
+        if (!aux.pullp && aux.bitPulls.empty()) return enp;
+        V3Number num{varp, varp->width(), 0};
+        if (aux.pullp) num.setAllBits1();
+        for (const auto& pair : aux.bitPulls) num.setBit(pair.first, 1);
+        return new AstOr{enp->fileline(), enp, new AstConst{enp->fileline(), num}};
+    }
     AstConst* getNonZConstp(AstConst* const constp) {
         FileLine* const fl = constp->fileline();
         V3Number numz{constp, constp->width()};
@@ -758,11 +774,11 @@ class TristateVisitor final : public TristateBaseVisitor {
                 && !m_tgraph.isTristate(varp)) {
                 return newAllZerosOrOnes(nodep, true);
             }
-            return newEnVarRefp(varrefp);
+            return newReadEnp(varrefp, newEnVarRefp(varrefp));
         } else if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
             AstVar* const enVarp = getCreateEnVarp(xrefp->varp(), false);
-            return newVarXRef(xrefp->fileline(), enVarp, xrefp->dotted(), VAccess::READ,
-                              xrefp->inlinedDots());
+            return newReadEnp(xrefp, newVarXRef(xrefp->fileline(), enVarp, xrefp->dotted(),
+                                                VAccess::READ, xrefp->inlinedDots()));
         } else if (AstConst* const constp = VN_CAST(nodep, Const)) {
             return getNonZConstp(constp);
         } else if (AstExtend* const extendp = VN_CAST(nodep, Extend)) {
@@ -1048,6 +1064,10 @@ class TristateVisitor final : public TristateBaseVisitor {
             // Such an input drives nothing, unless it has a pull
             if (m_zInputs.count(varp) && !m_varAux(varp).pullp
                 && m_varAux(varp).bitPulls.empty()) {
+                continue;
+            }
+            // A top-level input with no driver has the value the caller writes
+            if (nodep->isTop() && varp->isIO() && varp->direction() == VDirection::INPUT) {
                 continue;
             }
             // This variable is floating, set output enable to always be off on this assign.
@@ -3270,7 +3290,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                     nodep->user1p(newVarXRef(fl, enVarp, xrefp->dotted(), VAccess::READ,
                                              xrefp->inlinedDots()));
                 } else {
-                    nodep->user1p(new AstVarRef{fl, enVarp, VAccess::READ});
+                    nodep->user1p(newReadEnp(nodep, new AstVarRef{fl, enVarp, VAccess::READ}));
                 }
             }
         }
