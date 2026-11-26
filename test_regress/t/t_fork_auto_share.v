@@ -287,6 +287,61 @@ module t;
     foreach (box_loop.a[i]) `checkd(box_loop.a[i], i + 20);
   end
 
+  // Test: an NBA through a handle updates the object of the handle when the NBA runs (IEEE
+  // 1800-2023 10.4.2), also when the task rebinds the handle before the update
+  Box box_first;
+  Box box_second;
+  task automatic nba_rebind(Box b);
+    b.v <= 6;
+    b = box_second;
+    #1;
+  endtask
+  initial begin
+    box_first = new;
+    box_second = new;
+    nba_rebind(box_first);
+    `checkd(box_first.v, 6);
+    `checkd(box_second.v, 0);
+  end
+
+  // Test: the same, with the handle rebound in a loop
+  Box box_iter[3];
+  task automatic nba_rebind_loop();
+    Box h;
+    for (int i = 0; i < 3; ++i) begin
+      h = box_iter[i];
+      h.v <= i + 30;
+    end
+    #1;
+  endtask
+  initial begin
+    foreach (box_iter[i]) box_iter[i] = new;
+    nba_rebind_loop();
+    foreach (box_iter[i]) `checkd(box_iter[i].v, i + 30);
+  end
+
+  // Test: the same, with the handle also read by a forked process, which sees the new handle
+  Box box_old;
+  Box box_new;
+  Box box_seen;
+  task automatic nba_rebind_shared();
+    Box h = box_old;
+    fork
+      box_seen = h;
+    join_none
+    h.v <= 8;
+    h = box_new;
+    #1;
+  endtask
+  initial begin
+    box_old = new;
+    box_new = new;
+    nba_rebind_shared();
+    `checkd(box_old.v, 8);
+    `checkd(box_new.v, 0);
+    `checkd(box_seen == box_new, 1);
+  end
+
   // Test: a process sees the parent's later writes to an object through a handle
   int seen_member;
   task automatic member(Box b);
