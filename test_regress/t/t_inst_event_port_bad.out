@@ -1,0 +1,8 @@
+%Error: t/t_inst_event_port_bad.v:17:16: Event expression is not a legal port connection of a module instance (IEEE 1800-2023 23.3.2).
+   17 |   sub ordered (posedge clk, d);
+      |                ^~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_inst_event_port_bad.v:18:15: Event expression is not a legal port connection of a module instance (IEEE 1800-2023 23.3.2).
+   18 |   sub named (.clk(negedge clk or posedge d), .d(d));
+      |               ^~~
+%Error: Exiting due to
