@@ -5993,22 +5993,90 @@ private:
         if (indexp->isSigned()) return new AstExtendS{fl, indexp, width};
         return new AstExtend{fl, indexp, width};
     }
-    // Number of elements of queue or dynamic array 'arrayp', as a 'width' bit solver term: its
-    // size variable if its size is constrained, as that is solved with the elements
-    AstNodeExpr* newArraySizeTextp(AstVarRef* arrayp, int width) {
+    // Whether the elements of queue or dynamic array 'arrayp' can be counted where its element
+    // select is checked: it is a variable, a member through class handles, or an element of
+    // such an array selected by non-random indices
+    static bool countableArray(const AstNodeExpr* arrayp) {
+        if (VN_IS(arrayp, VarRef)) return true;
+        if (const AstMemberRef* const refp = VN_CAST(arrayp, MemberRef)) {
+            return countableArray(refp->fromp());
+        }
+        const AstNodeExpr* indexp = nullptr;
+        const AstNodeExpr* fromp = nullptr;
+        if (const AstArraySel* const selp = VN_CAST(arrayp, ArraySel)) {
+            indexp = selp->bitp();
+            fromp = selp->fromp();
+        } else if (const AstCMethodHard* const atp = VN_CAST(arrayp, CMethodHard)) {
+            if (atp->method() != VCMethod::ARRAY_AT) return false;
+            indexp = atp->pinsp();
+            fromp = atp->fromp();
+        } else {
+            return false;
+        }
+        return !isRandIndex(indexp) && countableArray(fromp);
+    }
+    // The solver size variable of queue or dynamic array 'arrayp' if this solve solves its size,
+    // a member array's only for the instances it resizes (see gateOnCurrentSize), else nullptr
+    AstNodeExpr* newSolvedSizeRefp(AstNodeExpr* arrayp) const {
         FileLine* const fl = arrayp->fileline();
-        if (AstVar* const sizeVarp = VN_CAST(arrayp->varp()->user4p(), Var)) {
-            AstVarRef* const sizeRefp = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule),
-                                                      sizeVarp, VAccess::READ};
-            sizeRefp->user1(true);
-            AstExtend* const extendp = new AstExtend{fl, sizeRefp, width};
-            extendp->user1(true);
-            return VN_AS(iterateSubtreeReturnEdits(extendp), NodeExpr);
+        if (const AstVarRef* const varRefp = VN_CAST(arrayp, VarRef)) {
+            AstVar* const sizeVarp = VN_CAST(varRefp->varp()->user4p(), Var);
+            if (!sizeVarp) return nullptr;
+            return new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp,
+                                 VAccess::READ};
+        }
+        const AstMemberRef* const memberRefp = VN_CAST(arrayp, MemberRef);
+        if (!memberRefp) return nullptr;
+        // Only a member select chain from a variable has a solver path
+        const AstNodeExpr* rootp = memberRefp;
+        while (const AstMemberRef* const ownerp = VN_CAST(rootp, MemberRef))
+            rootp = ownerp->fromp();
+        if (!VN_IS(rootp, VarRef)) return nullptr;
+        const AstVar* const varp = memberRefp->varp();
+        if (!m_memberSizeVars.count(varp)
+            || !m_sizedMemberPaths.count(buildMemberPath(memberRefp)))
+            return nullptr;
+        AstNodeExpr* const ownerp = memberRefp->fromp()->cloneTreePure(false);
+        AstMemberRef* const refp = new AstMemberRef{fl, ownerp, m_memberSizeVars.at(varp)};
+        refp->access(VAccess::READ);
+        return refp;
+    }
+    // Number of elements of queue or dynamic array 'arrayp' when randomize() is called, zero if a
+    // class handle on the path to it is null
+    static AstNodeExpr* newArraySizep(AstNodeExpr* arrayp) {
+        FileLine* const fl = arrayp->fileline();
+        AstNodeExpr* nonNullp = nullptr;
+        for (const AstNodeExpr* pathp = arrayp; !VN_IS(pathp, VarRef);) {
+            if (const AstMemberRef* const refp = VN_CAST(pathp, MemberRef)) {
+                AstNodeExpr* const neqp = new AstNeq{fl, refp->fromp()->cloneTreePure(false),
+                                                     new AstConst{fl, AstConst::Null{}}};
+                // From the variable outwards, so no member of a null handle is read
+                nonNullp = nonNullp ? new AstLogAnd{fl, neqp, nonNullp} : neqp;
+                pathp = refp->fromp();
+            } else {
+                // An element select, see countableArray
+                pathp = V3Const::selectionFromp(pathp);
+            }
         }
         AstCMethodHard* const sizep
             = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
         sizep->dtypeSetInt();
-        return getConstFormat(new AstExtend{fl, sizep, width});
+        if (!nonNullp) return sizep;
+        AstCond* const condp = new AstCond{fl, nonNullp, sizep, new AstConst{fl, 0}};
+        condp->dtypeSetInt();
+        return condp;
+    }
+    // Number of elements of queue or dynamic array 'arrayp', as a 'width' bit solver term: its
+    // size variable 'solvedSizep' if not nullptr, as that is solved with the elements
+    AstNodeExpr* newArraySizeTextp(AstNodeExpr* arrayp, AstNodeExpr* solvedSizep, int width) {
+        FileLine* const fl = arrayp->fileline();
+        if (solvedSizep) {
+            solvedSizep->user1(true);
+            AstExtend* const extendp = new AstExtend{fl, solvedSizep, width};
+            extendp->user1(true);
+            return VN_AS(iterateSubtreeReturnEdits(extendp), NodeExpr);
+        }
+        return getConstFormat(new AstExtend{fl, newArraySizep(arrayp), width});
     }
     // Make the translated element select 'selp' of 'width' bits read zero unless 'guardp', a
     // solver term, holds
@@ -6054,6 +6122,30 @@ private:
                 fl, newGuardedIndexp(bitp->cloneTreePure(false)),
                 new AstConst{fl, AstConst::WidthedValue{}, guardedIndexWidth(width), elements}};
             condp = condp ? new AstLogAnd{fl, condp, ltp} : ltp;
+        }
+        return condp;
+    }
+    // Return condition that the indices of the fixed-size arrays on the path of countable array
+    // 'arrayp' (see countableArray) are in range, or nullptr if they always are
+    AstNodeExpr* newOuterIndexInRangep(const AstNodeExpr* arrayp) const {
+        AstNodeExpr* condp = nullptr;
+        for (const AstNodeExpr* pathp = arrayp; !VN_IS(pathp, VarRef);) {
+            if (const AstMemberRef* const refp = VN_CAST(pathp, MemberRef)) {
+                pathp = refp->fromp();
+                continue;
+            }
+            const AstArraySel* const selp = VN_CAST(pathp, ArraySel);
+            if (!selp) {
+                pathp = V3Const::selectionFromp(pathp);
+                continue;
+            }
+            if (AstNodeExpr* const inRangep = newStateIndexInRangep(selp)) {
+                condp = condp ? new AstLogAnd{selp->fileline(), condp, inRangep} : inRangep;
+            }
+            // newStateIndexInRangep checked the whole chain of fixed-size array selects
+            while (const AstArraySel* const chainp = VN_CAST(pathp, ArraySel)) {
+                pathp = chainp->fromp();
+            }
         }
         return condp;
     }
@@ -7508,17 +7600,19 @@ private:
                 AstNodeExpr* stateGuardp = nullptr;
                 const bool guarded = !m_structSel && !m_nestedAccessp
                                      && nodep->dtypep()->skipRefp()->isIntegralOrPacked()
-                                     && VN_IS(nodep->fromp(), VarRef)
+                                     && countableArray(nodep->fromp())
                                      && !isForeachElement(nodep->fromp(), nodep->pinsp());
                 AstNodeExpr* sizeTextp = nullptr;  // For a solved index, after translation
                 if (guarded) {
-                    AstVarRef* const arrayp = VN_AS(nodep->fromp(), VarRef);
+                    AstNodeExpr* const arrayp = nodep->fromp();
                     AstNodeExpr* const indexp = nodep->pinsp();
                     const int guardWidth = guardedIndexWidth(indexp->width());
-                    if (indexIsRand || VN_IS(arrayp->varp()->user4p(), Var)) {
+                    AstNodeExpr* const solvedSizep = newSolvedSizeRefp(arrayp);
+                    if (indexIsRand || solvedSizep) {
                         // A solved size is a solver term, and the index may be one with it:
                         // below the size in the solver's 32-bit index sort, see newSmtIndexp
-                        sizeTextp = newArraySizeTextp(arrayp, guardedIndexWidth(VL_IDATASIZE));
+                        sizeTextp = newArraySizeTextp(arrayp, solvedSizep,
+                                                      guardedIndexWidth(VL_IDATASIZE));
                         if (!indexIsRand && indexp->width() > VL_IDATASIZE) {
                             // Not in that sort
                             AstConst* const limitp
@@ -7528,11 +7622,15 @@ private:
                                 fl, newGuardedIndexp(indexp->cloneTreePure(false)), limitp};
                         }
                     } else {
-                        AstCMethodHard* const dynSizep = new AstCMethodHard{
-                            fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
-                        dynSizep->dtypeSetInt();
-                        stateGuardp = new AstLt{fl, newGuardedIndexp(indexp->cloneTreePure(false)),
-                                                new AstExtend{fl, dynSizep, guardWidth}};
+                        stateGuardp
+                            = new AstLt{fl, newGuardedIndexp(indexp->cloneTreePure(false)),
+                                        new AstExtend{fl, newArraySizep(arrayp), guardWidth}};
+                    }
+                    // No element of a fixed-size array exists at an out-of-range index, and
+                    // the size read above at it would be another element's
+                    if (AstNodeExpr* const outerInRangep = newOuterIndexInRangep(arrayp)) {
+                        stateGuardp = stateGuardp ? new AstLogAnd{fl, outerInRangep, stateGuardp}
+                                                  : outerInRangep;
                     }
                     // In the solver's 32-bit index sort, in range when selected
                     if (!indexIsRand && indexp->width() > VL_IDATASIZE) {
