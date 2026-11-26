@@ -1705,6 +1705,7 @@ class AstFork final : public AstNodeBlock {
     // @astgen op3 := forksp : List[AstForkItem]
     const VJoinType m_joinType;  // Join keyword type
     bool m_immediateStart = false;  // Fork starts before its parent blocks or exits
+    bool m_capturesValues = false;  // Processes copy the variables they read when spawned
 
 public:
     AstFork(FileLine* fl, VJoinType joinType, const string& name = "")
@@ -1713,7 +1714,8 @@ public:
     ASTGEN_MEMBERS_AstFork;
     bool sameNode(const AstNode* samep) const override {
         const AstFork* const asamep = VN_DBG_AS(samep, Fork);
-        return joinType() == asamep->joinType() && immediateStart() == asamep->immediateStart();
+        return joinType() == asamep->joinType() && immediateStart() == asamep->immediateStart()
+               && capturesValues() == asamep->capturesValues();
     }
     bool isTimingControl() const override { return !joinType().joinNone(); }
     void dump(std::ostream& str) const override;
@@ -1721,6 +1723,8 @@ public:
     VJoinType joinType() const { return m_joinType; }
     bool immediateStart() const { return m_immediateStart; }
     void immediateStart(bool flag) { m_immediateStart = flag; }
+    bool capturesValues() const { return m_capturesValues; }
+    void capturesValues(bool flag) { m_capturesValues = flag; }
 };
 
 // === AstNodeCoverOrAssert ===
