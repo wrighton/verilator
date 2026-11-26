@@ -95,13 +95,16 @@ module mixed_t;
   initial begin
     int value;
     int result;
+    // The upper bound compares unsigned, so 0, 1 and 2 are in the range. The
+    // sampler leaves the opposite-sign bound to the solver.
     value  = 77;
     result = mixed_bound_pick(value, 64'h8000_0000_0000_0001);
-    `checkd(result, 0);
-    `checkd(value, 77);
+    `checkd(result, $test$plusargs("SOLVER"));
+    `checkd(value inside {77, 0, 1, 2}, 1'b1);
+    value  = 77;
     result = mixed_bound_pick(value, 64'hffff_ffff_ffff_ffff);
-    `checkd(result, 0);
-    `checkd(value, 77);
+    `checkd(result, $test$plusargs("SOLVER"));
+    `checkd(value inside {77, 0, 1, 2}, 1'b1);
     $write("*-* All Finished *-*\n");
     $finish;
   end
