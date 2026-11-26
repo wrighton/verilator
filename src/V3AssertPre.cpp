@@ -374,7 +374,14 @@ private:
                 new AstIf{stmtp->fileline(), nodep->resultp()->cloneTreePure(false), stmtp});
         }
     }
-    void lowerFell(AstFell* nodep) {
+    // The current operand of a value change function is sampled, also in a procedure
+    // (IEEE 1800-2023 16.9.3). An event expression reads it when its event occurs.
+    static AstNodeExpr* newCurrentClone(AstNodeExpr* exprp, bool sampled) {
+        AstNodeExpr* const clonep = exprp->cloneTreePure(false);
+        if (!sampled) return clonep;
+        return new AstSampled{exprp->fileline(), clonep, exprp->dtypep(), true};
+    }
+    void lowerFell(AstFell* nodep, bool sampled) {
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -384,12 +391,12 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstAnd{fl, pastp, new AstNot{fl, exprp->cloneTreePure(false)}};
+        exprp = new AstAnd{fl, pastp, new AstNot{fl, newCurrentClone(exprp, sampled)}};
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void lowerRose(AstRose* nodep) {
+    void lowerRose(AstRose* nodep, bool sampled) {
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -399,12 +406,12 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstAnd{fl, new AstNot{fl, pastp}, exprp->cloneTreePure(false)};
+        exprp = new AstAnd{fl, new AstNot{fl, pastp}, newCurrentClone(exprp, sampled)};
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void lowerStable(AstStable* nodep) {
+    void lowerStable(AstStable* nodep, bool sampled) {
         checkSamplingFuncDType(nodep, nodep->exprp(), /* allowUnpacked */ true);
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -413,7 +420,7 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = AstEq::newTyped(fl, pastp, exprp->cloneTreePure(false));
+        exprp = AstEq::newTyped(fl, pastp, newCurrentClone(exprp, sampled));
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -427,11 +434,11 @@ private:
             // Recurse selectively: unclocked functions and other handlers are not dispatched.
             lowerClockedSenFunctions(samplep);
             if (AstFell* const fellp = VN_CAST(samplep, Fell)) {
-                lowerFell(fellp);
+                lowerFell(fellp, false);
             } else if (AstRose* const rosep = VN_CAST(samplep, Rose)) {
-                lowerRose(rosep);
+                lowerRose(rosep, false);
             } else {
-                lowerStable(VN_AS(samplep, Stable));
+                lowerStable(VN_AS(samplep, Stable), false);
             }
         }
     }
@@ -989,7 +996,7 @@ private:
     void visit(AstFell* const nodep) override {
         if (nodep->user1SetOnce()) return;
         iterateChildren(nodep);
-        lowerFell(nodep);
+        lowerFell(nodep, true);
     }
     void visit(AstFuture* nodep) override {
         if (nodep->user1SetOnce()) return;
@@ -1127,7 +1134,7 @@ private:
     void visit(AstRose* const nodep) override {
         if (nodep->user1SetOnce()) return;
         iterateChildren(nodep);
-        lowerRose(nodep);
+        lowerRose(nodep, true);
     }
     static AstAssocArrayDType* getProcessAssocArrayType(FileLine* const flp) {
         // Type of __VassertsActive___x[std::process]
@@ -1254,7 +1261,7 @@ private:
     void visit(AstStable* const nodep) override {
         if (nodep->user1SetOnce()) return;
         iterateChildren(nodep);
-        lowerStable(nodep);
+        lowerStable(nodep, true);
     }
     void visit(AstSteady* nodep) override {
         if (nodep->user1SetOnce()) return;
