@@ -2814,8 +2814,11 @@ private:
         }
         return new AstConst{exprp->fileline(), AstConst::WidthedValue{}, exprp->width(), 0};
     }
-    // Return an SMT array of the value of exprp at each element of the array selp selects
-    AstSFormatF* newIndexedArrayp(AstNodeExpr* exprp, AstNodeExpr* selp) {
+    // Return an SMT array of the value of exprp at each element of the array selp selects, the
+    // elements stored into solver array 'baseName' if not empty, or if 'selected', that value at
+    // the index bound to '?i' (see editStateArraySel)
+    AstSFormatF* newIndexedArrayp(AstNodeExpr* exprp, AstNodeExpr* selp, bool selected = false,
+                                  const std::string& baseName = "") {
         VL_RESTORER(m_inRandIndexElems);
         m_inRandIndexElems = true;
         // Element i is exprp with the random index of selp replaced by i, so it may read
@@ -2865,17 +2868,35 @@ private:
         VL_DO_DANGLING(handleIndexp->deleteTree(), handleIndexp);
         const int width = exprp->width();
         AstVar* const textVarp = newTextVarp(selp);
-        // Each element stores its value in the array built so far
-        AstNodeStmt* bodyp
-            = new AstAssign{fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
-                            new AstConcatN{fl, new AstConst{fl, AstConst::String{}, "(store "},
-                                           new AstVarRef{fl, textVarp, VAccess::READ}}};
-        bodyp->addNext(newTermAppendp(
-            fl, textVarp, nullptr,
-            getConstFormat(posp->width() < idxWidth ? new AstExtend{fl, posp, idxWidth} : posp)));
-        bodyp->addNext(newTermAppendp(fl, textVarp, nullptr,
-                                      VN_AS(iterateSubtreeReturnEdits(elemp), NodeExpr)));
-        bodyp->addNext(newTextAppendp(fl, textVarp, new AstConst{fl, AstConst::String{}, ")"}));
+        AstNodeExpr* const keyTextp
+            = getConstFormat(posp->width() < idxWidth ? new AstExtend{fl, posp, idxWidth} : posp);
+        AstNodeExpr* const valueTextp = VN_AS(iterateSubtreeReturnEdits(elemp), NodeExpr);
+        // The closing parentheses of a chain, or the opening ones of the stores
+        AstVar* const outerVarp = newTextVarp(selp);
+        outerVarp->name(m_uniqueNames.get("__Vouter"));
+        AstNodeStmt* bodyp;
+        if (selected) {
+            // Each element is a test of the index in the chain of them, '(ite (= ?i k) v ...)',
+            // which is linear in the number of elements and needs no constant array
+            bodyp = newTextAppendp(
+                fl, textVarp,
+                new AstConcatN{
+                    fl,
+                    new AstConcatN{fl, new AstConst{fl, AstConst::String{}, "(ite (= ?i "},
+                                   keyTextp},
+                    new AstConcatN{fl, new AstConst{fl, AstConst::String{}, ") "},
+                                   new AstConcatN{fl, valueTextp,
+                                                  new AstConst{fl, AstConst::String{}, " "}}}});
+            bodyp->addNext(
+                newTextAppendp(fl, outerVarp, new AstConst{fl, AstConst::String{}, ")"}));
+        } else {
+            // Each element stores its value in the array built so far
+            bodyp = newTextAppendp(fl, outerVarp, new AstConst{fl, AstConst::String{}, "(store "});
+            bodyp->addNext(newTermAppendp(fl, textVarp, nullptr, keyTextp));
+            bodyp->addNext(newTermAppendp(fl, textVarp, nullptr, valueTextp));
+            bodyp->addNext(
+                newTextAppendp(fl, textVarp, new AstConst{fl, AstConst::String{}, ")"}));
+        }
         if (nonNullp) bodyp = new AstIf{fl, nonNullp, bodyp};
         const bool handleElem = VN_IS(selp->dtypep()->skipRefp(), ClassRefDType);
         AstNodeExpr* defaultp;  // Value of an element that does not exist
@@ -2899,23 +2920,55 @@ private:
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
         blockp->addDeclsp(textVarp);
-        blockp->addStmtsp(
-            new AstAssign{fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
-                          new AstConst{fl, AstConst::String{},
-                                       "((as const (Array (_ BitVec " + cvtToStr(idxWidth)
-                                           + ") (_ BitVec " + cvtToStr(width) + "))) "}});
-        AstNodeExpr* const defaultTextp
-            = assocDtp ? getConstFormat(defaultp)
-                       : VN_AS(iterateSubtreeReturnEdits(defaultp), NodeExpr);
-        blockp->addStmtsp(newTextAppendp(fl, textVarp, defaultTextp));
-        blockp->addStmtsp(newTextAppendp(fl, textVarp, new AstConst{fl, AstConst::String{}, ")"}));
+        blockp->addDeclsp(outerVarp);
+        for (AstVar* const varp : {textVarp, outerVarp}) {
+            blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE},
+                                            new AstConst{fl, AstConst::String{}, ""}});
+        }
         blockp->addStmtsp(new AstForeach{fl, headerp, bodyp});
+        if (!selected && !baseName.empty()) {
+            // An element not stored is out of range, so is not read
+            VL_DO_DANGLING(pushDeletep(defaultp), defaultp);
+            blockp->addStmtsp(new AstAssign{
+                fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
+                new AstConcatN{fl,
+                               new AstConcatN{fl, new AstVarRef{fl, outerVarp, VAccess::READ},
+                                              new AstConst{fl, AstConst::String{}, baseName}},
+                               new AstVarRef{fl, textVarp, VAccess::READ}}});
+        } else {
+            AstNodeExpr* const defaultTextp
+                = assocDtp ? getConstFormat(defaultp)
+                           : VN_AS(iterateSubtreeReturnEdits(defaultp), NodeExpr);
+            if (selected) {
+                // The default closes the chain
+                blockp->addStmtsp(newTextAppendp(fl, textVarp, defaultTextp));
+                blockp->addStmtsp(
+                    newTextAppendp(fl, textVarp, new AstVarRef{fl, outerVarp, VAccess::READ}));
+            } else {
+                // Elements not stored read the default
+                const std::string sort = "(Array (_ BitVec " + cvtToStr(idxWidth) + ") (_ BitVec "
+                                         + cvtToStr(width) + "))";
+                blockp->addStmtsp(new AstAssign{
+                    fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
+                    new AstConcatN{
+                        fl,
+                        new AstConcatN{fl,
+                                       new AstConcatN{fl,
+                                                      new AstVarRef{fl, outerVarp, VAccess::READ},
+                                                      new AstConst{fl, AstConst::String{},
+                                                                   "((as const " + sort + ") "}},
+                                       new AstConcatN{fl, defaultTextp,
+                                                      new AstConst{fl, AstConst::String{}, ")"}}},
+                        new AstVarRef{fl, textVarp, VAccess::READ}}});
+            }
+        }
         return new AstSFormatF{
             fl, "%s", false,
             new AstExprStmt{fl, blockp, new AstVarRef{fl, textVarp, VAccess::READ}}};
     }
-    // SMT constant with the current value of a variable, an SMT array for an array
-    AstNodeExpr* newStateFormatp(AstNodeExpr* varExprp) {
+    // SMT constant with the current value of a variable, an SMT array for an array, which is
+    // the solver array 'smtName' with its elements stored but for an associative array
+    AstNodeExpr* newStateFormatp(AstNodeExpr* varExprp, const std::string& smtName) {
         // A rand_mode(0) array selected by a random index needs all of its elements
         const AstNodeDType* const dtypep = varExprp->dtypep()->skipRefp();
         if (!dtypep->isNonPackedArray() || !dtypep->subDTypep()->skipRefp()->isIntegralOrPacked())
@@ -2924,7 +2977,9 @@ private:
         // newIndexedArrayp replaces the index by each element's
         AstNodeExpr* const selp
             = newSel(varExprp->fileline(), varExprp, new AstConst{varExprp->fileline(), 0});
-        AstSFormatF* const arrayp = newIndexedArrayp(selp, selp);
+        // A key that does not exist reads the default, which only a constant array gives
+        AstSFormatF* const arrayp = newIndexedArrayp(
+            selp, selp, false, VN_IS(dtypep, AssocArrayDType) ? std::string{} : smtName);
         // varExprp may be the visited reference, which a global constraint keeps for later
         VL_DO_DANGLING(pushDeletep(selp), selp);
         return arrayp;
@@ -2934,14 +2989,18 @@ private:
         if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
         AstNodeExpr* const selp = RandomizeUtil::randIndexSelp(nodep, isRandIndex);
         if (!selp) return false;
-        AstSFormatF* const arrayp = newIndexedArrayp(nodep, selp);
+        AstSFormatF* const valuep = newIndexedArrayp(nodep, selp, true);
         const int sortWidth = smtIndexWidth(selp);
         AstNodeExpr* const indexp = selIndexp(selp)->unlinkFrBack();
         // The offset into a fixed-size array is unsigned, even when computed as signed
         AstNodeExpr* const smtIndexp
             = newSmtIndexp(indexp, VN_IS(selp, CMethodHard) && indexp->isSigned(), sortWidth);
-        nodep->replaceWith(createSolverArrDerefp(
-            nodep->fileline(), arrayp, VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr)));
+        // The value of the element at the index, bound once as '?i'
+        AstSFormatF* const newp
+            = new AstSFormatF{nodep->fileline(), "(let ((?i %s)) %s)", false,
+                              VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr)};
+        newp->addExprsp(valuep);
+        nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         return true;
     }
@@ -3410,7 +3469,8 @@ private:
 
         // Get const format, using memberRefp if available for correct width/value
         AstNodeExpr* constFormatp = newStateFormatp(memberRefp ? memberRefp->cloneTree(false)
-                                                               : static_cast<AstNodeExpr*>(nodep));
+                                                               : static_cast<AstNodeExpr*>(nodep),
+                                                    m_nestedAccessp ? std::string{} : smtName);
         if (!randMode.usesMode) {
             exprp = new AstCond{varp->fileline(), handlesActivep, exprp, constFormatp};
             exprp->user1(true);  // Mark as formatted
@@ -5300,9 +5360,9 @@ private:
         }
         return randSelp;
     }
-    AstNodeExpr* newStructArrayDefaultp(AstStructSel* nodep) {
+    AstNodeExpr* newStructArrayDefaultp(AstNodeExpr* nodep) {
         AstNodeExpr* aggregateSelp = nullptr;
-        for (AstNodeExpr* selp = nodep->fromp();
+        for (AstNodeExpr* selp = V3Const::selectionFromp(nodep);
              selp && (isArraySel(selp) || VN_IS(selp, StructSel));
              selp = V3Const::selectionFromp(selp)) {
             if (isArraySel(selp) && VN_IS(selp->dtypep()->skipRefp(), StructDType))
@@ -5318,6 +5378,16 @@ private:
             return arrayp;
         }
         return VN_AS(iterateSubtreeReturnEdits(defaultp), NodeExpr);
+    }
+    // Whether integral element select 'nodep' reads a fixed-size unpacked array member of a
+    // struct array element chosen by a random index, which is lowered with the element select,
+    // so the value of an element that does not exist is an integral default, not an SMT array
+    static bool randIndexedMemberElement(AstArraySel* nodep) {
+        if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
+        AstNodeExpr* fromp = nodep->fromp();
+        while (AstArraySel* const selp = VN_CAST(fromp, ArraySel)) fromp = selp->fromp();
+        const AstStructSel* const structSelp = VN_CAST(fromp, StructSel);
+        return structSelp && randIndexedArraySel(structSelp->fromp());
     }
     // Whether the elements of an unpacked array, through all its dimensions, are integral, as
     // VlRandomizer declares the solver variable of an array of them
@@ -5606,12 +5676,12 @@ private:
     // so the member of the element at random index e becomes a chain over the current
     // elements, built at runtime: (ite (= e 0) arr.0.member (ite (= e 1) arr.1.member ... 0)).
     // The tail represents the selected member's type/declaration default on an invalid read.
-    void lowerRandIndexedStructSel(AstStructSel* nodep) {
+    void lowerRandIndexedStructSel(AstNodeExpr* nodep) {
         ++m_randIndexLowerings;
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* const defaultp = newStructArrayDefaultp(nodep);
-        AstStructSel* const elemp = nodep->cloneTree(false);
-        AstNodeExpr* const arraySelp = randIndexedArraySel(elemp->fromp());
+        AstNodeExpr* const elemp = nodep->cloneTree(false);
+        AstNodeExpr* const arraySelp = randIndexedArraySel(V3Const::selectionFromp(elemp));
         AstNodeExpr* const arrayp = arraySelFromp(arraySelp);
         gateOnCurrentSize(arrayp);
         AstNodeExpr* const indexp = selIndexp(arraySelp)->unlinkFrBack();
@@ -6007,6 +6077,10 @@ private:
     }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
+        if (randIndexedMemberElement(nodep)) {
+            lowerRandIndexedStructSel(nodep);
+            return;
+        }
         FileLine* const fl = nodep->fileline();
         // An element selected by an out-of-range index reads the default value
         // (IEEE 1800-2023 7.4.6); only an integral element has one to read instead
