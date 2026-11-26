@@ -967,9 +967,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
             AstVarRef* const rootVarRefp
                 = new AstVarRef{varp->fileline(), classp, varp, VAccess::READ};
             const std::vector<AstVar*> emptyPath;
-            memberClassp->foreachMember([&](AstClass* const, AstConstraint* const constrp) {
+            for (AstConstraint* const constrp : constraints(memberClassp)) {
                 processNestedConstraint(constrp, rootVarRefp, emptyPath, classp);
-            });
+            }
             // The owning class is seeded so a cycle back to it is not cloned again
             ActiveSet activeClasses{classp, memberClassp};
             cloneNestedConstraintsRecurse(rootVarRefp, memberClassp, emptyPath, classp,
@@ -1245,6 +1245,14 @@ class RandomizeMarkVisitor final : public VNVisitor {
         }
     }
 
+    // The constraints of classp, declared or inherited, before any is cloned into the class
+    // or one of its bases, as for a rand member of a derived class or of its own class
+    static std::vector<AstConstraint*> constraints(AstClass* classp) {
+        std::vector<AstConstraint*> constrps;
+        classp->foreachMember(
+            [&](AstClass* const, AstConstraint* const constrp) { constrps.push_back(constrp); });
+        return constrps;
+    }
     // Clone constraints from nested rand class members.
     void cloneNestedConstraintsRecurse(AstVarRef* rootVarRefp, AstClass* classp,
                                        const std::vector<AstVar*>& pathToClass,
@@ -1274,10 +1282,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
             // Replace all variable references inside the cloned constraint with proper
             // member selections
-            nestedClassp->foreachMember(
-                [&](AstClass* const containingClassp, AstConstraint* const constrp) {
-                    processNestedConstraint(constrp, rootVarRefp, newPath, targetClassp);
-                });
+            for (AstConstraint* const constrp : constraints(nestedClassp)) {
+                processNestedConstraint(constrp, rootVarRefp, newPath, targetClassp);
+            }
             cloneNestedConstraintsRecurse(rootVarRefp, nestedClassp, newPath, targetClassp,
                                           activeClasses);
             activeClasses.erase(nestedClassp);
