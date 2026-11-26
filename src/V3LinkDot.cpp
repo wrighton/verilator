@@ -1351,7 +1351,25 @@ public:
                 // Check this module - subcellnames
                 const AstCell* cellp = lookupSymp ? VN_CAST(lookupSymp->nodep(), Cell)
                                                   : nullptr;  // Replicated below
-                if (VSymEnt* const findSymp = findWithAltFallback(lookupSymp, ident, altIdent)) {
+                // In a block flattened by V3Begin, its enclosing blocks are searched before the
+                // module, which its symbol table falls back to (IEEE 1800-2023 23.8)
+                VSymEnt* blockSymp = nullptr;
+                for (VSymEnt* symp = lookupSymp; symp && VN_IS(symp->nodep(), CellInline);
+                     symp = symp->parentp()) {
+                    blockSymp = findWithAltFlat(symp, ident, altIdent);
+                    // Only scopes, not variables, as in IEEE 1800-2023 23.8 a)
+                    const AstVar* varp = blockSymp ? VN_CAST(blockSymp->nodep(), Var) : nullptr;
+                    if (const AstVarScope* const vscp
+                        = blockSymp ? VN_CAST(blockSymp->nodep(), VarScope) : nullptr) {
+                        varp = vscp->varp();
+                    }
+                    if (varp && !varp->isIfaceRef()) blockSymp = nullptr;
+                    if (blockSymp) break;
+                }
+                if (blockSymp) {
+                    lookupSymp = blockSymp;
+                } else if (VSymEnt* const findSymp
+                           = findWithAltFallback(lookupSymp, ident, altIdent)) {
                     lookupSymp = findSymp;
                 }
 
