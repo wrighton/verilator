@@ -23,4 +23,11 @@ module t (
   // Test should fail due to duplicated disable iff statements
   // (IEEE 1800-2023 16.12.1).
   assert property (disable iff (val == 0) check(1, 1));
+
+  // A sampled value function in a disable condition needs a clocking event
+  // (IEEE 1800-2023 16.9.3)
+  logic rst;
+  default disable iff $rose(rst);
+  assert property (@(posedge clk) disable iff ($fell(rst)) val);
+  assert property (@(posedge clk) disable iff (!$stable(rst) || $past(rst) || $changed(rst)) val);
 endmodule
