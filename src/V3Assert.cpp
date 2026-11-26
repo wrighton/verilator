@@ -1626,6 +1626,75 @@ public:
 };
 
 //######################################################################
+// AssertTaskRunnersVisitor
+
+// The tasks with a procedural concurrent assertion, the procedures and tasks calling them,
+// directly or through other tasks, and the tasks those call: the code whose process may reach
+// such an assertion, so has its flush points flush the pending instances of the process
+// (IEEE 1800-2023 16.14.6.2)
+class AssertTaskRunnersVisitor final : public VNVisitorConst {
+    // STATE
+    const AstNode* m_callerp = nullptr;  // Current procedure or task
+    // Callers of each task, and tasks called by each procedure or task
+    std::unordered_map<const AstNodeFTask*, std::vector<const AstNode*>> m_callerps;
+    std::unordered_map<const AstNode*, std::vector<const AstNodeFTask*>> m_calleeps;
+    std::vector<const AstNode*> m_workps;  // Runners yet to propagate to their callers
+    std::unordered_set<const AstNode*>& m_runnerpsr;  // Result
+
+    // VISITORS
+    void visit(AstNodeProcedure* nodep) override {
+        VL_RESTORER(m_callerp);
+        m_callerp = nodep;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeFTask* nodep) override {
+        VL_RESTORER(m_callerp);
+        m_callerp = nodep;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeFTaskRef* nodep) override {
+        if (m_callerp && nodep->taskp()) {
+            m_callerps[nodep->taskp()].push_back(m_callerp);
+            m_calleeps[m_callerp].push_back(nodep->taskp());
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeCoverOrAssert* nodep) override {
+        if (!nodep->immediate() && VN_IS(m_callerp, NodeFTask)) m_workps.push_back(m_callerp);
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // Linear in the netlist: each call is followed once
+    AssertTaskRunnersVisitor(AstNetlist* nodep, std::unordered_set<const AstNode*>& runnerpsr)
+        : m_runnerpsr{runnerpsr} {
+        iterateConst(nodep);
+        while (!m_workps.empty()) {
+            const AstNode* const runnerp = m_workps.back();
+            m_workps.pop_back();
+            if (!m_runnerpsr.emplace(runnerp).second) continue;
+            const AstNodeFTask* const taskp = VN_CAST(runnerp, NodeFTask);
+            if (!taskp) continue;
+            const auto it = m_callerps.find(taskp);
+            if (it == m_callerps.end()) continue;
+            for (const AstNode* const callerp : it->second) m_workps.push_back(callerp);
+        }
+        // A task such code calls runs in its process too, also when it calls none of those
+        std::vector<const AstNode*> calleeWorkps{m_runnerpsr.begin(), m_runnerpsr.end()};
+        while (!calleeWorkps.empty()) {
+            const AstNode* const callerp = calleeWorkps.back();
+            calleeWorkps.pop_back();
+            const auto it = m_calleeps.find(callerp);
+            if (it == m_calleeps.end()) continue;
+            for (const AstNodeFTask* const calleep : it->second) {
+                if (m_runnerpsr.emplace(calleep).second) calleeWorkps.push_back(calleep);
+            }
+        }
+    }
+};
+
+//######################################################################
 // AssertVisitor
 
 class AssertVisitor final : public VNVisitor {
@@ -1664,6 +1733,14 @@ class AssertVisitor final : public VNVisitor {
     bool m_inConcurrentAction = false;  // In an action of a concurrent assertion
     bool m_inlineAction = false;  // An action of the current assertion stays inline
     AstVar* m_matureEpochp = nullptr;  // Flushes of the current procedure's pending instances
+    // Procedures and tasks whose process may reach a procedural concurrent assertion in a task
+    std::unordered_set<const AstNode*> m_taskRunnerps;
+    bool m_taskRunner = false;  // The current process may reach one
+    bool m_taskMature = false;  // The current assertion, in a task, matures
+    AstVar* m_taskPendingp = nullptr;  // Pending instances of tasks' assertions, by process
+    AstVar* m_taskEpochp = nullptr;  // Flushes of processes with such pending instances
+    AstVar* m_taskRootp = nullptr;  // Process running each disable wrapper's, see newTaskKeyp
+    std::unordered_set<const AstForkItem*> m_keyedWrapperps;  // Done by keyDisableWrapper
     std::unordered_set<const AstVar*> m_pastVarps;  // Registers of sampled value functions
     AstVar* m_obsEventp = nullptr;  // Current module event to run deferred calls
     AstAlwaysReactive* m_obsReactivep = nullptr;  // Current module block running deferred calls
@@ -1688,6 +1765,7 @@ class AssertVisitor final : public VNVisitor {
     VDouble0 m_statPastVars;  // Statistic tracking
     VDouble0 m_statAssertOnCombined;  // Statistic tracking
     VDouble0 m_statAssertOnHoisted;  // Statistic tracking
+    VDouble0 m_statTaskMature;  // Statistic tracking
     bool m_inSampled = false;  // True inside a sampled expression
     bool m_inRestrict = false;  // True inside restrict assertion
     AstNodeStmt* m_passsp = nullptr;  // Current pass statement
@@ -2553,8 +2631,7 @@ class AssertVisitor final : public VNVisitor {
                                               new AstVarRef{flp, m_actionEventp, VAccess::READ}}},
                 nullptr};
             // Beside the process of the assertion, in the scope of its generate blocks
-            (m_assertCoverp ? static_cast<AstNodeProcedure*>(m_assertCoverp) : m_procedurep)
-                ->addNextHere(m_actionReactivep);
+            queuesAnchorp()->addNextHere(m_actionReactivep);
         }
         // The process running an entry, which first takes its values from the queues
         AstBegin* const instancep = new AstBegin{flp, "", nullptr, true};
@@ -2611,6 +2688,163 @@ class AssertVisitor final : public VNVisitor {
         return AstNode::addNext(
             queuesp,
             new AstFireEvent{flp, new AstVarRef{flp, m_actionEventp, VAccess::WRITE}, false});
+    }
+
+    // The type of a handle of a process, or of an array indexed by one
+    static AstNodeDType* newProcessDTypep(FileLine* flp) {
+        AstClass* const classp = v3Global.rootp()->stdPackageProcessp();
+        AstClassRefDType* const dtypep = new AstClassRefDType{flp, classp, nullptr};
+        dtypep->classOrPackagep(classp);
+        v3Global.rootp()->typeTablep()->addTypesp(dtypep);
+        return dtypep;
+    }
+    static AstAssocArrayDType* newProcessAssocDTypep(FileLine* flp, AstNodeDType* valuep) {
+        AstAssocArrayDType* const dtypep
+            = new AstAssocArrayDType{flp, valuep, newProcessDTypep(flp)};
+        dtypep->dtypep(dtypep);
+        v3Global.rootp()->typeTablep()->addTypesp(dtypep);
+        return dtypep;
+    }
+    // A count, or other value, by process, of what all tasks' assertions share
+    static AstVar* newTaskCountp(FileLine* flp, const char* name,
+                                 AstNodeDType* valueDtp = nullptr) {
+        AstPackage* const unitp = v3Global.rootp()->dollarUnitPkgp();
+        if (!valueDtp) valueDtp = v3Global.rootp()->typeTablep()->findUInt32DType();
+        AstVar* const varp
+            = new AstVar{flp, VVarType::MODULETEMP, name, newProcessAssocDTypep(flp, valueDtp)};
+        varp->isInternal(true);
+        varp->lifetime(VLifetime::STATIC_EXPLICIT);
+        varp->setIgnoreSchedWrite();
+        unitp->addStmtsp(varp);
+        return varp;
+    }
+    static AstVarRef* newUnitRefp(FileLine* flp, AstVar* varp, VAccess access) {
+        AstVarRef* const refp = new AstVarRef{flp, varp, access};
+        refp->classOrPackagep(v3Global.rootp()->dollarUnitPkgp());
+        return refp;
+    }
+    // The process whose instances the code running now queues and flushes: std::process::self(),
+    // or for a disable wrapper of V3LinkJump, which runs part of its enclosing process, that
+    // process
+    AstNodeExpr* newTaskKeyp(FileLine* flp) {
+        AstNetlist* const rootp = v3Global.rootp();
+        AstCMethodHard* const existsp
+            = new AstCMethodHard{flp, newUnitRefp(flp, m_taskRootp, VAccess::READ),
+                                 VCMethod::ASSOC_EXISTS, rootp->stdPackageProcessSelfp(flp)};
+        existsp->dtypeSetBit();
+        return new AstCond{flp, existsp,
+                           new AstAssocSel{flp, newUnitRefp(flp, m_taskRootp, VAccess::READ),
+                                           rootp->stdPackageProcessSelfp(flp)},
+                           rootp->stdPackageProcessSelfp(flp)};
+    }
+    // The count of the process, that of newTaskKeyp unless given
+    AstAssocSel* newTaskCountSelp(FileLine* flp, AstVar* varp, VAccess access,
+                                  AstNodeExpr* processp = nullptr) {
+        if (!processp) processp = newTaskKeyp(flp);
+        return new AstAssocSel{flp, newUnitRefp(flp, varp, access), processp};
+    }
+    // Whether a process, given by a handle, is still running: a pending instance of a process
+    // killed, e.g. by 'disable fork', has no process to mature in
+    static AstNodeExpr* newProcessLivep(FileLine* flp, AstNodeExpr* processp) {
+        AstClass* const classp = v3Global.rootp()->stdPackageProcessp();
+        AstFunc* statusp = nullptr;
+        for (AstNode* const itemp : classp->memberspList()) {
+            if (itemp->name() == "status") statusp = VN_AS(itemp, Func);
+        }
+        UASSERT_OBJ(statusp, classp, "'std::process::status' should be found");
+        AstMethodCall* const callp = new AstMethodCall{flp, processp, statusp->name()};
+        callp->taskp(statusp);
+        callp->classOrPackagep(classp);
+        callp->dtypeFrom(statusp);
+        // std::process::KILLED
+        const AstEnumDType* const enump = VN_AS(statusp->dtypep()->skipRefToEnump(), EnumDType);
+        const AstEnumItem* killedp = nullptr;
+        for (const AstEnumItem* const itemp : enump->itemspList()) {
+            if (itemp->name() == "KILLED") killedp = itemp;
+        }
+        UASSERT_OBJ(killedp, enump, "'std::process::KILLED' should be found");
+        return new AstNeq{flp, callp, VN_AS(killedp->valuep(), Const)->cloneTree(false)};
+    }
+    // Have newTaskKeyp give, in a disable wrapper, the process running the code enclosing it.
+    // The entry is erased after the wrapper's join, so it remains only when the enclosing
+    // process is killed while the wrapper runs: one entry per such kill.
+    void keyDisableWrapper(AstFork* forkp, AstForkItem* wrapperp) {
+        FileLine* const flp = forkp->fileline();
+        AstNetlist* const rootp = v3Global.rootp();
+        const auto newVarp = [&](const char* name) {
+            AstVar* const varp = new AstVar{flp, VVarType::BLOCKTEMP, name, newProcessDTypep(flp)};
+            varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            varp->funcLocal(m_ftaskp);
+            varp->isInternal(true);
+            return varp;
+        };
+        AstVar* const parentp = newVarp("__VassertTaskParent");
+        AstVar* const selfp = newVarp("__VassertTaskWrapper");
+        AstBegin* const beginp = new AstBegin{flp, "", nullptr, true};
+        beginp->addDeclsp(parentp);
+        beginp->addDeclsp(selfp);
+        VNRelinker relinker;
+        forkp->unlinkFrBack(&relinker);
+        beginp->addStmtsp(
+            new AstAssign{flp, new AstVarRef{flp, parentp, VAccess::WRITE}, newTaskKeyp(flp)});
+        beginp->addStmtsp(forkp);
+        AstCMethodHard* const erasep
+            = new AstCMethodHard{flp, newUnitRefp(flp, m_taskRootp, VAccess::WRITE),
+                                 VCMethod::ASSOC_ERASE, new AstVarRef{flp, selfp, VAccess::READ}};
+        erasep->dtypeSetVoid();
+        beginp->addStmtsp(erasep->makeStmt());
+        relinker.relink(beginp);
+        AstNodeStmt* const setsp = new AstAssign{flp, new AstVarRef{flp, selfp, VAccess::WRITE},
+                                                 rootp->stdPackageProcessSelfp(flp)};
+        setsp->addNext(
+            new AstAssign{flp,
+                          new AstAssocSel{flp, newUnitRefp(flp, m_taskRootp, VAccess::WRITE),
+                                          new AstVarRef{flp, selfp, VAccess::READ}},
+                          new AstVarRef{flp, parentp, VAccess::READ}});
+        if (AstNodeStmt* const stmtsp = wrapperp->stmtsp()) {
+            stmtsp->addHereThisAsNext(setsp);
+        } else {
+            wrapperp->addStmtsp(setsp);
+        }
+    }
+    // At a flush point of a process that may reach an assertion in a task, flush the process's
+    // pending instances of such assertions (IEEE 1800-2023 16.14.6.2)
+    AstNodeStmt* newTaskFlushp(FileLine* flp) {
+        if (!m_taskPendingp) {
+            m_taskPendingp = newTaskCountp(flp, "__VassertTaskPending");
+            m_taskEpochp = newTaskCountp(flp, "__VassertTaskEpoch");
+            m_taskRootp = newTaskCountp(flp, "__VassertTaskRoot", newProcessDTypep(flp));
+        }
+        AstCMethodHard* const existsp
+            = new AstCMethodHard{flp, newUnitRefp(flp, m_taskPendingp, VAccess::READ),
+                                 VCMethod::ASSOC_EXISTS, newTaskKeyp(flp)};
+        existsp->dtypeSetBit();
+        AstNodeExpr* const incp
+            = new AstAdd{flp, newTaskCountSelp(flp, m_taskEpochp, VAccess::READ),
+                         new AstConst{flp, AstConst::WidthedValue{}, 32, 1}};
+        return new AstIf{
+            flp, existsp,
+            new AstAssign{flp, newTaskCountSelp(flp, m_taskEpochp, VAccess::WRITE), incp}};
+    }
+    // Whether a procedural concurrent assertion in a task matures as in a procedure (see the
+    // decision in visitAssertionIterate): an assert, not lowered by V3AssertNfa, outside a fork
+    // branch and an action, with timing and its actions queued, in a task of a module or
+    // interface, not a class method or an exported task (IEEE 1800-2023 16.14.6)
+    bool taskAssertionMatures(AstNodeCoverOrAssert* nodep) const {
+        AstAssert* const assertp = VN_CAST(nodep, Assert);
+        if (!assertp || nodep->nfaLowered() || m_inForkBranch || m_inConcurrentAction
+            || !v3Global.opt.timing().isSetTrue() || !v3Global.rootp()->stdPackageProcessp()
+            || m_ftaskp->classMethod() || m_ftaskp->dpiExport() || VN_IS(m_modp, Package)) {
+            return false;
+        }
+        return !(nodep->passsp() && actionStaysInline(nodep->passsp()))
+               && !(assertp->failsp() && actionStaysInline(assertp->failsp()));
+    }
+    // The block beside which the queues of the current assertion run
+    AstNode* queuesAnchorp() const {
+        if (m_assertCoverp) return m_assertCoverp;
+        if (m_procedurep) return m_procedurep;
+        return m_ftaskp;
     }
 
     // A procedural concurrent assertion queues a pending instance at its statement, with the
@@ -2673,8 +2907,11 @@ class AssertVisitor final : public VNVisitor {
             if (varRefps.empty()) inputps.push_back(varp);
             varRefps.push_back(refp);
         });
-        // The flushes of the process (IEEE 1800-2023 16.14.6.2), see addObsFlushes
-        if (!m_matureEpochp) {
+        // The flushes of the process (IEEE 1800-2023 16.14.6.2), see addObsFlushes; in a task,
+        // of the calling process, see newTaskFlushp
+        if (m_ftaskp) {
+            UASSERT_OBJ(m_taskPendingp, nodep, "Task with no flush points");
+        } else if (!m_matureEpochp) {
             m_matureEpochp = newStatic("FlushEpoch", u32p);
             m_obsFlushp = AstNode::addNext(m_obsFlushp, incp(m_matureEpochp, 1));
         }
@@ -2730,7 +2967,24 @@ class AssertVisitor final : public VNVisitor {
                 }
             }
         }
-        queuesp = AstNode::addNext(queuesp, newQueuePush(flp, epochQp, rd(m_matureEpochp)));
+        AstNodeDType* const processDtp = m_ftaskp ? newProcessDTypep(flp) : nullptr;
+        AstVar* const processQp
+            = m_ftaskp ? newStatic("ProcessQueue", newQueueDTypep(flp, processDtp)) : nullptr;
+        AstVar* const processp = m_ftaskp ? newStatic("Process", processDtp) : nullptr;
+        if (m_ftaskp) {
+            // The process's count of flushes, and its pending instances
+            queuesp = AstNode::addNext(queuesp, newQueuePush(flp, processQp, newTaskKeyp(flp)));
+            queuesp = AstNode::addNext(
+                queuesp,
+                newQueuePush(flp, epochQp, newTaskCountSelp(flp, m_taskEpochp, VAccess::READ)));
+            queuesp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
+                queuesp,
+                new AstAssign{flp, newTaskCountSelp(flp, m_taskPendingp, VAccess::WRITE),
+                              new AstAdd{flp, newTaskCountSelp(flp, m_taskPendingp, VAccess::READ),
+                                         new AstConst{flp, AstConst::WidthedValue{}, 32, 1}}});
+        } else {
+            queuesp = AstNode::addNext(queuesp, newQueuePush(flp, epochQp, rd(m_matureEpochp)));
+        }
         queuesp = AstNode::addNext(queuesp, newQueuePush(flp, killQp, newKillCountp(flp)));
         queuesp = AstNode::addNext(queuesp, incp(pendingp, 1));
         queuesp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
@@ -2739,6 +2993,10 @@ class AssertVisitor final : public VNVisitor {
         AstLoop* const matureLoopp = new AstLoop{flp};
         matureLoopp->addStmtsp(new AstLoopTest{flp, matureLoopp, rd(pendingp)});
         matureLoopp->addStmtsp(incp(pendingp, -1));
+        if (m_ftaskp) {
+            matureLoopp->addStmtsp(
+                new AstAssign{flp, wr(processp), newQueuePop(flp, processQp, processDtp)});
+        }
         matureLoopp->addStmtsp(new AstAssign{flp, wr(epochp), newQueuePop(flp, epochQp, u32p)});
         matureLoopp->addStmtsp(new AstAssign{flp, wr(killp), newQueuePop(flp, killQp, u32p)});
         keepsp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
@@ -2749,10 +3007,38 @@ class AssertVisitor final : public VNVisitor {
                                               new AstConst{flp, AstConst::WidthedValue{}, 64, 1}}),
                       newQueuePush(flp, clkQp, rd(clkCountp))});
         keepsp = AstNode::addNext(keepsp, incp(maturedp, 1));
-        AstNodeExpr* const keepCondp
-            = new AstLogAnd{flp, new AstEq{flp, rd(epochp), rd(m_matureEpochp)},
-                            new AstEq{flp, rd(killp), newKillCountp(flp)}};
+        AstNodeExpr* const flushesp
+            = m_ftaskp ? static_cast<AstNodeExpr*>(
+                             newTaskCountSelp(flp, m_taskEpochp, VAccess::READ, rd(processp)))
+                       : rd(m_matureEpochp);
+        AstNodeExpr* keepCondp = new AstLogAnd{flp, new AstEq{flp, rd(epochp), flushesp},
+                                               new AstEq{flp, rd(killp), newKillCountp(flp)}};
+        if (m_ftaskp)
+            keepCondp = new AstLogAnd{flp, newProcessLivep(flp, rd(processp)), keepCondp};
         matureLoopp->addStmtsp(new AstIf{flp, keepCondp, keepsp, dropsp});
+        if (m_ftaskp) {
+            // A process with no pending instance left keeps no count
+            const auto countp = [&](AstVar* varp, VAccess access) {
+                return newTaskCountSelp(flp, varp, access, rd(processp));
+            };
+            matureLoopp->addStmtsp(
+                new AstAssign{flp, countp(m_taskPendingp, VAccess::WRITE),
+                              new AstSub{flp, countp(m_taskPendingp, VAccess::READ),
+                                         new AstConst{flp, AstConst::WidthedValue{}, 32, 1}}});
+            AstNodeStmt* erasesp = nullptr;
+            for (AstVar* const varp : {m_taskPendingp, m_taskEpochp}) {
+                AstCMethodHard* const erasep
+                    = new AstCMethodHard{flp, newUnitRefp(flp, varp, VAccess::WRITE),
+                                         VCMethod::ASSOC_ERASE, rd(processp)};
+                erasep->dtypeSetVoid();
+                erasesp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(erasesp, erasep->makeStmt());
+            }
+            matureLoopp->addStmtsp(
+                new AstIf{flp,
+                          new AstEq{flp, countp(m_taskPendingp, VAccess::READ),
+                                    new AstConst{flp, AstConst::WidthedValue{}, 32, 0}},
+                          erasesp});
+        }
         // Begin the matured instances whose leading clock occurred since they matured, in
         // their order
         AstCMethodHard* const frontp
@@ -2780,8 +3066,8 @@ class AssertVisitor final : public VNVisitor {
         AstAlways* const clockAlwaysp
             = new AstAlways{flp, VAlwaysKwd::ALWAYS, clockp, incp(clkCountp, 1)};
         clockAlwaysp->addStmtsp(new AstAssign{flp, wr(clkTimep), newTimep()});
-        m_procedurep->addNextHere(runnerp);
-        m_procedurep->addNextHere(clockAlwaysp);
+        queuesAnchorp()->addNextHere(runnerp);
+        queuesAnchorp()->addNextHere(clockAlwaysp);
         return newIfAssertOn(nodep->controlVarp(), queuesp, nodep->directive(), nodep->userType());
     }
 
@@ -2864,6 +3150,8 @@ class AssertVisitor final : public VNVisitor {
         if (m_beginp && nodep->name() == "") nodep->name(m_beginp->name());
         VL_RESTORER(m_inlineAction);
         m_inlineAction = false;
+        VL_RESTORER(m_taskMature);
+        m_taskMature = false;
         // The waits of a concurrent assertion's attempts and actions are not those of the
         // process, so not its flush points
         struct WaitsIsolation final {
@@ -2977,21 +3265,36 @@ class AssertVisitor final : public VNVisitor {
                     new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, nodep});
                 return;  // Later iterate will pick up
             }
-            // A task is not a process, so the assertion gets its own beside the task
+            // A task is not a process. An assertion in it that matures is queued by the
+            // process calling the task (see newMatureInstance), else it gets its own beside the
+            // task.
             if (m_ftaskp) {
-                // Outside the task, its variables, other than the automatic ones of the
-                // assertion's own blocks, are out of scope
+                m_taskMature = taskAssertionMatures(nodep);
+                // Outside the task, its variables are out of scope, other than the automatic
+                // ones of the assertion's own blocks, and those whose value an instance that
+                // matures takes when queued
                 std::unordered_set<const AstVar*> ownps;
                 nodep->foreach([&](const AstVar* varp) {
                     if (varp->lifetime().isAutomatic()) ownps.emplace(varp);
                 });
                 const AstVarRef* localRefp = nullptr;
                 nodep->exists([&](const AstVarRef* refp) {
-                    if (refp->varp()->isFuncLocal() && !ownps.count(refp->varp())) {
+                    const AstVar* const varp = refp->varp();
+                    if (varp->isFuncLocal() && !ownps.count(varp)
+                        && !(m_taskMature && varp->lifetime().isAutomatic())) {
                         localRefp = refp;
                     }
                     return localRefp != nullptr;
                 });
+                if (localRefp && m_taskMature) {
+                    localRefp->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: Procedural concurrent assertion in a task "
+                                      "referencing a static variable of the task "
+                                          << localRefp->varp()->prettyNameQ()
+                                          << " (IEEE 1800-2023 16.14.6).");
+                    VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                    return;
+                }
                 if (localRefp) {
                     localRefp->v3warn(E_UNSUPPORTED,
                                       "Unsupported: Procedural concurrent assertion in a task "
@@ -3001,6 +3304,8 @@ class AssertVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
                     return;
                 }
+            }
+            if (m_ftaskp && !m_taskMature) {
                 // Its actions move with it, out of the task
                 dropOutwardActionJumps(nodep);
                 // As above, for a block under a fork item in the task
@@ -3016,7 +3321,7 @@ class AssertVisitor final : public VNVisitor {
                 propp = sampledp->exprp();
             }
             if (!VN_IS(propp, PExpr)) actionSenTreep = sentreep;
-            if (m_procedurep) {
+            if (m_procedurep || m_ftaskp) {
                 procClockp = sentreep;
                 sentreep = nullptr;
             }
@@ -3138,11 +3443,11 @@ class AssertVisitor final : public VNVisitor {
         // A procedural concurrent assertion matures in the Observed region, see
         // newMatureInstance, unless it is lowered by V3AssertNfa, in a fork branch or an action
         // of a concurrent assertion, processes other than the procedure's, without timing, or
-        // has an action that stays inline
+        // has an action that stays inline; in a task, as decided by taskAssertionMatures
         const bool isPExpr = VN_IS(propExprp, PExpr);
         bool mature = procClockp && VN_IS(nodep, Assert) && !nodep->nfaLowered() && !m_inForkBranch
-                      && !m_inConcurrentAction && !m_ftaskp && !seqEvent && !selfDestruct
-                      && v3Global.opt.timing().isSetTrue();
+                      && !m_inConcurrentAction && (!m_ftaskp || m_taskMature) && !seqEvent
+                      && !selfDestruct && v3Global.opt.timing().isSetTrue();
         if (mature && isPExpr) mature = !m_inlineAction;
         if (mature && !isPExpr) {
             mature
@@ -3151,6 +3456,8 @@ class AssertVisitor final : public VNVisitor {
             if (mature && passsp) passsp = newQueuedAction(flp, passsp);
             if (mature && failsp) failsp = newQueuedAction(flp, failsp);
         }
+        UASSERT_OBJ(!m_taskMature || mature, nodep, "Task assertion expected to mature");
+        if (m_taskMature) ++m_statTaskMature;
         // Otherwise those of a clocked assertion run in the Reactive region from a process on
         // its clock. V3AssertNfa made those of what it lowered so already, except a default.
         if (!mature && actionSenTreep && !coverp) {
@@ -3916,10 +4223,12 @@ class AssertVisitor final : public VNVisitor {
         iterateAndNextNull(nodep->stmtsp());
         VL_RESTORER(m_inSpawnedFork);
         m_inSpawnedFork |= !nodep->joinType().join();
+        AstForkItem* wrapperp = nullptr;
         for (AstForkItem* const branchp : nodep->forkspList()) {
             // V3LinkJump's wrapper runs part of the enclosing process
             if (branchp->disableWrapper()) {
                 iterate(branchp);
+                wrapperp = branchp;
                 continue;
             }
             // IEEE 1800-2023 9.3.2: Each branch is a separate process
@@ -3928,10 +4237,13 @@ class AssertVisitor final : public VNVisitor {
             VL_RESTORER(m_obsFlushp);
             VL_RESTORER(m_obsDoneVarp);
             VL_RESTORER_CLEAR(m_obsWaitsp);
-            m_obsFlushp = nullptr;
+            m_obsFlushp = m_taskRunner ? newTaskFlushp(branchp->fileline()) : nullptr;
             m_obsDoneVarp = nullptr;
             iterate(branchp);
             addObsFlushes(branchp);
+        }
+        if (wrapperp && m_taskRunner && m_keyedWrapperps.emplace(wrapperp).second) {
+            keyDisableWrapper(nodep, wrapperp);
         }
     }
     // A fork branch is a process of its own, which also suspends if its own statements may
@@ -4263,10 +4575,15 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_actionReactivep);
         VL_RESTORER_CLEAR(m_namedBeginps);
         VL_RESTORER(m_procSuspends);
+        VL_RESTORER(m_taskRunner);
         m_procedurep = nodep;
         m_procSuspends = V3AssertCommon::procSuspends(nodep->stmtsp());
         m_actionEventp = nullptr;
         m_actionReactivep = nullptr;
+        m_taskRunner = m_taskRunnerps.count(nodep);
+        if (m_taskRunner) {
+            m_obsFlushp = AstNode::addNext(m_obsFlushp, newTaskFlushp(nodep->fileline()));
+        }
         AstBegin* const scopep = VN_CAST(nodep->stmtsp(), Begin);
         iterateChildren(nodep);
         // IEEE 1800-2023 16.4.2: The process resumes from its event control, or was declared by
@@ -4284,9 +4601,20 @@ class AssertVisitor final : public VNVisitor {
     void visit(AstNodeFTask* nodep) override {
         VL_RESTORER(m_ftaskp);
         VL_RESTORER(m_obsFlushp);
+        VL_RESTORER(m_obsDoneVarp);
+        VL_RESTORER_CLEAR(m_obsWaitsp);
+        VL_RESTORER(m_actionEventp);
+        VL_RESTORER(m_actionReactivep);
+        VL_RESTORER(m_taskRunner);
         m_ftaskp = nodep;
-        m_obsFlushp = nullptr;
+        m_obsDoneVarp = nullptr;
+        m_actionEventp = nullptr;
+        m_actionReactivep = nullptr;
+        // Its flush points are those of the calling process
+        m_taskRunner = m_taskRunnerps.count(nodep);
+        m_obsFlushp = m_taskRunner ? newTaskFlushp(nodep->fileline()) : nullptr;
         iterateChildren(nodep);
+        if (m_taskRunner) addObsFlushes(nodep);
     }
     void visit(AstGenBlock* nodep) override {
         // This code is needed rather than a visitor in V3Begin,
@@ -4325,6 +4653,9 @@ class AssertVisitor final : public VNVisitor {
 public:
     // CONSTRUCTORS
     explicit AssertVisitor(AstNetlist* nodep) {
+        if (v3Global.opt.timing().isSetTrue() && nodep->stdPackageProcessp()) {
+            AssertTaskRunnersVisitor{nodep, m_taskRunnerps};
+        }
         iterate(nodep);
         for (const auto& item : m_sharedControlDepths) {
             for (AstAssertCtlTarget* const targetp : item.first->targetspList()) {
@@ -4349,6 +4680,7 @@ public:
         V3Stats::addStat("Assertions, full/parallel case", m_statAsFull);
         V3Stats::addStat("Assertions, $past variables", m_statPastVars);
         V3Stats::addStat("Assertions, assertOn checks combined", m_statAssertOnCombined);
+        V3Stats::addStat("Assertions, procedural in tasks matured", m_statTaskMature);
         V3Stats::addStat("Assertions, assertOn checks hoisted", m_statAssertOnHoisted);
         V3Stats::addStat("Assertions, lifted impure case expressions", m_statLiftedCaseExprs);
         // Rewrites can change purity, e.g. by compiling out assertion statements with --no-assert

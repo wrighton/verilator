@@ -4749,9 +4749,11 @@ list_of_argumentsE<argp>:  // IEEE: [list_of_arguments]
 task_declaration<nodeFTaskp>:   // ==IEEE: task_declaration
                 task_declarationFront stmtListE yENDTASK endLabelE
                         { $$ = $1; $$->addStmtsp($2);
+                          GRAMMARP->m_insideTask = false;
                           GRAMMARP->endLabel($<fl>4, $$, $4); }
         |       task_declarationFront tf_item_declarationList stmtListE yENDTASK endLabelE
                         { $$ = $1; $$->addDeclsp($2); $$->addStmtsp($3);
+                          GRAMMARP->m_insideTask = false;
                           GRAMMARP->endLabel($<fl>5, $$, $5); }
         ;
 
@@ -4759,7 +4761,8 @@ task_declarationFront<nodeFTaskp>:  // IEEE: part of task_declaration
                 yTASK dynamic_override_specifiersE lifetimeE taskId tfPortsE ';'
                         { $$ = $4; $$->addDeclsp($5);
                           $$->baseOverride($2);
-                          $$->lifetime($3); }
+                          $$->lifetime($3);
+                          GRAMMARP->m_insideTask = true; }
         ;
 
 task_prototype<nodeFTaskp>:             // ==IEEE: task_prototype
@@ -6621,7 +6624,10 @@ deferred_immediate_assertion_item<nodeStmtp>:       // ==IEEE: deferred_immediat
         ;
 
 procedural_assertion_statement<nodeStmtp>:  // ==IEEE: procedural_assertion_statement
-                concurrent_assertion_statement          { $$ = $1; }
+                concurrent_assertion_statement
+                        { $$ = $1;
+                          // In a task, its instances are queued by process (see V3Assert)
+                          if (GRAMMARP->m_insideTask) PARSEP->importIfInStd($<fl>1, "process"); }
         |       immediate_assertion_statement           { $$ = $1; }
         //                      // IEEE: checker_instantiation
         //                      // Unlike modules, checkers are the only "id id (...)" form in statements.
