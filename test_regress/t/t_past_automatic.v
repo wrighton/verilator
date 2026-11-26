@@ -122,6 +122,22 @@ module t;
     end
   end
 
+  // In a procedure, value change functions compare sampled values, while an automatic index or
+  // variable is read with its current value
+  bit [6:0] v = 7'h29;
+  bit [6:0] pv = 7'h29;
+  always @(posedge clk) begin
+    automatic bit [6:0] s = v;  // The sampled value: before the write below
+    automatic bit x = s[0];
+    v = v + 7'h13;
+    for (int i = 0; i < 7; i++) begin
+      `checkh($rose(v[i]), s[i] && !pv[i]);
+      `checkh($stable(v[i]), s[i] == pv[i]);
+    end
+    `checkh($rose(x), 1'b0);
+    pv = s;
+  end
+
   initial begin
     #100;
     `checkh(npass, 70);
