@@ -331,15 +331,18 @@ An input port of net kind that is written but not coerced, including one
 written procedurally inside its module, through a virtual interface, or by
 a hierarchical reference, drives the net it is connected to if that net has
 no other driver, as the port and the net collapse into one net (IEEE
-1800-2023 23.3.3.7). The connection may be a hierarchical reference, and a
-constant bit, part, or element select of the net. Otherwise the net drives
-the port, and overrides the writes to it when it changes. A net, as a
-whole, has another driver if anything other than force, release, a
-continuous assignment of a constant z, or an output port connection writes
-any bit of it, if it is connected to an output port that has another
-driver, if it is declared tri0 or tri1 or connected to a pullup or
-pulldown, if it is an input port connected in any instance to a value other
-than a net, or to a net that has another driver, or set by
+1800-2023 23.3.3.7). A port written only by continuous assignments of a
+constant z is not so written, and a variable never written, other than by a
+declaration initializer of all z bits, is that constant z as a whole
+continuous assignment value or port connection. The connection may be a
+hierarchical reference, and a constant bit, part, or element select of the
+net. Otherwise the net drives the port, and overrides the writes to it when
+it changes. A net, as a whole, has another driver if anything other than
+force, release, a continuous assignment of a constant z, or an output port
+connection writes any bit of it, if it is connected to an output port that
+has another driver, if it is declared tri0 or tri1 or connected to a pullup
+or pulldown, if it is an input port connected in any instance to a value
+other than a net, or to a net that has another driver, or set by
 ```unconnected_drive``, if it is a port of the top-level module, or if it
 is public writable. An input port so driven in turn drives the nets it is
 connected to in the same way. Two such ports connected to overlapping bits
