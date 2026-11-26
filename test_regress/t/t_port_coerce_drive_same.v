@@ -212,10 +212,115 @@ endmodule
 bind dst4 drv4a u_drv4a ();
 bind rde4 drv4b u_drv4b ();
 
+// An instance named like the instance it is in, spelled from inside it and from the top
+module rde5 (
+    input logic clk,
+    input logic [6:0] x,
+    output logic [6:0] seen
+);
+  always_ff @(posedge clk) seen <= x;
+endmodule
+
+module inner5 (
+    input logic clk,
+    output logic [6:0] s
+);
+  wire [6:0] z;
+  assign z = 7'bz;
+  rde5 a (
+      .clk(clk),
+      .x(z),
+      .seen(s)
+  );
+endmodule
+
+module outer5 (
+    input logic clk,
+    output logic [6:0] s
+);
+  inner5 dst5 (
+      .clk(clk),
+      .s  (s)
+  );
+endmodule
+
+module drv5a;
+  drv_if d (
+      .clk(dst5.a.clk),
+      .v  (dst5.a.x)
+  );
+  initial begin
+    @(posedge dst5.a.clk);
+    d.cb.v <= 7'h65;
+  end
+endmodule
+
+module drv5b;
+  drv_if d (
+      .clk(dst5.dst5.a.clk),
+      .v  (dst5.dst5.a.x)
+  );
+  initial begin
+    @(posedge dst5.dst5.a.clk);
+    d.cb.v <= 7'h65;
+  end
+endmodule
+
+bind inner5 drv5a u_drv5a ();
+
+// In a generate block, spelled from its parent and from inside it
+module rde6 (
+    input logic clk,
+    input logic [6:0] x,
+    output logic [6:0] seen
+);
+  always_ff @(posedge clk) seen <= x;
+endmodule
+
+module dst6 (
+    input logic clk,
+    output logic [6:0] s
+);
+  wire [6:0] z;
+  assign z = 7'bz;
+  if (1) begin : g
+    rde6 a (
+        .clk(clk),
+        .x(z),
+        .seen(s)
+    );
+  end
+endmodule
+
+module drv6a;
+  drv_if d (
+      .clk(dst6.g.a.clk),
+      .v  (dst6.g.a.x)
+  );
+  initial begin
+    @(posedge dst6.g.a.clk);
+    d.cb.v <= 7'h65;
+  end
+endmodule
+
+module drv6b;
+  drv_if d (
+      .clk(g.a.clk),
+      .v  (g.a.x)
+  );
+  initial begin
+    @(posedge g.a.clk);
+    d.cb.v <= 7'h65;
+  end
+endmodule
+
+bind dst6 drv6a u_drv6a ();
+bind dst6 drv6b u_drv6b ();
+
 module t;
   logic clk = 0;
   always #5 clk = ~clk;
-  logic [6:0] s1, s2, s3, s4;
+  logic [6:0] s1, s2, s3, s4, s5, s6;
   dst1 u1 (
       .clk(clk),
       .s  (s1)
@@ -232,12 +337,23 @@ module t;
       .clk(clk),
       .s  (s4)
   );
+  outer5 dst5 (
+      .clk(clk),
+      .s  (s5)
+  );
+  drv5b u_drv5b ();
+  dst6 u6 (
+      .clk(clk),
+      .s  (s6)
+  );
   initial begin
     repeat (4) @(posedge clk);
     `checkh(s1, 7'h00);
     `checkh(s2, 7'h00);
     `checkh(s3, 7'h00);
     `checkh(s4, 7'h00);
+    `checkh(s5, 7'h00);
+    `checkh(s6, 7'h00);
     $write("*-* All Finished *-*\n");
     $finish;
   end
