@@ -4724,9 +4724,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
         m_unelabps;  // Tasks, functions and processes to remove, see unelaborated
     AstMethodCall* m_randMethodCallp = nullptr;  // Current randomize() method call
     // Per sequence in the current module, the event fired at its end points, see
-    // replaceSequenceTriggered
+    // replaceSequenceMethod
     std::map<const AstSequence*, AstVar*> m_seqTriggeredEvents;
     V3UniqueNames m_seqTriggeredNames{"__Vtriggered"};  // Names of those events
+    // Per sequence in the current module, the count of its end points, see replaceSequenceMethod
+    std::map<const AstSequence*, AstVar*> m_seqMatchedCounts;
+    V3UniqueNames m_seqMatchedNames{"__Vmatched"};  // Names of those counts
     int m_modportNum = 0;  // Uniqueify modport numbers
     bool m_assertCtlModuleRelative = false;  // Normalized selector path starts at module scope
     std::vector<AstNodeModule*> m_assertCtlTops;  // Top scopes for implicit selection
@@ -5859,29 +5862,76 @@ class LinkDotResolveVisitor final : public VNVisitor {
         const VSymEnt* const parentSymp = LinkDotState::getNodeSym(nodep)->parentp();
         return parentSymp == m_modSymp || VN_IS(parentSymp->nodep(), Package);
     }
-    // Replace sequence method 'triggered' nodep with an event's state, returning the event
-    AstVar* replaceSequenceTriggered(AstParseRef* nodep, AstSchemaRef* refp) {
-        // The method's value is the triggered state of the event (IEEE 1800-2023 16.13.6),
-        // fired at each end point of the sequence instance, as for a sequence event control.
+    // Replace sequence method 'triggered' or 'matched' nodep, returning the variable it reads
+    AstVar* replaceSequenceMethod(AstParseRef* nodep, AstSchemaRef* refp) {
         // The instance moves to module scope, so cannot reference e.g. a property's formal,
         // an automatic variable, a generate block's variable or genvar, or another instance.
         if (!isModuleScope(refp->schemap()) || refp->exists([this](const AstVarRef* varRefp) {
                 return varRefp->varp()->isGenVar() || !isModuleScope(varRefp->varp());
             })) {
-            nodep->v3warn(E_UNSUPPORTED, "Unsupported: sequence method 'triggered' on a sequence"
-                                         " instance referencing a non-module-scope declaration");
-            VL_DO_CLEAR(pushDeletep(refp), refp = nullptr);  // Null: no sequence to fire
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: sequence method "
+                                             << nodep->prettyNameQ()
+                                             << " on a sequence instance referencing a"
+                                                " non-module-scope declaration.");
+            VL_DO_CLEAR(pushDeletep(refp), refp = nullptr);  // Null: no sequence to follow
         }
-        AstVar* const eventp = V3AssertCommon::newSequenceEvent(
-            nodep->fileline(), m_modp, m_seqTriggeredNames.get(nodep), refp);
-        replaceWithTriggered(nodep, eventp);
-        return eventp;
+        AstVar* const varp
+            = nodep->name() == "matched"
+                  ? V3AssertCommon::newSequenceEndCount(nodep->fileline(), m_modp,
+                                                        m_seqMatchedNames.get(nodep), refp)
+                  : V3AssertCommon::newSequenceEvent(nodep->fileline(), m_modp,
+                                                     m_seqTriggeredNames.get(nodep), refp);
+        replaceWithSequenceMethod(nodep, varp);
+        return varp;
     }
-    void replaceWithTriggered(AstParseRef* nodep, AstVar* eventp) {
+    void replaceWithSequenceMethod(AstParseRef* nodep, AstVar* varp) {
+        // The values of the methods do not depend on the start of the match (IEEE 1800-2023
+        // 16.13.6). 'triggered' is the triggered state of an event fired at each end point of
+        // the instance, as for a sequence event control. 'matched' holds at the first tick of
+        // the clock it is read on after an end point (IEEE 1800-2023 F.6.1), so when the
+        // sampled count of end points changed since the previous tick.
         FileLine* const flp = nodep->fileline();
-        nodep->replaceWith(
-            new AstMethodCall{flp, new AstVarRef{flp, eventp, VAccess::READ}, "triggered"});
+        AstNodeExpr* newp;
+        if (nodep->name() == "matched") {
+            if (const char* const whatp = matchedIllegalContext(nodep)) {
+                nodep->v3error("Sequence method 'matched' used " << whatp << ".");
+            }
+            newp = new AstLogNot{
+                flp, new AstStable{flp, new AstVarRef{flp, varp, VAccess::READ}, nullptr}};
+            // The replacement, iterated next, ends the dotted reference
+            m_ds.init(m_curSymp);
+        } else {
+            newp = new AstMethodCall{flp, new AstVarRef{flp, varp, VAccess::READ}, "triggered"};
+        }
+        nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    // Where sequence method 'matched' at nodep is illegal, or nullptr if it is in a sequence
+    // expression, the only place it can be used (IEEE 1800-2023 16.13.6)
+    static const char* matchedIllegalContext(const AstNode* nodep) {
+        for (const AstNode *belowp = nodep, *abovep = nodep->aboveLoopp(); abovep;
+             belowp = abovep, abovep = abovep->aboveLoopp()) {
+            if (VN_IS(abovep, Past) || VN_IS(abovep, Stable) || VN_IS(abovep, Rose)
+                || VN_IS(abovep, Fell) || VN_IS(abovep, Sampled) || VN_IS(abovep, Future)) {
+                return "in a sampled value function (IEEE 1800-2023 16.9.3)";
+            }
+            const AstAbortOn* const abortp = VN_CAST(abovep, AbortOn);
+            if (abortp && abortp->condp() == belowp) {
+                return "in an abort condition (IEEE 1800-2023 16.12.14)";
+            }
+            if (const AstPropSpec* const specp = VN_CAST(abovep, PropSpec)) {
+                if (specp->propp() == belowp) return nullptr;
+                if (specp->disablep() == belowp) {
+                    return "in a disable condition (IEEE 1800-2023 16.6)";
+                }
+                break;
+            }
+            if (VN_IS(abovep, DefaultDisable)) {
+                return "in a disable condition (IEEE 1800-2023 16.6)";
+            }
+            if (VN_IS(abovep, Sequence) || VN_IS(abovep, Property)) return nullptr;
+        }
+        return "outside a sequence expression (IEEE 1800-2023 16.13.6)";
     }
     // Whether a reference that does not resolve is in code of an interface that is not
     // elaborated, see vifOnly. Such code is never executed, as virtual interfaces of the
@@ -5964,6 +6014,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         UINFO(8, indent() << "visit " << nodep);
         VL_RESTORER(m_genericIfaceModule);
         VL_RESTORER_CLEAR(m_seqTriggeredEvents);
+        VL_RESTORER_CLEAR(m_seqMatchedCounts);
         if (const AstModule* const modp = VN_CAST(nodep, Module)) {
             m_genericIfaceModule = modp->hasGenericIface();
         }
@@ -6566,11 +6617,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
             nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
-        } else if (m_ds.m_dotPos == DP_MEMBER && nodep->name() == "triggered"
+        } else if (m_ds.m_dotPos == DP_MEMBER
+                   && (nodep->name() == "triggered" || nodep->name() == "matched")
                    && VN_IS(m_ds.m_dotp->lhsp(), SchemaRef)
                    && VN_IS(VN_AS(m_ds.m_dotp->lhsp(), SchemaRef)->schemap(), Sequence)) {
             // A sequence instance with arguments
-            replaceSequenceTriggered(nodep, VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), SchemaRef));
+            replaceSequenceMethod(nodep, VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), SchemaRef));
         } else if (m_ds.m_dotPos == DP_MEMBER) {
             // Found a Var, everything following is membership.  {scope}.{var}.HERE {member}
             if (m_ds.m_dotErr) {
@@ -6643,16 +6695,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 UINFO(1, "ds=" << m_ds.ascii());
                 nodep->v3fatalSrc("Unhandled DotPosition");
             }
-            if (m_ds.m_dotPos == DP_FINAL && nodep->name() == "triggered") {
+            if (m_ds.m_dotPos == DP_FINAL
+                && (nodep->name() == "triggered" || nodep->name() == "matched")) {
                 if (AstSequence* const seqp = VN_CAST(m_ds.m_dotSymp->nodep(), Sequence)) {
-                    // A sequence without arguments, whose instances share the event
-                    AstVar*& eventpr = m_seqTriggeredEvents[seqp];
-                    if (eventpr) {
-                        replaceWithTriggered(nodep, eventpr);
+                    // A sequence without arguments, whose instances share the variable
+                    AstVar*& varpr = (nodep->name() == "matched" ? m_seqMatchedCounts
+                                                                 : m_seqTriggeredEvents)[seqp];
+                    if (varpr) {
+                        replaceWithSequenceMethod(nodep, varpr);
                     } else {
                         AstSchemaRef* const refp
                             = new AstSchemaRef{nodep->fileline(), seqp, nullptr, nullptr};
-                        eventpr = replaceSequenceTriggered(nodep, refp);
+                        varpr = replaceSequenceMethod(nodep, refp);
                     }
                     return;
                 }
