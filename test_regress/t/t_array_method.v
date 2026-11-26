@@ -200,6 +200,35 @@ module t;
       m = '{'{1, 1, 1}, '{100, 100, 1}};
       `checkh(int'(m[1].sum()), 73);
     end
+    // A reduction as a self-determined operand of a logical operator, ?: and if
+    begin
+      bit b[3];
+      bit [6:0] m[2];
+      bit r;
+      b = '{1'b0, 1'b1, 1'b0};
+      m = '{7'd100, 7'd28};
+      r = b.or() && b.xor();
+      `checkh(r, 1'b1);
+      r = b.and() || !b.or();
+      `checkh(r, 1'b0);
+      r = !b.and();
+      `checkh(r, 1'b1);
+      r = b.sum() -> b.product();
+      `checkh(r, 1'b0);
+      `checkh(b.or() ? 7'd5 : 7'd6, 7'd5);
+      // A multi-bit value as a logical operand
+      // verilator lint_off WIDTHTRUNC
+      if (m.sum() || m.and()) r = 1;
+      else r = 0;
+      `checkh(r, 1'b1);
+      if (m.sum() && m.and()) r = 1;
+      else r = 0;
+      `checkh(r, 1'b0);
+      r = m.or() && m.xor() && !m.sum();
+      `checkh(r, 1'b1);
+      `checkh(m.product() ? 7'd3 : 7'd4, 7'd3);
+      // verilator lint_on WIDTHTRUNC
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
