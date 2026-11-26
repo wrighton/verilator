@@ -61,7 +61,6 @@ Testing assume_final_deferred_immediate at t/t_assert_ctl_arg.v:62
 Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_else' at t/t_assert_ctl_arg.v:62
 [0] %Error: t_assert_ctl_arg.v:172: Assertion failed in top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt: 'assert' failed.
 Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt_else' at t/t_assert_ctl_arg.v:62
-Passed 'top.t.cover_final_deferred_immediate_stmt_62' at t/t_assert_ctl_arg.v:62
 ==========
 Running all asserts at: t/t_assert_ctl_arg.v:64
 ==========
@@ -106,7 +105,6 @@ Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_e
 [0] %Error: t_assert_ctl_arg.v:172: Assertion failed in top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt: 'assert' failed.
 Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt_else' at t/t_assert_ctl_arg.v:70
 Passed 'top.t.cover_simple_immediate_stmt_70' at t/t_assert_ctl_arg.v:70
-Passed 'top.t.cover_final_deferred_immediate_stmt_70' at t/t_assert_ctl_arg.v:70
 ==========
 Running all asserts at: t/t_assert_ctl_arg.v:72
 ==========
@@ -160,7 +158,6 @@ Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_e
 [0] %Error: t_assert_ctl_arg.v:172: Assertion failed in top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt: 'assert' failed.
 Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt_else' at t/t_assert_ctl_arg.v:77
 Passed 'top.t.cover_simple_immediate_stmt_77' at t/t_assert_ctl_arg.v:77
-Passed 'top.t.cover_final_deferred_immediate_stmt_77' at t/t_assert_ctl_arg.v:77
 ==========
 Running all asserts at: t/t_assert_ctl_arg.v:79
 ==========
@@ -259,7 +256,6 @@ Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_e
 [0] %Error: t_assert_ctl_arg.v:172: Assertion failed in top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt: 'assert' failed.
 Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt_else' at t/t_assert_ctl_arg.v:89
 Passed 'top.t.cover_simple_immediate_stmt_89' at t/t_assert_ctl_arg.v:89
-Passed 'top.t.cover_final_deferred_immediate_stmt_89' at t/t_assert_ctl_arg.v:89
 ==========
 Running all asserts at: t/t_assert_ctl_arg.v:91
 ==========
@@ -296,7 +292,6 @@ Testing assume_observed_deferred_immediate at t/t_assert_ctl_arg.v:99
 Testing assert_final_deferred_immediate at t/t_assert_ctl_arg.v:99
 Testing assume_final_deferred_immediate at t/t_assert_ctl_arg.v:99
 Passed 'top.t.cover_simple_immediate_stmt_99' at t/t_assert_ctl_arg.v:99
-Passed 'top.t.cover_final_deferred_immediate_stmt_99' at t/t_assert_ctl_arg.v:99
 ==========
 Running all asserts at: t/t_assert_ctl_arg.v:102
 ==========
@@ -332,7 +327,6 @@ Failed 'top.$unit.run_final_deferred_immediate.assert_final_deferred_immediate_e
 Failed 'top.$unit.run_final_deferred_immediate.assert_final_deferred_immediate_stmt_else' at t/t_assert_ctl_arg.v:105
 Testing assume_final_deferred_immediate at t/t_assert_ctl_arg.v:105
 Passed 'top.t.cover_simple_immediate_stmt_105' at t/t_assert_ctl_arg.v:105
-Passed 'top.t.cover_final_deferred_immediate_stmt_105' at t/t_assert_ctl_arg.v:105
 ==========
 Running all asserts at: t/t_assert_ctl_arg.v:107
 ==========
@@ -359,7 +353,6 @@ Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_e
 [0] %Error: t_assert_ctl_arg.v:172: Assertion failed in top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt: 'assert' failed.
 Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt_else' at t/t_assert_ctl_arg.v:107
 Passed 'top.t.cover_simple_immediate_stmt_107' at t/t_assert_ctl_arg.v:107
-Passed 'top.t.cover_final_deferred_immediate_stmt_107' at t/t_assert_ctl_arg.v:107
 ==========
 Running all asserts at: t/t_assert_ctl_arg.v:109
 ==========
@@ -387,30 +380,33 @@ Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_e
 [0] %Error: t_assert_ctl_arg.v:172: Assertion failed in top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt: 'assert' failed.
 Failed 'top.$unit.run_final_deferred_immediate.assume_final_deferred_immediate_stmt_else' at t/t_assert_ctl_arg.v:111
 Passed 'top.t.cover_simple_immediate_stmt_111' at t/t_assert_ctl_arg.v:111
+[0] %Error: t_assert_ctl_arg.v:96: Assertion failed in top.t.assert_observed_deferred_immediate_96: 'assert' failed.
+Failed 'top.t.assert_observed_deferred_immediate_else_96' at t/t_assert_ctl_arg.v:96
+[0] %Error: t_assert_ctl_arg.v:96: Assertion failed in top.t.assert_observed_deferred_immediate_stmt_96: 'assert' failed.
+Failed 'top.t.assert_observed_deferred_immediate_stmt_else_96' at t/t_assert_ctl_arg.v:96
+Passed 'top.t.cover_observed_deferred_immediate_stmt_99' at t/t_assert_ctl_arg.v:99
+[0] %Error: t_assert_ctl_arg.v:102: Assertion failed in top.t.assume_observed_deferred_immediate_102: 'assert' failed.
+Failed 'top.t.assume_observed_deferred_immediate_else_102' at t/t_assert_ctl_arg.v:102
+[0] %Error: t_assert_ctl_arg.v:102: Assertion failed in top.t.assume_observed_deferred_immediate_stmt_102: 'assert' failed.
+Failed 'top.t.assume_observed_deferred_immediate_stmt_else_102' at t/t_assert_ctl_arg.v:102
+[0] %Error: t_assert_ctl_arg.v:105: Assertion failed in top.t.assert_observed_deferred_immediate_105: 'assert' failed.
+Failed 'top.t.assert_observed_deferred_immediate_else_105' at t/t_assert_ctl_arg.v:105
+[0] %Error: t_assert_ctl_arg.v:105: Assertion failed in top.t.assert_observed_deferred_immediate_stmt_105: 'assert' failed.
+Failed 'top.t.assert_observed_deferred_immediate_stmt_else_105' at t/t_assert_ctl_arg.v:105
+Passed 'top.t.cover_observed_deferred_immediate_stmt_105' at t/t_assert_ctl_arg.v:105
+[0] %Error: t_assert_ctl_arg.v:107: Assertion failed in top.t.assert_observed_deferred_immediate_107: 'assert' failed.
+Failed 'top.t.assert_observed_deferred_immediate_else_107' at t/t_assert_ctl_arg.v:107
+[0] %Error: t_assert_ctl_arg.v:107: Assertion failed in top.t.assert_observed_deferred_immediate_stmt_107: 'assert' failed.
+Failed 'top.t.assert_observed_deferred_immediate_stmt_else_107' at t/t_assert_ctl_arg.v:107
+[0] %Error: t_assert_ctl_arg.v:107: Assertion failed in top.t.assume_observed_deferred_immediate_107: 'assert' failed.
+Failed 'top.t.assume_observed_deferred_immediate_else_107' at t/t_assert_ctl_arg.v:107
+[0] %Error: t_assert_ctl_arg.v:107: Assertion failed in top.t.assume_observed_deferred_immediate_stmt_107: 'assert' failed.
+Failed 'top.t.assume_observed_deferred_immediate_stmt_else_107' at t/t_assert_ctl_arg.v:107
+Passed 'top.t.cover_observed_deferred_immediate_stmt_107' at t/t_assert_ctl_arg.v:107
+Passed 'top.t.cover_final_deferred_immediate_stmt_99' at t/t_assert_ctl_arg.v:99
+Passed 'top.t.cover_final_deferred_immediate_stmt_105' at t/t_assert_ctl_arg.v:105
+Passed 'top.t.cover_final_deferred_immediate_stmt_107' at t/t_assert_ctl_arg.v:107
 Passed 'top.t.cover_final_deferred_immediate_stmt_111' at t/t_assert_ctl_arg.v:111
-[0] %Error: t_assert_ctl_arg.v:96: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:96
-[0] %Error: t_assert_ctl_arg.v:96: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:96
-Passed 'top.t' at t/t_assert_ctl_arg.v:99
-[0] %Error: t_assert_ctl_arg.v:102: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:102
-[0] %Error: t_assert_ctl_arg.v:102: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:102
-[0] %Error: t_assert_ctl_arg.v:105: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:105
-[0] %Error: t_assert_ctl_arg.v:105: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:105
-Passed 'top.t' at t/t_assert_ctl_arg.v:105
-[0] %Error: t_assert_ctl_arg.v:107: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:107
-[0] %Error: t_assert_ctl_arg.v:107: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:107
-[0] %Error: t_assert_ctl_arg.v:107: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:107
-[0] %Error: t_assert_ctl_arg.v:107: Assertion failed in top.t: 'assert' failed.
-Failed 'top.t' at t/t_assert_ctl_arg.v:107
-Passed 'top.t' at t/t_assert_ctl_arg.v:107
 [10] Disabling concurrent asserts
 [20] Enabling concurrent asserts
 *-* All Finished *-*
