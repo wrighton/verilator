@@ -3449,6 +3449,15 @@ private:
         const RandomizeMode randMode = {.asUQuad = varp->user1()};
         if (!randMode.usesMode) return false;
         FileLine* const fl = nodep->fileline();
+        // While off, the array is read as state, so the constraint names it only while it is
+        // solved: the runtime may leave it out of a solve while off (see markHeldLookup), unless
+        // a randc cycle or another read of it names it
+        const std::string smtName = memberRefp ? buildMemberPath(memberRefp) : varRefp->name();
+        if (!varp->isRandC()) {
+            addMarkStmt(VCMethod::RANDOMIZER_MARK_HELD_LOOKUP, varp, smtName,
+                        getInitp(varp, memberRefp, getLeftmostVarModulep(memberRefp, varp)));
+        }
+        const bool listed = !m_constraintVarsp || m_constraintVarsp->count(smtName);
         AstNodeExpr* const onp = newRandModeOnp(nodep, randMode, memberRefp, varp);
         AstNodeExpr* const heldp = nodep->cloneTree(false);
         VNRelinker handle;
@@ -3466,6 +3475,7 @@ private:
         m_heldSelp = nodep;
         iterate(nodep);
         condp->dtypeSetString();  // Of its formatted arms
+        if (!listed && !varp->isRandC()) m_constraintVarsp->erase(smtName);
         return true;
     }
 

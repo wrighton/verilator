@@ -19,5 +19,10 @@ test.execute(check_finished=True, all_run_flags=['+verilator+solver+file+' + sol
 # A held element read by a random index is a lookup of its values, not an array term, except
 # through two objects
 test.file_grep_not(solver_log, r'\(store (?!\(|mid\.leaf\.deep )')
+# Nor is the array declared, so the large table's solve needs no array logic
+test.file_grep(solver_log, r'\(set-logic QF_BV\)')
+test.file_grep_not(solver_log, r'declare-fun table_ ')
+# Except where named
+test.file_grep(solver_log, r'declare-fun mid\.leaf\.deep ')
 
 test.passes()

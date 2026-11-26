@@ -294,6 +294,7 @@ class VlRandomizer VL_NOT_FINAL {
     std::unordered_set<std::string> m_roundKept;  // Variables in m_roundValues
     // Array size variables, by registered name, which a solve of array sizes alone sets
     std::unordered_set<std::string> m_sizeVars;
+    std::unordered_set<std::string> m_heldLookups;  // See markHeldLookup
     ArrayInfoMap m_arr_vars;  // Tracks each element in array structures for iteration
     // Arrays whose elements must be distinct grouped by unique constraint
     std::map<uint32_t, std::unordered_set<std::string>> m_uniqueArrays;
@@ -370,6 +371,9 @@ class VlRandomizer VL_NOT_FINAL {
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
+    // Remove from m_vars, into hiddenr, the frozen arrays of m_heldLookups no constraint of
+    // this call names
+    void hideUnnamedFrozen(std::map<std::string, std::shared_ptr<const VlRandomVar>>& hiddenr);
 
     // Structured domains emitted from the original constraint AST. Coordinates are
     // unsigned, with the sign bit flipped for signed variables, so order is monotone.
@@ -1260,6 +1264,8 @@ public:
     bool func_args_ready(std::initializer_list<const char*> names) const;
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
     void markSizeVar(const std::string& name) { m_sizeVars.insert(name); }  // Of array size
+    // Of an array whose element reads by a random index name it only while it is solved
+    void markHeldLookup(const std::string& name) { m_heldLookups.insert(name); }
     /// Restrict variable name to its enum values: domain is a Bool term over '__Ve'
     void enum_domain(const std::string& name, const char* domain) { m_enumDomains[name] = domain; }
     /// Register solve-before ordering of bits [lsb, lsb + width) of variables or array

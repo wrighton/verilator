@@ -34,6 +34,22 @@ class Tables;
   endfunction
 endclass
 
+// A large table alone, which needs no array logic while held
+class Large;
+  rand bit [15:0] table_[];
+  rand int unsigned j;
+  rand bit [15:0] v;
+  constraint c_v {
+    j < 1000;
+    v == table_[j];
+    v > 16'd100;
+  }
+  function new();
+    table_ = new[1000];
+    foreach (table_[i]) table_[i] = 16'(i * 7);
+  endfunction
+endclass
+
 // Named only in the solve after the size solve
 class Sized;
   rand bit [7:0] arr[4];
@@ -95,12 +111,26 @@ class Summed;
   endfunction
 endclass
 
+// Unique, so named while held
+class Distinct;
+  rand bit [7:0] arr[4];
+  rand bit [1:0] i;
+  rand bit [7:0] e;
+  constraint c_u {unique {arr};}
+  constraint c_e {e == arr[i];}
+  function new();
+    arr = '{8'd1, 8'd4, 8'd2, 8'd3};
+  endfunction
+endclass
+
 module t;
   Tables tab;
+  Large big;
   Sized sized;
   Top top;
   Holder hold;
   Summed sum;
+  Distinct dis;
   int ok;
   bit [15:0] saved[];
   initial begin
@@ -132,6 +162,13 @@ module t;
     ok = tab.randomize() with {v == 16'd1234;};
     `checkh(ok, 1);
     `checkh(tab.dyn[tab.j], 16'd1234);
+    big = new;
+    big.table_.rand_mode(0);
+    repeat (3) begin
+      ok = big.randomize();
+      `checkh(ok, 1);
+      `checkh(big.v, big.table_[big.j]);
+    end
     sized = new;
     sized.arr.rand_mode(0);
     ok = sized.randomize();
@@ -161,6 +198,13 @@ module t;
       `checkh(ok, 1);
       `checkh(sum.s, 10'd10);
       `checkh(sum.e, sum.arr[sum.i]);
+    end
+    dis = new;
+    dis.arr.rand_mode(0);
+    repeat (5) begin
+      ok = dis.randomize();
+      `checkh(ok, 1);
+      `checkh(dis.e, dis.arr[dis.i]);
     end
     $write("*-* All Finished *-*\n");
     $finish;
