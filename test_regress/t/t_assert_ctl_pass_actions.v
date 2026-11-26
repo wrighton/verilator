@@ -65,6 +65,8 @@ module t;
   int overlap_seq_fails = 0;
   int nonoverlap_seq_passes = 0;
   int nonoverlap_seq_fails = 0;
+  int single_vacuous_passes = 0;
+  int single_nonvacuous_passes = 0;
   int class_fails = 0;
 
   class AssertCtlClass;
@@ -104,6 +106,21 @@ module t;
   end
   else concurrent_fails++;
 
+  // Single-cycle implications, the second with a match item
+  assert property (@(posedge clk) 1'b0 |-> 1'b1) begin
+    single_vacuous_passes++;
+  end
+  else `stop;
+
+  property p_single_nonvacuous;
+    int v;
+    (1'b1, v = 3) |-> v == 3;
+  endproperty
+  assert property (@(posedge clk) p_single_nonvacuous) begin
+    single_nonvacuous_passes++;
+  end
+  else `stop;
+
   assert property (@(posedge clk) stimulus[0] |-> ##1 stimulus[3]) overlap_seq_passes++;
   else overlap_seq_fails++;
 
@@ -116,11 +133,14 @@ module t;
   endtask
 
   task automatic tick_and_check(input int exp_vacuous, input int exp_nonvacuous,
-                                input int exp_concurrent_fails);
+                                input int exp_concurrent_fails, input int exp_single_vacuous,
+                                input int exp_single_nonvacuous);
     @(posedge clk);
     #2;
     `checkd(vacuous_passes, exp_vacuous);
     `checkd(nonvacuous_passes, exp_nonvacuous);
+    `checkd(single_vacuous_passes, exp_single_vacuous);
+    `checkd(single_nonvacuous_passes, exp_single_nonvacuous);
     `checkd(concurrent_fails, exp_concurrent_fails);
     check_cycle_equivalence();
   endtask
@@ -221,23 +241,23 @@ module t;
 
     $assertcontrol(9, 1, 1);
 
-    tick_and_check(1, 0, 0);
-    tick_and_check(2, 1, 0);
+    tick_and_check(1, 0, 0, 1, 1);
+    tick_and_check(2, 1, 0, 2, 2);
 
     $assertcontrol(11, 1, 1);
-    tick_and_check(2, 2, 0);
+    tick_and_check(2, 2, 0, 2, 3);
 
     $assertcontrol(7, 1, 1);
-    tick_and_check(2, 2, 0);
+    tick_and_check(2, 2, 0, 2, 3);
 
     $assertcontrol(10, 1, 1);
-    tick_and_check(2, 3, 0);
+    tick_and_check(2, 3, 0, 2, 4);
 
     $assertcontrol(6, 1, 1);
-    tick_and_check(3, 4, 0);
+    tick_and_check(3, 4, 0, 3, 5);
 
     $assertcontrol(8, 1, 1);
-    tick_and_check(4, 5, 1);
+    tick_and_check(4, 5, 1, 4, 6);
 
     // Exercise all 127 states of the maximal-length LFSR, and wrap around
     repeat (2 * 127) begin

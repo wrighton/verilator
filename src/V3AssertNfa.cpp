@@ -6149,25 +6149,51 @@ class AssertNfaVisitor final : public VNVisitor {
         return !hasMultiCycleExpr(parts.triggerExprp);
     }
 
-    void splitImplicationPassActions(AstAssert* assertp, const PropertyParts& parts,
-                                     AstNodeExpr* nonvacuousMatchp) {
+    // The pass action of assertp, taken from it, run on a vacuous success if vacuousp (when
+    // non-null) holds, and on a nonvacuous success if nonvacuousp holds
+    static AstNodeStmt* newSplitPassActions(AstAssert* assertp, AstNodeExpr* vacuousp,
+                                            AstNodeExpr* nonvacuousp, V3UniqueNames& actionNames) {
         FileLine* const flp = assertp->fileline();
-
         AstNodeStmt* const passsp = assertp->passsp()->unlinkFrBackWithNext();
         AstNodeStmt* splitsp = nullptr;
-
-        if (!parts.isFollowedBy) {
-            AstNodeExpr* const vacuousp
-                = new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))};
-            AstNodeStmt* const vacuousBodyp = V3AssertCommon::cloneAction(passsp, m_actionNames);
+        if (vacuousp) {
+            AstNodeStmt* const vacuousBodyp = V3AssertCommon::cloneAction(passsp, actionNames);
             splitsp = newPassOnIf(assertp->controlVarp(), flp, vacuousp, vacuousBodyp,
                                   assertp->userType(), assertp->directive(), /*vacuous=*/true);
         }
+        AstIf* const nonvacuousIfp
+            = newPassOnIf(assertp->controlVarp(), flp, nonvacuousp, passsp, assertp->userType(),
+                          assertp->directive(), /*vacuous=*/false);
+        return AstNode::addNextNull<AstNodeStmt>(splitsp, nonvacuousIfp);
+    }
 
-        AstIf* const nonvacuousp = newPassOnIf(assertp->controlVarp(), flp, nonvacuousMatchp,
-                                               passsp, assertp->userType(), assertp->directive(),
-                                               /*vacuous=*/false);
-        splitsp = AstNode::addNextNull<AstNodeStmt>(splitsp, nonvacuousp);
+    // The pass action of assertp, taken from it, enabled by the pass control of a nonvacuous
+    // success if nonvacuousp holds, else of a vacuous success. One action and a single test, so
+    // a pass action that suspends does not see nonvacuousp change.
+    static AstIf* newExclusiveSplitPassActions(AstAssert* assertp, AstNodeExpr* nonvacuousp) {
+        FileLine* const flp = assertp->fileline();
+        AstNodeStmt* const passsp = assertp->passsp()->unlinkFrBackWithNext();
+        AstNodeExpr* const passOnp
+            = new AstCond{flp, nonvacuousp,
+                          assertPassOnCond(assertp->controlVarp(), flp, assertp->userType(),
+                                           assertp->directive(), /*vacuous=*/false),
+                          assertPassOnCond(assertp->controlVarp(), flp, assertp->userType(),
+                                           assertp->directive(), /*vacuous=*/true)};
+        AstIf* const ifp = new AstIf{flp, passOnp, passsp};
+        ifp->isBoundsCheck(true);
+        ifp->user1(true);
+        return ifp;
+    }
+
+    void splitImplicationPassActions(AstAssert* assertp, const PropertyParts& parts,
+                                     AstNodeExpr* nonvacuousMatchp) {
+        FileLine* const flp = assertp->fileline();
+        AstNodeExpr* const vacuousp
+            = parts.isFollowedBy
+                  ? nullptr
+                  : new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))};
+        AstNodeStmt* const splitsp
+            = newSplitPassActions(assertp, vacuousp, nonvacuousMatchp, m_actionNames);
         // Another attempt failing on the same tick runs the fail action instead
         prependFailAction(assertp, m_modp, V3AssertCommon::cloneAction(splitsp, m_actionNames));
         assertp->addPasssp(splitsp);
@@ -6426,6 +6452,26 @@ class AssertNfaVisitor final : public VNVisitor {
         return isUnderProceduralCondition(assertp)
                || (m_alwaysp->sentreep() && m_alwaysp->sentreep()->sensesp()->nextp());
     }
+    // V3AssertPre lowers a single-cycle property to a boolean, so split the pass action of
+    // an implication here, where its antecedent tells a vacuous success apart
+    // (IEEE 1800-2023 16.14.8)
+    void splitSingleCyclePasssp(AstNodeCoverOrAssert* assertp) {
+        PropertyParts parts = decomposeProperty(assertp->propp());
+        if (!splitsImplicationPasssp(assertp, parts)) return;
+        // A future value function delays the evaluation of the property, not of the antecedent
+        if (assertp->propp()->exists([](const AstNode* np) { return isFutureValueFn(np); })) {
+            return;
+        }
+        // Match item assignments belong to the antecedent, not to the vacuity check
+        AstNodeExpr* antp = parts.triggerExprp;
+        if (const AstExprStmt* const exprStmtp = VN_CAST(antp, ExprStmt)) {
+            antp = exprStmtp->resultp();
+        }
+        // A single-cycle property has one attempt per tick, so no fail action prefix
+        AstAssert* const assertAssertp = VN_AS(assertp, Assert);
+        assertAssertp->addPasssp(
+            newExclusiveSplitPassActions(assertAssertp, sampled(antp->cloneTreePure(false))));
+    }
     AstPropSpec* prepareAssertionProp(AstNodeCoverOrAssert* assertp) {
         if (reportSequenceRepOperand(assertp->propp())) {
             VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
@@ -6476,6 +6522,7 @@ class AssertNfaVisitor final : public VNVisitor {
                                                                    m_ftaskInfo, propp)
                         || proceduralUnsupported(assertp, propp)
                         || singleCycleUnsupported(propp))))) {
+            splitSingleCyclePasssp(assertp);
             return nullptr;
         }
         if (const AstNode* const callp = matchItemCall(propp)) {
