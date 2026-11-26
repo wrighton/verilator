@@ -472,9 +472,12 @@ class TristateVisitor final : public TristateBaseVisitor {
                                      // assign be recognised as a tristate contributor even
                                      // though that module's own graph has no Z on the net.
         std::map<int, int> bitPulls;  // Per-bit pull: bit_index -> direction (1=up, 0=down)
+        AstVar* renVarp = nullptr;  // Input __ren: enable of the net an input port connects to
     };
 
     VNUser3Allocator<AstVar, AuxAstVar> m_varAux;
+    // __ren pins whose enable is yet to be formed -> __en of the instance's input, if any
+    std::unordered_map<AstPin*, AstVar*> m_renPins;
 
     // TYPES
     struct RefStrength final {
@@ -661,8 +664,28 @@ class TristateVisitor final : public TristateBaseVisitor {
         refp->classOrPackagep(origp->classOrPackagep());
         return refp;
     }
+    // Whether reads of varp in this module take its enable from the instance's connection: an
+    // input port of a module instantiated by another module. Its __en is otherwise only the
+    // enable of drivers in this module, such as a pull, not of what drives the port.
+    bool readsConnectionEn(const AstNodeVarRef* refp) const {
+        const AstVar* const varp = refp->varp();
+        return VN_IS(refp, VarRef) && VN_IS(m_modp, Module) && m_modp->level() > 2
+               && !m_modp->hierBlock() && varp->isIO() && !varp->declDirection().isWritable();
+    }
+    AstVar* getCreateRenVarp(AstVar* invarp) {
+        AuxAstVar& aux = m_varAux(invarp);
+        if (!aux.renVarp) {
+            aux.renVarp = new AstVar{invarp->fileline(), VVarType::MODULETEMP,
+                                     invarp->name() + "__ren", invarp};
+            aux.renVarp->varType2In();
+            UINFO(9, "       newren " << aux.renVarp);
+            modAddStmtp(invarp, aux.renVarp);
+        }
+        return aux.renVarp;
+    }
     // Enable of a read given the enable of the drivers of its variable: a top-level input is
-    // driven by the caller, and pulled bits are never z
+    // driven by the caller, an input of an instance as its connection is, and pulled bits are
+    // never z
     AstNodeExpr* newReadEnp(const AstNodeVarRef* refp, AstNodeExpr* enp) {
         AstVar* const varp = refp->varp();
         if (VN_IS(refp, VarRef) && m_modp->isTop() && varp->isIO()
@@ -670,12 +693,82 @@ class TristateVisitor final : public TristateBaseVisitor {
             VL_DO_DANGLING(enp->deleteTree(), enp);
             return newAllZerosOrOnes(varp, true);
         }
+        if (readsConnectionEn(refp)) {
+            VL_DO_DANGLING(enp->deleteTree(), enp);
+            enp = new AstVarRef{refp->fileline(), getCreateRenVarp(varp), VAccess::READ};
+        }
         const AuxAstVar& aux = m_varAux(varp);
         if (!aux.pullp && aux.bitPulls.empty()) return enp;
         V3Number num{varp, varp->width(), 0};
         if (aux.pullp) num.setAllBits1();
         for (const auto& pair : aux.bitPulls) num.setBit(pair.first, 1);
         return new AstOr{enp->fileline(), enp, new AstConst{enp->fileline(), num}};
+    }
+    // For an instance's input port whose reads take the enable of its connection, add a pin
+    // passing it, from origExprp, a copy of the pin's expression before it was reconnected;
+    // the enable is formed once the tristate variables are known
+    void addRenPin(AstPin* nodep, AstNodeExpr* origExprp, AstVar* enVarp) {
+        AstVar* const renModVarp = m_varAux(nodep->modVarp()).renVarp;
+        if (!renModVarp) {
+            if (origExprp) VL_DO_DANGLING(pushDeletep(origExprp), origExprp);
+            return;
+        }
+        AstNodeExpr* exprp = origExprp;
+        if (!exprp) {  // Unconnected, so z
+            V3Number numz{renModVarp, renModVarp->width()};
+            numz.setAllBitsZ();
+            exprp = new AstConst{nodep->fileline(), numz};
+        }
+        AstPin* const renpinp
+            = new AstPin{nodep->fileline(), nodep->pinNum(), renModVarp->name(), exprp};
+        renpinp->modVarp(renModVarp);
+        UINFO(9, "       newpin " << renpinp);
+        renpinp->user2Or(U2_GRAPHING);
+        m_renPins.emplace(renpinp, enVarp);
+        nodep->addNextHere(renpinp);
+    }
+    // Return the read enable of exprp, an expression connected to an input port, or nullptr if
+    // not known, e.g. of a net that is not tristate, but may have been assigned from one
+    AstNodeExpr* newConnectionEnp(AstNodeExpr* exprp) {
+        if (AstVarRef* const refp = VN_CAST(exprp, VarRef)) {
+            AstVar* const varp = refp->varp();
+            if (m_tgraph.isTristate(varp)) return newReadEnp(refp, newEnVarRefp(refp));
+            // An input passed through, its __en not made, as it is not tristate here
+            if (readsConnectionEn(refp)) return newReadEnp(refp, newAllZerosOrOnes(varp, false));
+            if (!varp->isNet()) return newAllZerosOrOnes(varp, true);
+        } else if (AstConst* const constp = VN_CAST(exprp, Const)) {
+            return getNonZConstp(constp);
+        } else if (AstSel* const selp = VN_CAST(exprp, Sel)) {
+            if (VN_IS(selp->lsbp(), Const)) {
+                if (AstNodeExpr* const fromEnp = newConnectionEnp(selp->fromp())) {
+                    return new AstSel{selp->fileline(), fromEnp,
+                                      VN_AS(selp->lsbp(), Const)->toSInt(), selp->widthConst()};
+                }
+            }
+        } else if (AstConcat* const concatp = VN_CAST(exprp, Concat)) {
+            AstNodeExpr* const lhsEnp = newConnectionEnp(concatp->lhsp());
+            AstNodeExpr* const rhsEnp = lhsEnp ? newConnectionEnp(concatp->rhsp()) : nullptr;
+            if (rhsEnp) return new AstConcat{concatp->fileline(), lhsEnp, rhsEnp};
+            if (lhsEnp) VL_DO_DANGLING(pushDeletep(lhsEnp), lhsEnp);
+            return nullptr;
+        } else if (AstReplicate* const repp = VN_CAST(exprp, Replicate)) {
+            if (VN_IS(repp->countp(), Const)) {
+                if (AstNodeExpr* const srcEnp = newConnectionEnp(repp->srcp())) {
+                    return new AstReplicate{repp->fileline(), srcEnp,
+                                            VN_AS(repp->countp(), Const)->toUInt()};
+                }
+            }
+            return nullptr;
+        }
+        // Driven if it reads no net, which may have a z, nor constant z
+        const bool canBeZ = exprp->exists([](const AstNode* nodep) {
+            if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+                return refp->varp()->isNet();
+            }
+            const AstConst* const constp = VN_CAST(nodep, Const);
+            return constp && constp->num().isAnyZ();
+        });
+        return canBeZ ? nullptr : newAllZerosOrOnes(exprp, true);
     }
     AstConst* getNonZConstp(AstConst* const constp) {
         FileLine* const fl = constp->fileline();
@@ -2276,14 +2369,22 @@ class TristateVisitor final : public TristateBaseVisitor {
             // Find child module's new variables.
             AstVar* const enModVarp = static_cast<AstVar*>(nodep->modVarp()->user1p());
             if (!enModVarp) {
+                // A copy only to find its enable from, never evaluated
+                AstNodeExpr* const origExprp
+                    = nodep->exprp() ? VN_AS(nodep->exprp(), NodeExpr)->cloneTree(false) : nullptr;
                 // May have an output only that later connects to a tristate, so simplify now.
                 V3Inst::pinReconnectSimple(nodep, m_cellp, false);
+                addRenPin(nodep, origExprp, nullptr);
                 iteratePinGuts(nodep);
                 return;  // No __en signals on this pin
             }
             // Tristate exists:
             UINFO(9, dbgState() << nodep);
             UINFOTREE(9, nodep, "", "pin-pre");
+            // The connection, before it is reconnected; a copy only to find its enable from,
+            // never evaluated
+            AstNodeExpr* const origExprp
+                = nodep->exprp() ? VN_AS(nodep->exprp(), NodeExpr)->cloneTree(false) : nullptr;
 
             // Empty/in-only; need Z to propagate
             const bool inDeclProcessing = (nodep->exprp()
@@ -2384,6 +2485,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 nodep, m_cellp, true);  // Note may change nodep->exprp()
             UINFOTREE(9, nodep, "", "pin-in:");
             UINFOTREE(9, inAssignp, "", "pin-as:");
+            addRenPin(nodep, origExprp, inDeclProcessing ? enVarp : nullptr);
 
             // Connect enable to output signal
             AstVarRef* exprrefp;  // Tristate variable that the Pin's expression refers to
@@ -2435,6 +2537,20 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
         // Not graph building
         else {
+            const auto it = m_renPins.find(nodep);
+            if (it != m_renPins.end()) {
+                // The enable of the net the pin's expression reads, now that it is known; if not
+                // known, the enable the instance's input otherwise has, if any
+                AstVar* const enVarp = it->second;
+                m_renPins.erase(it);
+                AstNodeExpr* const exprp = VN_AS(nodep->exprp()->unlinkFrBack(), NodeExpr);
+                AstNodeExpr* enp = newConnectionEnp(exprp);
+                if (!enp && enVarp) enp = new AstVarRef{exprp->fileline(), enVarp, VAccess::READ};
+                nodep->exprp(enp ? enp : newAllZerosOrOnes(nodep->modVarp(), false));
+                VL_DO_DANGLING(pushDeletep(exprp), exprp);
+                nodep->user2Or(U2_NONGRAPH);
+                return;
+            }
             if (nodep->user2() & U2_NONGRAPH) return;  // This pin is already expanded
             nodep->user2Or(U2_NONGRAPH);
             UINFO(9, " " << nodep);
@@ -2712,6 +2828,7 @@ public:
 #endif
     }
     ~TristateVisitor() override {
+        UASSERT(m_renPins.empty(), "__ren pin left without its enable");
         V3Stats::addStat("Tristate, Tristate resolved nets", m_statTriSigs);
     }
 };
