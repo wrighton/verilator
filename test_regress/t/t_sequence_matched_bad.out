@@ -1,0 +1,23 @@
+%Error: t/t_sequence_matched_bad.v:24:34: Sequence method 'matched' used outside a sequence expression (IEEE 1800-2023 16.13.6).
+   24 |   always @(posedge clk) if (s_ab.matched) ++n;
+      |                                  ^~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sequence_matched_bad.v:26:35: Sequence method 'matched' used outside a sequence expression (IEEE 1800-2023 16.13.6).
+   26 |   assert property (@(posedge s_ab.matched) a);
+      |                                   ^~~~~~~
+%Error: t/t_sequence_matched_bad.v:29:46: Sequence method 'matched' used in a sampled value function (IEEE 1800-2023 16.9.3).
+   29 |   assert property (@(posedge clk) $past(s_ab.matched));
+      |                                              ^~~~~~~
+%Error: t/t_sequence_matched_bad.v:30:54: Sequence method 'matched' used in a sampled value function (IEEE 1800-2023 16.9.3).
+   30 |   assert property (@(posedge clk) a |-> $rose(s_x(a).matched));
+      |                                                      ^~~~~~~
+%Error: t/t_sequence_matched_bad.v:33:53: Sequence method 'matched' used in a disable condition (IEEE 1800-2023 16.6).
+   33 |   assert property (@(posedge clk) disable iff (s_ab.matched) a);
+      |                                                     ^~~~~~~
+%Error: t/t_sequence_matched_bad.v:34:31: Sequence method 'matched' used in a disable condition (IEEE 1800-2023 16.6).
+   34 |   default disable iff (s_x(b).matched);
+      |                               ^~~~~~~
+%Error: t/t_sequence_matched_bad.v:37:56: Sequence method 'matched' used in an abort condition (IEEE 1800-2023 16.12.14).
+   37 |   assert property (@(posedge clk) sync_accept_on (s_ab.matched) a);
+      |                                                        ^~~~~~~
+%Error: Exiting due to
