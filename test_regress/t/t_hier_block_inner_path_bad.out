@@ -1,0 +1,14 @@
+%Error: t/t_hier_block_inner_path_bad.v:26:29: Cannot access scope inside hierarchical block
+   26 |   assign o = leaf.u_sibling.sf(i);   
+      |                             ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_hier_block_inner_path_bad.v:15:33: Cannot access scope inside hierarchical block
+   15 |   assign o = t.u_leaf.u_sibling.sf(i)
+      |                                 ^~
+%Error: t/t_hier_block_inner_path_bad.v:17:26: Cannot access scope inside hierarchical block
+   17 |       ^ u_leaf.u_sibling.sf(i)
+      |                          ^~
+%Error: t/t_hier_block_inner_path_bad.v:19:27: Cannot access scope inside hierarchical block
+   19 |       ^ u_leaf2.u_sibling.sf(i);
+      |                           ^~
+%Error: Exiting due to
