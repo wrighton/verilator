@@ -1,0 +1,11 @@
+%Error-UNSUPPORTED: t/t_constraint_global_member_size_unsup.v:19:7: Unsupported: Randomized index into an array of class objects selecting a member.
+   19 |     st[fix].b == (st.size() == 1);
+      |       ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_global_member_size_unsup.v:38:22: Unsupported: Randomized index into an array of class objects selecting a member.
+   38 |   constraint c_st {st[st.size() - 1].b == 1;}
+      |                      ^
+%Error-UNSUPPORTED: t/t_constraint_global_member_size_unsup.v:58:7: Unsupported: Randomized index into an array of class objects selecting a member.
+   58 |     st[st.size() - 1].b == 1;
+      |       ^
+%Error: Exiting due to
