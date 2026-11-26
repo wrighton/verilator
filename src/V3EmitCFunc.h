@@ -780,6 +780,7 @@ public:
                    // and means using '=' and bypasses using emitConstantW.
                    // Whuch we don't want to do as slows compiler down.
                    && !VN_IS(nodep->rhsp(), VarRef)  //
+                   && !VN_IS(nodep->rhsp(), LambdaArgRef)  //
                    && !VN_IS(nodep->rhsp(), ConsArray)  //
                    && !VN_IS(nodep->rhsp(), NodeSel)  //
                    && !VN_IS(nodep->rhsp(), MemberRef)  //
