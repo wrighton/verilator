@@ -45,8 +45,10 @@
 #include "V3LinkLValue.h"
 #include "V3MemberMap.h"
 #include "V3SolverBackend.h"
+#include "V3Stats.h"
 #include "V3UniqueNames.h"
 
+#include <array>
 #include <queue>
 #include <set>
 #include <tuple>
@@ -371,6 +373,50 @@ class RandomizeMarkVisitor final : public VNVisitor {
         m_handleHolders;  // Classes holding a rand class handle of each class
     bool m_handleHoldersBuilt = false;  // m_handleHolders is complete
     std::vector<AstClass*> m_classps;  // All classes, in tree order
+    // How a constraint uses a static rand member of another class
+    enum class StaticUse : uint8_t { RANDOM, STATE, UNSUPPORTED };
+    // By class of the constraint and class declaring the member
+    std::unordered_map<const AstClass*, std::unordered_map<const AstClass*, StaticUse>>
+        m_staticUses;
+    // A step of the walk from the objects of the class of a constraint to the objects its
+    // randomization has, see stepReach()
+    enum Step : uint8_t {
+        HANDLE,  // An object of the declared class of a rand class handle
+        HANDLE_MEMBERS,  // The rand class handles of such an object a class declares or inherits
+        DERIVED,  // An object of a class derived from the class of a handle, or held by one
+        DERIVED_OWN,  // Such an object of a class extending one so reached, by its own members
+        DERIVED_MEMBERS,  // The rand class handles of such an object a class declares or inherits
+        STEPS
+    };
+    // How objects reach those having the static rand members of a class, as bits
+    static constexpr uint8_t REACH_DECLARED = 1;  // Through rand class handles
+    static constexpr uint8_t REACH_DERIVED = 2;  // Also through a class derived from a handle's
+    // State of a step in the walk, for finding the strongly connected components (Tarjan)
+    struct StepState final {
+        int index = -1;  // Order of visit, -1 if not visited
+        int lowlink = 0;  // Least order of visit reached
+        size_t stackIndex = 0;  // Position on the stack
+        bool onStack = false;  // On the stack of the components being found
+        uint8_t reach = 0;  // REACH_* bits
+    };
+    // The walk of the steps for the objects having the static rand members of a class
+    struct StaticOwner final {
+        const AstClass* ownerp = nullptr;  // The class
+        std::unordered_map<const AstClass*, std::array<StepState, STEPS>> states;
+        std::vector<std::pair<const AstClass*, Step>> stack;  // Of the components being found
+        int index = 0;  // Next order of visit
+        std::unordered_map<const AstClass*, bool>
+            extendsOwner;  // Per class, if it is or extends it
+        // Per class, and whether with the members it inherits, how its rand class handles
+        // reach the objects having the members, as StepState::reach
+        std::array<std::unordered_map<const AstClass*, uint8_t>, 2> memberReaches;
+        // As memberReaches, also with the classes derived from the class
+        std::array<std::unordered_map<const AstClass*, uint8_t>, 2> constraintReaches;
+    };
+    std::unordered_map<const AstClass*, StaticOwner> m_staticOwners;  // By declaring class
+    // The class declaring each static member of a class
+    std::unordered_map<const AstVar*, const AstClass*> m_staticDeclClassps;
+    size_t m_staticReachSteps = 0;  // Statistic tracking
     AstClass* m_classp = nullptr;  // Current class
     AstNode* m_constraintExprGenp = nullptr;  // Current constraint or constraint if expression
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -545,15 +591,176 @@ class RandomizeMarkVisitor final : public VNVisitor {
         }
         return false;
     }
-    // True for a static rand member of another class that neither the class of the current
-    // constraint nor one derived from it reaches through rand class handles: a state
-    // variable of the constraint (IEEE 1800-2023 18.4)
-    bool isStateStatic(const AstVar* varp) const {
+    // Whether class classp is, or extends, the class of owner; once per class
+    bool extendsOwner(StaticOwner& owner, const AstClass* classp) {
+        const auto pair = owner.extendsOwner.emplace(classp, classp == owner.ownerp);
+        bool& extends = pair.first->second;
+        if (!pair.second) return extends;
+        ++m_staticReachSteps;
+        V3Global::opCountInc();
+        const AstClassExtends* const extp = classp->extendsp();
+        if (!extends && extp && !extp->isImplements()) {
+            extends = extendsOwner(owner, extp->classp());
+        }
+        return extends;
+    }
+    // The classes of the rand class handles a class declares
+    static std::vector<const AstClass*> handleClasses(const AstClass* classp) {
+        std::vector<const AstClass*> classps;
+        for (const AstNode* const memberp : classp->memberspList()) {
+            const AstVar* const varp = VN_CAST(memberp, Var);
+            const AstClass* const memberClassp = varp ? handleClassp(varp) : nullptr;
+            if (memberClassp && varp->rand().isRandomizable()) classps.push_back(memberClassp);
+        }
+        return classps;
+    }
+    // How the objects reached by step from class classp reach those having the static rand
+    // members of the class of owner: an object has the objects its rand class handles hold, of
+    // the handles' classes or of classes extending or implementing them (IEEE 1800-2023
+    // 18.5.9), and the steps from an object having the members are not followed. REACH_DERIVED
+    // is set when they are reached through a class derived from the class of a handle, whose
+    // constraints are known only at run time. Each step is walked once per owner, finding the
+    // strongly connected components of the steps (Tarjan), so in time linear in the classes
+    // and their members. The steps from a step of a class not having the members:
+    //   HANDLE           HANDLE_MEMBERS of the class, and the derived classes (*)
+    //   HANDLE_MEMBERS   HANDLE of the rand class handles the class declares, and
+    //                    HANDLE_MEMBERS of the class it extends
+    //   DERIVED          DERIVED_MEMBERS of the class, and the derived classes (*)
+    //   DERIVED_OWN      DERIVED of the rand class handles the class declares, and the derived
+    //                    classes (*)
+    //   DERIVED_MEMBERS  DERIVED of the rand class handles the class declares, and
+    //                    DERIVED_MEMBERS of the class it extends
+    //   (*) DERIVED_OWN of each class extending it, DERIVED of each implementing it
+    uint8_t stepReach(StaticOwner& owner, const AstClass* classp, Step step) {
+        StepState& state = owner.states[classp][step];
+        if (state.index >= 0) return state.reach;
+        ++m_staticReachSteps;
+        V3Global::opCountInc();
+        state.index = state.lowlink = owner.index++;
+        state.stackIndex = owner.stack.size();
+        state.onStack = true;
+        owner.stack.emplace_back(classp, step);
+        const auto visitNext = [&](const AstClass* nextClassp, Step nextStep) {
+            const StepState& next = owner.states[nextClassp][nextStep];
+            const bool visited = next.index >= 0;
+            state.reach |= stepReach(owner, nextClassp, nextStep);
+            if (!visited || next.onStack) {
+                state.lowlink = std::min(state.lowlink, visited ? next.index : next.lowlink);
+            }
+        };
+        const bool members = step == HANDLE_MEMBERS || step == DERIVED_MEMBERS;
+        const bool has = !members && extendsOwner(owner, classp);
+        state.reach |= has ? (step == HANDLE ? REACH_DECLARED : REACH_DERIVED) : 0;
+        if (!has) {
+            // The members it declares, and those it inherits
+            const Step memberStep = step == HANDLE || step == HANDLE_MEMBERS ? HANDLE : DERIVED;
+            const bool ownMembers = members || step == DERIVED_OWN;
+            if (ownMembers) {
+                for (const AstClass* const cp : handleClasses(classp)) visitNext(cp, memberStep);
+            }
+            const AstClassExtends* const extp = classp->extendsp();
+            if (members && extp && !extp->isImplements()) visitNext(extp->classp(), step);
+            if (step == HANDLE) visitNext(classp, HANDLE_MEMBERS);
+            if (step == DERIVED) visitNext(classp, DERIVED_MEMBERS);
+            // The classes extending it, by the members they declare, or implementing it
+            const auto it = members ? m_allDerivedMap.end() : m_allDerivedMap.find(classp);
+            if (it != m_allDerivedMap.end()) {
+                for (const AstClass* const cp : it->second) {
+                    // Only an interface class extends several classes, but has no members, so
+                    // which of its steps does not matter
+                    const AstClassExtends* const cpExtp = cp->extendsp();
+                    const bool extends = !cpExtp->isImplements() && cpExtp->classp() == classp;
+                    visitNext(cp, extends ? DERIVED_OWN : DERIVED);
+                }
+            }
+        }
+        // The root of a component: its steps reach what any reaches
+        if (state.lowlink == state.index) {
+            uint8_t reach = 0;
+            for (size_t i = state.stackIndex; i < owner.stack.size(); ++i) {
+                reach |= owner.states[owner.stack[i].first][owner.stack[i].second].reach;
+            }
+            for (size_t i = state.stackIndex; i < owner.stack.size(); ++i) {
+                StepState& memberState = owner.states[owner.stack[i].first][owner.stack[i].second];
+                memberState.reach = reach;
+                memberState.onStack = false;
+            }
+            owner.stack.resize(state.stackIndex);
+        }
+        return state.reach;
+    }
+    // How the rand class handles of class classp, with or without those it inherits, reach
+    // the objects having the static rand members of the class of owner; see
+    // StaticOwner::memberReaches. Each class's own members are scanned once per owner.
+    uint8_t memberReach(StaticOwner& owner, const AstClass* classp, bool inherited) {
+        const auto pair = owner.memberReaches[inherited].emplace(classp, 0);
+        uint8_t& reach = pair.first->second;
+        if (!pair.second) return reach;
+        if (inherited) {
+            reach = memberReach(owner, classp, false);
+            const AstClassExtends* const extp = classp->extendsp();
+            if (extp && !extp->isImplements()) reach |= memberReach(owner, extp->classp(), true);
+            return reach;
+        }
+        for (const AstNode* const memberp : classp->memberspList()) {
+            ++m_staticReachSteps;
+            V3Global::opCountInc();
+            const AstVar* const varp = VN_CAST(memberp, Var);
+            const AstClass* const memberClassp = varp ? handleClassp(varp) : nullptr;
+            const bool handle = memberClassp && varp->rand().isRandomizable();
+            reach |= handle ? stepReach(owner, memberClassp, HANDLE) : 0;
+        }
+        return reach;
+    }
+    // How the objects of class classp, or of classes derived from it, reach those having the
+    // static rand members of the class of owner, with or without the members it inherits;
+    // see StaticOwner::constraintReaches
+    uint8_t constraintReach(StaticOwner& owner, const AstClass* classp, bool inherited) {
+        const auto pair = owner.constraintReaches[inherited].emplace(classp, 0);
+        uint8_t& reach = pair.first->second;
+        if (!pair.second) return reach;
+        reach = memberReach(owner, classp, inherited);
+        const auto it = m_allDerivedMap.find(classp);
+        if (it != m_allDerivedMap.end()) {
+            for (const AstClass* const cp : it->second) reach |= constraintReach(owner, cp, false);
+        }
+        return reach;
+    }
+    // How the constraints of class constraintClassp use a static rand member of declClassp:
+    // random if the objects of the constraint's class, or of a class derived from it, reach
+    // those having the member through rand class handles of declared classes only, as their
+    // constraints are then solved with the constraint's; unsupported if also through a
+    // derived class; else a state variable (IEEE 1800-2023 18.4)
+    StaticUse staticUse(const AstClass* constraintClassp, const AstClass* declClassp) {
+        StaticOwner& owner = m_staticOwners[declClassp];
+        owner.ownerp = declClassp;
+        const uint8_t reach = constraintReach(owner, constraintClassp, true);
+        return (reach & REACH_DERIVED) ? StaticUse::UNSUPPORTED
+               : reach                 ? StaticUse::RANDOM
+                                       : StaticUse::STATE;
+    }
+    // True for a static rand member of another class that is a state variable of the current
+    // constraint, as decided once per pair of classes by staticUse(), which also takes one
+    // whose use is unsupported, after reporting it
+    bool isStateStatic(const AstNodeVarRef* nodep) {
         if (!m_constraintClassp) return false;
-        const AstClass* const declClassp = foreignStaticClassp(m_constraintClassp, varp);
-        if (!declClassp) return false;
-        ActiveSet visited;
-        return !hierarchyReaches(m_constraintClassp, declClassp, visited);
+        const auto declIt = m_staticDeclClassps.find(nodep->varp());
+        if (declIt == m_staticDeclClassps.end()) return false;
+        const AstClass* const declClassp = declIt->second;
+        const auto pair = m_staticUses[m_constraintClassp].emplace(declClassp, StaticUse::RANDOM);
+        StaticUse& use = pair.first->second;
+        // A static member of a base or derived class is the object's own
+        if (pair.second && !AstClass::isClassRelated(m_constraintClassp, declClassp)) {
+            use = staticUse(m_constraintClassp, declClassp);
+        }
+        if (use == StaticUse::UNSUPPORTED) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: Constraint on static rand member "
+                                             << nodep->varp()->prettyNameQ()
+                                             << " of a class whose objects the randomization"
+                                                " reaches through a class derived from the class"
+                                                " of a rand class handle");
+        }
+        return use != StaticUse::RANDOM;
     }
     void markMembers(const AstClass* nodep) {
         for (const AstClass* classp = nodep; classp;
@@ -1266,7 +1473,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
         }
         // Mark as randomizable if: rand-declared, or listed in std::randomize() args
         if (nodep->varp()->rand().isRandomizable() && !(m_inStdWith && m_stdRandCallp)
-            && !isStateStatic(nodep->varp()) && !callerVar) {
+            && !isStateStatic(nodep) && !callerVar) {
             nodep->user1(true);
         } else if (isStdRandomizeArg(nodep)) {
             nodep->user1(true);
@@ -1440,10 +1647,16 @@ public:
                          std::unordered_set<AstVar*>& elemModeArrays)
         : m_cloneObjps{cloneObjps}
         , m_elemModeArrays{elemModeArrays} {
-        // Derived classes are needed while marking constraints, so record them first
+        // Derived classes and the classes of static members are needed while marking
+        // constraints, so record them first
         nodep->foreach([&](AstClass* classp) {
-            if (const AstClassExtends* const extendsp = classp->extendsp()) {
+            for (const AstClassExtends* extendsp = classp->extendsp(); extendsp;
+                 extendsp = VN_AS(extendsp->nextp(), ClassExtends)) {
                 m_allDerivedMap[extendsp->classp()].push_back(classp);
+            }
+            for (const AstNode* const memberp : classp->memberspList()) {
+                const AstVar* const varp = VN_CAST(memberp, Var);
+                if (varp && varp->lifetime().isStatic()) m_staticDeclClassps.emplace(varp, classp);
             }
         });
         iterateConst(nodep);
@@ -1452,7 +1665,9 @@ public:
         cloneMemberConstraints();
         setPackageRefs();
     }
-    ~RandomizeMarkVisitor() override = default;
+    ~RandomizeMarkVisitor() override {
+        V3Stats::addStat("Randomize, static rand member reachability steps", m_staticReachSteps);
+    }
 };
 
 enum class CaptureMode : uint8_t {
