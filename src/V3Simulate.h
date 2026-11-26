@@ -1803,6 +1803,11 @@ private:
         }
         AstNodeFTask* funcp = nodep->taskp();
         UASSERT_OBJ(funcp, nodep, "Not linked");
+        if (funcp->unelaborated()) {
+            clearOptimizable(funcp, "Constant function with a hierarchical reference"
+                                    " (IEEE 1800-2023 13.4.3)");
+            return;
+        }
         if (m_params) V3Width::widthParamsEdit(funcp);
         VL_DANGLING(funcp);  // Make sure we've sized the function
         funcp = nodep->taskp();

@@ -1,0 +1,5 @@
+%Error: t/t_interface_virtual_unused_bad.v:9:10: Can't find definition of scope/variable: 'missing_inst'
+    9 |   logic [missing_inst.w-1:0] data;
+      |          ^~~~~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to
