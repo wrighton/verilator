@@ -413,6 +413,7 @@ class WidthVisitor final : public VNVisitor {
     ContainingClassFinder m_containingClassFinder;  // Finds the class containing a node
     std::unordered_set<AstVar*> m_aliasedVars;  // Variables referenced in alias
     std::unordered_set<const AstVar*> m_seqUntypedFormals;  // Untyped formals of current sequence
+    std::unordered_set<const AstVar*> m_untypedSeqFormals;  // Untyped formals of all sequences
     std::unordered_set<const AstVar*> m_curModVars;  // Variables declared in current module
     std::unordered_map<const AstNodeDType*, AstNodeDType*>
         m_derivedDTypeps;  // Maps from a two-state dtype to a four-state counterpart
@@ -8873,11 +8874,21 @@ class WidthVisitor final : public VNVisitor {
             const AstVar* const varp = VN_CAST(declp, Var);
             if (!varp || !varp->isInput()) continue;
             const AstBasicDType* const basicp = VN_CAST(varp->childDTypep(), BasicDType);
-            if (basicp && basicp->implicit()) m_seqUntypedFormals.insert(varp);
+            if (basicp && basicp->implicit()) {
+                m_seqUntypedFormals.insert(varp);
+                m_untypedSeqFormals.insert(varp);
+            }
         }
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "SeqBody", nodep->exprp(), SELF, BOTH);
         nodep->didWidth(true);
+    }
+    void visit(AstEventArg* nodep) override {
+        // visit(AstSchemaRef) takes those of a sequence or property instance
+        nodep->v3error("Event expression as an argument of a call that is not a sequence or"
+                       " property instance (IEEE 1800-2023 16.8.1).");
+        nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void visit(AstSchemaRef* nodep) override {
         if (nodep->didWidth()) return;
@@ -8885,9 +8896,24 @@ class WidthVisitor final : public VNVisitor {
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
             const AstVar* const portp = tconnect.first;
             const AstArg* const argp = tconnect.second;
+            const bool untyped = portp->basicp() && portp->basicp()->untyped();
+            // An event expression is the actual of an event or untyped formal, substituted
+            // where the formal is a clocking event (IEEE 1800-2023 16.8.1)
+            if (AstEventArg* const eventp = VN_CAST(argp->exprp(), EventArg)) {
+                // A sequence formal declared without a type is typed as logic, see visit(AstVar)
+                if (!untyped && !portp->dtypep()->isEvent() && !m_untypedSeqFormals.count(portp)) {
+                    eventp->v3error("Event expression as the actual argument of formal "
+                                    << portp->prettyNameQ()
+                                    << ", which is not of type event or untyped"
+                                       " (IEEE 1800-2023 16.8.1).");
+                }
+                userIterate(eventp->senItemp(), nullptr);
+                eventp->dtypeSetBit();
+                continue;
+            }
             // An untyped formal preserves the actual argument's self-determined type, a typed
             // one casts it to its type (IEEE 1800-2023 16.8.1)
-            if (portp->basicp() && portp->basicp()->untyped()) {
+            if (untyped) {
                 iterateCheckSelf(nodep, "Function Argument", argp->exprp(), SELF, BOTH);
             } else {
                 userIterate(argp->exprp(), WidthVP{portp->dtypep(), PRELIM}.p());

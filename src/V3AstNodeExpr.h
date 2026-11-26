@@ -1576,6 +1576,20 @@ public:
     bool isStrong() const { return m_isStrong; }
     string verilogKwd() const override { return isStrong() ? "s_eventually" : "eventually"; }
 };
+class AstEventArg final : public AstNodeExpr {
+    // An event expression actual argument of a sequence or property instance, until its formal
+    // is substituted (IEEE 1800-2023 16.8.1)
+    // @astgen op1 := senItemp : AstSenItem
+public:
+    AstEventArg(FileLine* fl, AstSenItem* senItemp)
+        : ASTGEN_SUPER_EventArg(fl) {
+        this->senItemp(senItemp);
+    }
+    ASTGEN_MEMBERS_AstEventArg;
+    string emitVerilog() override { V3ERROR_NA_RETURN(""); }
+    string emitC() override { V3ERROR_NA_RETURN(""); }
+    bool cleanOut() const override { V3ERROR_NA_RETURN(true); }
+};
 class AstExprStmt final : public AstNodeExpr {
     // Perform a statement, often assignment inside an expression node,
     // the parent gets passed the 'resultp()'.
