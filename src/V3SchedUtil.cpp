@@ -25,6 +25,7 @@
 #include "V3Order.h"
 #include "V3Sched.h"
 #include "V3SenExprBuilder.h"
+#include "V3SenTree.h"
 #include "V3Stats.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -308,7 +309,58 @@ void foreachCallAccess(const AstCCall* callp, const LogicAccessFunc& f) {
     SchedLogicAccessVisitor{f}.followCall(callp);
 }
 
-std::unordered_set<const AstVarScope*> computeImplicitSensitivities(AstNodeProcedure* procp) {
+AstSenTree* changeSenTree(SenTreeFinder& finder, AstNodeProcedure* procp,
+                          const std::unordered_set<const AstVarScope*>& vscps) {
+    FileLine* const flp = procp->fileline();
+    AstSenItem* senItemsp = nullptr;
+    std::unordered_set<const AstVarScope*> added;
+    foreachLogicAccess(procp, [&](AstVarScope* vscp, VAccess) {
+        if (!vscps.count(vscp) || !added.emplace(vscp).second) return;
+        AstVarRef* const newRefp = new AstVarRef{flp, vscp, VAccess::READ};
+        senItemsp
+            = AstNode::addNext(senItemsp, new AstSenItem{flp, VEdgeType::ET_HYBRID, newRefp});
+    });
+    AstSenTree* const senTreep = new AstSenTree{flp, senItemsp};
+    AstSenTree* const resultp = finder.getSenTree(senTreep);
+    // SenTreeFinder::getSenTree clones, so clean up
+    VL_DO_DANGLING(senTreep->deleteTree(), senTreep);
+    return resultp;
+}
+
+SoleWriterMap computeSoleWriters(AstNetlist* netlistp) {
+    SoleWriterMap soleWriters;
+    // Static initializers run before any process, so do not count as writers
+    netlistp->foreach([&](const AstActive* activep) {
+        if (activep->sentreep()->hasStatic()) return;
+        for (AstNodeProcedure* const procp : activep->procspList()) {
+            foreachLogicAccess(procp, [&](const AstVarScope* vscp, VAccess access) {
+                if (!access.isWriteOrRW()) return;
+                const auto pair = soleWriters.emplace(vscp, procp);
+                if (pair.second) return;
+                if (pair.first->second != procp) pair.first->second = nullptr;
+            });
+        }
+    });
+    // Writes in functions called other than as logic, and outside the model, are other writers
+    netlistp->foreach([&](AstCFunc* funcp) {
+        if (isLogicCallee(funcp)) return;  // Of the processes calling it
+        foreachLogicAccess(funcp, [&](const AstVarScope* vscp, VAccess access) {
+            if (access.isWriteOrRW()) soleWriters[vscp] = nullptr;
+        });
+    });
+    for (auto& pair : soleWriters) {
+        const AstVar* const varp = pair.first->varp();
+        if (varp->isForceable() || varp->isSigPublic() || varp->isWrittenByDpi()
+            || varp->isInout()) {
+            pair.second = nullptr;
+        }
+    }
+    return soleWriters;
+}
+
+std::unordered_set<const AstVarScope*>
+computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleWriters,
+                             size_t& excludedr) {
     // Dangerous assumption:
     // A variable read after the process assigned it earlier (in tree order, with a read-write
     // reference counting as an assignment) is not an implicit sensitivity, considering it
@@ -325,6 +377,19 @@ std::unordered_set<const AstVarScope*> computeImplicitSensitivities(AstNodeProce
         if (access.isWriteOrRW() && !vscp->varp()->ignoreSchedWrite()) assigned.emplace(vscp);
         if (access.isReadOrRW() && !assigned.count(vscp)) implicitSensitivities.emplace(vscp);
     });
+    // A user's always_comb is not sensitive to what it writes (IEEE 1800-2023 9.2.2.2.1), so does
+    // not wake itself. Only the whole variables it alone writes are excluded, as another process
+    // may drive other parts (IEEE 1800-2023 9.2.2.2). A task's writes count, being inlined.
+    const AstAlways* const alwaysp = VN_CAST(procp, Always);
+    if (alwaysp && alwaysp->userComb()) {
+        for (const AstVarScope* const vscp : assigned) {
+            const auto it = soleWriters.find(vscp);
+            if (it != soleWriters.end() && it->second == procp
+                && implicitSensitivities.erase(vscp)) {
+                ++excludedr;
+            }
+        }
+    }
     // Reads through forced values the process computes itself do not trigger it either
     VarScopeSet forceReadEdgeIgnores;
     collectForceReadEdgeIgnores(procp, forceReadEdgeIgnores);
