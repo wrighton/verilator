@@ -1805,6 +1805,7 @@ void VlRandomizer::disable_soft(const std::string& varName) {
 
 void VlRandomizer::clearConstraints() {
     m_constraints.clear();
+    m_nonlinear = false;
     m_constraintVarNames.clear();
     m_constraintVarEnds.clear();
     m_constraints_line.clear();
@@ -1875,12 +1876,13 @@ bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layer
 const char* VlRandomizer::solverLogic() const {
     // Without arrays, QF_BV lets z3 answer the incremental checks of the sampling with
     // its bit-blasting SAT solver, which is several times faster than the SMT core it
-    // uses for QF_ABV. Phased solves keep phasedLogic(): their XOR rounds solve slower
+    // uses for QF_ABV, but many times slower once a product or quotient of variables has
+    // to be inverted. Phased solves keep phasedLogic(): their XOR rounds solve slower
     // with QF_BV.
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) return "QF_ABV";
     }
-    return "QF_BV";
+    return m_nonlinear ? "QF_ABV" : "QF_BV";
 }
 
 const char* VlRandomizer::phasedLogic() const {

@@ -181,6 +181,9 @@ class ConstraintExprVisitor final : public VNVisitor {
     std::set<std::string> m_constraintVars;
     // Constraint replacing the top-level if whose folded names m_constraintVars holds
     const AstConstraintExpr* m_foldTakerp = nullptr;
+    // Whether a constraint folded by a top-level if multiplies, divides or takes the remainder of
+    // two random terms, or raises one to a power; false except until m_foldTakerp takes it over
+    bool m_foldNonlinear = false;
     // Where the variable references being lowered record their solver names. Set by
     // visit(AstConstraintExpr*), the only visit reaching a variable reference: the other
     // constraint items either move their expressions into one or never iterate them.
@@ -2294,6 +2297,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         const bool foldOwner = !m_wantSingle;
         UASSERT_OBJ(!foldOwner || m_constraintVars.empty(), nodep,
                     "Constraint names of an earlier fold were not taken over");
+        if (foldOwner) m_foldNonlinear = false;  // An earlier fold may have folded to nothing
         AstNodeExpr* newp = nullptr;
         FileLine* const fl = nodep->fileline();
         // A single soft item under 'if' without 'else' stays soft, as made by hoistGuardedSofts
@@ -2595,9 +2599,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         // Outside a fold this constraint is emitted here with only its own names: those it
         // records, plus the folded names when it replaces an if (see visit(AstConstraintIf*))
         std::set<std::string> vars;
+        bool foldNonlinear = false;
         if (!m_wantSingle) {
             if (nodep == m_foldTakerp) {
                 vars.swap(m_constraintVars);
+                std::swap(foldNonlinear, m_foldNonlinear);
                 m_foldTakerp = nullptr;
             }
             UASSERT_OBJ(m_constraintVars.empty(), nodep,
@@ -2624,8 +2630,22 @@ class ConstraintExprVisitor final : public VNVisitor {
                 nodep->exprp(neqp);
             }
         }
+        // Whether it multiplies, divides or takes the remainder of two random terms, or raises one
+        // to a power, which the solver may solve faster in another logic. The constraints an if
+        // folds into it are formatted already, so they are found as they are folded.
+        const bool nonlinear
+            = foldNonlinear || nodep->exprp()->exists([](const AstNodeBiop* biopp) {
+                  if (VN_IS(biopp, Pow) || VN_IS(biopp, PowSS) || VN_IS(biopp, PowSU)
+                      || VN_IS(biopp, PowUS)) {
+                      return biopp->lhsp()->user1() || biopp->rhsp()->user1();
+                  }
+                  return (VN_IS(biopp, Mul) || VN_IS(biopp, MulS) || VN_IS(biopp, Div)
+                          || VN_IS(biopp, DivS) || VN_IS(biopp, ModDiv) || VN_IS(biopp, ModDivS))
+                         && biopp->lhsp()->user1() && biopp->rhsp()->user1();
+              });
         iterateChildren(nodep);
         if (m_wantSingle) {
+            if (nonlinear) m_foldNonlinear = true;
             nodep->replaceWith(nodep->exprp()->unlinkFrBack());
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             return;
@@ -2664,7 +2684,17 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         callp->addPinsp(
             new AstCExpr{nodep->fileline(), AstCExpr::Pure{}, "\"" + prettyText + "\""});
-        nodep->replaceWith(callp->makeStmt());
+        AstNodeStmt* const stmtp = callp->makeStmt();
+        nodep->replaceWith(stmtp);
+        if (nonlinear) {
+            AstCMethodHard* const nonlinearp = new AstCMethodHard{
+                nodep->fileline(),
+                new AstVarRef{nodep->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
+                              VAccess::READWRITE},
+                VCMethod::RANDOMIZER_NONLINEAR};
+            nonlinearp->dtypeSetVoid();
+            stmtp->addNextHere(nonlinearp->makeStmt());
+        }
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
     }
     void visit(AstDynArraySel* nodep) override { visitElementSel(nodep); }

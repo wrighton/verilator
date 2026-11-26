@@ -256,6 +256,8 @@ class VlSolverSession;
 class VlRandomizer VL_NOT_FINAL {
     // MEMBERS
     std::vector<std::string> m_constraints;  // Solver-dependent hard constraints
+    // A hard or soft constraint multiplies, divides or takes the remainder of two random terms
+    bool m_nonlinear = false;
     // Solver variables the hard constraints name, flattened in m_constraints order; the
     // string literals of the generated code, so stored without copying
     std::vector<const char*> m_constraintVarNames;
@@ -951,6 +953,9 @@ public:
 
     // varNames are the solver variables the constraint names, kept without copying until
     // clearConstraints(), so they must live that long (the generated code passes literals)
+    // A constraint added since the constraints were cleared multiplies, divides or takes the
+    // remainder of two random terms
+    void nonlinear() { m_nonlinear = true; }
     void hard(std::string constraint, std::initializer_list<const char*> varNames = {},
               const char* filename = "", uint32_t linenum = 0, const char* source = "");
     void soft(std::string constraint, const char* filename = "", uint32_t linenum = 0,

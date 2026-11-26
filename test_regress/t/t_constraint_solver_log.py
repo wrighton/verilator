@@ -21,7 +21,25 @@ solver_log = test.obj_dir + "/solver.log"
 test.execute(all_run_flags=['+verilator+solver+file+' + solver_log])
 
 test.file_grep(solver_log, '# Verilator solver log')
-# Without array variables the solver gets QF_BV, which z3 solves incrementally faster
-test.file_grep(solver_log, r'\(set-logic QF_BV\)')
+
+# Without array variables the solver gets QF_BV, which z3 solves incrementally faster,
+# unless an enabled constraint multiplies, divides or takes the remainder of two random
+# terms, which z3 solves faster with QF_ABV. A session is found by the first variable it
+# declares.
+session = r'^  \(set-logic (\S+)\)\n(?:  \(define-fun .*\n)*  \(declare-fun '
+test.file_grep(solver_log, session + r'tripled ', 'QF_BV')
+test.file_grep(solver_log, session + r'scaled ', 'QF_BV')
+test.file_grep(solver_log, session + r'dis_a ', 'QF_BV')
+test.file_grep(solver_log, session + r'factor_a ', 'QF_ABV')
+test.file_grep(solver_log, session + r'quot_a ', 'QF_ABV')
+test.file_grep(solver_log, session + r'inl_a ', 'QF_ABV')
+test.file_grep(solver_log, session + r'grd_x ', 'QF_ABV')
+test.file_grep(solver_log, session + r'imp_x ', 'QF_ABV')
+test.file_grep(solver_log, session + r'ie_x ', 'QF_ABV')
+test.file_grep(solver_log, session + r'ne_x ', 'QF_ABV')
+test.file_grep(solver_log, session + r'is_x ', 'QF_ABV')
+test.file_grep(solver_log, session + r'fe_x ', 'QF_ABV')
+test.file_grep(solver_log, session + r'dp_x ', 'QF_ABV')
+test.file_grep(solver_log, session + r'sg_x ', 'QF_ABV')
 
 test.passes()
