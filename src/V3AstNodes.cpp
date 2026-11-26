@@ -3144,6 +3144,37 @@ bool AstNodeBiop::isPure() {
     if (!m_purity.isCached()) m_purity.set(getPurityRecurse());
     return m_purity.get();
 }
+AstNodeBiop* AstNodeBiop::newTypedCompare(VNType type, FileLine* fl, AstNodeExpr* lhsp,
+                                          AstNodeExpr* rhsp) {
+    const int width = std::max(lhsp->width(), rhsp->width());
+    const bool isSigned = lhsp->isSigned() && rhsp->isSigned();
+    // Extend an operand to the width; a constant stays a constant
+    const auto extend = [&](AstNodeExpr* nodep) -> AstNodeExpr* {
+        if (nodep->width() == width) return nodep;
+        if (const AstConst* const constp = VN_CAST(nodep, Const)) {
+            V3Number num{nodep, width, constp->num()};
+            if (isSigned) num.opExtendS(constp->num(), constp->width());
+            num.isSigned(isSigned);
+            VL_DO_DANGLING(nodep->deleteTree(), nodep);
+            return new AstConst{fl, num};
+        }
+        if (isSigned) return new AstExtendS{fl, nodep, width};
+        return new AstExtend{fl, nodep, width};
+    };
+    lhsp = extend(lhsp);
+    rhsp = extend(rhsp);
+    if (type == VNType::Gte) {
+        if (isSigned) return new AstGteS{fl, lhsp, rhsp};
+        return new AstGte{fl, lhsp, rhsp};
+    }
+    if (type == VNType::Lte) {
+        if (isSigned) return new AstLteS{fl, lhsp, rhsp};
+        return new AstLte{fl, lhsp, rhsp};
+    }
+    if (type == VNType::EqWild) return new AstEqWild{fl, lhsp, rhsp};
+    UASSERT_OBJ(type == VNType::Eq, lhsp, "Unexpected comparison type");
+    return new AstEq{fl, lhsp, rhsp};
+}
 void AstNodeBlock::dump(std::ostream& str) const {
     Super::dump(str);
     if (unnamed()) str << " [UNNAMED]";

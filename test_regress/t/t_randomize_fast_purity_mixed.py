@@ -11,11 +11,10 @@ import vltest_bootstrap
 
 test.scenarios('vlt')
 test.top_filename = 't/t_randomize_fast_purity.v'
-test.compile(verilator_flags2=['--stats', '--top-module mixed_t',
-                              't/t_randomize_fast_purity.cpp'])
-test.execute(run_env='VERILATOR_SOLVER=/bin/false',
-             all_run_flags=['+verilator+wno+unsatconstr+1'])
+test.compile(verilator_flags2=['--stats', '--top-module mixed_t', 't/t_randomize_fast_purity.cpp'])
+test.execute(run_env='VERILATOR_SOLVER=/bin/false', all_run_flags=['+verilator+wno+unsatconstr+1'])
 if test.have_solver:
     test.execute(run_env='VERILATOR_SOLVER="z3 --in"',
+                 all_run_flags=['+SOLVER'],
                  expect_filename=test.golden_filename)
 test.passes()

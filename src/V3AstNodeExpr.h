@@ -124,6 +124,11 @@ protected:
 
 public:
     ASTGEN_MEMBERS_AstNodeBiop;
+    // Return 'lhsp type rhsp' of typed operands, sized and signed as the operator: the
+    // narrower operand is extended, with sign only if both are signed (IEEE 1800-2023 11.4.4,
+    // 11.8.2). Type is Eq, EqWild, Gte or Lte.
+    static AstNodeBiop* newTypedCompare(VNType type, FileLine* fl, AstNodeExpr* lhsp,
+                                        AstNodeExpr* rhsp);
     // METHODS
     // Set out to evaluation of a AstConst'ed
     virtual void numberOperate(V3Number& out, const V3Number& lhs, const V3Number& rhs) = 0;
