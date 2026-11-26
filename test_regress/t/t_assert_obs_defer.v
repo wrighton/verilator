@@ -7,6 +7,7 @@
 // verilog_format: off
 `define stop $stop
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 module t;
@@ -44,6 +45,7 @@ module t;
   action_args u_action_args ();
   static_assert u_static_assert ();
   cover_flush u_cover_flush ();
+  action_scope u_action_scope ();
 
   initial begin
     static int a;
@@ -525,4 +527,20 @@ module cover_flush;
   function void record_c2();
     c2_hits++;
   endfunction
+endmodule
+
+// %m in an action names the scope of the assertion, as for an immediate assertion
+module action_scope;
+  for (genvar i = 0; i < 2; ++i) begin : gen
+    string text;
+    initial begin : blk
+      #1;
+      labeled : assert #0 (1) $sformat(text, "%m");
+      #1;
+      `checks(text, $sformatf("t.u_action_scope.gen[%0d].blk.labeled", i));
+      assert #0 (1) $sformat(text, "%m");
+      #1;
+      `checks(text, $sformatf("t.u_action_scope.gen[%0d].blk", i));
+    end
+  end
 endmodule
