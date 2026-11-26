@@ -1300,12 +1300,16 @@ void AstClocking::dumpJson(std::ostream& str) const {
 }
 AstVar* AstClocking::ensureEventp(bool childDType) {
     if (!eventp()) {
+        // An unnamed global clocking's event needs a name, as instances below refer to it
+        const string eventName = m_name.empty() && isGlobal() ? globalEventName() : m_name;
         AstVar* const evp
-            = childDType ? new AstVar{fileline(), VVarType::MODULETEMP, m_name, VFlagChildDType{},
-                                      new AstBasicDType{fileline(), VBasicDTypeKwd::EVENT}}
-                         : new AstVar{fileline(), VVarType::MODULETEMP, m_name,
-                                      findBasicDType(VBasicDTypeKwd::EVENT)};
+            = childDType
+                  ? new AstVar{fileline(), VVarType::MODULETEMP, eventName, VFlagChildDType{},
+                               new AstBasicDType{fileline(), VBasicDTypeKwd::EVENT}}
+                  : new AstVar{fileline(), VVarType::MODULETEMP, eventName,
+                               findBasicDType(VBasicDTypeKwd::EVENT)};
         evp->lifetime(VLifetime::STATIC_EXPLICIT);
+        evp->isGlobalClockingEvent(isGlobal());
         eventp(evp);
         // Trigger the clocking event in Observed (IEEE 1800-2023 14.13)
         addNextHere(new AstAlwaysObserved{
@@ -4796,6 +4800,7 @@ void AstVar::dump(std::ostream& str) const {
     if (isReadByDpi()) str << " [DPIRD]";
     if (isWrittenByDpi()) str << " [DPIWR]";
     if (isInternal()) str << " [INTERNAL]";
+    if (isGlobalClockingEvent()) str << " [GCLKEVENT]";
     if (isLatched()) str << " [LATCHED]";
     if (isUsedLoopIdx()) str << " [LOOPIDX]";
     if (rand().isRandomizable()) str << " [" << rand().ascii() << "]";
@@ -4830,6 +4835,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     dumpJsonStrFunc(str, origName);
     dumpJsonStrFunc(str, verilogName);
     dumpJsonBoolFuncIf(str, constPoolEntry);
+    dumpJsonBoolFuncIf(str, isGlobalClockingEvent);
     dumpJsonBoolFuncIf(str, covergroupRefMember);
     dumpJsonBoolFuncIf(str, embeddedCovergroup);
     dumpJsonBoolFuncIf(str, isSc);

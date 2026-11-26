@@ -17,7 +17,7 @@
         t/t_clocking_bad5.v:23:19: ... Location of original declaration
    23 |   global clocking ck @(posedge clk);
       |                   ^~
-%Error: t/t_clocking_bad5.v:15:12: Can't find definition of variable: '$global_clock'
+%Error: t/t_clocking_bad5.v:15:12: No global clocking in the instance, or in an enclosing instance, for '$global_clock' (IEEE 1800-2023 14.14).
    15 |   always @($global_clock) $display;
       |            ^~~~~~~~~~~~~
 %Error: Exiting due to
