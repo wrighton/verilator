@@ -11,7 +11,7 @@ begin \
    if (!bit'(cl.randomize())) $stop; \
    prev_result = longint'(field); \
    if (!(cond)) $stop; \
-   repeat(9) begin \
+   repeat(29) begin \
       longint result; \
       if (!bit'(cl.randomize())) $stop; \
       result = longint'(field); \
