@@ -370,6 +370,13 @@ class ElementIndexVisitor final : public VNVisitorConst {
     }
     void classify(const AstNodeExpr* indexp) {
         if (VN_IS(indexp, Const)) return;
+        // A foreach index offset by a constant, as of an array not ranged from 0
+        if (const AstSub* const subp = VN_CAST(indexp, Sub)) {
+            if (VN_IS(subp->rhsp(), Const)) indexp = subp->lhsp();
+        } else if (const AstAdd* const addp = VN_CAST(indexp, Add)) {
+            if (VN_IS(addp->rhsp(), Const)) indexp = addp->lhsp();
+            if (VN_IS(addp->lhsp(), Const)) indexp = addp->rhsp();
+        }
         const AstNodeVarRef* const refp = VN_CAST(indexp, NodeVarRef);
         if (refp && m_idxVarps.count(refp->varp())) return;
         if (indexp->exists([this](const AstNode* nodep) { return isOtherRef(nodep); })) {
