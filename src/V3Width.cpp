@@ -15728,6 +15728,8 @@ public:
     struct DriveConn final {
         AstCell* cellp;
         AstPin* pinp;
+        AstNodeExpr* exprp;  // The connection, or the part of a concatenation of it
+        int lsb;  // Of the port bits exprp is connected to
         AstVar* netp;
         std::vector<std::pair<int, int>> ranges;  // Selected, from the net outwards
         size_t chain;  // Union-find parent, of connections that are decided together
@@ -15765,6 +15767,8 @@ public:
         // a whole, as otherwise a net in it could have two drivers.
         std::vector<DriveConn> conns;
         std::unordered_map<const AstPin*, size_t> pinConns;  // Index into conns
+        // Parts of the connection of each pin not yet taken out of it
+        std::unordered_map<const AstPin*, size_t> partsLeft;
         std::unordered_map<const AstVar*, std::vector<size_t>> netConns;  // Indices into conns
         std::vector<std::pair<AstCell*, AstPin*>> visitedPinps;  // Also those not candidates
         // Connections to visit, with the index of the one reaching it, if not a written port
@@ -15794,28 +15798,36 @@ public:
                 continue;
             }
             if (!sourceNetPinMatches(pinp, NetProjection::ANY)) continue;
-            DriveConn conn{cellPin.first, pinp, nullptr, {}, conns.size(), false};
+            // A concatenation connects each of its parts to bits of the port, as a whole
+            std::vector<DriveConn> pinConnList;
             AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
-            conn.netp = exprp ? selectedNetp(exprp, conn.ranges) : nullptr;
-            if (!conn.netp) continue;
-            const size_t i = conns.size();
-            pinConns.emplace(pinp, i);
-            // A net with another driver drives the chain
-            conn.keep = ctx.drivenps.count(conn.netp) != 0;
-            // Quadratic only in the ports written on one net, which are few
-            for (const size_t j : netConns[conn.netp]) {
-                if (rangesOverlap(conns[j].ranges, conn.ranges)) {
-                    conns[j].keep = true;
-                    conn.keep = true;
+            if (!exprp || !addDriveConns(cellPin.first, pinp, exprp, 0, pinConnList)) continue;
+            const size_t firsti = conns.size();
+            pinConns.emplace(pinp, firsti);
+            partsLeft.emplace(pinp, pinConnList.size());
+            for (DriveConn& conn : pinConnList) {
+                const size_t i = conns.size();
+                conn.chain = i;
+                // A net with another driver drives the chain
+                conn.keep = ctx.drivenps.count(conn.netp) != 0;
+                // Quadratic only in the ports written on one net, which are few
+                for (const size_t j : netConns[conn.netp]) {
+                    if (rangesOverlap(conns[j].ranges, conn.ranges)) {
+                        conns[j].keep = true;
+                        conn.keep = true;
+                    }
+                }  // LCOV_EXCL_LINE
+                netConns[conn.netp].push_back(i);
+                conns.push_back(conn);
+                conns[driveChain(conns, i)].chain = driveChain(conns, firsti);
+                if (fromi != SIZE_MAX) {
+                    conns[driveChain(conns, fromi)].chain = driveChain(conns, i);
                 }
-            }  // LCOV_EXCL_LINE
-            netConns[conn.netp].push_back(i);
-            conns.push_back(conn);
-            if (fromi != SIZE_MAX) conns[driveChain(conns, fromi)].chain = driveChain(conns, i);
-            if (conns[i].keep || !conn.netp->isInput()) continue;
-            const auto it = ctx.inPinps.find(conn.netp);
-            if (it == ctx.inPinps.end()) continue;
-            for (const auto& inPin : it->second) work.emplace_back(i, inPin);
+                if (conns[i].keep || !conn.netp->isInput()) continue;
+                const auto it = ctx.inPinps.find(conn.netp);
+                if (it == ctx.inPinps.end()) continue;
+                for (const auto& inPin : it->second) work.emplace_back(i, inPin);
+            }
         }
         for (size_t i = 0; i < conns.size(); ++i) {
             if (conns[i].keep) conns[driveChain(conns, i)].keep = true;
@@ -15823,13 +15835,23 @@ public:
         for (size_t i = 0; i < conns.size(); ++i) {
             const DriveConn& conn = conns[i];
             if (conns[driveChain(conns, i)].keep) continue;
-            AstNodeExpr* const exprp = VN_AS(conn.pinp->exprp(), NodeExpr)->unlinkFrBack();
+            AstNodeExpr* const pinExprp = VN_AS(conn.pinp->exprp(), NodeExpr);
+            const bool part = conn.exprp != pinExprp;  // Of a concatenation
+            AstNodeExpr* const exprp = conn.exprp->unlinkFrBack();
+            // A concatenation is deleted once its last part is taken out of it
+            if (part && !--partsLeft[conn.pinp]) {
+                VL_DO_DANGLING(pushDeletep(pinExprp->unlinkFrBack()), pinExprp);
+            }
             linkCollapsedWrite(exprp);
             conn.netp->icoMaybeWritten(true);
             conn.netp->isContinuously(true);
             FileLine* const flp = exprp->fileline();
-            AstVarXRef* const rhsp
+            AstNodeExpr* rhsp
                 = new AstVarXRef{flp, conn.pinp->modVarp(), conn.cellp->name(), VAccess::READ};
+            if (part) {
+                rhsp->dtypeFrom(conn.pinp->modVarp());
+                rhsp = new AstSel{flp, rhsp, conn.lsb, exprp->width()};
+            }
             conn.cellp->addNextHere(new AstAlways{new AstAssignW{flp, exprp, rhsp}});
         }
         // All written formals have now been classified. A true net connection may
@@ -15867,6 +15889,26 @@ public:
                 V3Inst::pinReconnectSimple(pinp, visitedPinps[i].first, false, true);
             }
         }
+    }
+    // Add to connsr the connections exprp makes, connected to the port bits from lsb, if it
+    // is a net or a constant select of one, or a concatenation of those
+    static bool addDriveConns(AstCell* cellp, AstPin* pinp, AstNodeExpr* exprp, int lsb,
+                              std::vector<DriveConn>& connsr) {
+        // A concatenation '{a, b}' is a replication of one
+        if (AstReplicate* const repp = VN_CAST(exprp, Replicate)) {
+            return VN_AS(repp->countp(), Const)->toUInt() == 1
+                   && addDriveConns(cellp, pinp, repp->srcp(), lsb, connsr);
+        }
+        if (AstConcat* const catp = VN_CAST(exprp, Concat)) {
+            return addDriveConns(cellp, pinp, catp->rhsp(), lsb, connsr)
+                   && addDriveConns(cellp, pinp, catp->lhsp(), lsb + catp->rhsp()->width(),
+                                    connsr);
+        }
+        DriveConn conn{cellp, pinp, exprp, lsb, nullptr, {}, 0, false};
+        conn.netp = selectedNetp(exprp, conn.ranges);
+        if (!conn.netp) return false;
+        connsr.push_back(std::move(conn));
+        return true;
     }
     // Whether constant selects of a net, as from selectedNetp, may share bits
     static bool rangesOverlap(const std::vector<std::pair<int, int>>& ap,
