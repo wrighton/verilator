@@ -3517,8 +3517,9 @@ class AssertVisitor final : public VNVisitor {
         if (mature) {
             bodysp = newMatureInstance(nodep, bodysp, procClockp);
             procClockp = nullptr;
-        } else if (!seqEvent) {
-            // The outcome gate applies the same control policy to global and scoped sites.
+        } else if (!seqEvent && !nodep->nfaLowered()) {
+            // V3AssertNfa gates the start of each attempt, as Off leaves the attempts already
+            // executing (IEEE 1800-2023 20.11)
             bodysp = newIfAssertOn(nodep->controlVarp(), bodysp, nodep->directive(),
                                    nodep->userType());
         }

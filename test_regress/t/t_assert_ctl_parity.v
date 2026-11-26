@@ -108,12 +108,13 @@ module t;
         $assertoff;
       end
       6, 9: begin
-        // Both configurations suppress NFA actions at completion while Off.
-        `checkd(failures, 0);
+        // Off starts no attempt in both configurations, but the attempts already executing
+        // complete with their actions (IEEE 1800-2023 20.11).
+        `checkd(failures, 1);
         `checkd(split_passes, split_at_off);
         `checkd(unsplit_passes, unsplit_at_off);
-        `checkd(late_split, late_split_at_off);
-        `checkd(late_unsplit, late_unsplit_at_off);
+        `checkd(late_split, late_split_at_off + 1);
+        `checkd(late_unsplit, late_unsplit_at_off + 1);
         if (cyc == 9) begin
           $display("*-* All Finished *-*");
           $finish;
