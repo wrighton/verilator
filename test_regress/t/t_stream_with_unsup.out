@@ -1,0 +1,24 @@
+%Error-UNSUPPORTED: t/t_stream_with_unsup.v:16:14: Unsupported: with[] stream expression as a stream target
+                                                 : ... note: In instance 't'
+   16 |     {>>{data with [0:n-1]}} = 16'h1234;
+      |              ^~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_stream_with_unsup.v:17:11: Unsupported: with[] stream expression as a stream target
+                                                 : ... note: In instance 't'
+   17 |     {>>{f with [n+:2]}} = 16'h1234;
+      |           ^~~~
+%Warning-WIDTHEXPAND: t/t_stream_with_unsup.v:17:25: Stream target requires 32 bits, but source expression only provides 16 bits (IEEE 1800-2023 11.4.14.3)
+                                                   : ... note: In instance 't'
+   17 |     {>>{f with [n+:2]}} = 16'h1234;
+      |                         ^
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Error-UNSUPPORTED: t/t_stream_with_unsup.v:18:20: Unsupported: Streaming concatenation with multiple operands, of which one is dynamically sized: 'byte$[$]'
+                                                 : ... note: In instance 't'
+   18 |     r = {>>{q with [0:n-1], q2 with [1:2]}};
+      |                    ^
+%Error-UNSUPPORTED: t/t_stream_with_unsup.v:18:37: Unsupported: Streaming concatenation with multiple operands, of which one is dynamically sized: 'byte$[$]'
+                                                 : ... note: In instance 't'
+   18 |     r = {>>{q with [0:n-1], q2 with [1:2]}};
+      |                                     ^
+%Error: Exiting due to
