@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_checker_event_port_unsup.v:18:25: Unsupported: event expression as an instance port connection (IEEE 1800-2023 17.3).
+   18 |   Mutex check_bus (cyc, posedge clk, failure);
+      |                         ^~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_checker_event_port_unsup.v:19:34: Unsupported: event expression as an instance port connection (IEEE 1800-2023 17.3).
+   19 |   Mutex check_named (.sig(cyc), .clock(negedge clk), .failure(failure));
+      |                                  ^~~~~
+%Error-UNSUPPORTED: t/t_checker_event_port_unsup.v:20:24: Unsupported: event expression as an instance port connection (IEEE 1800-2023 17.3).
+   20 |   Mutex check_or (cyc, posedge clk or negedge clk, failure);
+      |                        ^~~~~~~
+%Error-UNSUPPORTED: t/t_checker_event_port_unsup.v:21:33: Unsupported: event expression as an instance port connection (IEEE 1800-2023 17.3).
+   21 |   Mutex check_list (.sig(cyc), .clock(posedge clk, negedge clk), .failure(failure));
+      |                                 ^~~~~
+%Error: Exiting due to
