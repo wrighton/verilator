@@ -1,0 +1,11 @@
+%Error: t/t_interface_import_lookup_bad.v:30:17: Can't find definition of 'fx' in dotted task/function: 'p.fx'
+                                               : ... Suggested alternative: 'fa'
+   30 |   assign o2 = p.fx();   
+      |                 ^~
+        ... Known scopes under 'fx': <no instances found>
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_interface_import_lookup_bad.v:31:17: Can't find definition of 'nosuch' in dotted scope/variable: 'p.nosuch'
+   31 |   assign o3 = p.nosuch.q;   
+      |                 ^~~~~~
+        ... Known scopes under 'p': n
+%Error: Exiting due to
