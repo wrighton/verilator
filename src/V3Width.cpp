@@ -2475,7 +2475,8 @@ class WidthVisitor final : public VNVisitor {
 
     void visit(AstConstCast* nodep) override {
         // Only V3Assert needs it, for a procedural concurrent assertion (IEEE 1800-2023 16.14.6.1)
-        if (!m_inConcurrentAssert) {
+        // and as a sampled value is the current value of its expression (IEEE 1800-2023 16.5.1)
+        if (!m_inConcurrentAssert && !m_underSampledArg) {
             AstNodeExpr* const lhsp = nodep->lhsp()->unlinkFrBack();
             nodep->replaceWith(lhsp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
