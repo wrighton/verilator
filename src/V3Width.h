@@ -38,7 +38,8 @@ public:
     // For use only in WidthVisitor
     // Replace AstSelBit, etc with AstSel/AstArraySel
     // Returns replacement node if nodep was deleted, or null if none.
-    static AstNode* widthSelNoIterEdit(AstNode* nodep) VL_MT_DISABLED;
+    // With padQueue, a queue slice of constant size keeps it, as streamed by with[]
+    static AstNode* widthSelNoIterEdit(AstNode* nodep, bool padQueue = false) VL_MT_DISABLED;
 };
 
 #endif  // Guard

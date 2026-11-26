@@ -1380,6 +1380,8 @@ class UnknownVisitor final : public VNVisitor {
         case VCMethod::DYN_SLICE:
         case VCMethod::DYN_SLICE_BACK_BACK:
         case VCMethod::DYN_SLICE_FRONT_BACK:
+        case VCMethod::DYN_SLICE_PAD_BACK_BACK:
+        case VCMethod::DYN_SLICE_PAD_FRONT_BACK:
         case VCMethod::DYN_SLICE_ASSIGN:
         case VCMethod::DYN_SLICE_ASSIGN_BACK_BACK:
         case VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK: return 2;
