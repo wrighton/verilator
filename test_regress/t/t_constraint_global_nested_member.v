@@ -87,6 +87,52 @@ class derived_cfg extends base_cfg;
 endclass
 
 
+// Test case 5: rand member inherited by the class of a nested rand member
+class leaf_cfg;
+  rand bit [7:0] x;
+  constraint c {x < 10;}
+endclass
+
+class mid_base_cfg;
+  rand leaf_cfg l;
+  constraint c_base {l.x > 2;}
+endclass
+
+class mid_cfg extends mid_base_cfg;
+  rand bit [7:0] z;
+  constraint c_mid {z == l.x * 2;}
+endclass
+
+class top_cfg;
+  rand mid_cfg m;
+  constraint c_top {m.l.x != 5;}
+endclass
+
+
+// Test case 6: rand member redeclared by a derived class
+class low_cfg;
+  rand bit [7:0] x;
+  constraint c {x < 10;}
+endclass
+
+class high_cfg;
+  rand bit [7:0] y;
+  constraint c {y > 200;}
+endclass
+
+class shadowed_base_cfg;
+  rand low_cfg h;
+endclass
+
+class shadowing_cfg extends shadowed_base_cfg;
+  rand high_cfg h;
+endclass
+
+class shadow_top_cfg;
+  rand shadowing_cfg m;
+endclass
+
+
 // Test case 4: rand class member declared in a base class of the randomized object
 class inh_leaf;
   rand int m_w;
@@ -136,6 +182,9 @@ module t_constraint_global_nested_member;
     tb_test tb;
     axi_wrap_test axi_t;
     derived_cfg d;
+    top_cfg top;
+    shadow_top_cfg st;
+    shadowed_base_cfg sb;
     inh_derived inh_d;
     inh_derived2 inh_d2;
     inh_caller inh_c;
@@ -150,6 +199,26 @@ module t_constraint_global_nested_member;
     repeat (20) begin
       if (d.randomize() != 1) $stop;
       if (d.s.g != 1) $stop;
+    end
+
+    top = new;
+    top.m = new;
+    top.m.l = new;
+    repeat (20) begin
+      if (top.randomize() != 1) $stop;
+      if (!(top.m.l.x inside {[3 : 9]}) || top.m.l.x == 5) $stop;
+      if (top.m.z != top.m.l.x * 2) $stop;
+    end
+
+    st = new;
+    st.m = new;
+    st.m.h = new;
+    sb = st.m;
+    sb.h = new;
+    repeat (20) begin
+      if (st.randomize() != 1) $stop;
+      if (st.m.h.y <= 200) $stop;
+      if (sb.h.x >= 10) $stop;
     end
 
     inh_d = new;
