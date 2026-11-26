@@ -17,6 +17,7 @@
 //
 // Top Scope:
 //   Replace each variable reference under SAMPLED with a new variable.
+//   Sample only the ranges of a wide variable that constant selects read.
 //   Capture whole-signal force reads by value, before sampling their children.
 //   Make a process computing a value marked to follow the time read a new variable holding the
 //   time, so it is computed at each evaluation.
@@ -31,6 +32,7 @@
 
 #include "V3Sched.h"
 #include "V3SharedTmps.h"
+#include "V3Stats.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -38,6 +40,21 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 // Clock state, as a visitor of each AstNode
 
 class SampledVisitor final : public VNVisitor {
+    // TYPES
+    // A range of a variable that sampled constant selects read
+    struct Range final {
+        int m_lsb;  // First bit
+        int m_width;  // Number of bits
+        AstVarScope* m_sampledp;  // The variable sampling it, once made
+    };
+    // The ranges a variable's sampled reads take, merged where they overlap or touch
+    struct VarRanges final {
+        bool m_whole = false;  // Sample the whole variable
+        std::vector<Range> m_ranges;  // Ranges read, by first bit
+    };
+    // Most ranges of a variable sampled separately, each with its own assignment
+    static constexpr size_t MAX_RANGES = 16;
+
     // NODE STATE
     //  AstVarScope::user1()  -> AstVarScope*. The VarScope that stores sampled value
     //  AstVarRef::user1()    -> bool. Whether already converted
@@ -49,6 +66,9 @@ class SampledVisitor final : public VNVisitor {
     V3SharedTmps m_forceTmps{"__VsampledForce", VVarType::MODULETEMP};  // Sampled force values
     // Keys remain in the tree as the sampled variables' value expressions.
     std::unordered_map<VNRef<AstNode>, AstVarScope*> m_forceSamples;
+    // Ranges of wide variables that sampled expressions only read with constant selects
+    std::unordered_map<const AstVarScope*, VarRanges> m_varRanges;
+    VDouble0 m_statRanges;  // Ranges sampled instead of their whole variable
 
     // STATE - for current visit position (use VL_RESTORER)
     AstScope* m_scopep = nullptr;  // Current scope
@@ -71,7 +91,122 @@ class SampledVisitor final : public VNVisitor {
         return vscp;
     }
 
+    // The range of the variable of 'refp' that select 'selp' of it reads, if constant
+    static bool constRange(const AstSel* selp, const AstVarRef* refp, int& lsb, int& width) {
+        const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
+        if (!lsbp || lsbp->num().isFourState() || !lsbp->num().fitsInUInt()
+            || lsbp->toUInt() + static_cast<uint64_t>(selp->widthConst())
+                   > static_cast<uint64_t>(refp->width())) {
+            return false;
+        }
+        lsb = static_cast<int>(lsbp->toUInt());
+        width = selp->widthConst();
+        return true;
+    }
+    // The select of reference 'refp', or of a sampled expression that is only 'refp', if any
+    static const AstSel* selectOf(const AstVarRef* refp) {
+        const AstNode* fromp = refp;
+        if (VN_IS(refp->backp(), Sampled)) fromp = refp->backp();
+        const AstSel* const selp = VN_CAST(fromp->backp(), Sel);
+        return selp && selp->fromp() == fromp ? selp : nullptr;
+    }
+    // Whether 'nodep' is under a force read in sampled expression 'sampledp'
+    static bool underForceRead(const AstNode* nodep, const AstSampled* sampledp) {
+        for (; nodep != sampledp; nodep = nodep->backp()) {
+            const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard);
+            if (methodp && methodp->method() == VCMethod::FORCE_READ) return true;
+        }
+        return false;
+    }
+    // Find the variables wider than a quad whose sampled reads are all constant selects, and
+    // the ranges they read, if few and narrower than the variable
+    void findRanges(AstNetlist* netlistp) {
+        netlistp->foreach([&](const AstSampled* sampledp) {
+            sampledp->exprp()->foreach([&](const AstVarRef* refp) {
+                VarRanges& ranges = m_varRanges[refp->varScopep()];
+                const AstSel* const selp = selectOf(refp);
+                int lsb = 0;
+                int width = 0;
+                // Automatic variables and values following the time are not sampled
+                if (refp->width() <= VL_QUADSIZE || !selp || !constRange(selp, refp, lsb, width)
+                    || underForceRead(refp, sampledp) || refp->varp()->isFuncLocal()
+                    || sampledp->timed()) {
+                    ranges.m_whole = true;
+                } else {
+                    ranges.m_ranges.push_back(Range{lsb, width, nullptr});
+                }
+            });
+        });
+        for (auto& pair : m_varRanges) {
+            VarRanges& ranges = pair.second;
+            if (ranges.m_whole) continue;
+            std::vector<Range>& list = ranges.m_ranges;
+            std::sort(list.begin(), list.end(), [](const Range& a, const Range& b) {
+                return a.m_lsb < b.m_lsb || (a.m_lsb == b.m_lsb && a.m_width < b.m_width);
+            });
+            std::vector<Range> merged;
+            int width = 0;
+            for (const Range& range : list) {
+                if (!merged.empty()
+                    && range.m_lsb <= merged.back().m_lsb + merged.back().m_width) {
+                    Range& last = merged.back();
+                    last.m_width = std::max(last.m_lsb + last.m_width, range.m_lsb + range.m_width)
+                                   - last.m_lsb;
+                } else {
+                    merged.push_back(range);
+                }
+            }
+            for (const Range& range : merged) width += range.m_width;
+            list = merged;
+            ranges.m_whole = list.size() > MAX_RANGES || width >= pair.first->width();
+        }
+    }
+
     // VISITORS
+    void visit(AstSel* nodep) override {
+        // A constant select of a sampled variable, inside or around its sampled expression
+        const AstSampled* const sampledp = VN_CAST(nodep->fromp(), Sampled);
+        const AstVarRef* const refp
+            = VN_CAST(sampledp ? sampledp->exprp() : nodep->fromp(), VarRef);
+        int lsb = 0;
+        int width = 0;
+        if (!refp || refp->user1() || !(m_inSampled || (sampledp && !sampledp->timed()))
+            || !constRange(nodep, refp, lsb, width)) {
+            iterateChildren(nodep);
+            return;
+        }
+        const auto it = m_varRanges.find(refp->varScopep());
+        if (it == m_varRanges.end() || it->second.m_whole) {
+            iterateChildren(nodep);
+            return;
+        }
+        // Read the sampled range holding the selected bits
+        auto rangeIt
+            = std::upper_bound(it->second.m_ranges.begin(), it->second.m_ranges.end(), lsb,
+                               [](int value, const Range& range) { return value < range.m_lsb; });
+        Range& range = *--rangeIt;
+        FileLine* const flp = nodep->fileline();
+        AstVarScope* const vscp = refp->varScopep();
+        if (!range.m_sampledp) {
+            AstSel* const valuep = new AstSel{flp, new AstVarRef{flp, vscp, VAccess::READ},
+                                              range.m_lsb, range.m_width};
+            valuep->dtypep(valuep->findBitOrLogicDType(range.m_width, range.m_width,
+                                                       VSigning::UNSIGNED,
+                                                       vscp->varp()->dtypep()->isFourstate()));
+            ++m_statRanges;
+            range.m_sampledp = createSampledVar(
+                m_sampledTmps, valuep, vscp->varp()->name() + "__" + cvtToStr(range.m_lsb));
+        }
+        AstVarRef* const newRefp = new AstVarRef{flp, range.m_sampledp, VAccess::READ};
+        newRefp->user1SetOnce();  // Don't sample this one
+        AstNodeExpr* newp = newRefp;
+        if (lsb != range.m_lsb || width != range.m_width) {
+            newp = new AstSel{flp, newRefp, lsb - range.m_lsb, width};
+            newp->dtypeFrom(nodep);
+        }
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstScope* nodep) override {
         VL_RESTORER(m_scopep);
         VL_RESTORER(m_timeVscp);
@@ -157,10 +292,13 @@ public:
     // CONSTRUCTORS
     explicit SampledVisitor(AstNetlist* netlistp)
         : m_sampleFuncp{netlistp->evalFuncp(VEval::SAMPLE)} {
+        findRanges(netlistp);
         iterate(netlistp);
         V3Sched::util::splitCheck(m_sampleFuncp);
     }
-    ~SampledVisitor() override = default;
+    ~SampledVisitor() override {
+        V3Stats::addStat("Optimizations, Sampled variable ranges", m_statRanges);
+    }
 };
 
 //######################################################################
