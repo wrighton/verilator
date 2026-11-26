@@ -174,6 +174,13 @@ static bool isRandIndex(const AstNodeExpr* indexp) {
     });
 }
 
+// Whether exprp selects the last element ('$') of an array of class handles
+static bool isLastObjectSel(const AstNodeExpr* exprp) {
+    const AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard);
+    return methodp && methodp->method() == VCMethod::ARRAY_AT_BACK
+           && VN_IS(methodp->dtypep()->skipRefp(), ClassRefDType);
+}
+
 // Whether an index reads the size variable of a size-constrained array
 static bool isSizeIndex(const AstNodeExpr* indexp) {
     return indexp->exists(
@@ -5363,10 +5370,15 @@ private:
             // The index, under the truncation above
             const AstNodeExpr* const namedp = VN_IS(bitp, Sel) ? VN_AS(bitp, Sel)->fromp() : bitp;
             const AstSub* const subp = VN_CAST(namedp, Sub);
+            const AstAdd* const addp = VN_CAST(namedp, Add);
             if (subp && VN_IS(subp->lhsp(), VarRef) && VN_IS(subp->rhsp(), Const)) {
                 // A variable index into an array with a nonzero low bound
                 m_nestedAccessp->addVarNamePart(herep,
                                                 subp->lhsp()->name() + "-" + subp->rhsp()->name());
+            } else if (addp && VN_IS(addp->lhsp(), VarRef) && VN_IS(addp->rhsp(), Const)) {
+                // Or a negative one
+                m_nestedAccessp->addVarNamePart(herep,
+                                                addp->lhsp()->name() + "+" + addp->rhsp()->name());
             } else {
                 m_nestedAccessp->addVarNamePart(herep, namedp->name());
             }
@@ -5572,8 +5584,20 @@ private:
                 }
             }
         }
-        AstCMethodHard* const cmethodp = VN_CAST(nodep->fromp(), CMethodHard);
-        if (nodep->user1() && cmethodp && cmethodp->method() == VCMethod::ARRAY_AT) {
+        // Handle MemberRef references created by captureRefByThis()
+        if (isCapturedThisSel(nodep)) {
+            // Convert to VarRef
+            AstVarRef* const varRefp
+                = new AstVarRef{nodep->fileline(), nodep->varp(), VAccess::READ};
+            varRefp->user1(nodep->varp()->rand().isRandomizable());
+            varRefp->classOrPackagep(VN_AS(nodep->user2p(), NodeModule));
+            nodep->replaceWith(varRefp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            visit(varRefp);
+        } else if (nodep->user1() && isLastObjectSel(nodep->fromp())) {
+            lastObjectMember(nodep);
+        } else if (nodep->user1() && VN_IS(nodep->fromp(), CMethodHard)
+                   && VN_AS(nodep->fromp(), CMethodHard)->method() == VCMethod::ARRAY_AT) {
             // Class ref array element member access (e.g., items[i].val)
             AstCMethodHard* const cmethodp = VN_AS(nodep->fromp(), CMethodHard);
             AstNodeDType* const arrayDtp = cmethodp->fromp()->dtypep()->skipRefp();
@@ -5628,6 +5652,31 @@ private:
         }
     }
     void visit(AstSFormatF* nodep) override {}
+    // The member nodep of the last element of an array of objects
+    void lastObjectMember(AstMemberRef* nodep) {
+        AstNodeExpr* const arrayp = VN_AS(nodep->fromp(), CMethodHard)->fromp();
+        const AstNodeVarRef* const arrayRefp = VN_CAST(arrayp, NodeVarRef);
+        if (arrayRefp && VN_IS(arrayRefp->varp()->user4p(), Var)) {
+            // Its index is of a solved size, known only after the setup of the constraints
+            unsupportedObjectRandIndex(nodep);
+            return;
+        }
+        // Read as state, or as out of range of an empty array
+        nodep->fromp()->v3warn(CONSTRAINTIGN,
+                               "Unsupported: randomizing this expression, treating as state");
+        FileLine* const fl = nodep->fileline();
+        AstCMethodHard* const sizep
+            = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
+        sizep->dtypeSetInt();
+        VNRelinker handle;
+        nodep->unlinkFrBack(&handle);
+        AstCond* const condp
+            = new AstCond{fl, new AstNeq{fl, sizep, new AstConst{fl, 0}}, nodep,
+                          new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0}};
+        condp->dtypeFrom(nodep);
+        handle.relink(condp);
+        editFormat(condp);
+    }
     // Move soft items of a constraint 'if' out to guarded soft constraints after 'lastp'
     void hoistGuardedSofts(AstNode*& lastp, AstConstraintIf* ifp, AstNodeExpr* outerCondp) {
         // The 'if' folds into one hard expression, so each soft item needs its own

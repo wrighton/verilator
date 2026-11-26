@@ -68,18 +68,39 @@ class SizedHolder;
   endfunction
 endclass
 
+// Likewise, its select of the last element, whose size it solves
+class Back;
+  rand Last st[$];
+  constraint c_st {
+    st.size() == 3;
+    st[$].b == 1;
+  }
+endclass
+
+class BackHolder;
+  rand Back b;
+  rand bit k;
+  constraint c_k {k == 1;}
+  function new();
+    b = new;
+  endfunction
+endclass
+
 module t;
   FixedHolder fixedHolder;
   EndingHolder endingHolder;
   SizedHolder sizedHolder;
+  BackHolder backHolder;
   int ok;
   initial begin
     fixedHolder = new;
     endingHolder = new;
     sizedHolder = new;
+    backHolder = new;
     ok = fixedHolder.randomize();
     ok = endingHolder.randomize();
     ok = sizedHolder.randomize();
+    ok = backHolder.randomize();
     $finish;
   end
 endmodule

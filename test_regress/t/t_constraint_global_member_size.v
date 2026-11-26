@@ -228,6 +228,55 @@ class LimitedHolder;
   endfunction
 endclass
 
+class Pair;
+  rand bit [7:0] d;
+  rand bit [7:0] v;
+endclass
+
+class NonZero;  // Selects by foreach indices of an array not ranged from 0
+  rand Pair af[2:3];
+  rand bit [7:0] k;
+  constraint c_af {
+    foreach (af[i]) af[i].d > af[i].v;
+    k < 8'd50;
+  }
+  function new();
+    foreach (af[i]) af[i] = new;
+  endfunction
+endclass
+
+class NonZeroHolder;
+  rand NonZero z;
+  constraint c_k {z.k > 8'd10;}
+  function new();
+    z = new;
+  endfunction
+endclass
+
+class Negative;  // Likewise with a negative lower bound, and descending
+  rand Pair af[-2:1];
+  rand Pair ad[3:2];
+  rand bit [7:0] k;
+  constraint c_af {
+    foreach (af[i]) af[i].d > af[i].v;
+    foreach (ad[i]) ad[i].d > ad[i].v;
+    k < 8'd50;
+  }
+  function new();
+    foreach (af[i]) af[i] = new;
+    foreach (ad[i]) ad[i] = new;
+  endfunction
+endclass
+
+class NegativeHolder;
+  rand Negative z;
+  constraint c_k {z.k > 8'd10;}
+  function new();
+    z = new;
+  endfunction
+endclass
+
+
 module t;
   Trn trn;
   Grower grower;
@@ -236,6 +285,8 @@ module t;
   MixedHolder mixedHolder;
   Ordered2Holder ordered2Holder;
   LimitedHolder limitedHolder;
+  NonZeroHolder nonZeroHolder;
+  NegativeHolder negativeHolder;
   FixedHolder fixedHolder;
   int ok;
   initial begin
@@ -246,6 +297,8 @@ module t;
     mixedHolder = new;
     ordered2Holder = new;
     limitedHolder = new;
+    nonZeroHolder = new;
+    negativeHolder = new;
     fixedHolder = new;
     repeat (20) begin
       ok = trn.randomize();
@@ -264,6 +317,21 @@ module t;
       `checkh(indexedHolder.indexed.q.size(), 2);
       `checkh(indexedHolder.indexed.q[0].x, 8'd17);
       `checkh(indexedHolder.indexed.q[0].bos, 1'b1);
+      ok = negativeHolder.randomize();
+      `checkh(ok, 1);
+      `checkh(negativeHolder.z.k > 8'd10 && negativeHolder.z.k < 8'd50, 1'b1);
+      foreach (negativeHolder.z.af[i]) begin
+        `checkh(negativeHolder.z.af[i].d > negativeHolder.z.af[i].v, 1'b1);
+      end
+      foreach (negativeHolder.z.ad[i]) begin
+        `checkh(negativeHolder.z.ad[i].d > negativeHolder.z.ad[i].v, 1'b1);
+      end
+      ok = nonZeroHolder.randomize();
+      `checkh(ok, 1);
+      `checkh(nonZeroHolder.z.k > 8'd10 && nonZeroHolder.z.k < 8'd50, 1'b1);
+      foreach (nonZeroHolder.z.af[i]) begin
+        `checkh(nonZeroHolder.z.af[i].d > nonZeroHolder.z.af[i].v, 1'b1);
+      end
       ok = limitedHolder.randomize();
       `checkh(ok, 1);
       `checkh(limitedHolder.l.q.size(), limitedHolder.n);
