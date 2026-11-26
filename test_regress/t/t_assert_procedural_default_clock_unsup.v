@@ -19,10 +19,10 @@ module t (
     assert property (a |-> b);
     assert property (a |-> ##1 b);
   end
-  // A clock is only inferred from a single event, a restriction of this implementation
+  // The clock inferred from the event not otherwise used, posedge clk, supersedes default
+  // clocking (IEEE 1800-2023 16.14.6, 16.16), but the procedure also runs on another event
   always @(posedge clk or negedge rst_n) begin
     x <= rst_n;
-    assert property (a |-> b);
     assert property (a |-> ##1 b);
   end
 
