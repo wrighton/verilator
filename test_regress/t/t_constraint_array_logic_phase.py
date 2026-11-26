@@ -35,7 +35,8 @@ test.file_grep(
     solver_log, r'(?s)\(set-option :produce-models true\)'
     r'(?:(?!\(reset\)|:produce-unsat-assumptions).)*'
     r'\(set-logic QF_[A-Z]+\)(?:(?!\(reset\)).)*'
-    r'\(let \(\(\?i idx\)\) \(ite \(= \?i #x00000000\) #b0010010 ')
+    r'\(define-fun (__Vt\d+) \(\(\?i \(_ BitVec 32\)\)\) \(_ BitVec 7\) '
+    r'\(ite \(= \?i #x00000000\) #b0010010 (?:(?!\(reset\)).)*\(\1 idx\)')
 test.file_grep_not(solver_log,
                    r'(?s)\(set-logic (?!ALL\))[^)]*\)(?:(?!\(reset\)).)*\(as const \(Array ')
 

@@ -17,11 +17,12 @@ test.compile(threads=2 if test.vltmt else -1)
 solver_log = test.obj_dir + '/solver.log'
 test.execute(check_finished=True, all_run_flags=['+verilator+solver+file+' + solver_log])
 # The active arrays use QF_ABV before and after the held associative array's constant-array
-# solve; the held fixed-size array alone needs no constant array, read as a lookup of its values
+# solve; the held fixed-size array alone needs no constant array, read through a table of its
+# values
 test.file_grep(
     solver_log, r'(?s)\(set-logic QF_ABV\)(?:(?!\(reset\)).)*\(assert '
     r'.*?\(set-logic ALL\)(?:(?!\(reset\)).)*\(as const \(Array '
-    r'.*?\(set-logic QF_ABV\)(?:(?!\(reset\)).)*\(let \(\(\?i '
+    r'.*?\(set-logic QF_ABV\)(?:(?!\(reset\)).)*\(define-fun __Vt'
     r'.*?\(set-logic QF_ABV\)(?:(?!\(reset\)).)*\(assert ')
 test.file_grep_not(solver_log,
                    r'(?s)\(set-logic (?!ALL\))[^)]*\)(?:(?!\(reset\)).)*\(as const \(Array ')

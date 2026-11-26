@@ -2731,6 +2731,34 @@ private:
         return preamblep;
     }
 
+    // Call of 'method' of the randomizer
+    AstCMethodHard* newRandomizerCallp(FileLine* fl, VCMethod method, AstNodeExpr* pinsp) const {
+        AstCMethodHard* const callp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            method, pinsp};
+        callp->dtypeSetVoid();
+        return callp;
+    }
+    // What the solver must support for the text 'textp' builds, found in its fixed parts as the
+    // runtime would find it in a constraint's (see VlRandomizer::TableNeeds)
+    static uint8_t textNeeds(const AstNode* textp) {
+        uint8_t needs = 0;
+        const auto add = [&needs](const std::string& text) {
+            if (text.find("(as const (Array ") != std::string::npos) needs |= 1;
+            if (text.find("(Array ") != std::string::npos) needs |= 2;
+            // A product or quotient, of variables or not
+            for (const char* const opp :
+                 {"(bvmul ", "(bvudiv ", "(bvurem ", "(bvsdiv ", "(bvsrem ", "(bvsmod "}) {
+                if (text.find(opp) != std::string::npos) needs |= 2;
+            }
+        };
+        textp->foreach([&add](const AstSFormatF* fmtp) { add(fmtp->name()); });
+        textp->foreach([&add](const AstConst* constp) {
+            if (constp->num().isString()) add(constp->num().toString());
+        });
+        return needs;
+    }
+
     // Constraint text over the elements of an array is built at run time, by a loop
     // appending to a string variable.
 
@@ -3020,8 +3048,8 @@ private:
         return new AstConst{exprp->fileline(), AstConst::WidthedValue{}, exprp->width(), 0};
     }
     // Return an SMT array of the value of exprp at each element of the array selp selects, the
-    // elements stored into solver array 'baseName' if not empty, or if 'selected', that value at
-    // the index bound to '?i' (see editStateArraySel)
+    // elements stored into solver array 'baseName' if not empty, or if 'selected', the name of a
+    // table of that value at the index '?i' (see editStateArraySel)
     AstSFormatF* newIndexedArrayp(AstNodeExpr* exprp, AstNodeExpr* selp, bool selected = false,
                                   const std::string& baseName = "") {
         VL_RESTORER(m_inRandIndexElems);
@@ -3072,29 +3100,22 @@ private:
         handleIndexp->replaceWith(posp->cloneTreePure(false));
         VL_DO_DANGLING(handleIndexp->deleteTree(), handleIndexp);
         const int width = exprp->width();
-        AstVar* const textVarp = newTextVarp(selp);
         AstNodeExpr* const keyTextp
             = getConstFormat(posp->width() < idxWidth ? new AstExtend{fl, posp, idxWidth} : posp);
         AstNodeExpr* const valueTextp = VN_AS(iterateSubtreeReturnEdits(elemp), NodeExpr);
-        // The closing parentheses of a chain, or the opening ones of the stores
-        AstVar* const outerVarp = newTextVarp(selp);
-        outerVarp->name(m_uniqueNames.get("__Vouter"));
+        AstVar* textVarp = nullptr;
+        // The opening parentheses of the stores
+        AstVar* outerVarp = nullptr;
         AstNodeStmt* bodyp;
         if (selected) {
-            // Each element is a test of the index in the chain of them, '(ite (= ?i k) v ...)',
-            // which is linear in the number of elements and needs no constant array
-            bodyp = newTextAppendp(
-                fl, textVarp,
-                new AstConcatN{
-                    fl,
-                    new AstConcatN{fl, new AstConst{fl, AstConst::String{}, "(ite (= ?i "},
-                                   keyTextp},
-                    new AstConcatN{fl, new AstConst{fl, AstConst::String{}, ") "},
-                                   new AstConcatN{fl, valueTextp,
-                                                  new AstConst{fl, AstConst::String{}, " "}}}});
-            bodyp->addNext(
-                newTextAppendp(fl, outerVarp, new AstConst{fl, AstConst::String{}, ")"}));
+            // Each element is an entry of a table the runtime defines once (see
+            // VlRandomizer::table_end)
+            keyTextp->addNext(valueTextp);
+            bodyp = newRandomizerCallp(fl, VCMethod::RANDOMIZER_TABLE_ENTRY, keyTextp)->makeStmt();
         } else {
+            textVarp = newTextVarp(selp);
+            outerVarp = newTextVarp(selp);
+            outerVarp->name(m_uniqueNames.get("__Vouter"));
             // Each element stores its value in the array built so far
             bodyp = newTextAppendp(fl, outerVarp, new AstConst{fl, AstConst::String{}, "(store "});
             bodyp->addNext(newTermAppendp(fl, textVarp, nullptr, keyTextp));
@@ -3124,6 +3145,38 @@ private:
         }
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
+        if (selected) {
+            AstNodeExpr* const otherwisep
+                = assocDtp ? getConstFormat(defaultp)
+                           : VN_AS(iterateSubtreeReturnEdits(defaultp), NodeExpr);
+            // The keys are the positions in order, but for an associative array, an array
+            // declared high to low or an element that may be skipped
+            const AstUnpackArrayDType* const udtypep
+                = VN_CAST(arrayp->dtypep()->skipRefp(), UnpackArrayDType);
+            const bool positional
+                = !assocDtp && !nonNullp && (!udtypep || udtypep->declRange().ascending());
+            AstNodeExpr* const argsp = new AstConst{fl, static_cast<uint32_t>(idxWidth)};
+            argsp->addNext(new AstConst{fl, static_cast<uint32_t>(width)});
+            argsp->addNext(new AstConst{fl, AstConst::BitTrue{}, positional});
+            argsp->addNext(new AstConst{
+                fl, AstConst::WidthedValue{}, 8,
+                static_cast<uint32_t>(textNeeds(valueTextp) | textNeeds(otherwisep))});
+            blockp->addStmtsp(
+                newRandomizerCallp(fl, VCMethod::RANDOMIZER_TABLE_BEGIN, argsp)->makeStmt());
+            blockp->addStmtsp(new AstForeach{fl, headerp, bodyp});
+            // Ended in the block, as a value the block builds may be another table's
+            AstVar* const nameVarp = newTextVarp(selp);
+            nameVarp->name(m_uniqueNames.get("__Vtable"));
+            blockp->addDeclsp(nameVarp);
+            AstCMethodHard* const endp
+                = newRandomizerCallp(fl, VCMethod::RANDOMIZER_TABLE_END, otherwisep);
+            endp->dtypeSetString();
+            blockp->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, nameVarp, VAccess::WRITE}, endp});
+            return new AstSFormatF{
+                fl, "%s", false,
+                new AstExprStmt{fl, blockp, new AstVarRef{fl, nameVarp, VAccess::READ}}};
+        }
         blockp->addDeclsp(textVarp);
         blockp->addDeclsp(outerVarp);
         for (AstVar* const varp : {textVarp, outerVarp}) {
@@ -3131,7 +3184,7 @@ private:
                                             new AstConst{fl, AstConst::String{}, ""}});
         }
         blockp->addStmtsp(new AstForeach{fl, headerp, bodyp});
-        if (!selected && !baseName.empty()) {
+        if (!baseName.empty()) {
             // An element not stored is out of range, so is not read
             VL_DO_DANGLING(pushDeletep(defaultp), defaultp);
             blockp->addStmtsp(new AstAssign{
@@ -3144,28 +3197,20 @@ private:
             AstNodeExpr* const defaultTextp
                 = assocDtp ? getConstFormat(defaultp)
                            : VN_AS(iterateSubtreeReturnEdits(defaultp), NodeExpr);
-            if (selected) {
-                // The default closes the chain
-                blockp->addStmtsp(newTextAppendp(fl, textVarp, defaultTextp));
-                blockp->addStmtsp(
-                    newTextAppendp(fl, textVarp, new AstVarRef{fl, outerVarp, VAccess::READ}));
-            } else {
-                // Elements not stored read the default
-                const std::string sort = "(Array (_ BitVec " + cvtToStr(idxWidth) + ") (_ BitVec "
-                                         + cvtToStr(width) + "))";
-                blockp->addStmtsp(new AstAssign{
-                    fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
-                    new AstConcatN{
-                        fl,
-                        new AstConcatN{fl,
-                                       new AstConcatN{fl,
-                                                      new AstVarRef{fl, outerVarp, VAccess::READ},
-                                                      new AstConst{fl, AstConst::String{},
-                                                                   "((as const " + sort + ") "}},
-                                       new AstConcatN{fl, defaultTextp,
-                                                      new AstConst{fl, AstConst::String{}, ")"}}},
-                        new AstVarRef{fl, textVarp, VAccess::READ}}});
-            }
+            // Elements not stored read the default
+            const std::string sort = "(Array (_ BitVec " + cvtToStr(idxWidth) + ") (_ BitVec "
+                                     + cvtToStr(width) + "))";
+            blockp->addStmtsp(new AstAssign{
+                fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
+                new AstConcatN{
+                    fl,
+                    new AstConcatN{fl,
+                                   new AstConcatN{fl, new AstVarRef{fl, outerVarp, VAccess::READ},
+                                                  new AstConst{fl, AstConst::String{},
+                                                               "((as const " + sort + ") "}},
+                                   new AstConcatN{fl, defaultTextp,
+                                                  new AstConst{fl, AstConst::String{}, ")"}}},
+                    new AstVarRef{fl, textVarp, VAccess::READ}}});
         }
         return new AstSFormatF{
             fl, "%s", false,
@@ -3200,11 +3245,10 @@ private:
         // The offset into a fixed-size array is unsigned, even when computed as signed
         AstNodeExpr* const smtIndexp
             = newSmtIndexp(indexp, VN_IS(selp, CMethodHard) && indexp->isSigned(), sortWidth);
-        // The value of the element at the index, bound once as '?i'
-        AstSFormatF* const newp
-            = new AstSFormatF{nodep->fileline(), "(let ((?i %s)) %s)", false,
-                              VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr)};
-        newp->addExprsp(valuep);
+        // The value of the element at the index: a function of '?i' defined once per
+        // randomize(), so that other reads of the array, e.g. in a foreach, add no text
+        AstSFormatF* const newp = new AstSFormatF{nodep->fileline(), "(%s %s)", false, valuep};
+        newp->addExprsp(VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr));
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         return true;
@@ -10554,6 +10598,12 @@ class SolverSmtLowering final : public V3SolverLowering {
             = holderp->stmtsp() ? holderp->stmtsp()->unlinkFrBackWithNext() : nullptr;
         VL_DO_DANGLING(holderp->deleteTree(), holderp);
         AstNode* thensp = AstNode::addNextNull(stmtsp, implementConstraintsClear(fl, genp));
+        // Its tables are named apart from those of the randomizer it is merged into
+        thensp = AstNode::addNext(
+            thensp,
+            static_cast<AstNode*>(newGenMethodp(fl, genp, VCMethod::RANDOMIZER_TABLE_PREFIX_FROM,
+                                                new AstVarRef{fl, intop, VAccess::READWRITE})
+                                      ->makeStmt()));
         AstTask* const setupTaskp = SmtUtil::getCreateConstraintSetupFunc(classp, m_memberMap);
         thensp = AstNode::addNext(thensp, (new AstTaskRef{fl, setupTaskp})->makeStmt());
         AstNodeExpr* const argsp
