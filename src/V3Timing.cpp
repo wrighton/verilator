@@ -2860,13 +2860,28 @@ void V3Timing::chooseMailboxWaits(AstNetlist* nodep) {
     V3Global::dumpCheckGlobalTree("mailboxwait", 0, dumpTreeEitherLevel() >= 6);
 }
 
+// When no process suspends, a flush of the pending deferred assertion reports of a process,
+// which V3Assert placed where the process resumes, runs where it is
+static void inlineDeferredAssertFlushes(AstNetlist* nodep) {
+    std::vector<AstDeferredAssertFlush*> flushps;
+    nodep->foreach([&](AstDeferredAssertFlush* flushp) { flushps.push_back(flushp); });
+    for (AstDeferredAssertFlush* const flushp : flushps) {
+        flushp->replaceWith(flushp->stmtsp()->unlinkFrBackWithNext());
+        VL_DO_DANGLING(flushp->deleteTree(), flushp);
+    }
+}
+
 void V3Timing::timingAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
     {
         const VNUser1InUse m_user1InUse;
         const VNUser2InUse m_user2InUse;
         { TimingSuspendableVisitor{nodep}; }
-        if (v3Global.usesTiming()) TimingControlVisitor{nodep};
+        if (v3Global.usesTiming()) {
+            TimingControlVisitor{nodep};
+        } else {
+            inlineDeferredAssertFlushes(nodep);
+        }
     }
     if (v3Global.usesTiming() && nodep->exists([](const AstAlwaysReactive*) { return true; })) {
         TimingReactiveVisitor{nodep};
