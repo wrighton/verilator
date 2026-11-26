@@ -6921,6 +6921,13 @@ private:
         sizeRefp->user1(true);
         return VN_AS(iterateSubtreeReturnEdits(sizeRefp), NodeExpr);
     }
+    // A number of members, in the hexadecimal digits of the 96-bit sum counting them, which
+    // no sum of products of 32-bit sizes and such numbers can overflow
+    static std::string countHex(uint64_t value) {
+        std::ostringstream os;
+        os << std::hex << std::setw(24) << std::setfill('0') << value;
+        return os.str();
+    }
     // Listing of the leaf elements of a uniqueness constraint
     struct UniqueLeaves final {
         AstVar* const textVarp;  // Terms listed
@@ -7064,13 +7071,31 @@ private:
                 leaves.fixedVarp
                     = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfixed", nodep->findIntDType()};
                 leaves.fixedVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-                sizeSump = new AstSFormatF{fl, "#x00000000%8x", false,
+                sizeSump = new AstSFormatF{fl, "#x0000000000000000%8x", false,
                                            new AstVarRef{fl, leaves.fixedVarp, VAccess::READ}};
             }
-            if (itemp->dtypep()->skipRefp()->subDTypep()->isNonPackedArray()) continue;
-            sizeSump = new AstSFormatF{fl, "(bvadd %s ((_ zero_extend 32) %s))", false,
-                                       AstNode::addNext<AstNodeExpr, AstNodeExpr>(
-                                           sizeSump, newSolvedSizeTextp(itemp, sizeVarp))};
+            // Each element of the array holds the leaves of its element type, none if that
+            // is dynamically sized: an element it gains has none. A count above the number
+            // of values is as good as that number plus one.
+            uint64_t perElement = 1;
+            for (const AstNodeDType* subp = itemp->dtypep()->skipRefp()->subDTypep()->skipRefp();
+                 subp->isNonPackedArray(); subp = subp->subDTypep()->skipRefp()) {
+                const AstUnpackArrayDType* const adtypep = VN_CAST(subp, UnpackArrayDType);
+                if (!adtypep) {
+                    perElement = 0;
+                    break;
+                }
+                perElement = std::min(perElement * adtypep->elementsConst(), leafValues + 1);
+            }
+            if (!perElement) continue;
+            AstNodeExpr* termp = new AstSFormatF{fl, "((_ zero_extend 64) %s)", false,
+                                                 newSolvedSizeTextp(itemp, sizeVarp)};
+            if (perElement > 1) {
+                termp = new AstSFormatF{fl, "(bvmul %s #x" + countHex(perElement) + ")", false,
+                                        termp};
+            }
+            sizeSump
+                = new AstSFormatF{fl, "(bvadd %s %s)", false, AstNode::addNext(sizeSump, termp)};
         }
         for (AstVar* const varp : {leaves.countVarp, leaves.fixedVarp}) {
             if (!varp) continue;
@@ -7097,10 +7122,8 @@ private:
         AstNodeExpr* distinctp;
         if (sizeSump) {
             // At most one member for each value of the leaf type
-            std::ostringstream valuesHex;
-            valuesHex << std::hex << std::setw(16) << std::setfill('0') << leafValues;
-            AstSFormatF* const countp
-                = new AstSFormatF{fl, "(bvule %s #x" + valuesHex.str() + ")", false, sizeSump};
+            AstSFormatF* const countp = new AstSFormatF{
+                fl, "(bvule %s #x" + countHex(leafValues) + ")", false, sizeSump};
             fewp = new AstSFormatF{fl, "(__Vbv %s)", false, countp->cloneTreePure(false)};
             distinctp
                 = new AstSFormatF{fl, "(__Vbv (and (distinct%s) %s))", false,
