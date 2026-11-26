@@ -307,7 +307,6 @@ public:
         return setupAllTaskp;
     }
 
-    // Solver variable name for a constrained dynamic or queue size.
     // A variable's solver symbol: its name, renamed if it is a reserved word or a theory symbol,
     // which a solver does not take as a declared name, even quoted. A user's name cannot start
     // with "__V".
@@ -329,8 +328,11 @@ public:
                && std::all_of(name.begin() + 2, name.end(),
                               [](char c) { return c >= 'a' && c <= 'z'; });
     }
+    // Solver variable name for a constrained dynamic or queue size. VlRandomizer::sizeVarp()
+    // in verilated_random.cpp looks it up to pin the array by element between solve-before
+    // phases; keep the two the same (t_constraint_solve_before_array_pins checks it).
     static std::string sizeVarName(const AstVar* const varp) {
-        return "__V" + varp->name() + "_size";
+        return "__V" + smtSymbol(varp->name()) + "_size";
     }
 
     // A solve-before item orders variables; it does not constrain container size.
