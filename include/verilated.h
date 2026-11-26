@@ -679,6 +679,8 @@ protected:
         int8_t m_timeprecision;  // Time precision as 0..15
         int m_errorCount = 0;  // Number of errors
         int m_errorLimit = 1;  // Stop on error number
+        // Most elements randomize() may give a dynamic array or queue; see randArrayMax()
+        int m_randArrayMax = 1 << 20;
         int m_randReset = 0;  // Random reset: 0=all 0s, 1=all 1s, 2=random
         int m_randSeed = 1;  // Random seed (default 1; +verilator+seed+0 picks at parse time)
         static constexpr int UNITS_NONE = 99;  // Default based on precision
@@ -880,6 +882,11 @@ public:
     void errorCount(int val) VL_MT_SAFE;
     /// Increment current number of errors/assertions
     void errorCountInc() VL_MT_SAFE;
+    /// Return most elements randomize() may give a dynamic array or queue
+    int randArrayMax() const VL_MT_SAFE { return m_s.m_randArrayMax; }
+    /// Set most elements randomize() may give a dynamic array or queue. Like the other
+    /// +verilator+ arguments, set before the model runs, as it is read without a lock.
+    void randArrayMax(int val) VL_MT_SAFE;
     /// Return number of errors/assertions before stop
     int errorLimit() const VL_MT_SAFE { return m_s.m_errorLimit; }
     /// Set number of errors/assertions before stop
