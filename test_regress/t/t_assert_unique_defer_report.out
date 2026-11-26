@@ -10,12 +10,14 @@
 [7] %Error: t_assert_unique_defer_report.v:84: Assertion failed in t.loop.unnamedblk1: 'unique if' statement violated
 [7] %Error: t_assert_unique_defer_report.v:84: Assertion failed in t.loop.unnamedblk1: 'unique if' statement violated
 [8] %Error: t_assert_unique_defer_report.v:99: Assertion failed in t.gen_blk.named: priority case, but non-match found for '1'h1'
-[10] %Error: t_assert_unique_defer_report.v:114: Assertion failed in t.check_in_function: unique case, but multiple matches found for '1'h1'
+[9] priority_if_none: after the check
+[9] %Error: t_assert_unique_defer_report.v:117: Assertion failed in t.priority_if_none: 'priority if' statement violated
+[10] %Error: t_assert_unique_defer_report.v:124: Assertion failed in t.check_in_function: unique case, but multiple matches found for '1'h1'
 [10] in_function: after the check
-[11] %Error: t_assert_unique_defer_report.v:131: Assertion failed in t.__VforkTask_0.in_join_none: unique case, but multiple matches found for '1'h1'
+[11] %Error: t_assert_unique_defer_report.v:141: Assertion failed in t.__VforkTask_0.in_join_none: unique case, but multiple matches found for '1'h1'
 [11] in_join_none: after the check
-[12] %Error: t_assert_unique_defer_report.v:149: Assertion failed in t.in_assertion_action: unique case, but multiple matches found for '1'h1'
+[12] %Error: t_assert_unique_defer_report.v:159: Assertion failed in t.in_assertion_action: unique case, but multiple matches found for '1'h1'
 [12] in_assertion_action: after the check
 *-* All Finished *-*
-[20] %Error: t_assert_unique_defer_report.v:160: Assertion failed in t.in_final: unique case, but multiple matches found for '1'h1'
+[20] %Error: t_assert_unique_defer_report.v:170: Assertion failed in t.in_final: unique case, but multiple matches found for '1'h1'
 [20] in_final: after the check

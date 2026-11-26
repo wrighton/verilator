@@ -1,0 +1,3 @@
+[10] %Error: t_uniqueif.v:88: Assertion failed in top.t: 'priority if' statement violated
+%Error: t/t_uniqueif.v:88: Verilog $stop
+Aborting...
