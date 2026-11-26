@@ -2022,7 +2022,8 @@ class AssertVisitor final : public VNVisitor {
     // Lower observed deferred action into a pending call with its input arguments snapshotted.
     // Pending calls run in the Reactive region unless a flush of their process clears them
     // (IEEE 1800-2023 16.4.1).
-    AstNodeStmt* newObservedDeferredAction(FileLine* flp, AstNodeStmt* actionsp) {
+    AstNodeStmt* newObservedDeferredAction(FileLine* flp, AstNodeStmt* actionsp,
+                                           const AstNodeCoverOrAssert* assertp) {
         // The null statement of an 'else;', an empty implied block, has no call to defer
         const AstBegin* const beginp = VN_CAST(actionsp, Begin);
         if (beginp && beginp->implied() && !beginp->stmtsp()) return actionsp;
@@ -2075,17 +2076,64 @@ class AssertVisitor final : public VNVisitor {
                 }
             }
         }
-        return newObservedDeferredCall(flp, actionsp, queuesp);
+        return newObservedDeferredCall(flp, actionsp, queuesp, assertp);
     }
-    // Make statements pending, appending what queues them to queuesp
-    AstNodeStmt* newObservedDeferredCall(FileLine* flp, AstNodeStmt* callsp,
-                                         AstNodeStmt* queuesp) {
+    // Make statements pending, appending what queues them to queuesp. A pending call made
+    // before an $assertkill of its assertion is not run (IEEE 1800-2023 20.11).
+    AstNodeStmt* newObservedDeferredCall(FileLine* flp, AstNodeStmt* callsp, AstNodeStmt* queuesp,
+                                         const AstNodeCoverOrAssert* assertp) {
         AstVar* const pendingp
             = newModuleTemp(flp, m_obsNames.get("Pending"), m_modp->findUInt32DType(), m_modp);
         pendingp->setIgnoreSchedWrite();
         m_obsFlushp = AstNode::addNext(
             m_obsFlushp, new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
                                        new AstConst{flp, 0}});
+        // Dropping a call made before a kill still removes its values from their queues
+        AstNodeStmt* dropsp = nullptr;
+        if (queuesp) {
+            queuesp->foreachAndNext([&](const AstCMethodHard* pushp) {
+                if (pushp->method() != VCMethod::ARRAY_PUSH_BACK) return;
+                AstVar* const valQueuep = VN_AS(pushp->fromp(), VarRef)->varp();
+                AstCMethodHard* const popp
+                    = new AstCMethodHard{flp, new AstVarRef{flp, valQueuep, VAccess::READWRITE},
+                                         VCMethod::DYN_POP_FRONT};
+                popp->dtypeSetVoid();
+                dropsp = AstNode::addNext(dropsp, popp->makeStmt());
+            });
+        }
+        // The calls pending when a change of the $assertkill count of the assertion is first seen
+        // were made before the kill, so are dropped. They are the first pending.
+        AstVar* const killSeenp
+            = newModuleTemp(flp, m_obsNames.get("KillSeen"), m_modp->findUInt32DType(), m_modp);
+        killSeenp->setIgnoreSchedWrite();
+        AstVar* const killedp
+            = newModuleTemp(flp, m_obsNames.get("Killed"), m_modp->findUInt32DType(), m_modp);
+        killedp->setIgnoreSchedWrite();
+        m_obsFlushp = AstNode::addNext(
+            m_obsFlushp,
+            new AstAssign{flp, new AstVarRef{flp, killedp, VAccess::WRITE}, new AstConst{flp, 0}});
+        const auto newKillCount = [&]() {
+            return V3AssertCommon::newAssertCtlGetp(flp, VAssertCtlQuery::KILL,
+                                                    assertp->userType(), assertp->directive(),
+                                                    assertp->controlVarp());
+        };
+        const auto newKillCheck = [&]() {
+            AstNodeStmt* const stmtsp
+                = new AstAssign{flp, new AstVarRef{flp, killedp, VAccess::WRITE},
+                                new AstVarRef{flp, pendingp, VAccess::READ}};
+            stmtsp->addNext(
+                new AstAssign{flp, new AstVarRef{flp, killSeenp, VAccess::WRITE}, newKillCount()});
+            return new AstIf{
+                flp, new AstNeq{flp, newKillCount(), new AstVarRef{flp, killSeenp, VAccess::READ}},
+                stmtsp};
+        };
+        queuesp = AstNode::addNext(queuesp, newKillCheck());
+        dropsp = AstNode::addNext(static_cast<AstNodeStmt*>(new AstAssign{
+                                      flp, new AstVarRef{flp, killedp, VAccess::WRITE},
+                                      new AstSub{flp, new AstVarRef{flp, killedp, VAccess::READ},
+                                                 new AstConst{flp, 1}}}),
+                                  dropsp);
+        callsp = new AstIf{flp, new AstVarRef{flp, killedp, VAccess::READ}, dropsp, callsp};
         if (!m_obsEventp) {
             m_obsEventp = newModuleTemp(flp, m_obsNames.get("Event"),
                                         m_modp->findBasicDType(VBasicDTypeKwd::EVENT), m_modp);
@@ -2115,6 +2163,14 @@ class AssertVisitor final : public VNVisitor {
             flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
             new AstSub{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}});
         reactLoopp->addStmtsp(callsp);
+        // Every report pending when the Reactive region runs has matured, also if an action run
+        // before it kills its assertion, so the checks come before any of the calls
+        AstIf* const checkp = newKillCheck();
+        if (m_obsReactivep->stmtsp()) {
+            m_obsReactivep->stmtsp()->addHereThisAsNext(checkp);
+        } else {
+            m_obsReactivep->addStmtsp(checkp);
+        }
         m_obsReactivep->addStmtsp(reactLoopp);
         return queuesp;
     }
@@ -2776,8 +2832,8 @@ class AssertVisitor final : public VNVisitor {
                 // IEEE 1800-2023 16.4.2: Deferred coverage is flushed like a pending report
                 AstNodeStmt* creditsp = covincp;
                 if (obsDeferred) {
-                    creditsp = newObservedDeferredCall(flp, covincp, nullptr);
-                    if (passsp) passsp = newObservedDeferredAction(flp, passsp);
+                    creditsp = newObservedDeferredCall(flp, covincp, nullptr, nodep);
+                    if (passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
                 }
                 if (passsp) {
                     passsp = newIfAssertPassOn(nodep->controlVarp(), passsp, nodep->directive(),
@@ -2799,8 +2855,8 @@ class AssertVisitor final : public VNVisitor {
                 failsp = newFireAssertUnchecked(
                     nodep, VN_IS(nodep, AssertIntrinsic) ? "'$cast' failed." : "'assert' failed.");
             if (obsDeferred) {
-                if (passsp) passsp = newObservedDeferredAction(flp, passsp);
-                if (failsp) failsp = newObservedDeferredAction(flp, failsp);
+                if (passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
+                if (failsp) failsp = newObservedDeferredAction(flp, failsp, nodep);
             }
         } else {
             nodep->v3fatalSrc("Unknown node type");

@@ -96,8 +96,9 @@ module t;
   always @(negedge clk) begin
     case (cyc)
       3: begin
-        // Global Kill retains pending reports in both configurations.
-        `checkd(deferred_sum, 8);
+        // Global Kill drops the report pending at it in both configurations (IEEE 1800-2023
+        // 20.11), keeping the one made after it.
+        `checkd(deferred_sum, 5);
         `checkd(split_passes > 0, 1);
         `checkd(unsplit_passes > 0, 1);
         split_at_off = split_passes;
