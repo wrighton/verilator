@@ -320,6 +320,14 @@ class DefaultSampledValueVisitor final : public VNVisitor {
     }
     void visit(AstArraySel* nodep) override { visitSelect(nodep); }
     void visit(AstSel* nodep) override { visitSelect(nodep); }
+    // The default sampled value of a past value is that of its expression, its value before
+    // enough clock ticks (IEEE 1800-2023 16.9.3)
+    void visit(AstPast* nodep) override {
+        AstNodeExpr* const exprp = nodep->exprp()->unlinkFrBack();
+        nodep->replaceWith(exprp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        iterate(exprp);
+    }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:
