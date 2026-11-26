@@ -55,4 +55,8 @@
                                  : ... note: In instance 't'
    55 |   always @(posedge clk) if ($rose(cb4.in4)) $display(cb4.in4);
       |                                       ^~~
+%Error: t/t_clocking_bad4.v:60:13: Skew must be constant (IEEE 1800-2023 14.4)
+                                 : ... note: In instance 't'
+   60 |     output #cyc out5;
+      |             ^~~
 %Error: Exiting due to
