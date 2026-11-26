@@ -112,6 +112,7 @@ private:
     bool m_inAssignDlyLhs = false;  // True if in AssignDly's LHS
     bool m_inSynchDrive = false;  // True if in synchronous drive
     bool m_inConcatAssign = false;  // True if in assignment to a concatenation
+    bool m_inSampled = false;  // True if under a sampled value (IEEE 1800-2023 16.5.1)
     std::vector<SynchDrive> m_drives;  // Clockvars written by the synchronous drive
     bool m_hasCycleDelay = false;  // True if node has cycle delay beneath
     std::vector<AstVarXRef*> m_xrefsp;  // list of xrefs that need name fixup
@@ -244,6 +245,13 @@ private:
                                                new AstVarRef{flp, evtVarp, VAccess::READ}}},
             nullptr};
         return new AstIf{flp, new AstNot{flp, isTriggeredp}, waitp};
+    }
+
+    // Iterate the operands of a sampled value function or a sampled expression
+    void iterateSampled(AstNodeExpr* nodep) {
+        VL_RESTORER(m_inSampled);
+        m_inSampled = true;
+        iterateChildren(nodep);
     }
 
     static void checkSamplingFuncDType(AstNodeExpr* nodep, const AstNode* exprp) {
@@ -452,7 +460,7 @@ private:
                 AstCMethodHard* const popp = new AstCMethodHard{
                     flp, new AstVarRef{flp, queueVarp, VAccess::READWRITE}, VCMethod::DYN_POP,
                     new AstTime{nodep->fileline(), m_modp->timeunit()}};
-                popp->addPinsp(skewp->unlinkFrBack());
+                popp->addPinsp(skewp->cloneTree(false));
                 refp->access(VAccess::READWRITE);  // Only conditionally assigned
                 popp->addPinsp(refp);
                 popp->dtypeSetVoid();
@@ -682,6 +690,15 @@ private:
             if (nodep->access().isReadOrRW() && itemp->direction() == VDirection::OUTPUT) {
                 nodep->v3error("Cannot read from output clockvar (IEEE 1800-2023 14.3)");
             }
+            if (m_inSampled && itemp->direction() == VDirection::INPUT) {
+                // A non-constant skew is reported with the clocking item
+                const AstConst* const skewp
+                    = VN_CAST(V3Const::constifyEdit(itemp->skewp()), Const);
+                if (skewp && !skewp->num().is1Step()) {
+                    nodep->v3error("Cannot sample input clockvar with a skew other than #1step"
+                                   " (IEEE 1800-2023 16.5.1).");
+                }
+            }
             if (nodep->access().isWriteOrRW()) {
                 if (itemp->direction() == VDirection::OUTPUT) {
                     if (!m_inAssignDlyLhs) {
@@ -793,7 +810,7 @@ private:
     }
     void visit(AstFalling* nodep) override {
         if (nodep->user1SetOnce()) return;
-        iterateChildren(nodep);
+        iterateSampled(nodep);
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -807,7 +824,7 @@ private:
     }
     void visit(AstFell* nodep) override {
         if (nodep->user1SetOnce()) return;
-        iterateChildren(nodep);
+        iterateSampled(nodep);
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -824,7 +841,7 @@ private:
     }
     void visit(AstFuture* nodep) override {
         if (nodep->user1SetOnce()) return;
-        iterateChildren(nodep);
+        iterateSampled(nodep);
         checkSamplingFuncDType(nodep, nodep->exprp());
         AstSenTree* const sentreep = nodep->sentreep();
         if (sentreep) VL_DO_DANGLING(pushDeletep(sentreep->unlinkFrBack()), sentreep);
@@ -833,7 +850,7 @@ private:
     void visit(AstPast* nodep) override {
         checkSamplingFuncDType(nodep, nodep->exprp());
         if (nodep->sentreep()) return;  // Already processed
-        iterateChildren(nodep);
+        iterateSampled(nodep);
         nodep->sentreep(newSenTree(nodep));
     }
     void visit(AstSConsRep* nodep) override {
@@ -888,7 +905,7 @@ private:
     }
     void visit(AstRising* nodep) override {
         if (nodep->user1SetOnce()) return;
-        iterateChildren(nodep);
+        iterateSampled(nodep);
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -902,7 +919,7 @@ private:
     }
     void visit(AstRose* nodep) override {
         if (nodep->user1SetOnce()) return;
-        iterateChildren(nodep);
+        iterateSampled(nodep);
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -1043,7 +1060,7 @@ private:
     }
     void visit(AstStable* nodep) override {
         if (nodep->user1SetOnce()) return;
-        iterateChildren(nodep);
+        iterateSampled(nodep);
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -1059,7 +1076,7 @@ private:
     }
     void visit(AstSteady* nodep) override {
         if (nodep->user1SetOnce()) return;
-        iterateChildren(nodep);
+        iterateSampled(nodep);
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -1072,7 +1089,7 @@ private:
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void visit(AstSampled* nodep) override {
-        iterateChildren(nodep);
+        iterateSampled(nodep);
         if (!nodep->internal()) checkSamplingFuncDType(nodep, nodep->exprp());
     }
 
