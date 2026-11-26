@@ -413,6 +413,42 @@ module t;
     `checkp(edyn7, "'{'h33, 'h22, 'h11}");
   endtask
 
+  task test8;
+    // Items of unpacked arrays selected by with[]
+    byte unsigned data[];
+    byte unsigned q[$];
+    byte unsigned f[4];
+    byte unsigned fd[3:0];
+    int unsigned n;
+    bit [15:0] p16;
+    bit [7:0] p8;
+    data = '{8'h11, 8'h22, 8'h33, 8'h44};
+    q = '{8'h55, 8'h66, 8'h77};
+    f = '{8'h01, 8'h02, 8'h03, 8'h04};
+    n = 2;
+    data = {>>{data with [0:n-1]}};
+    `checkh(data.size(), 2);
+    `checkh(data[0], 8'h11);
+    `checkh(data[1], 8'h22);
+    p16 = {>>{q with [n-1+:2]}};
+    `checkh(p16, 16'h6677);
+    p16 = {<<8{q with [n-:2]}};
+    `checkh(p16, 16'h7766);
+    p8 = {>>{f with [n]}};
+    `checkh(p8, 8'h03);
+    p16 = {>>{f with [1:2]}};
+    `checkh(p16, 16'h0203);
+    // As the matching slice of a descending array
+    fd = '{8'h04, 8'h03, 8'h02, 8'h01};
+    p16 = {>>{fd with [2:1]}};
+    `checkh(p16, 16'h0302);
+    // At a runtime position
+    for (int i = 0; i < 2; ++i) begin
+      p16 = {>>{fd with [n - i -: 2]}};
+      `checkh(p16, i == 0 ? 16'h0302 : 16'h0201);
+    end
+  endtask
+
   initial begin
     test1();
     test2();
@@ -421,6 +457,7 @@ module t;
     test5();
     test6();
     test7();
+    test8();
     $write("*-* All Finished *-*\n");
     $finish;
   end
