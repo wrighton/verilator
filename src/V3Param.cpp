@@ -349,6 +349,9 @@ class ParamProcessor final {
     static constexpr std::string::size_type DIGEST_DIGITS = 8;
 
     const AstNodeModule* m_modp = nullptr;  // Current module being processed
+    // Modules whose parameters all have values, checked once (see nodeDeparamCommon)
+    std::unordered_set<const AstNodeModule*> m_paramsValuedModps;
+    VDouble0 m_statStmtScans;  // Statements scanned for references
 
     // Database to get lib-create wrapper that matches parameters in hierarchical Verilation
     ParameterizedHierBlocks m_hierBlocks;
@@ -2249,20 +2252,29 @@ class ParamProcessor final {
         // Link source class to its specialized version for later relinking of method references
         if (defaultsResolved) srcModp->user4p(newModp);
 
-        for (AstNode* const stmtp : newModp->stmtspList()) {
-            if (AstParamTypeDType* dtypep = VN_CAST(stmtp, ParamTypeDType)) {
-                if (VN_IS(dtypep->skipRefOrNullp(), VoidDType)) {
-                    nodep->v3error(
-                        "Class parameter type without default value is never given value"
-                        << " (IEEE 1800-2023 6.20.1): " << dtypep->prettyNameQ());
+        // A module whose parameters all have values keeps them, so is checked only once, as
+        // checking it for each reference would be quadratic
+        if (!m_paramsValuedModps.count(newModp)) {
+            bool valued = true;
+            for (AstNode* const stmtp : newModp->stmtspList()) {
+                ++m_statStmtScans;
+                if (AstParamTypeDType* dtypep = VN_CAST(stmtp, ParamTypeDType)) {
+                    if (VN_IS(dtypep->skipRefOrNullp(), VoidDType)) {
+                        valued = false;
+                        nodep->v3error(
+                            "Class parameter type without default value is never given value"
+                            << " (IEEE 1800-2023 6.20.1): " << dtypep->prettyNameQ());
+                    }
+                }
+                if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                    if (VN_IS(newModp, Class) && varp->isParam() && !varp->valuep()) {
+                        valued = false;
+                        nodep->v3error("Class parameter without default value is never given value"
+                                       << " (IEEE 1800-2023 6.20.1): " << varp->prettyNameQ());
+                    }
                 }
             }
-            if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                if (VN_IS(newModp, Class) && varp->isParam() && !varp->valuep()) {
-                    nodep->v3error("Class parameter without default value is never given value"
-                                   << " (IEEE 1800-2023 6.20.1): " << varp->prettyNameQ());
-                }
-            }
+            if (valued) m_paramsValuedModps.insert(newModp);
         }
 
         genericInterfaceVarSetup(paramsp, pinsp);
@@ -2702,7 +2714,9 @@ public:
             m_allModuleNames.insert(modp->name());
         }
     }
-    ~ParamProcessor() = default;
+    ~ParamProcessor() {
+        V3Stats::addStatSum("Param, Statements scanned for references", m_statStmtScans);
+    }
     VL_UNCOPYABLE(ParamProcessor);
 };
 
@@ -2980,6 +2994,9 @@ class ParamVisitor final : public VNVisitor {
     // STATE - across all visitors
     ParamState& m_state;  // Common state
     ParamProcessor m_processor;  // De-parameterize a cell, build modules
+    // Interfaces whose nested interface cells are specialized (see specializeNestedIfaceCells)
+    std::unordered_set<const AstNodeModule*> m_nestedSpecializedModps;
+    VDouble0 m_statStmtScans;  // Statements scanned for references
     GenForUnroller m_unroller;  // Unroller for AstGenFor
 
     bool m_iterateModule = false;  // Iterating module body
@@ -3271,7 +3288,12 @@ class ParamVisitor final : public VNVisitor {
 
     // Deparameterize and constify nested interface cells within ifaceModp.
     void specializeNestedIfaceCells(AstNodeModule* ifaceModp) {
+        // Specializing removes the parameters of its nested cells, so a later call, as for each
+        // reference to the interface, has nothing to do, until a cell array is split (see
+        // visit(AstCell)). Scanning it for each reference would be quadratic.
+        if (!m_nestedSpecializedModps.insert(ifaceModp).second) return;
         for (AstNode* const stmtp : ifaceModp->stmtspList()) {
+            ++m_statStmtScans;
             AstCell* const nestedCellp = VN_CAST(stmtp, Cell);
             if (!nestedCellp) continue;
             if (!VN_IS(nestedCellp->modp(), Iface)) continue;
@@ -3520,8 +3542,9 @@ class ParamVisitor final : public VNVisitor {
                             "No __Viftop variable for interface array");
                 return varp;
             }();
-            // Expand the instance array into its elements
+            // Expand the instance array into its elements, cells to specialize if nested
             expandCellArrayDimensions(nodep, ifaceVarp, nodep->rangep(), "", 0);
+            m_nestedSpecializedModps.erase(m_modp);
             if (ifaceVarp) {
                 ifaceVarp->isIfaceArraySplit(true);
                 // Until V3Width removes it, the whole array variable refers to the first
@@ -4038,7 +4061,9 @@ public:
         // Relies on modules already being in top-down-order
         iterate(netlistp);
     }
-    ~ParamVisitor() override = default;
+    ~ParamVisitor() override {
+        V3Stats::addStatSum("Param, Statements scanned for references", m_statStmtScans);
+    }
     ParamProcessor& processor() { return m_processor; }
     VL_UNCOPYABLE(ParamVisitor);
 };
