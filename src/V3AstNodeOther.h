@@ -518,6 +518,7 @@ class AstNodeSchema VL_NOT_FINAL : public AstNode {
     // with the actual arguments replacing the formal ports
     // @astgen op1 := declsp : List[AstNode]  // Ports and local declarations
     std::string m_name;  // Name of definition
+    std::string m_origName;  // Name as declared, of a copy named apart from its declaration
 
 protected:
     AstNodeSchema(VNType t, FileLine* fl, const std::string& name)
@@ -527,6 +528,12 @@ protected:
 public:
     ASTGEN_MEMBERS_AstNodeSchema;
     std::string name() const override VL_MT_STABLE { return m_name; }
+    void name(const std::string& name) override { m_name = name; }
+    std::string origName() const override { return m_origName; }
+    void origName(const std::string& name) { m_origName = name; }
+    std::string prettyNameMsg() const override {
+        return prettyName(m_origName.empty() ? m_name : m_origName);
+    }
     bool maybePointedTo() const override VL_MT_SAFE { return true; }
 };
 
