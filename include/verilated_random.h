@@ -319,6 +319,8 @@ class VlRandomizer VL_NOT_FINAL {
     void emitDefines(std::ostream& os) const;
     void emitDeclares(std::ostream& os, bool pinCurrent) const;
     void emitAsserts(std::ostream& os, const std::vector<std::string>& extras, bool named) const;
+    // A flat solve's logic, variables and constraints, and randc exclusions
+    void emitFlat(std::ostream& os, const std::vector<std::string>& uniqueExprs) const;
     bool nextFlat(VlRNG& rngr, VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
 
     // --- UniGen2 (a near-uniform constrained randomization sampler) fields ---
@@ -370,9 +372,14 @@ class VlRandomizer VL_NOT_FINAL {
         int root;  // Index of the whole variable or element it is part of
         int value0 = 0;  // Lowest bit of the value it is pinned to
     };
-    // Move the solution towards random values the constraints allow
+    // Move the solution towards random values the constraints allow; uniqueExprsp, for a
+    // flat solve, lets the solution be found again in a fresh session
     void solveDiversity(VlRNG& rngr, VlSolverSession& sess,
-                        const std::set<std::string>* fixedp = nullptr);
+                        const std::set<std::string>* fixedp = nullptr,
+                        const std::vector<std::string>* uniqueExprsp = nullptr);
+    // Find a random solution again in a fresh session, after spreading kept nothing
+    void resolveFresh(VlRNG& rngr, VlSolverSession& sess,
+                      const std::vector<std::string>& uniqueExprs, uint64_t limit);
     // Assume literals __Va<first>... (one per term) with keep, dropping conflicting ones until SAT
     bool assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std::string& keep, int first,
                         const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
