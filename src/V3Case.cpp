@@ -612,8 +612,8 @@ class CaseVisitor final : public VNVisitor {
             for (AstNode* const condp : cip->condspList()) {
                 // Count conditions that can actually match.
                 if (!neverItem(nodep, VN_AS(condp, NodeExpr))) ++m_caseNConditions;
-                // Mark opaque if non-constant condition
-                if (!VN_IS(condp, Const)) {
+                // Mark opaque if non-constant condition, or case inside item of another width
+                if (!VN_IS(condp, Const) || condp->width() != caseExprp->width()) {
                     m_caseOpaque = true;
                     canBeDecoder = false;  // Can't be a decoder if opaque
                 }
@@ -951,10 +951,19 @@ class CaseVisitor final : public VNVisitor {
         AstNodeExpr* const caseExprp = casep->exprp()->cloneTreePure(false);
         // InsideRange: Similar logic in V3Width::visit(AstInside)
         if (AstInsideRange* const itemRangep = VN_CAST(itemExprp, InsideRange)) {
-            AstNodeExpr* const resultp = itemRangep->newAndFromInside(
-                caseExprp, itemRangep->lhsp()->unlinkFrBack(), itemRangep->rhsp()->unlinkFrBack());
+            AstNodeExpr* const resultp
+                = itemRangep->newAndFromInside(caseExprp, itemRangep->lhsp()->unlinkFrBack(),
+                                               itemRangep->rhsp()->unlinkFrBack(), true);
             VL_DO_DANGLING2(pushDeletep(itemExprp), itemExprp, itemRangep);
             return resultp;
+        }
+
+        // A case inside item keeps its own width if signedness differs (see V3Width)
+        if (itemExprp->width() != caseExprp->width()) {
+            const AstConst* const itemConstp = VN_CAST(itemExprp, Const);
+            const bool wild = itemConstp && itemConstp->num().isFourState();
+            return AstNodeBiop::newTypedCompare(wild ? VNType::EqWild : VNType::Eq, flp, caseExprp,
+                                                itemExprp);
         }
 
         if (AstConst* const itemConstp = VN_CAST(itemExprp, Const)) {
