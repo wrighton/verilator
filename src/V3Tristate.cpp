@@ -734,12 +734,14 @@ class TristateVisitor final : public TristateBaseVisitor {
         return refp;
     }
     // Whether reads of varp in this module take its enable from the instance's connection: an
-    // input port of a module instantiated by another module. Its __en is otherwise only the
-    // enable of drivers in this module, such as a pull, not of what drives the port.
+    // input or inout port of a module instantiated by another module. Its __en is otherwise
+    // only the enable of drivers in this module, such as a pull, not of what drives the port.
     bool readsConnectionEn(const AstNodeVarRef* refp) const {
         const AstVar* const varp = refp->varp();
         return VN_IS(refp, VarRef) && VN_IS(m_modp, Module) && m_modp->level() > 2
-               && !m_modp->hierBlock() && varp->isIO() && !varp->declDirection().isWritable();
+               && !m_modp->hierBlock() && varp->isIO()
+               && (!varp->declDirection().isWritable()
+                   || varp->declDirection() == VDirection::INOUT);
     }
     AstVar* getCreateRenVarp(AstVar* invarp) {
         AuxAstVar& aux = m_varAux(invarp);
@@ -763,8 +765,15 @@ class TristateVisitor final : public TristateBaseVisitor {
             return newAllZerosOrOnes(varp, true);
         }
         if (readsConnectionEn(refp)) {
-            VL_DO_DANGLING(enp->deleteTree(), enp);
-            enp = new AstVarRef{refp->fileline(), getCreateRenVarp(varp), VAccess::READ};
+            AstVarRef* const renp
+                = new AstVarRef{refp->fileline(), getCreateRenVarp(varp), VAccess::READ};
+            if (varp->declDirection() == VDirection::INOUT) {
+                // Also as this module drives it, if its connection's enable is not known
+                enp = new AstOr{refp->fileline(), renp, enp};
+            } else {
+                VL_DO_DANGLING(enp->deleteTree(), enp);
+                enp = renp;
+            }
         }
         const AuxAstVar& aux = m_varAux(varp);
         if (!aux.pullp && aux.bitPulls.empty()) return enp;
