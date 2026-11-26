@@ -596,6 +596,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstNodeModule* modp;  // Module containing the driver
         AstVar* targetp;  // Canonical interface net
         string dotted;
+        string inlinedDots;
         AstModport* modportp;
         std::array<IfaceRankBucket, VStrength::SUPPLY + 1> ranks{};
     };
@@ -646,9 +647,10 @@ class TristateVisitor final : public TristateBaseVisitor {
         xrefp->inlinedDots(inlinedDots);
         return xrefp;
     }
-    // Return the path from the module to the instance a reference starts from. Like V3LinkDot's
-    // findInlinedDotsSym and findDotted, look up the first dotted component in the innermost
-    // block in inlinedDots, else in the module, else in the nearest enclosing block declaring it.
+    // Return the path from the module to the instance a reference starts from, to group the
+    // drivers of one instance. Like V3LinkDot's findInlinedDotsSym and findDotted, look up the
+    // first dotted component in the innermost block in inlinedDots, else in the module, else in
+    // the nearest enclosing block declaring it.
     string ifaceInstancePath(const AstVarXRef* xrefp) const {
         const string dotted = xrefp->dotted();
         const string first = dotted.substr(0, dotted.find('.'));
@@ -1258,7 +1260,13 @@ class TristateVisitor final : public TristateBaseVisitor {
                         partitions[ifaceInstancePath(VN_AS(rs.m_varrefp, VarXRef))].push_back(rs);
                     }
                     for (auto& kv : partitions) {
-                        insertTristatesSignal(nodep, invarp, &kv.second, true, kv.first,
+                        // Slot writes reuse a driver's dotted path and scope, so V3LinkDot
+                        // resolves them like that driver's path. The grouping relies on
+                        // ifaceInstancePath matching V3LinkDot, see the shadow tests.
+                        const AstVarXRef* const xrefp
+                            = VN_AS(kv.second.front().m_varrefp, VarXRef);
+                        insertTristatesSignal(nodep, invarp, &kv.second, true, xrefp->dotted(),
+                                              xrefp->inlinedDots(),
                                               findModportForDotted(nodep, kv.first));
                     }
                 } else if (VN_IS(nodep, Iface) && !invarp->isIO()) {
@@ -1268,9 +1276,9 @@ class TristateVisitor final : public TristateBaseVisitor {
                     // hierarchy with a plain (non-Z) assign is also routed through the
                     // contribution mechanism (its own graph has no Z to mark it tristate).
                     m_varAux(invarp).ifaceTristate = true;
-                    insertTristatesSignal(nodep, invarp, refsp, true, "", nullptr);
+                    insertTristatesSignal(nodep, invarp, refsp, true, "", "", nullptr);
                 } else {
-                    insertTristatesSignal(nodep, invarp, refsp, false, "", nullptr);
+                    insertTristatesSignal(nodep, invarp, refsp, false, "", "", nullptr);
                 }
             } else {
                 UINFO(8, "  NO TRISTATE ON:" << invarp);
@@ -1544,6 +1552,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstNodeModule* const nodep = ctx.modp;
         AstVar* const invarp = ctx.targetp;
         const string& dotted = ctx.dotted;
+        const string& inlinedDots = ctx.inlinedDots;
         AstModport* const modportp = ctx.modportp;
         invarp->setDfgAllowMultidriveTri();
         const auto inserted = m_ifaceContribs.emplace(invarp, std::vector<IfaceContribution>{});
@@ -1576,10 +1585,10 @@ class TristateVisitor final : public TristateBaseVisitor {
             addModportVarRef(modportp, contribEnp, VDirection::OUTPUT);
         }
         AstAssignW* const outp
-            = new AstAssignW{fl, new AstVarXRef{fl, contribOutp, dotted, VAccess::WRITE},
+            = new AstAssignW{fl, newVarXRef(fl, contribOutp, dotted, VAccess::WRITE, inlinedDots),
                              new AstVarRef{fl, outVarp, VAccess::READ}};
         AstAssignW* const enp
-            = new AstAssignW{fl, new AstVarXRef{fl, contribEnp, dotted, VAccess::WRITE},
+            = new AstAssignW{fl, newVarXRef(fl, contribEnp, dotted, VAccess::WRITE, inlinedDots),
                              new AstVarRef{fl, enVarp, VAccess::READ}};
         outp->user2Or(U2_BOTH);
         enp->user2Or(U2_BOTH);
@@ -1693,11 +1702,11 @@ class TristateVisitor final : public TristateBaseVisitor {
     }
 
     // isIfaceTri: true when the var is a tristate in an interface module (local or external).
-    // ifaceDottedPath/ifaceModportp are non-empty only for external (cross-module) drivers;
-    // empty for local drivers within the interface itself.
+    // ifaceDottedPath/ifaceInlinedDots/ifaceModportp are non-empty only for external
+    // (cross-module) drivers; empty for local drivers within the interface itself.
     void insertTristatesSignal(AstNodeModule* nodep, AstVar* const invarp, RefStrengthVec* refsp,
                                bool isIfaceTri, const string& ifaceDottedPath,
-                               AstModport* ifaceModportp) {
+                               const string& ifaceInlinedDots, AstModport* ifaceModportp) {
         UINFO(8, "  TRISTATE EXPANDING:" << invarp);
         ++m_statTriSigs;
         m_tgraph.didProcess(invarp);
@@ -1759,7 +1768,7 @@ class TristateVisitor final : public TristateBaseVisitor {
 
         // Keep actual-rank accumulation across every nominal source-strength group in this
         // target/path partition. Only the interface route uses these scratch roots.
-        IfaceExportContext ctx{nodep, invarp, ifaceDottedPath, ifaceModportp};
+        IfaceExportContext ctx{nodep, invarp, ifaceDottedPath, ifaceInlinedDots, ifaceModportp};
         RefStrengthVec::iterator beginStrength = refsp->begin();
         while (beginStrength != refsp->end()) {
             RefStrengthVec::iterator endStrength = beginStrength + 1;
