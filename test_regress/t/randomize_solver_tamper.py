@@ -17,7 +17,8 @@
 #         | err_marker | err_multiline | err_mute | err_once | err_phase | err_reply | err_trunc
 #         | err_unbal | err_unbal_cont | frozen_value
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
-#         | high_digit | indent | low_digit | model_trunc | multiline | mute_at
+#         | high_digit | indent | limit_unsupported | low_digit | model_trunc | multiline
+#         | mute_at
 #         | no_digits | none | octal | oor_assume | phase_bare | phase_dup | phase_elem_bin
 #         | phase_elem_dup | phase_elem_h | phase_elem_other | phase_hex_h | phase_junk
 #         | phase_model | phase_narrow | phase_partial | phase_short | phase_trunc | phase_var
@@ -83,6 +84,8 @@
 #   garbage_status   - replace the Nth status with a word that is not a status
 #   high_digit       - replace the Nth model reply with a digit valid only in a wider base
 #   indent           - prepend whitespace to every reply line
+#   limit_unsupported - answer every set-option of :reproducible-resource-limit with
+#                      unsupported
 #   low_digit        - replace the Nth model reply with a character below any digit or letter
 #   model_trunc      - answer the Nth model with an unterminated reply and close the pipe
 #   multiline        - split every S-expression reply one token per line
@@ -297,9 +300,9 @@ ASSUME_MODES = ("err_assume", "garbage_assume", "oor_assume", "stale_assume")
 CORE_MODES = ("core_junk", "err_core")
 # Modes rewriting every line, so they never consume the index
 STREAM_MODES = ("bin_literals", "bv_literals", "bv_spaced", "crlf", "csa_unsupported", "indent",
-                "multiline", "success")
+                "limit_unsupported", "multiline", "success")
 # Modes that change commands on their way to the solver
-INPUT_MODES = ("csa_unsupported", "err_cell")
+INPUT_MODES = ("csa_unsupported", "err_cell", "limit_unsupported")
 # Echoed in place of a command, to mark where in the replies its answer belongs
 TAMPER_MARK = "vl_tamper"
 
@@ -326,10 +329,14 @@ scopes = types.SimpleNamespace(count=0, pushed=False, cell_after=None)
 
 def feed():
     """Pass the runtime's commands on, counting push, pop and reset for err_cell
-    and replacing check-sat-assuming with a marker echo for csa_unsupported"""
+    and replacing check-sat-assuming with a marker echo for csa_unsupported, or the
+    resource-limit option for limit_unsupported"""
     for cmd in sys.stdin:
         text = cmd.lstrip()
         if mode == "csa_unsupported" and text.startswith("(check-sat-assuming"):
+            cmd = '(echo "' + TAMPER_MARK + '")\n'
+        if mode == "limit_unsupported" and text.startswith(
+                "(set-option :reproducible-resource-limit"):
             cmd = '(echo "' + TAMPER_MARK + '")\n'
         # The runtime reads each status before it sends the next push, pop or reset,
         # so a status is read while the count is still that of its check-sat
@@ -431,7 +438,8 @@ inside = False  # Inside an SMT string literal, where parens do not nest
 
 for line in proc.stdout:
     line = line.rstrip("\n")
-    if mode == "csa_unsupported" and line in (TAMPER_MARK, '"' + TAMPER_MARK + '"'):
+    if mode in ("csa_unsupported", "limit_unsupported") and line in (TAMPER_MARK,
+                                                                     '"' + TAMPER_MARK + '"'):
         emit("unsupported")
         continue
     # z3 prints an echoed string bare; SMT-LIB 2.6 section 4.2.9 keeps its quotes
