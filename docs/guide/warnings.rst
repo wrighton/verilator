@@ -1738,6 +1738,15 @@ List Of Warnings
    which IEEE 1800-2023 23.3.3.2 does not allow. Verilator simulates them as
    if they were nets. Instead declare or connect a net, such as a ``wire``.
 
+   Also warns when a procedural concurrent assertion or a sampled value
+   function without a clocking event takes its clock from the event control
+   of an always procedure that also has a blocking timing control or another
+   event control. No clock is inferred for such a procedure (IEEE 1800-2023
+   16.14.6 a) and b)), so without default clocking the assertion has no
+   clock, which IEEE 1800-2023 16.16 f) does not allow. Verilator clocks it
+   by the procedure's event control. Instead declare default clocking with
+   that event.
+
    Also warns on an initializer on an output port that is a net,
    such as ``output wire y = 1'b1``, which IEEE 1800-2023 23.2.2.2 does not
    allow. Verilator uses it as the initial value of the net. Instead use a

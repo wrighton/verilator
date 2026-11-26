@@ -1264,25 +1264,134 @@ void V3AssertCommon::reducePlainAlways(AstPropSpec* specp) {
     VL_DO_DANGLING(alwaysp->deleteTree(), alwaysp);
 }
 
-AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
-    // A single edge event none of whose variables is used in the procedure body. A use in an
-    // event, as in the clock that assertion lowering gives a sampled value function, is ignored.
-    AstSenItem* const itemp = alwaysp->sentreep() ? alwaysp->sentreep()->sensesp() : nullptr;
-    if (!itemp || itemp->nextp() || !itemp->edgeType().anEdge() || !alwaysp->stmtsp()) {
-        return nullptr;
+//######################################################################
+// AssertInferClockVisitor
+// Find the variables a procedure body uses other than in a clocking event or an assertion
+// statement, which prevent inferring a clock from an event expression of the procedure's
+// event control (IEEE 1800-2023 16.14.6). An event of the body counts as a clocking event, as
+// does the clock that assertion lowering gives a sampled value function.
+
+class AssertInferClockVisitor final : public VNVisitorConst {
+    // STATE
+    std::unordered_set<const AstVar*> m_usedVarps;  // Variables used in the body
+
+    // VISITORS
+    void visit(AstSenItem*) override {}
+    void visit(AstNodeCoverOrAssert*) override {}
+    void visit(AstVarRef* nodep) override { m_usedVarps.emplace(nodep->varp()); }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit AssertInferClockVisitor(AstNode* stmtsp) { iterateAndNextConstNull(stmtsp); }
+    ~AssertInferClockVisitor() override = default;
+    // True if the body uses a variable of the expression
+    bool usesVarOf(const AstNode* exprp) const {
+        return exprp->exists(
+            [&](const AstVarRef* refp) { return m_usedVarps.count(refp->varp()) != 0; });
     }
-    const auto inEvent = [alwaysp](const AstNode* nodep) {
-        for (; nodep != alwaysp; nodep = nodep->aboveLoopp()) {
-            if (VN_IS(nodep, SenItem)) return true;
+};
+
+AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
+    // The only event expression of the event control that is an edge event, possibly with iff,
+    // or solely an event variable or clocking block, whose variables the procedure body does
+    // not use (IEEE 1800-2023 16.14.6 c))
+    if (!alwaysp->sentreep() || !alwaysp->stmtsp()) return nullptr;
+    const AssertInferClockVisitor bodyUses{alwaysp->stmtsp()};
+    AstSenItem* clockp = nullptr;
+    for (AstSenItem* const itemp : alwaysp->sentreep()->sensespList()) {
+        // A clocking block is an event variable here
+        const bool isEvent = VN_IS(itemp->sensp(), NodeVarRef) && !itemp->condp()
+                             && itemp->sensp()->dtypep()->isEvent();
+        if (!itemp->edgeType().anEdge() && !isEvent) continue;
+        if (bodyUses.usesVarOf(itemp->sensp())) continue;
+        if (clockp) return nullptr;
+        clockp = itemp;
+    }
+    return clockp;
+}
+
+//######################################################################
+// AssertInferBlockVisitor
+// Find a statement of a procedure body that prevents inferring a clock for the procedure: a
+// blocking timing control, including a call of a task that blocks, or an event control
+// (IEEE 1800-2023 16.14.6 a), b)). A timing control of a process forked without waiting for
+// it, or of a nonblocking assignment, does not block. Neither does an assertion statement,
+// whose actions run in a process of their own. In a task, only the blocking statements count.
+
+class AssertInferBlockVisitor final : public VNVisitorConst {
+    // STATE
+    std::unordered_map<const AstNodeFTask*, bool>&
+        m_taskBlocks;  // Whether calling each task blocks
+    const bool m_inTask;  // In a task, not a procedure
+    bool m_nonblocking = false;  // In a statement whose timing controls do not block
+    const AstNode* m_blockerp = nullptr;  // The first statement found
+
+    // METHODS
+    bool taskBlocks(const AstNodeFTask* taskp) {
+        // Insert false first, so recursive calls terminate
+        if (!m_taskBlocks.emplace(taskp, false).second) return m_taskBlocks[taskp];
+        const bool blocks
+            = AssertInferBlockVisitor{m_taskBlocks, true, taskp->stmtsp()}.blockerp() != nullptr;
+        m_taskBlocks[taskp] = blocks;
+        return blocks;
+    }
+
+    // An event control, which prevents the inference also where it does not block
+    void foundEventControl(const AstNode* nodep) {
+        if (!m_inTask || !m_nonblocking) m_blockerp = nodep;
+    }
+
+    // VISITORS
+    void visit(AstNodeCoverOrAssert*) override {}
+    void visit(AstEventControl* nodep) override {
+        if (!m_blockerp) foundEventControl(nodep);
+    }
+    void visit(AstFork* nodep) override {
+        if (m_blockerp) return;
+        VL_RESTORER(m_nonblocking);
+        m_nonblocking |= nodep->joinType().joinNone();
+        if (!m_nonblocking) m_blockerp = nodep;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeAssign* nodep) override {
+        if (m_blockerp) return;
+        VL_RESTORER(m_nonblocking);
+        m_nonblocking |= VN_IS(nodep, AssignDly);
+        // An intra-assignment event control
+        if (VN_IS(nodep->timingControlp(), SenTree)) foundEventControl(nodep);
+        if (!m_blockerp && !m_nonblocking && nodep->isTimingControl()) m_blockerp = nodep;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeFTaskRef* nodep) override {
+        if (m_blockerp) return;
+        if (!m_nonblocking && VN_IS(nodep->taskp(), Task) && taskBlocks(nodep->taskp())) {
+            m_blockerp = nodep;
         }
-        return false;
-    };
-    const bool usedInBody = itemp->sensp()->exists([&](const AstVarRef* clkRefp) {
-        return alwaysp->stmtsp()->existsAndNext([&](const AstVarRef* refp) {
-            return refp->varp() == clkRefp->varp() && !inEvent(refp);
-        });
-    });
-    return usedInBody ? nullptr : itemp;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override {
+        if (m_blockerp) return;
+        if (!m_nonblocking && nodep->isTimingControl()) m_blockerp = nodep;
+        iterateChildrenConst(nodep);
+    }
+
+public:
+    // CONSTRUCTORS
+    AssertInferBlockVisitor(std::unordered_map<const AstNodeFTask*, bool>& taskBlocks, bool inTask,
+                            AstNode* stmtsp)
+        : m_taskBlocks{taskBlocks}
+        , m_inTask{inTask} {
+        iterateAndNextConstNull(stmtsp);
+    }
+    ~AssertInferBlockVisitor() override = default;
+    const AstNode* blockerp() const { return m_blockerp; }
+};
+
+const AstNode*
+V3AssertCommon::inferenceBlockerp(const AstAlways* alwaysp,
+                                  std::unordered_map<const AstNodeFTask*, bool>& taskBlocks) {
+    return AssertInferBlockVisitor{taskBlocks, false, alwaysp->stmtsp()}.blockerp();
 }
 
 //######################################################################
