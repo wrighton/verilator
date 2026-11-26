@@ -37,4 +37,30 @@ module t (
     end
   end
 
+  // A value wider than the elements is compared at its width, with the elements extended
+  bit [2:0] narrow[2] = '{3'd1, 3'd2};
+  logic signed [2:0] snarrow[2] = '{-3'sd1, 3'sd2};
+  int q[$] = '{9, 32'hffff_ffff};
+  bit [3:0] key4;
+  logic signed [3:0] skey4;
+  bit [39:0] key40;
+  initial begin
+    key4 = 4'd9;
+    skey4 = -4'sd1;
+    /* verilator lint_off WIDTHTRUNC */
+    if (key4 inside {narrow}) $stop;
+    key4 = 4'd2;
+    if (!(key4 inside {narrow})) $stop;
+    if (!(skey4 inside {snarrow})) $stop;
+    key4 = 4'd15;
+    if (key4 inside {snarrow}) $stop;
+    key4 = 4'd7;
+    if (!(key4 inside {snarrow})) $stop;
+    key40 = 40'h1_0000_0009;
+    if (key40 inside {q}) $stop;
+    key40 = 40'h00_ffff_ffff;
+    if (!(key40 inside {q})) $stop;
+    /* verilator lint_on WIDTHTRUNC */
+  end
+
 endmodule

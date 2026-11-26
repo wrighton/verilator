@@ -4077,6 +4077,72 @@ class ConstVisitor final : public VNVisitor {
         if (!num.fitsInUInt() || num.toUInt() >= elements) return nullptr;
         return consp->valuep(num.toUInt());
     }
+    // Fold 'inside' a constant unpacked array value, in one pass over its elements
+    bool foldArrayInside(AstCMethodHard* nodep) {
+        const AstConst* const valuep = VN_CAST(nodep->pinsp(), Const);
+        const AstConsArray* consp = VN_CAST(nodep->fromp(), ConsArray);
+        if (const AstVarRef* const refp = VN_CAST(nodep->fromp(), VarRef)) {
+            if (refp->varp()->isParam()) consp = VN_CAST(refp->varp()->valuep(), ConsArray);
+        }
+        if (!valuep || !consp) return false;
+        const AstUnpackArrayDType* const arrayDtp
+            = VN_CAST(consp->dtypep()->skipRefp(), UnpackArrayDType);
+        if (!arrayDtp) return false;
+        // Each element, then the default once if it gives any element
+        std::vector<const AstNodeExpr*> elemps;
+        int given = 0;
+        for (const AstConsArrayItem* itemp = consp->itemsp(); itemp;
+             itemp = VN_AS(itemp->nextp(), ConsArrayItem)) {
+            elemps.push_back(itemp->valuep());
+            ++given;
+        }
+        if (given < arrayDtp->elementsConst()) elemps.push_back(consp->defaultp());
+        // An integral value and element compare at their common width, the narrower extended
+        // as signed only if both are signed, x/z bits included (IEEE 1800-2023 11.8.2)
+        const AstNodeDType* const elemDtp = arrayDtp->subDTypep()->skipRefp();
+        const bool integral = !valuep->isString() && !valuep->isDouble();
+        const int width = std::max(valuep->width(), elemDtp->width());
+        const bool isSigned = valuep->isSigned() && elemDtp->isSigned();
+        const auto extended = [&](const V3Number& num) {
+            V3Number extNum{nodep, width};
+            if (isSigned) {
+                extNum.opExtendS(num, num.width());
+            } else {
+                extNum.opAssign(num);
+            }
+            return extNum;
+        };
+        const V3Number value = integral ? extended(valuep->num()) : valuep->num();
+        bool unknown = false;
+        for (const AstNodeExpr* const elemp : elemps) {
+            const AstConst* const constp = VN_CAST(elemp, Const);
+            if (!constp) return false;
+            V3Number eq{nodep, 1};
+            if (valuep->isString()) {
+                eq.opEqN(value, constp->num());
+            } else if (valuep->isDouble()) {
+                eq.opEqD(value, constp->num());
+            } else {
+                eq.opWildEq(value, extended(constp->num()));
+            }
+            if (eq.isEqOne()) {
+                VL_DO_DANGLING(replaceNum(nodep, 1), nodep);
+                return true;
+            }
+            unknown |= eq.isAnyXZ();
+        }
+        V3Number num{nodep, 1, 0};
+        if (unknown) num.setAllBitsX();
+        VL_DO_DANGLING(replaceNum(nodep, num), nodep);
+        return true;
+    }
+    void visit(AstCMethodHard* nodep) override {
+        if (nodep->method() == VCMethod::ARRAY_INSIDE) {
+            iterateChildren(nodep);
+            if (foldArrayInside(nodep) || !m_required) return;
+        }
+        visit(static_cast<AstNode*>(nodep));
+    }
     void visit(AstArraySel* nodep) override {
         iterateAndNextNull(nodep->bitp());
         if (VN_IS(nodep->bitp(), Const)
