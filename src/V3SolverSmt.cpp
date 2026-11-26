@@ -3480,7 +3480,8 @@ private:
         }
 
         sump = adjustWidth(fl, sump, nodep->width(), nodep->dtypep()->numeric());
-        sump->user1(true);
+        // Counting every bit, or none, gives a constant (IEEE 1800-2023 20.9)
+        sump->user1(countOnes != countZeros);
 
         nodep->replaceWith(sump);
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
