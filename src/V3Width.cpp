@@ -9885,6 +9885,8 @@ class WidthVisitor final : public VNVisitor {
                 assignMethod = VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK;
             } else if (slicep->method() == VCMethod::DYN_SLICE_PLUS) {
                 assignMethod = VCMethod::DYN_SLICE_ASSIGN_PLUS;
+            } else if (slicep->method() == VCMethod::DYN_SLICE_PLUS_PAD) {
+                assignMethod = VCMethod::DYN_SLICE_ASSIGN_PLUS_PAD;
             } else {
                 assignMethod = VCMethod::_ENUM_MAX;  // not a slice
             }
