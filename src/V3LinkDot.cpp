@@ -5804,6 +5804,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
     }
 
+    // Returns true and issues error iff a task or function cannot be called through the scope
+    // 'scopeSymp', as an instance of a hier_block, whose ports alone are accessible. Not before
+    // the parameters are resolved, as V3LinkResolve marks the blocks after the first link, and
+    // V3Param replaces an instance of one with its library, which has no such symbol.
+    bool errorHierNonPortFTask(AstNodeFTaskRef* refp, const VSymEnt* scopeSymp) {
+        if (!m_statep->forParamed()) return false;  // Reported once
+        const AstCell* const cellp = VN_CAST(scopeSymp->nodep(), Cell);
+        if (!cellp || !cellp->modp() || !cellp->modp()->hierBlock()) return false;
+        // Only from outside the block: its own instance's scope is above a reference in it,
+        // which its own run resolves, as for an upward reference by its module's name
+        for (const VSymEnt* upp = m_curSymp; upp; upp = upp->parentp()) {
+            if (upp == scopeSymp) return false;
+        }
+        refp->v3error("Cannot access non-port symbols inside hierarchical block");
+        return true;
+    }
     // Returns true and issues error iff 'varp' cannot be accesed with a VarXRef
     // in a hier_block given by 'scopeSymp'
     bool errorHierNonPort(AstVarXRef* refp, AstVar* varp, VSymEnt* scopeSymp) {
@@ -7963,9 +7979,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 if (nodep->inlinedDots() != "") {  // Correct for current post-inlined scope
                     dotSymp = findInlinedDotsSym(nodep, nodep->inlinedDots());
                 }
+                const int errorsBefore = V3Error::errorCount();
                 dotSymp = m_statep->findDotted(nodep->fileline(), dotSymp, nodep->dotted(), baddot,
                                                okSymp, true, nullptr, false,
                                                &upward);  // Maybe nullptr
+                // A task or function of a hierarchical block is not a port, so not accessible,
+                // and the block's library, which a run Verilating the blocks replaces it with,
+                // declares none. Not if findDotted reported the path already, as for a path
+                // into a block inside a block.
+                if (dotSymp && !nodep->dotted().empty() && V3Error::errorCount() == errorsBefore
+                    && errorHierNonPortFTask(nodep, dotSymp)) {
+                    return;
+                }
             }
             // Restricted 'with (id_list)': only id_list names bind into target class.
             if (m_randSymp
