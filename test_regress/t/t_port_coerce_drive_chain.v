@@ -159,6 +159,62 @@ module smid (
   sdut u_d (.*);
 endmodule
 
+// A port connected to a concatenation drives each net in it from its bits
+interface cat_if (
+    input logic clk,
+    input logic [15:0] d
+);
+  // verilator lint_off ASSIGNIN
+  clocking cb @(posedge clk);
+    output d;
+  endclocking
+  // verilator lint_on ASSIGNIN
+endinterface
+
+module cdut (
+    input logic clk,
+    input logic [3:0] md,
+    input logic [6:0] pkt,
+    input logic [7:0] w,
+    output logic [15:0] got
+);
+  always_ff @(posedge clk) got <= {md, pkt, w[6:2]};
+endmodule
+
+module cdrv;
+  cat_if c (
+      .clk(cdut.clk),
+      .d({cdut.md, cdut.pkt, cdut.w[6:2]})
+  );
+  initial begin
+    @(posedge cdut.clk);
+    c.cb.d <= 16'ha5c3;
+  end
+endmodule
+
+bind cdut cdrv u_cdrv ();
+
+// A concatenation with a part that is not a net drives none of it; only that it builds is
+// checked
+module kdut (
+    input logic clk,
+    input logic [3:0] md
+);
+endmodule
+
+module kdrv;
+  cat_if c (
+      .clk(kdut.clk),
+      .d({kdut.md, 12'h0})
+  );
+  initial begin
+    @(posedge kdut.clk);
+    c.cb.d <= 16'ha5c3;
+  end
+endmodule
+
+bind kdut kdrv u_kdrv ();
+
 module t;
   localparam realtime HALF = 5ns;
   logic clk = 1'b0;
@@ -237,6 +293,24 @@ module t;
       .v(mv),
       .seen(mseen)
   );
+  wire [3:0] cmd;
+  wire [6:0] cpkt;
+  wire [7:0] cw;
+  logic [15:0] cgot;
+  assign cmd = {$bits(cmd) {1'bz}};
+  assign cpkt = {$bits(cpkt) {1'bz}};
+  wire [3:0] kmd;
+  kdut u_k (
+      .clk,
+      .md(kmd)
+  );
+  cdut u_c (
+      .clk,
+      .md(cmd),
+      .pkt(cpkt),
+      .w(cw),
+      .got(cgot)
+  );
   initial begin
     repeat (8) #HALF clk = ~clk;
     `checkh(seen, 1'b1);
@@ -253,6 +327,10 @@ module t;
     `checkh(zrv2, 1'b1);
     `checkh(bseen, 2'b11);
     `checkh(bv, 2'b11);
+    `checkh(cgot, 16'ha5c3);
+    `checkh(cmd, 4'ha);
+    `checkh(cpkt, 7'h2e);
+    `checkh(cw[6:2], 5'h03);
     $write("*-* All Finished *-*\n");
     $finish;
   end
