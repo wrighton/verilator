@@ -26,7 +26,7 @@ module livecfg;
 endmodule
 
 module shadowcfg;
-  defparam t.u.P = 9;
+  defparam t.u.P = 8;
 endmodule
 
 module holder;
@@ -45,13 +45,10 @@ module t;
   leaf u ();
   box #(.TAG(1)) a ();
   box #(.TAG(2)) b ();
-  if (0) begin : unbuilt
-    shadowcfg c ();
-  end
   initial begin
     `checkd(u.P, 7);
-    `checkd(a.t.u.P, 9);
-    `checkd(b.t.u.P, 9);
+    `checkd(a.t.u.P, 8);
+    `checkd(b.t.u.P, 8);
     $write("*-* All Finished *-*\n");
     $finish;
   end
