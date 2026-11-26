@@ -773,11 +773,23 @@ private:
     }
 
 public:
+    // The innermost hierarchical block a symbol is in, or nullptr
+    static const AstNodeModule* hierBlockAbovep(const VSymEnt* symp) {
+        for (; symp; symp = symp->parentp()) {
+            const AstNodeModule* modp = VN_CAST(symp->nodep(), NodeModule);
+            if (const AstCell* const cellp = VN_CAST(symp->nodep(), Cell)) modp = cellp->modp();
+            if (modp && modp->hierBlock()) return modp;
+        }
+        return nullptr;
+    }
     VSymEnt* findDotted(FileLine* refLocationp, VSymEnt* lookupSymp, const string& dotname,
                         string& baddot, VSymEnt*& okSymp, bool firstId) {
         // Given a dotted hierarchy name, return where in scope it is
         // Note when dotname=="" we just fall through and return lookupSymp
         UINFO(8, "    dottedFind se" << cvtToHex(lookupSymp) << " '" << dotname << "'");
+        const VSymEnt* const fromSymp = lookupSymp;  // Scope of the reference
+        const VSymEnt* firstSymp = nullptr;  // Found for the first identifier
+        bool firstModName = false;  // First identifier found as a module name
         string leftname = dotname;
         okSymp = lookupSymp;  // So can list bad scopes
         while (leftname != "") {  // foreach dotted part of xref name
@@ -821,6 +833,7 @@ public:
 
                 // Check this module - cur modname
                 else if (cellp && cellp->modp()->origName() == ident) {
+                    firstModName = true;
                 }
                 // $root we walk up to Netlist
                 else if (ident == "$root") {
@@ -844,6 +857,7 @@ public:
                                 crossedCell = true;
                             }
                             if (cellp && cellp->modp()->origName() == ident) {
+                                firstModName = true;
                                 break;
                             } else if (VSymEnt* const findSym2p
                                        = findWithAltFallback(lookupSymp, ident, altIdent)) {
@@ -910,7 +924,11 @@ public:
             if (lookupSymp) {
                 if (const AstCell* const cellp = VN_CAST(lookupSymp->nodep(), Cell)) {
                     if (const AstNodeModule* const modp = cellp->modp()) {
-                        if (modp->hierBlock() && !leftname.empty()) {
+                        // Not on a path from inside the block starting at its module's name,
+                        // which its own run resolves, as its top module
+                        if (modp->hierBlock() && !leftname.empty()
+                            && !(!firstSymp && firstModName
+                                 && hierBlockAbovep(fromSymp) == modp)) {
                             refLocationp->v3error("Cannot access scope inside hierarchical block");
                         } else if (VN_IS(modp, NotFoundModule)) {
                             refLocationp->v3error("Dotted reference to instance that refers to "
@@ -919,6 +937,7 @@ public:
                         }
                     }
                 }
+                if (!firstSymp) firstSymp = lookupSymp;
                 // Follow scope alias for nested interface port access
                 if (!leftname.empty()) {
                     const auto aliasIt = m_scopeAliasMap[SAMN_IFTOP].find(lookupSymp);
