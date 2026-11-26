@@ -4574,7 +4574,8 @@ private:
         AstNodeExpr* const thenTextp = formatValueRegion(nodep->thenp());
         AstNodeExpr* const elseTextp = formatValueRegion(nodep->elsep());
         AstSFormatF* const smtp = editSMT(nodep, nodep->condp(), thenTextp, elseTextp);
-        if (!result.truep && !result.falsep && !result.errorp) {
+        // The predicate reads the proofs of its parts even if none decides the whole guard
+        if (!blockp->stmtsp()) {
             VL_DO_DANGLING(blockp->deleteTree(), blockp);
             return;
         }
