@@ -752,14 +752,16 @@ std::unordered_set<const AstVar*> findIcoReportEvents(const LogicRegions& region
 // optimization reads state that C++ code can change, such as the assertion controls, so is hidden
 // state too, unless it only decides whether outputs to the user run: an assertion with only
 // reports reports when its logic runs, as other outputs, while one with actions writing variables
-// must see the controls in every evaluation. Each If is walked for its writes, which is linear in
-// the logic for each level of If nesting, and the logic of an input is small.
+// must see the controls in every evaluation. So are those in an If writing no variable, such as
+// the $assertkill count a deferred assertion keeps in compiler state to drop its reports. Each If
+// is walked for its writes, which is linear in the logic for each level of If nesting, and the
+// logic of an input is small.
 bool icoLogicReadsHiddenState(AstNode* logicp,
                               const std::unordered_set<const AstVar*>& reportEvents) {
     std::unordered_set<const AstCExpr*> outputCondps;
     logicp->foreach([&](const AstIf* ifp) {
         if (icoWritesVariable(ifp, reportEvents)) return;
-        ifp->condp()->foreach([&](const AstCExpr* exprp) { outputCondps.emplace(exprp); });
+        ifp->foreach([&](const AstCExpr* exprp) { outputCondps.emplace(exprp); });
     });
     return logicp->exists([&](AstNode* nodep) {
         if (const AstCExpr* const exprp = VN_CAST(nodep, CExpr)) {
