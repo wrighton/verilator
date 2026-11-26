@@ -10,8 +10,9 @@
 // verilog_format: on
 
 // A scalar solve-before session still sends a state-array constructor.
+// A rand_mode(0) associative array is held with a constant-array default for missing keys
 class PhaseState;
-  logic [3:0] state_arr[2];
+  rand logic [3:0] state_arr[int];
   rand int unsigned idx;
   rand bit [3:0] v;
   constraint c {
@@ -19,11 +20,16 @@ class PhaseState;
     v == state_arr[idx];
     solve idx before v;
   }
+  function new();
+    state_arr[0] = 0;
+    state_arr[1] = 0;
+    state_arr.rand_mode(0);
+  endfunction
 endclass
 
 // A state-array constructor in a soft constraint still needs ALL during phased solving.
 class PhaseSoftOnly;
-  logic [4:0] state_arr[2];
+  rand logic [4:0] state_arr[int];
   rand int unsigned soft_idx;
   rand bit [4:0] soft_v;
   constraint c {
@@ -31,6 +37,11 @@ class PhaseSoftOnly;
     soft soft_v == state_arr[soft_idx];
     solve soft_idx before soft_v;
   }
+  function new();
+    state_arr[0] = 0;
+    state_arr[1] = 0;
+    state_arr.rand_mode(0);
+  endfunction
 endclass
 
 class PhaseScalar;
@@ -43,6 +54,7 @@ class PhaseScalar;
   }
 endclass
 
+// A state array read through a random index needs no constant array
 class SamplerState;
   logic [6:0] state_arr[2] = '{7'h12, 7'h34};
   rand int unsigned idx;
