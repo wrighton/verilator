@@ -4689,17 +4689,50 @@ private:
     }
     void visit(AstSel* nodep) override {
         if (editFormat(nodep)) return;
-        VNRelinker handle;
         FileLine* const fl = nodep->fileline();
-        AstNodeExpr* const msbp = new AstSFormatF{
-            fl, "%1d", false,
-            new AstAdd{fl, nodep->lsbp()->cloneTreePure(false),
-                       new AstConst{fl, static_cast<uint32_t>(nodep->widthConst() - 1)}}};
-        AstNodeExpr* const lsbp
-            = new AstSFormatF{fl, "%1d", false, nodep->lsbp()->unlinkFrBack(&handle)};
-        handle.relink(lsbp);
-
-        editSMT(nodep, nodep->fromp(), lsbp, msbp);
+        const int width = nodep->widthConst();
+        const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const);
+        if (lsbConstp && lsbConstp->num().fitsInUInt()
+            && static_cast<uint64_t>(lsbConstp->toUInt()) + width
+                   <= static_cast<uint64_t>(nodep->fromp()->width())) {
+            const uint32_t lsb = lsbConstp->toUInt();
+            editSMT(nodep, nodep->fromp(), new AstSFormatF{fl, cvtToStr(lsb), false, nullptr},
+                    new AstSFormatF{fl, cvtToStr(lsb + width - 1), false, nullptr});
+            return;
+        }
+        // Shift right by the position, as bits out of range read zero (IEEE 1800-2023 11.5.1),
+        // over zeros appended below for a part-select starting below the value. The extension
+        // is wide enough that neither the position nor the shift wraps.
+        AstNodeExpr* fromp = nodep->fromp()->unlinkFrBack();
+        AstNodeExpr* lsbp = nodep->lsbp()->unlinkFrBack();
+        const int padWidth = width - 1;
+        const int extWidth = std::max(fromp->width() + padWidth, lsbp->width()) + 1;
+        if (padWidth) {
+            fromp = new AstConcat{fl, fromp,
+                                  new AstConst{fl, AstConst::WidthedValue{}, padWidth, 0}};
+            fromp->user1(true);
+        }
+        fromp = new AstExtend{fl, fromp, extWidth};
+        fromp->user1(true);
+        if (lsbp->isSigned()) {
+            lsbp = new AstExtendS{fl, lsbp, extWidth};
+        } else {
+            lsbp = new AstExtend{fl, lsbp, extWidth};
+        }
+        lsbp->user1(true);
+        if (padWidth) {
+            lsbp = new AstAdd{fl, lsbp,
+                              new AstConst{fl, AstConst::WidthedValue{}, extWidth,
+                                           static_cast<uint32_t>(padWidth)}};
+            lsbp->user1(true);
+        }
+        AstShiftR* const shiftp = new AstShiftR{fl, fromp, lsbp, extWidth};
+        shiftp->user1(true);
+        AstSel* const selp = new AstSel{fl, shiftp, 0, width};
+        selp->user1(true);
+        nodep->replaceWith(selp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        iterate(selp);
     }
     // A constrained mark is not a rand qualifier. Only owned scalar STATE-index reads
     // have a stable canonical name and a storage type this staging path can preserve.
