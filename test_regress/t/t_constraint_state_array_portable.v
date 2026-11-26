@@ -51,6 +51,27 @@ class ModeOff;
   }
 endclass
 
+// Members of a struct array element chosen by a random index
+typedef struct {
+  rand bit [7:0] vals[3];
+  rand bit [7:0] grid[2][2];
+} item_t;
+
+class MemberIndex;
+  rand int idx;
+  rand bit [7:0] yv, yg;
+  rand item_t items[2];
+  constraint c {
+    idx inside {[0 : 3]};
+    foreach (items[i]) {
+      foreach (items[i].vals[j]) items[i].vals[j] == 8'(i * 3 + j + 1);
+      foreach (items[i].grid[j, l]) items[i].grid[j][l] == 8'(8'h40 + i * 4 + j * 2 + l);
+    }
+    yv == items[idx].vals[1];
+    yg == items[idx].grid[1][0];
+  }
+endclass
+
 class Big;
   rand int k;
   rand bit [15:0] y;
@@ -97,6 +118,18 @@ module t;
         `checkh(m.sum, 32'h70 + 32'h71 + 32'h72);
       end
       `checkh(m.d[1], 8'h71);
+    end
+    begin
+      automatic MemberIndex mi = new;
+      automatic int out = 0;
+      repeat (20) begin
+        randomize_result = mi.randomize();
+        `checkh(randomize_result, 1);
+        if (mi.idx >= 2) ++out;
+        `checkh(mi.yv, mi.idx < 2 ? mi.items[mi.idx[0]].vals[1] : 8'h0);
+        `checkh(mi.yg, mi.idx < 2 ? mi.items[mi.idx[0]].grid[1][0] : 8'h0);
+      end
+      if (out == 0) `stop;
     end
     b.t = new[BIG];
     foreach (b.t[i]) b.t[i] = 16'(i * 7 + 1);
