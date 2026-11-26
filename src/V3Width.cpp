@@ -265,6 +265,20 @@ public:
 };
 
 //######################################################################
+// Whether an expression is a constant of only z bits, e.g. a replication of a z
+
+static bool isAllZ(const AstNode* nodep) {
+    if (const AstConst* const constp = VN_CAST(nodep, Const)) return constp->num().isAllZ();
+    if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+        return isAllZ(repp->srcp()) && VN_IS(repp->countp(), Const);
+    }
+    if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+        return isAllZ(concatp->lhsp()) && isAllZ(concatp->rhsp());
+    }
+    return false;
+}
+
+//######################################################################
 // Replace reads of variables holding only an all-z initial value with that value
 
 class WidthZVarVisitor final : public VNVisitor {
@@ -275,14 +289,8 @@ class WidthZVarVisitor final : public VNVisitor {
     // a variable written in any other way, or that may be written unseen: a port, a public or
     // forceable variable, a class member, or a member of an interface used as a virtual
     // interface type.
-    struct ZInit final {
-        const AstConst* const constp;  // The initial value
-        const AstNodeModule* const modp;  // Module declaring the variable
-        ZInit(const AstConst* constp, const AstNodeModule* modp)
-            : constp{constp}
-            , modp{modp} {}
-    };
-    std::unordered_map<const AstVar*, ZInit> m_zInits;  // Candidates, by their initializer
+    // Candidates, with the module declaring each
+    std::unordered_map<const AstVar*, const AstNodeModule*> m_zInitModps;
     std::unordered_set<const AstVar*> m_writtenps;  // Variables written otherwise
     std::unordered_set<const AstNodeModule*> m_vifModps;  // Interfaces of virtual interfaces
     std::vector<AstNodeVarRef*> m_readps;  // Reads that are a whole driving value
@@ -297,16 +305,14 @@ class WidthZVarVisitor final : public VNVisitor {
     void visit(AstInitialStatic* nodep) override {
         const AstAssign* const assp = VN_CAST(nodep->stmtsp(), Assign);
         const AstVarRef* const lhsp = assp ? VN_CAST(assp->lhsp(), VarRef) : nullptr;
-        const AstConst* const constp = assp ? VN_CAST(assp->rhsp(), Const) : nullptr;
-        if (!lhsp || assp->nextp() || !constp || !constp->num().isAllZ() || VN_IS(m_modp, Class)
-            || constp->width() != lhsp->varp()->width()) {
+        if (!lhsp || assp->nextp() || !isAllZ(assp->rhsp()) || VN_IS(m_modp, Class)
+            || assp->rhsp()->width() != lhsp->varp()->width()) {
             iterateChildren(nodep);
             return;
         }
         const AstVar* const varp = lhsp->varp();
         if (varp->isIO() || varp->isSigPublic() || varp->isSigUserRWPublic() || varp->isForceable()
-            || !varp->dtypep()->isFourstate()
-            || !m_zInits.emplace(varp, ZInit{constp, m_modp}).second) {
+            || !varp->dtypep()->isFourstate() || !m_zInitModps.emplace(varp, m_modp).second) {
             m_writtenps.emplace(varp);
         }
     }
@@ -344,12 +350,14 @@ public:
     explicit WidthZVarVisitor(AstNetlist* nodep) {
         iterate(nodep);
         for (AstNodeVarRef* const refp : m_readps) {
-            const auto it = m_zInits.find(refp->varp());
-            if (it == m_zInits.end() || m_writtenps.count(refp->varp())
-                || m_vifModps.count(it->second.modp)) {
+            const auto it = m_zInitModps.find(refp->varp());
+            if (it == m_zInitModps.end() || m_writtenps.count(refp->varp())
+                || m_vifModps.count(it->second)) {
                 continue;
             }
-            AstConst* const constp = new AstConst{refp->fileline(), it->second.constp->num()};
+            V3Number num{refp, refp->width()};
+            num.setAllBitsZ();
+            AstConst* const constp = new AstConst{refp->fileline(), num};
             constp->dtypeFrom(refp);
             refp->replaceWith(constp);
             VL_DO_DANGLING(pushDeletep(refp), refp);
@@ -15586,8 +15594,7 @@ public:
                         [&](const AstNodeVarRef* refp) { undrivingRefps.emplace(refp); });
                 } else if (const AstAssignW* const assp = VN_CAST(np, AssignW)) {
                     // A z has no strength, so drives nothing (IEEE 1800-2023 28.12)
-                    const AstConst* const constp = VN_CAST(assp->rhsp(), Const);
-                    if (constp && constp->num().isAllZ()) {
+                    if (isAllZ(assp->rhsp())) {
                         assp->lhsp()->foreach([&](const AstNodeVarRef* refp) {
                             undrivingRefps.emplace(refp);
                             zRefps.emplace(refp);
