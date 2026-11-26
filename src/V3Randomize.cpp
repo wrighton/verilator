@@ -57,6 +57,8 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 // General file-level definitions
 
 static constexpr const char* BASIC_RANDOMIZE_FUNC_NAME = "__VBasicRand";
+// Randomizes the objects of rand interface class handles, after the object's own solve
+static constexpr const char* IFACES_RANDOMIZE_FUNC_NAME = "__VrandIfaces";
 
 using ActiveSet = std::unordered_set<const AstClass*>;
 
@@ -1224,6 +1226,8 @@ class RandomizeVisitor final : public VNVisitor {
     // Per-handle-type pre/post virtual wrapper presence
     std::map<AstClass*, std::pair<bool, bool>> m_prePostWrap;
     ActiveSet m_activeClasses;  // Classes currently building randomize()
+    // Per class, whether it randomizes objects of interface class handles, see hasIfaceObjects()
+    std::unordered_map<const AstClass*, bool> m_hasIfaceObjects;
     RandModeVars m_modeVars;  // Static rand_mode/constraint_mode state vars per class
     const std::unique_ptr<V3SolverLowering> m_solverp;  // Constraint solver lowering
 
@@ -2095,6 +2099,81 @@ class RandomizeVisitor final : public VNVisitor {
         }
         return commonp;
     }
+    // Add to function funcp of nodep 'fvar &= member.name()' for member object memberVarp of
+    // ownerClassp, while not null and its rand mode is on
+    void addMemberCall(AstFunc* const funcp, AstClass* const nodep, AstClass* const ownerClassp,
+                       AstVar* const memberVarp, const std::string& name) {
+        FileLine* const fl = nodep->fileline();
+        AstClass* const memberClassp
+            = VN_AS(memberVarp->dtypep()->skipRefp(), ClassRefDType)->classp();
+        AstFunc* const memberFuncp
+            = name == IFACES_RANDOMIZE_FUNC_NAME
+                  ? getCreateIfacesRandomizeFunc(memberClassp)
+                  : V3Randomize::newRandomizeFunc(m_memberMap, memberClassp, name);
+        // A cycle of rand class handles makes the randomize functions recursive
+        if (m_activeClasses.count(memberClassp)) memberFuncp->recursive(true);
+        AstMethodCall* const callp = new AstMethodCall{
+            fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::WRITE}, name};
+        callp->taskp(memberFuncp);
+        callp->dtypeFrom(memberFuncp);
+        AstVar* const fvarp = funcp->fvarp();
+        AstIf* const assignIfNotNullp = new AstIf{
+            fl,
+            new AstNeq{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
+                       new AstConst{fl, AstConst::Null{}}},
+            new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE},
+                          new AstAnd{fl, new AstVarRef{fl, fvarp, VAccess::READ}, callp}}};
+        funcp->addStmtsp(wrapIfRandMode(nodep, memberVarp, assignIfNotNullp));
+    }
+    // Whether varp is an unpacked array of handles of an interface class, or of such arrays
+    static bool isIfaceHandleArray(const AstVar* varp) {
+        const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+        if (!dtypep->isNonPackedArray()) return false;
+        while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
+        const AstClassRefDType* const classRefp = VN_CAST(dtypep, ClassRefDType);
+        return classRefp && classRefp->classp()->isInterfaceClass();
+    }
+    // Whether the randomization of an object of classp randomizes objects of rand handles of an
+    // interface class, directly or through member objects it basic-randomizes
+    bool hasIfaceObjects(AstClass* const classp) {
+        // Emplaced first, as a guard against recursion through a cycle of rand handles
+        const auto pair = m_hasIfaceObjects.emplace(classp, false);
+        if (!pair.second) return pair.first->second;
+        const bool has = classp->existsMember([&](const AstClass*, const AstVar* varp) {
+            const AstClassRefDType* const classRefp
+                = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
+            return varp->rand().isRandomizable()
+                   && (isIfaceHandleArray(varp)
+                       || (classRefp
+                           && (classRefp->classp()->isInterfaceClass()
+                               || (varp->globalConstrained()
+                                   && hasIfaceObjects(classRefp->classp())))));
+        });
+        m_hasIfaceObjects[classp] = has;
+        return has;
+    }
+    // Get or create the function randomizing the objects of hasIfaceObjects() of classp
+    AstFunc* getCreateIfacesRandomizeFunc(AstClass* const classp) {
+        AstFunc* const funcp
+            = V3Randomize::newRandomizeFunc(m_memberMap, classp, IFACES_RANDOMIZE_FUNC_NAME);
+        if (!funcp->stmtsp()) {
+            FileLine* const fl = classp->fileline();
+            funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, funcp->fvarp(), VAccess::WRITE},
+                                           new AstConst{fl, AstConst::WidthedValue{}, 32, 1}});
+        }
+        return funcp;
+    }
+    // Add to randomize function funcp of classp the randomization of the objects of rand
+    // interface class handles, once the object's solve succeeded (IEEE 1800-2023 18.6.3)
+    void addIfacesRandomize(AstClass* const classp, AstFunc* const funcp) {
+        if (!hasIfaceObjects(classp)) return;
+        FileLine* const fl = funcp->fileline();
+        AstVar* const fvarp = funcp->fvarp();
+        funcp->addStmtsp(
+            new AstIf{fl, new AstVarRef{fl, fvarp, VAccess::READ},
+                      new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE},
+                                    new AstFuncRef{fl, getCreateIfacesRandomizeFunc(classp)}}});
+    }
     void addBasicRandomizeBody(AstFunc* const basicRandomizep, AstClass* const nodep,
                                AstVar* randModeVarp) {
         UINFO(9, "addBasicRTB " << nodep);
@@ -2127,40 +2206,32 @@ class RandomizeVisitor final : public VNVisitor {
                                        "type of the containing class");
                     return;
                 }
-                AstFunc* const memberFuncp
-                    = memberVarp->globalConstrained()
-                          ? V3Randomize::newRandomizeFunc(m_memberMap, classRefp->classp(),
-                                                          BASIC_RANDOMIZE_FUNC_NAME)
-                          : V3Randomize::newRandomizeFunc(m_memberMap, classRefp->classp());
-                // A cycle of rand class handles makes the randomize functions recursive
-                if (m_activeClasses.count(classRefp->classp())) memberFuncp->recursive(true);
-                AstMethodCall* const callp
-                    = memberVarp->globalConstrained()
-                          ? new AstMethodCall{fl,
-                                              new AstVarRef{fl, classp, memberVarp,
-                                                            VAccess::WRITE},
-                                              BASIC_RANDOMIZE_FUNC_NAME}
-                          : new AstMethodCall{
-                                fl, new AstVarRef{fl, classp, memberVarp, VAccess::WRITE},
-                                "randomize"};
-                callp->taskp(memberFuncp);
-                callp->dtypeFrom(memberFuncp);
-                AstVarRef* const basicFvarRefReadp = basicFvarRefp->cloneTree(false);
-                basicFvarRefReadp->access(VAccess::READ);
-                AstIf* const assignIfNotNullp = new AstIf{
-                    fl,
-                    new AstNeq{fl, new AstVarRef{fl, classp, memberVarp, VAccess::READ},
-                               new AstConst{fl, AstConst::Null{}}},
-                    new AstAssign{fl, basicFvarRefp->cloneTree(false),
-                                  new AstAnd{fl, basicFvarRefReadp, callp}}};
-                basicRandomizep->addStmtsp(wrapIfRandMode(nodep, memberVarp, assignIfNotNullp));
+                // An interface class has no constraints to solve here, so the object randomizes
+                // itself, by the randomize() of its class, once this object's solve succeeded
+                AstClass* const memberClassp = classRefp->classp();
+                if (memberClassp->isInterfaceClass()) {
+                    addMemberCall(getCreateIfacesRandomizeFunc(nodep), nodep, classp, memberVarp,
+                                  "randomize");
+                    return;
+                }
+                const bool basic = memberVarp->globalConstrained();
+                addMemberCall(basicRandomizep, nodep, classp, memberVarp,
+                              basic ? BASIC_RANDOMIZE_FUNC_NAME : "randomize");
+                if (basic && hasIfaceObjects(memberClassp)) {
+                    addMemberCall(getCreateIfacesRandomizeFunc(nodep), nodep, classp, memberVarp,
+                                  IFACES_RANDOMIZE_FUNC_NAME);
+                }
             } else {
+                // The objects of an array of interface class handles, as of one such handle
+                AstFunc* const funcp = isIfaceHandleArray(memberVarp)
+                                           ? getCreateIfacesRandomizeFunc(nodep)
+                                           : basicRandomizep;
                 AstVar* const randcVarp = newRandcVarsp(memberVarp, nodep);
                 AstVarRef* const refp
                     = new AstVarRef{memberVarp->fileline(), classp, memberVarp, VAccess::WRITE};
-                AstNodeStmt* const stmtp = newRandStmtsp(fl, refp, randcVarp, basicFvarp);
+                AstNodeStmt* const stmtp = newRandStmtsp(fl, refp, randcVarp, funcp->fvarp());
                 if (!refp->backp()) VL_DO_DANGLING(refp->deleteTree(), refp);
-                basicRandomizep->addStmtsp(
+                funcp->addStmtsp(
                     new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), stmtp, false});
             }
         });
@@ -2470,6 +2541,7 @@ class RandomizeVisitor final : public VNVisitor {
                                             new AstAnd{fl, fvarRefReadp, secondHalfp}});
 
         if (basicFirst) m_solverp->addAfterClassSolve(nodep, randomizep);
+        addIfacesRandomize(nodep, randomizep);
 
         // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
         AstNodeStmt* postp = nullptr;
@@ -2805,6 +2877,7 @@ class RandomizeVisitor final : public VNVisitor {
         m_solverp->lowerInlineRandomize(nodep, classp, randomizeFuncp,
                                         withp->exprp()->unlinkFrBackWithNext(),
                                         captured.getThisp(), basicRandomizeFuncCallp);
+        addIfacesRandomize(classp, randomizeFuncp);
 
         // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
         AstNodeStmt* postp = nullptr;
