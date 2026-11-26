@@ -57,8 +57,8 @@ module t;
     // for all directives (7) (IEEE 1800-2023 20.11 Tables 20-5, 20-6, 20-7; 12.5.3)
     $assertcontrol(4, 32, 7, 0, t.a.then_blk);
     #1;
-    // Each immediate unique case violation is reported when the case evaluates, so
-    // the expected output may repeat a report within a time step
+    // A unique case violation is reported once, for the last evaluation of the case in its
+    // time step (IEEE 1800-2023 12.5.3.1)
     drive("match both", 1, 2'd1, 0, 2'd2);
     `checkd(a.o, 21);
     `checkd(b.o, 32);
