@@ -47,6 +47,20 @@ static constexpr int diversityMaxSatisfied = 64;  // Most of them satisfied
 static constexpr int diversityWideBits = 64;  // Parts wider than this may stay unsplit
 static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to drop a part of all
 static constexpr int diversitySlotSamples = 4;  // Elements checked for a part dropped for all
+// Resource limit of each spreading check, in the solver's own units (SMT-LIB 2.6
+// :reproducible-resource-limit): diversityCheckLimit, plus diversityCheckLimitSquare times
+// n^2, n the number of terms spread (variables and array elements, not bits). It bounds
+// work, not time. For z3 the base is 1.9 times the costliest spreading check of the
+// randomize tests (2.65M; 5.4M for any check), and a hard check reaches it in one to
+// several seconds, depending on the check. Legitimate checks over n elements take up to
+// about 5 n^2: 0.5 to 0.6 n^2 spreading n = 4000 to 12000 elements, 5 n^2 refuting every
+// element for a random index into n = 1000 to 2000 of them. cvc5's units cost about 3000
+// times as much, so there it is effectively no limit.
+static constexpr uint64_t diversityCheckLimit = 5000000;
+static constexpr uint64_t diversityCheckLimitSquare = 10;
+// The largest limit z3 takes, an unsigned 32-bit option value. From about 20000 terms on,
+// the limit is this one, effectively none, as before there were limits.
+static constexpr uint64_t diversityCheckLimitMax = 0xffffffffULL;
 
 // Index of the i-th of the elements checked out of n, spread over them
 static size_t diversitySample(size_t i, size_t n) {
@@ -539,8 +553,9 @@ static void warnSolverReply(const std::string& reply) {
     VL_WARN_MT(__FILE__, __LINE__, "randomize", msg.c_str());
 }
 
-// Read one solver status; only a print-success echo may precede it
-static VlSolverStatus readStatus(std::istream& is) {
+// Read one solver status; only a print-success echo may precede it. A check under a
+// resource limit may stop short, so its unknown is not warned.
+static VlSolverStatus readStatus(std::istream& is, bool limited) {
     std::string line;
     while (readLine(is, line)) {
         if (line == "success") continue;
@@ -548,7 +563,7 @@ static VlSolverStatus readStatus(std::istream& is) {
         if (line == "unsat") return VlSolverStatus::UNSAT;
         if (line == "unknown") {
             static bool s_warnedUnknown = false;
-            if (!s_warnedUnknown) {
+            if (!limited && !s_warnedUnknown) {
                 s_warnedUnknown = true;
                 VL_WARN_MT(__FILE__, __LINE__, "randomize",
                            "Solver returned unknown (timed out or incomplete), so randomize() "
@@ -626,6 +641,8 @@ class VlSolverSession final {
     std::string m_program VL_GUARDED_BY(m_mutex);  // Storage backing m_argv
     std::vector<const char*> m_argv VL_GUARDED_BY(m_mutex);  // Solver argv
     bool m_warnedRestart VL_GUARDED_BY(m_mutex) = false;
+    bool m_takesLimit VL_GUARDED_BY(m_mutex) = false;  // Takes :reproducible-resource-limit
+    bool m_limited VL_GUARDED_BY(m_mutex) = false;  // Checks are under a resource limit
 
 public:
     std::iostream& os() VL_REQUIRES(m_mutex) { return m_proc; }
@@ -637,7 +654,7 @@ public:
         // The failed read may have taken an error answering an earlier command of the batch
         // (SMT-LIB 2.6 section 4.1.2), so later replies cannot be matched to their commands
         if (m_stale) return VlSolverStatus::FAIL;
-        const VlSolverStatus status = ::readStatus(m_proc);
+        const VlSolverStatus status = ::readStatus(m_proc, m_limited);
         m_stale = status == VlSolverStatus::FAIL;
         return status;
     }
@@ -647,6 +664,13 @@ public:
         if (::readSExpr(m_proc, outr)) return true;
         abandon();
         return false;
+    }
+    // Limit the effort of each later check, or lift the limit with 0; a solver that does
+    // not take the option checks without one
+    void limitChecks(uint64_t limit) VL_REQUIRES(m_mutex) {
+        if (!m_takesLimit || (!limit && !m_limited)) return;
+        m_proc << "(set-option :reproducible-resource-limit " << limit << ")\n";
+        m_limited = limit != 0;
     }
 
     // Start a transaction, spawning or respawning the solver as needed
@@ -689,16 +713,20 @@ public:
     }
 
 private:
-    // Skip queued replies up to an echoed marker; a solver that went away stays out of step
-    void resync() VL_REQUIRES(m_mutex) {
+    // Skip queued replies up to an echoed marker, and tell whether all were print-success
+    // echoes; a solver that went away stays out of step
+    bool resync() VL_REQUIRES(m_mutex) {
         m_proc << "(echo \"vl_resync\")\n";
         std::string line;
+        bool quiet = true;
         // SMT-LIB 2.6 section 4.2.9 echoes the string with its quotes, z3 without them
         while (readLine(m_proc, line) && line != "vl_resync" && line != "\"vl_resync\"") {
+            quiet &= line == "success";
             // A queued error is read whole, as its text may hold a line like the marker
             if (isSolverError(line)) finishErrorReply(m_proc, line);
         }
         if (!m_proc.fail()) m_stale = false;
+        return quiet && !m_proc.fail();
     }
 
     // A solver that will not start is not started again
@@ -719,8 +747,11 @@ private:
         m_proc << "; sampler: " << (solverSamples() ? "solver" : "default") << "\n";
         m_proc << "(set-logic QF_ABV)\n";
         m_proc << "(check-sat)\n";
+        // A solver without the option answers it with 'unsupported' or an error
+        m_proc << "(set-option :reproducible-resource-limit 0)\n";
         m_proc << "(reset)\n";
         if (readStatus() == VlSolverStatus::SAT) {
+            m_takesLimit = resync();
             m_state = State::LIVE;
             m_dirty = false;
             return;
@@ -755,6 +786,20 @@ public:
         if (m_ok) m_sess.end();
     }
     bool ok() const { return m_ok; }
+};
+
+// Limits each solver check while it lives: a spreading check cut short keeps the solution
+// found, but a main check must never be, so the limit is lifted on every exit
+class VlSolverLimit final {
+    VlSolverSession& m_sess;
+
+public:
+    VlSolverLimit(VlSolverSession& sess, uint64_t limit) VL_REQUIRES(sess.m_mutex)
+        : m_sess{sess} {
+        sess.limitChecks(limit);
+    }
+    // Analysis cannot see through the reference member back to the caller's lock
+    ~VlSolverLimit() VL_NO_THREAD_SAFETY_ANALYSIS { m_sess.limitChecks(0); }
 };
 
 // One SMT-LIB term from a solver reply: a symbol or literal, or a parenthesized term
@@ -2506,6 +2551,12 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             terms.push_back({var.second.get(), j, 0, width, static_cast<int>(terms.size())});
         }
     }
+    // Checks spreading more terms (variables and array elements, not bits) take more work,
+    // about the square of their number
+    const uint64_t nterms = std::min<uint64_t>(terms.size(), 65536);
+    const VlSolverLimit limit{
+        sess, std::min(diversityCheckLimitMax,
+                       diversityCheckLimit + diversityCheckLimitSquare * nterms * nterms)};
     std::string keep;  // Surviving literals
     int lits = 0;  // Literals declared so far
     int checksLeft = diversityMaxChecks;
@@ -2592,7 +2643,10 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
                 dropped[k] = false;
                 satisfied();
             }
-            if (!settled && status != VlSolverStatus::UNSAT) break;
+            if (!settled && status != VlSolverStatus::UNSAT) {
+                checksLeft = 0;  // Cut short or failed: no further check
+                break;
+            }
         }
         lits += conflicted.size();
         std::map<int, std::vector<size_t>> changeable;  // Parts able to change, per element
@@ -2616,8 +2670,14 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             --checksLeft;
             const VlSolverStatus status = sess.readStatus();
             settled = status == VlSolverStatus::SAT;
-            if (settled) satisfied();
-            if (status == VlSolverStatus::UNSAT) stopped.insert(it.first);
+            if (settled) {
+                satisfied();
+            } else if (status == VlSolverStatus::UNSAT) {
+                stopped.insert(it.first);
+            } else {
+                checksLeft = 0;  // Cut short or failed: no further check
+                break;
+            }
         }
         const auto split = [&](const PinTerm& term) {
             const int step = (term.width + 1) / 2;
@@ -2640,7 +2700,9 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         }
     }
     if (!settled) {
-        // Out of checks, or the solver failed (and then likely fails this check too)
+        // Out of checks, or a check failed or was cut short. The kept literals have a
+        // solution, so finding it again is not limited.
+        sess.limitChecks(0);
         os << "(check-sat-assuming (" << keep << "))\n";
         if (sess.readStatus() != VlSolverStatus::SAT) return;
     }
@@ -2712,7 +2774,12 @@ bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep
                 if (checksLeftr-- <= 0) return false;
                 os << "(check-sat-assuming (" << keep << " __Va"
                    << first + members[diversitySample(i, members.size())] << "))\n";
-                othersFit = sess.readStatus() == VlSolverStatus::SAT;
+                const VlSolverStatus sampled = sess.readStatus();
+                // Cut short or failed: the solution already written stands
+                if (sampled != VlSolverStatus::SAT && sampled != VlSolverStatus::UNSAT) {
+                    return false;
+                }
+                othersFit = sampled == VlSolverStatus::SAT;
                 if (!othersFit) continue;
                 if (--*satisfiedLeftp <= 0) checksLeftr = 0;
                 break;

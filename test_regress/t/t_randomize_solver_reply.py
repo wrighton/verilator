@@ -144,6 +144,8 @@ pin_runs = [
     # Untampered: calls 1 to 4 each settle after 4 rounds: the pin of the variable conflicts,
     # and so does its check of whether it can change at all
     (None, 0, 16),
+    # A solver without a resource limit spreads the same way, with no limit
+    ('limit_unsupported', 0, 16),
     # Status 4: the first pin round of call 1, answered unknown, so call 1 checks only the
     # base solution again
     ('unknown_once', 4, 14),
@@ -167,6 +169,30 @@ for mode, at, nrounds in pin_runs:
                           'TAMPER=' + mode + ' TAMPER_AT=' + str(at)) if mode else '')
     test.file_grep(logfile, r'NPASS=(\d+)', 4)
     test.file_grep_count(solver_log, r'^  \(check-sat-assuming', nrounds)
+    # Spreading checks are limited only by a solver that takes the option
+    limited = r'^  \(set-option :reproducible-resource-limit [1-9]'
+    if mode == 'limit_unsupported':
+        test.file_grep_not(solver_log, limited)
+    elif not mode:
+        test.file_grep(solver_log, limited)
+
+# A spreading check cut short ends the spreading, wherever it is made. Bits status 7 is the
+# first of the one-by-one checks of the elements drawn 1, after the four conflicts of the
+# round; Either status 11 is the check of a part dropped as a guess; Consts status 12 is the
+# check of whether the value can change at all. No further limited check follows, only the
+# unlimited closing one, and the solution stands without a warning.
+for mode, at in [('bits', 7), ('either', 11), ('consts', 12)]:
+    logfile = test.obj_dir + '/sim_cut_' + mode + '.log'
+    solver_log = test.obj_dir + '/solver_cut_' + mode + '.log'
+    test.execute(logfile=logfile,
+                 all_run_flags=['+MODE=cut_' + mode, '+verilator+solver+file+' + solver_log],
+                 run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
+                 'TAMPER=unknown_once TAMPER_AT=' + str(at))
+    test.file_grep(logfile, r'NPASS=(\d+)', 1)
+    test.file_grep_not(logfile, r'Solver returned unknown')
+    test.file_grep(
+        solver_log, r'^< unknown\n  \(set-option :reproducible-resource-limit 0\)\n'
+        r'  \(check-sat-assuming \([^)]*\)\)\n< sat$')
 
 # 20 randomize calls of a wide class, alone, with a solver that does not support
 # check-sat-assuming
