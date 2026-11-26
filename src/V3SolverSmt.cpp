@@ -2948,6 +2948,33 @@ private:
         }
     }
 
+    // The variable of a rand array declared element by element (see SolverScalarArrayVisitor)
+    // that fromp names, if a select of it here is of an element term
+    AstVar* scalarArrayVarp(const AstNodeExpr* fromp) const {
+        if (m_structSel || m_nestedAccessp) return nullptr;
+        const AstNodeVarRef* const refp = VN_CAST(fromp, NodeVarRef);
+        return refp && refp->varp()->solverScalar() && refp->user1() ? refp->varp() : nullptr;
+    }
+    // Replace selp, the SMT select of an element of scalar array varp at index indexp, with
+    // the element's own constant, named by the randomizer as the constraint is built
+    AstSFormatF* replaceWithElemTermp(AstSFormatF* selp, AstVar* varp, AstNodeExpr* indexp) {
+        FileLine* const fl = selp->fileline();
+        // Of the array's select width, or the 32 bits of the solver's index sort
+        UASSERT_OBJ(indexp->width() <= VL_IDATASIZE, indexp, "Index wider than the index sort");
+        if (indexp->width() < VL_IDATASIZE) indexp = new AstExtend{fl, indexp, VL_IDATASIZE};
+        AstCMethodHard* const termp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_ELEM_TERM,
+            new AstConst{fl, AstConst::String{}, SmtUtil::smtSymbol(varp->name())}};
+        termp->addPinsp(indexp);
+        termp->dtypeSetString();
+        AstSFormatF* const newp = new AstSFormatF{fl, "%s", false, termp};
+        newp->dtypeSetString();
+        selp->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(selp), selp);
+        return newp;
+    }
+
     // Create SFormatF for array dereference inside solver
     AstSFormatF* createSolverArrDerefp(FileLine* const fl, AstNodeExpr* const arrExprp,
                                        AstNodeExpr* const idxExprp) {
@@ -3730,6 +3757,17 @@ private:
                                      foreignMode ? randMode : RandomizeMode{}, initp);
         } else {
             initp->addStmtsp(methodp->makeStmt());
+            if (varp->solverScalar()) {
+                // Declared element by element, see SolverScalarArrayVisitor
+                AstCMethodHard* const markp = new AstCMethodHard{
+                    varp->fileline(),
+                    new AstVarRef{varp->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
+                                  VAccess::READWRITE},
+                    VCMethod::RANDOMIZER_MARK_SCALAR,
+                    new AstConst{varp->fileline(), AstConst::String{}, smtName}};
+                markp->dtypeSetVoid();
+                initp->addStmtsp(markp->makeStmt());
+            }
         }
         if (varp->lifetime().isStatic() && randMode.usesMode) {
             AstCMethodHard* const markp = new AstCMethodHard{
@@ -6851,11 +6889,18 @@ private:
             // Index is constant or non-rand -- format as hex literal.
             // Keep a pre-edit clone for the rand_mode hoist below.
             AstNodeExpr* const origp = nodep->cloneTree(false);
+            AstVar* const scalarVarp = objectElem ? nullptr : scalarArrayVarp(nodep->fromp());
+            AstNodeExpr* const scalarIndexp
+                = scalarVarp ? nodep->bitp()->cloneTreePure(false) : nullptr;
             AstNodeExpr* const indexp
                 = new AstSFormatF{fl, "#x%8x", false, nodep->bitp()->unlinkFrBack(&handle)};
             handle.relink(indexp);
-            AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
-            renameArrayExpr(newp, objectElem, elemFormat);
+            AstSFormatF* newp = editSMT(nodep, nodep->fromp(), indexp);
+            if (scalarVarp) {
+                UASSERT_OBJ(newp, nodep, "A select has an SMT form");
+                newp = replaceWithElemTermp(newp, scalarVarp, scalarIndexp);
+            }
+            if (!scalarVarp) renameArrayExpr(newp, objectElem, elemFormat);
             if (newp && stateInRangep) editStateInRange(newp, stateInRangep, elemWidth);
             if (!newp || !hoistRandModeOverSelectAndMember(newp, origp)) {
                 VL_DO_DANGLING(origp->deleteTree(), origp);
@@ -8309,6 +8354,9 @@ private:
                     AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
                     nodep->addPinsp(newSmtIndexp(pinp, pinp->isSigned()));
                 }
+                AstVar* const scalarVarp = indexIsRand ? nullptr : scalarArrayVarp(nodep->fromp());
+                AstNodeExpr* scalarIndexp
+                    = scalarVarp ? nodep->pinsp()->cloneTreePure(false) : nullptr;
                 iterateChildren(nodep);
                 AstNodeExpr* pinp = nodep->pinsp()->unlinkFrBack();
                 AstSFormatF* newp;
@@ -8358,6 +8406,11 @@ private:
                 }
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                if (scalarVarp && !m_structSel) {
+                    newp = replaceWithElemTermp(newp, scalarVarp, scalarIndexp);
+                    scalarIndexp = nullptr;
+                }
+                if (scalarIndexp) VL_DO_DANGLING(scalarIndexp->deleteTree(), scalarIndexp);
                 // The state guard is outermost, as the solver guard reads the array's size
                 AstSFormatF* guardedp = newp;
                 if (smtGuardp) {
@@ -8837,12 +8890,274 @@ public:
 //######################################################################
 // SMT-LIB solver back-end
 
+//######################################################################
+// Rand arrays the solver can declare element by element
+//
+// z3 answers the incremental checks of the solution spreading on arrays with its SMT core,
+// far slower than its bit-blasting SAT solver on bit-vectors alone, which a problem without
+// arrays gets (see solverLogic() in the runtime). A rand array that the constraints read only
+// element by element, each at an index known before the solve, is declared as one bit-vector
+// constant per element instead, named <array>__Vs<8 hex digits of the index>, a name no user
+// identifier has, as Verilator encodes "__" in those. Any other use keeps the array an SMT
+// array: a whole-array use (an equality, unique, inside, a method), a select at an index the
+// solver chooses or whose value needs one (a rand variable, an array size, a method call), a
+// select through another object, solve-before, rand_mode on the array or its elements, or an
+// explicit randomize() argument.
+
+class SolverScalarArrayVisitor final : public VNVisitorConst {
+    // STATE
+    std::unordered_set<AstVar*> m_candidates;  // Rand array members of a scalarizable shape
+    std::unordered_set<AstVar*> m_randArgs;  // Variables randomize() is called with
+    std::unordered_set<const AstNode*> m_selectedRefs;  // References selected at known indices
+    std::vector<std::pair<AstVar*, const AstNodeExpr*>> m_indices;  // Select indices to check
+    // The classes whose constraints reference each array other than as a select of a
+    // non-random array, which the solver reads as a value
+    std::unordered_map<AstVar*, std::vector<AstClass*>> m_arrayRefs;
+    std::unordered_set<const AstNode*> m_stateSelRefs;  // References selected from as values
+    std::unordered_map<const AstVar*, AstClass*> m_ownerps;  // Class of each member
+    std::unordered_map<AstClass*, std::vector<AstVar*>> m_classCandidates;  // By class
+    std::unordered_map<AstClass*, std::vector<AstClass*>> m_derivedps;  // Directly derived
+    std::vector<AstClass*> m_mergeHolderps;  // Classes with a rand handle of a merged class
+    AstClass* m_classp = nullptr;  // Current class
+    bool m_collecting = true;  // First walk: candidates and randomize() arguments
+    bool m_inConstraint = false;  // Under a constraint, or a 'with' of one
+    const ElemRandModes& m_elemModes;  // Arrays with per-element rand_mode()
+    const RandDispatch& m_dispatch;  // Classes whose objects merge their constraints
+
+    // METHODS
+    // Whether varp is a rand array member the solver could declare element by element
+    bool candidateShape(AstVar* varp) const {
+        if (!varp->isRand() || varp->isRandC() || varp->globalConstrained()) return false;
+        if (varp->lifetime().isStatic()) return false;
+        if (m_elemModes.hasModes(varp)) return false;
+        if (RandomizeMode{.asUQuad = varp->user1()}.usesMode) return false;
+        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+        if (!VN_IS(dtypep, DynArrayDType) && !VN_IS(dtypep, QueueDType)
+            && !VN_IS(dtypep, UnpackArrayDType)) {
+            return false;
+        }
+        if (dtypep->dimensions(false).second != 1) return false;
+        const AstNodeDType* const elemp = dtypep->subDTypep()->skipRefp();
+        return elemp->isIntegralOrPacked() && elemp->width() <= VL_QUADSIZE;
+    }
+    // Whether an index's value is known before the solve
+    bool knownIndex(const AstNodeExpr* indexp) const {
+        return indexp->forall([this](const AstNode* np) {
+            if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
+                return !refp->varp()->isRand() && !m_randArgs.count(refp->varp());
+            }
+            return VN_IS(np, NodeExpr) && !VN_IS(np, NodeFTaskRef) && !VN_IS(np, CMethodHard)
+                   && !VN_IS(np, MethodCall) && !VN_IS(np, MemberRef) && !VN_IS(np, LambdaArgRef);
+        });
+    }
+    void exclude(AstVar* varp) { m_candidates.erase(varp); }
+    static bool isArray(const AstVar* varp) {
+        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+        return dtypep->isNonPackedArray() || VN_IS(dtypep, WildcardArrayDType);
+    }
+    // Record an array reference in a constraint, of the current class, or else of the class
+    // the array is a member of. Any reference not recognized as a select of a non-random array
+    // counts as declaring the array whole, which at worst keeps arrays whole needlessly
+    void addArrayRef(AstVar* varp, const AstNode* refp) {
+        if (!isArray(varp) || m_stateSelRefs.count(refp)) return;
+        AstClass* classp = m_classp;
+        if (!classp) {
+            const auto it = m_ownerps.find(varp);
+            if (it == m_ownerps.end()) return;
+            classp = it->second;
+        }
+        m_arrayRefs[varp].push_back(classp);
+    }
+    // A randomizer declaring any array whole solves with arrays, where elements of their own
+    // gain nothing, so it keeps whole the arrays of every class it solves: its object's class
+    // and that class's bases, and if merging objects, the holders' too. A class's constraints
+    // are solved by its own randomizer and by those of derived classes, so a class whose
+    // constraints declare an array whole keeps whole the arrays of its bases, of itself and of
+    // its derived classes. That excludes candidates, whose referencing classes then declare
+    // them whole in turn. Each such class is handled once, so this is linear in the
+    // references and candidates, times the classes related by inheritance to one class.
+    void excludeMixed() {
+        std::vector<AstClass*> pending;  // Classes declaring an array whole, to handle
+        std::unordered_set<AstClass*> mixedps;  // Those found so far
+        const auto addMixed = [&](AstClass* classp) {
+            if (mixedps.insert(classp).second) pending.push_back(classp);
+        };
+        for (const auto& pair : m_arrayRefs) {
+            if (m_candidates.count(pair.first)) continue;
+            for (AstClass* const classp : pair.second) addMixed(classp);
+        }
+        bool holdersMixed = false;
+        while (!pending.empty()) {
+            AstClass* const classp = pending.back();
+            pending.pop_back();
+            if (!holdersMixed && m_dispatch.isMerged(classp)) {
+                holdersMixed = true;
+                for (AstClass* const holderp : m_mergeHolderps) addMixed(holderp);
+            }
+            std::vector<AstClass*> relatedps;  // Bases, itself, and derived classes
+            for (AstClass* basep = classp->extendsp() ? classp->extendsp()->classp() : nullptr;
+                 basep; basep = basep->extendsp() ? basep->extendsp()->classp() : nullptr) {
+                relatedps.push_back(basep);
+            }
+            std::vector<AstClass*> derivedps{classp};
+            while (!derivedps.empty()) {
+                AstClass* const derivedp = derivedps.back();
+                derivedps.pop_back();
+                relatedps.push_back(derivedp);
+                const auto it = m_derivedps.find(derivedp);
+                if (it != m_derivedps.end()) {
+                    derivedps.insert(derivedps.end(), it->second.begin(), it->second.end());
+                }
+            }
+            for (AstClass* const relatedp : relatedps) {
+                const auto it = m_classCandidates.find(relatedp);
+                if (it == m_classCandidates.end()) continue;
+                for (AstVar* const varp : it->second) {
+                    if (!m_candidates.erase(varp)) continue;
+                    const auto refIt = m_arrayRefs.find(varp);
+                    if (refIt == m_arrayRefs.end()) continue;
+                    for (AstClass* const refClassp : refIt->second) addMixed(refClassp);
+                }
+            }
+        }
+    }
+
+    // VISITORS
+    void visit(AstClass* nodep) override {
+        VL_RESTORER(m_classp);
+        m_classp = nodep;
+        if (m_collecting) {
+            if (nodep->extendsp()) m_derivedps[nodep->extendsp()->classp()].push_back(nodep);
+            bool mergeHolder = false;
+            for (AstNode* itemp = nodep->membersp(); itemp; itemp = itemp->nextp()) {
+                AstVar* const varp = VN_CAST(itemp, Var);
+                if (!varp) continue;
+                m_ownerps.emplace(varp, nodep);
+                // An object merged into another's solve has its variables renamed there
+                if (!m_dispatch.isMerged(nodep) && candidateShape(varp)) {
+                    m_candidates.insert(varp);
+                    m_classCandidates[nodep].push_back(varp);
+                }
+                const AstClass* const handleClassp = RandDispatch::randHandleClassp(varp);
+                if (handleClassp && m_dispatch.isMerged(handleClassp)) mergeHolder = true;
+            }
+            if (mergeHolder) m_mergeHolderps.push_back(nodep);
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstConstraint* nodep) override {
+        VL_RESTORER(m_inConstraint);
+        m_inConstraint = true;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstWith* nodep) override {
+        VL_RESTORER(m_inConstraint);
+        m_inConstraint = true;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstConstraintBefore* nodep) override {
+        // Solve-before pins elements by their select terms
+        nodep->foreach([this](const AstNodeVarRef* refp) {
+            exclude(refp->varp());
+            if (!m_collecting) addArrayRef(refp->varp(), refp);
+        });
+    }
+    void visit(AstNodeFTaskRef* nodep) override {
+        // Arguments of randomize() are random however declared, and arrays given as such stay
+        // whole
+        if (m_collecting && nodep->name() == "randomize") {
+            for (const AstNode* argp = nodep->argsp(); argp; argp = argp->nextp()) {
+                argp->foreach([this](const AstNodeVarRef* refp) {
+                    m_randArgs.insert(refp->varp());
+                    exclude(refp->varp());
+                });
+            }
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstArraySel* nodep) override {
+        if (!m_collecting && m_inConstraint) {
+            if (const AstNodeVarRef* const refp = VN_CAST(nodep->fromp(), NodeVarRef)) {
+                if (m_candidates.count(refp->varp())) {
+                    m_selectedRefs.insert(refp);
+                    m_indices.emplace_back(refp->varp(), nodep->bitp());
+                }
+                if (!refp->varp()->isRand()) m_stateSelRefs.insert(refp);
+            }
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstCMethodHard* nodep) override {
+        if (!m_collecting && m_inConstraint) {
+            if (const AstNodeVarRef* const refp = VN_CAST(nodep->fromp(), NodeVarRef)) {
+                if (m_candidates.count(refp->varp())) {
+                    if (nodep->method() == VCMethod::ARRAY_AT) {
+                        m_selectedRefs.insert(refp);
+                        m_indices.emplace_back(refp->varp(), nodep->pinsp());
+                    } else if (nodep->method() == VCMethod::DYN_SIZE) {
+                        m_selectedRefs.insert(refp);  // The size is a variable of its own
+                    }
+                }
+                // A method of a non-random array is a value, but for 'inside' its elements
+                if (!refp->varp()->isRand() && nodep->method() != VCMethod::ARRAY_INSIDE) {
+                    m_stateSelRefs.insert(refp);
+                }
+            }
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstForeachHeader* nodep) override {
+        // A constraint foreach iterates the array's elements, by index
+        if (!m_collecting && m_inConstraint) {
+            if (const AstNodeVarRef* const refp = VN_CAST(nodep->fromp(), NodeVarRef)) {
+                m_selectedRefs.insert(refp);
+            }
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        if (m_collecting || !m_inConstraint) return;
+        if (m_candidates.count(nodep->varp()) && !m_selectedRefs.count(nodep)) {
+            exclude(nodep->varp());
+        }
+        addArrayRef(nodep->varp(), nodep);
+    }
+    void visit(AstMemberRef* nodep) override {
+        // A select through another object is merged under a path; see merge_nested
+        if (!m_collecting && m_inConstraint) {
+            exclude(nodep->varp());
+            addArrayRef(nodep->varp(), nodep);
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    SolverScalarArrayVisitor(AstNetlist* netlistp, const ElemRandModes& elemModes,
+                             const RandDispatch& dispatch)
+        : m_elemModes{elemModes}
+        , m_dispatch{dispatch} {
+        iterateConst(netlistp);
+        m_collecting = false;
+        iterateConst(netlistp);
+        for (const auto& pair : m_indices) {
+            if (!knownIndex(pair.second)) exclude(pair.first);
+        }
+        excludeMixed();
+        for (AstVar* const varp : m_candidates) varp->solverScalar(true);
+        V3Stats::addStat("Randomize, scalarized arrays", m_candidates.size());
+    }
+    ~SolverScalarArrayVisitor() override = default;
+};
+
 class SolverSmtLowering final : public V3SolverLowering {
     // STATE
     StaticReachFuncs m_staticReaches{m_memberMap, m_uniqueNames};
     FastDistGens m_fastDistGens;  // Original eligible dist -> generator recording its draw
     int m_distNum = 0;  // Dist bucket variable counter within a class for var naming
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
+    bool m_scalarsDecided = false;  // SolverScalarArrayVisitor ran, see prepareClass
     // m_writtenVars of each class, with those of its base classes
     std::map<const AstClass*, std::set<std::string>> m_classWrittenVars;
     // Classes whose randomization may randomize a randc variable
@@ -10977,7 +11292,13 @@ public:
     }
 
     // V3SolverLowering
-    void prepareClass(AstClass* classp) override { createRandomGenerator(classp); }
+    void prepareClass(AstClass* classp) override {
+        if (!m_scalarsDecided && v3Global.opt.fConstraintScalar()) {
+            m_scalarsDecided = true;
+            SolverScalarArrayVisitor{v3Global.rootp(), m_elemModes, m_dispatch};
+        }
+        createRandomGenerator(classp);
+    }
     void finish() override { m_staticReaches.makeBodies(); }
     void startClass(AstClass*) override {
         m_writtenVars.clear();  // Each class has its own set of written variables

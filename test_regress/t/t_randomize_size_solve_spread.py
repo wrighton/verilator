@@ -27,15 +27,17 @@ with open(solver_log, encoding="utf8") as fh:
 
 # A size solve declares the size without the final solve's pin of it; after the first
 # call it also holds the elements of the old size, which it neither pins nor asks
+# An element is a select of the array, or with d read only by element, a constant of its own
+elements = ("(select d ", " d__Vs", "(d__Vs")
 stale = 0
 for text in sessions:
     if "(declare-fun __Vd_size " not in text or "(= __Vd_size (_ bv" in text:
         continue
-    if "(select d #x" in text:
+    if "(select d #x" in text or "(declare-fun d__Vs" in text:
         stale += 1
     for line in text.split("\n"):
-        if (line.startswith("  (assert (= __Va")
-                or line.startswith("  (get-value")) and "(select d " in line:
+        if (line.startswith("  (assert (= __Va") or line.startswith("  (get-value")) and any(
+                element in line for element in elements):
             test.error("Size solve pins or asks an element: " + line[:200])
 if stale < 10:
     test.error("Size solves holding elements of the old size: " + str(stale))

@@ -2229,14 +2229,29 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
     for (const std::string& name : m_freshVars) {
         os << "(declare-fun " << name << " () (_ BitVec 32))\n";
     }
+    m_scalarElems.clear();
+    for (const auto& ghost : m_ghostElems) {
+        os << "(declare-fun " << ghost.first << " () (_ BitVec " << ghost.second << "))\n";
+    }
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) {
             auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
             var.second->setArrayInfo(arrVarsp);
         }
-        os << "(declare-fun " << var.first << " () ";
-        var.second->emitType(os);
-        os << ")\n";
+        if (var.second->scalar()) {
+            // Element by element, see elemTerm
+            for (int j = 0;; ++j) {
+                const auto it = m_arr_vars.find({var.first, j});
+                if (it == m_arr_vars.end()) break;
+                const std::string& name = var.second->elementName(it->second->m_indices[0]);
+                os << "(declare-fun " << name << " () (_ BitVec " << var.second->width() << "))\n";
+                m_scalarElems[name] = std::make_pair(var.second.get(), it->second);
+            }
+        } else {
+            os << "(declare-fun " << var.first << " () ";
+            var.second->emitType(os);
+            os << ")\n";
+        }
         // Pin each var, or each array element, to its current value
         if (pinCurrent) {
             const int elements
@@ -2573,7 +2588,7 @@ int VlRandomizer::bsat(VlSolverSession& sess, size_t bound, std::vector<Witness>
             if (VL_UNLIKELY(!(is >> c) || c != '(')) return -1;  // LCOV_EXCL_BR_LINE
             // The var's name, or an element's (select ...): positional, so not its indices
             std::vector<std::string> indices;
-            if (VL_UNLIKELY(parseSelect(readSMTTerm(is), indices) != entry.first)) return -1;
+            if (VL_UNLIKELY(termVarName(readSMTTerm(is), indices) != entry.first)) return -1;
             std::string value = readSMTLastTerm(is);
             const int width = m_vars.at(entry.first)->width();
             smtIndexedToBinary(value, width);
@@ -3425,8 +3440,9 @@ bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
                 const int count = varr.countMatchingElements(m_arr_vars, varr.name());
                 requested += count;
                 const auto firstIt = m_arr_vars.find({varr.name(), 0});
+                // A scalar array has no solver array; see elemTerm
                 if (wholep && count > modelWholeRead && varr.isArray() && varr.dimension() == 1
-                    && firstIt != m_arr_vars.end()
+                    && !varr.scalar() && firstIt != m_arr_vars.end()
                     && firstIt->second->m_idxWidths[0] <= VL_IDATASIZE) {
                     wholep->insert(varr.name());
                     termsr << ' ' << varr.name();
@@ -3546,8 +3562,11 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested,
         }
         std::string idx;
         std::vector<std::string> indices;
-        const std::string name = parseSelect(readSMTTerm(is), indices);
+        const std::string term = readSMTTerm(is);
         std::string value = readSMTLastTerm(is);
+        // A scalar array's element is named by its own constant
+        const auto scalarIt = m_scalarElems.find(term);
+        const std::string name = termVarName(term, indices);
         const auto it = m_vars.find(name);
         if (it == m_vars.end()) {
             VL_WARN_MT(__FILE__, __LINE__, "randomize",
@@ -3597,7 +3616,13 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested,
         }
         smtIndexedToBinary(value, varr.width());
         std::string element = varr.name();
-        if (varr.dimension() || !indices.empty()) {
+        if (scalarIt != m_scalarElems.end()) {
+            const ArrayInfo& info = *scalarIt->second.second;
+            element = info.m_name;
+            std::ostringstream ss;
+            ss << "#x" << std::hex << std::setw(8) << std::setfill('0') << info.m_index;
+            idx = ss.str();
+        } else if (varr.dimension() || !indices.empty()) {
             // An index within the sort can still name no registered element
             const ArrayInfo* infop = nullptr;
             if (elementName(varr, indices, element)) {
@@ -3739,6 +3764,11 @@ void VlRandomizer::merge_nested(const VlRandomizer& from, const std::string& pat
             nested.second.push_back(name);
         }
         if (from.m_randcVarNames.count(pair.first)) m_randcVarNames.insert(name);
+        // The compiler keeps the arrays of a merged object whole (SolverScalarArrayVisitor)
+        // LCOV_EXCL_START
+        if (VL_UNCOVERABLE(var.scalar()))
+            VL_FATAL_MT(__FILE__, __LINE__, "randomize", "Internal: Merged scalar array");
+        // LCOV_EXCL_STOP
         bindings += " (" + pair.first + " " + name + ")";
         renames.emplace(pair.first, name);
     }
@@ -3879,7 +3909,31 @@ std::string VlRandomizer::fresh_const() {
     return m_freshVars.back();
 }
 
+std::string VlRandomizer::termVarName(const std::string& term,
+                                      std::vector<std::string>& indices) const {
+    const auto it = m_scalarElems.find(term);
+    return it != m_scalarElems.end() ? it->second.first->name() : parseSelect(term, indices);
+}
+
+const std::string& VlRandomizer::elemTerm(const std::string& name, IData index) {
+    const auto varIt = m_vars.find(name);
+    if (VL_UNCOVERABLE(varIt == m_vars.end())) {
+        VL_FATAL_MT(__FILE__, __LINE__, "randomize",
+                    "Internal: elemTerm of an unregistered array");
+    }
+    const VlRandomVar& var = *varIt->second;
+    var.scalar(true);
+    // A one-dimensional array's element at an index is the one of that ordinal
+    if (m_arr_vars.find({name, static_cast<int>(index)}) != m_arr_vars.end()) {
+        return var.elementName(index);
+    }
+    std::string ghost;
+    VlRandomVar::elementNameOf(ghost, name, index, "__Vg");
+    return m_ghostElems.emplace(ghost, var.width()).first->first;
+}
+
 void VlRandomizer::clearConstraints() {
+    m_ghostElems.clear();
     m_nullReads.clear();
     m_failPending.clear();
     m_failFilename = nullptr;
@@ -4012,6 +4066,12 @@ const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
         if (arrIt == m_vars.end()
             || arrIt->second->dimension() != static_cast<int>(indices.size()))
             continue;
+        // The compiler keeps an array solved before others whole (SolverScalarArrayVisitor)
+        // LCOV_EXCL_START
+        if (VL_UNCOVERABLE(arrIt->second->scalar()))
+            VL_FATAL_MT(__FILE__, __LINE__, "randomize",
+                        "Internal: Solve-before element of a scalar array");
+        // LCOV_EXCL_STOP
         // An array without elements has no index widths, nor the element
         const auto firstIt = m_arr_vars.find(generateKey(base, 0));
         if (firstIt == m_arr_vars.end()) return nullptr;
@@ -4222,7 +4282,7 @@ const char* VlRandomizer::solverLogic() const {
     // to be inverted. Phased solves keep phasedLogic(): their XOR rounds solve slower
     // with QF_BV.
     for (const auto& var : m_vars) {
-        if (var.second->dimension() > 0) return "QF_ABV";
+        if (var.second->dimension() > 0 && !var.second->scalar()) return "QF_ABV";
     }
     // A constraint may hold an array term of its own, such as an array literal, also in a
     // table it calls
@@ -4670,6 +4730,8 @@ const VlRandomVar* VlRandomizer::phaseTermKey(const std::string& term, std::stri
         const auto it = m_solveBeforeElems.find(keyr);
         return it == m_solveBeforeElems.end() ? nullptr : it->second.get();
     }
+    // Not of a scalar array's element: the elements solved in an earlier phase are of
+    // arrays named in solve-before, which the compiler keeps whole
     std::vector<std::string> indices;
     const std::string name = parseSelect(term, indices);
     const auto it = m_vars.find(name);

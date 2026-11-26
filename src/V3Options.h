@@ -458,6 +458,7 @@ private:
     bool m_fConstBitOpTree;  // main switch: -fno-const-bit-op-tree constant bit op tree
     bool m_fConstEager = true;  // main switch: -fno-const-eagerly run V3Const during passes
     bool m_fConstraintFast;  // main switch: -fno-constraint-fast: solver-free simple domains
+    bool m_fConstraintScalar;  // main switch: -fno-constraint-scalar: arrays by element
     bool m_fDedupe;      // main switch: -fno-dedupe: logic deduplication
     bool m_fDfgPeephole = true; // main switch: -fno-dfg-peephole
     bool m_fDfgPushDownSels = true; // main switch: -fno-dfg-push-down-sels
@@ -818,6 +819,7 @@ public:
     bool fConstBitOpTree() const { return m_fConstBitOpTree; }
     bool fConstEager() const { return m_fConstEager; }
     bool fConstraintFast() const { return m_fConstraintFast; }
+    bool fConstraintScalar() const { return m_fConstraintScalar; }
     bool fDedupe() const { return m_fDedupe; }
     bool fDfg() const { return m_fDfg; }
     bool fDfgPeephole() const { return m_fDfgPeephole; }
