@@ -15328,9 +15328,94 @@ public:
                 }  // LCOV_EXCL_LINE
             }
         }  // LCOV_EXCL_LINE
-        driveConnections(writtenPinps, DriveContext{std::move(drivenps), std::move(drivenRanges),
-                                                    std::move(netPortps), std::move(inPinps)});
+        const InstancePaths instancePaths{netlistp};
+        driveConnections(writtenPinps,
+                         DriveContext{std::move(drivenps), std::move(drivenRanges),
+                                      std::move(netPortps), std::move(inPinps), instancePaths});
     }
+    // The instances of each module, by the cells creating them, to tell apart the instances
+    // hierarchical references to the module's variables are of (see cellsOf)
+    // Cells, each creating an instance in the instance the one before creates
+    using CellChain = std::vector<const AstCell*>;
+    class InstancePaths final {
+        // Cells, by their names
+        std::unordered_map<std::string, std::vector<const AstCell*>> m_cellsByName;
+        std::unordered_map<const AstCell*, const AstNodeModule*> m_parents;  // Module of each
+        std::unordered_map<const AstVar*, const AstNodeModule*> m_modules;  // Module of each
+        // Modules instantiated where a path names more than cells: in a generate block, or as
+        // an array of instances, or recursively
+        std::unordered_set<const AstNodeModule*> m_unsafeps;
+        // Add to chainsr the cell chains, each ending with 'chain', the scopes comps[0..k] may
+        // name, where modp is the scope comps[k] names: a chain stops where the path may
+        // name more than cells, or names a module upwards
+        void addChains(const AstNodeModule* modp, const std::deque<std::string>& comps, size_t k,
+                       const CellChain& chain, std::vector<CellChain>& chainsr) const {
+            if (m_unsafeps.count(modp)) {
+                chainsr.push_back(chain);
+                return;
+            }
+            const auto it = m_cellsByName.find(comps[k]);
+            if (it != m_cellsByName.end()) {
+                for (const AstCell* const cellp : it->second) {
+                    if (cellp->modp() != modp) continue;
+                    CellChain longer{cellp};
+                    longer.insert(longer.end(), chain.begin(), chain.end());
+                    if (k == 0) {
+                        chainsr.push_back(longer);
+                    } else {
+                        addChains(m_parents.at(cellp), comps, k - 1, longer, chainsr);
+                    }
+                }
+            }
+            // Only the first may name a module, upwards (IEEE 1800-2023 23.8)
+            if (k == 0 && (modp->origName() == comps[0] || modp->name() == comps[0])) {
+                chainsr.push_back(chain);
+            }
+        }
+
+    public:
+        explicit InstancePaths(AstNetlist* netlistp) {
+            for (AstNode* np = netlistp->modulesp(); np; np = np->nextp()) {
+                const AstNodeModule* const modp = VN_AS(np, NodeModule);
+                np->foreach([&](const AstCell* cellp) {
+                    m_cellsByName[cellp->name()].push_back(cellp);
+                    m_parents.emplace(cellp, modp);
+                    if (cellp->rangep() || cellp->recursive()) m_unsafeps.insert(cellp->modp());
+                });
+                np->foreach([&](const AstVar* varp) { m_modules.emplace(varp, modp); });
+                const auto addScoped = [&](const AstNode* scopep) {
+                    scopep->foreach(
+                        [&](const AstCell* cellp) { m_unsafeps.insert(cellp->modp()); });
+                };
+                np->foreach([&](const AstNodeGen* genp) { addScoped(genp); });
+                np->foreach([&](const AstNodeBlock* blockp) { addScoped(blockp); });
+            }
+        }
+        // The chains of cells, one of which creates the instances from a scope of the path down
+        // to the instance a reference at dotted path 'path' to variable 'varp' is of; none if
+        // it may be of any instance of its module. Each instance is created by one cell, in an
+        // instance created by one cell, and so on, so references of no common chain are of
+        // different instances, also where one module has several instances.
+        std::vector<CellChain> chainsOf(const AstVar* varp, const std::string& path) const {
+            const auto modIt = m_modules.find(varp);
+            if (modIt == m_modules.end()) return {};  // LCOV_EXCL_LINE  // A net is in a module
+            const AstNodeModule* const modp = modIt->second;
+            std::deque<std::string> comps = VString::split(path, '.');
+            if (!comps.empty() && comps.front() == "$root") comps.pop_front();
+            // A single name may name the module upwards, so any instance of it
+            if (comps.size() < 2 || VN_IS(modp, Iface) || m_unsafeps.count(modp)) return {};
+            std::vector<CellChain> chains;
+            const auto it = m_cellsByName.find(comps.back());
+            if (it == m_cellsByName.end()) return {};
+            for (const AstCell* const cellp : it->second) {
+                if (cellp->modp() == modp) {
+                    addChains(m_parents.at(cellp), comps, comps.size() - 2, CellChain{cellp},
+                              chains);
+                }
+            }
+            return chains;
+        }
+    };
     // State of making written input ports drive the nets connected to them
     struct DriveContext final {
         std::unordered_set<const AstVar*> drivenps;  // Variables with a driver
@@ -15341,6 +15426,7 @@ public:
         NetPorts netPortps;
         // Input port connections of each port
         std::unordered_map<const AstVar*, std::vector<std::pair<AstCell*, AstPin*>>> inPinps;
+        const InstancePaths& instancePaths;  // To tell apart instances of one module
     };
     // A connection of a port that would drive the net connected to it
     struct DriveConn final {
@@ -15349,9 +15435,10 @@ public:
         AstNodeExpr* exprp;  // The connection, or the part of a concatenation of it
         int lsb;  // Of the port bits exprp is connected to
         AstVar* netp;
-        // The dotted path of the reference to the net, so the nets of two instances of one
-        // module are not taken for one (see samePath)
-        std::string path;
+        // The chains of cells one of which creates the instance whose net it is, if a
+        // hierarchical reference tells, so the nets of two instances of one module are not
+        // taken for one (see InstancePaths::chainsOf); empty if it may be any instance
+        std::vector<CellChain> instanceps;
         RangeList ranges;  // Selected, from the net outwards, narrowed to those it drives
         RangeList partRanges;  // Selected, from the net outwards
         // The bits of exprp the port drives, from its lsb, if not all: the others drive the
@@ -15428,7 +15515,7 @@ public:
             if (drivenOverlaps(ctx.drivenRanges, conn.netp, conn.ranges)) conn.keep = true;
             // Quadratic only in the ports written on one net, which are few
             for (const size_t j : netConns[conn.netp]) {
-                if (j != i && samePath(conns[j].path, conn.path)
+                if (j != i && mayBeSameInstance(conns[j], conn)
                     && rangesOverlap(conns[j].ranges, conn.ranges)) {
                     conns[j].keep = true;
                     conn.keep = true;
@@ -15479,6 +15566,7 @@ public:
             for (DriveConn& conn : pinConnList) {
                 const size_t i = conns.size();
                 conn.chain = i;
+                conn.instanceps = ctx.instancePaths.chainsOf(conn.netp, netPath(conn.exprp));
                 // Reached from a port driving bits of this one, only the bits of the net those
                 // drive are, where the connection maps the bits
                 if (fromi != SIZE_MAX) narrowToReached(conn, conns[fromi]);
@@ -15587,12 +15675,11 @@ public:
                    && addDriveConns(cellp, pinp, catp->lhsp(), lsb + catp->rhsp()->width(),
                                     connsr);
         }
-        DriveConn conn{cellp, pinp, exprp, lsb, nullptr, "", {}, {}, 0, exprp->width() - 1,
+        DriveConn conn{cellp, pinp, exprp, lsb, nullptr, {}, {}, {}, 0, exprp->width() - 1,
                        0,     false};
         conn.netp = selectedNetp(exprp, conn.ranges);
         if (!conn.netp) return false;
         conn.partRanges = conn.ranges;
-        conn.path = netPath(exprp);
         connsr.push_back(std::move(conn));
         return true;
     }
@@ -15634,19 +15721,21 @@ public:
             }
         }
     }
-    // Whether two references of one variable may be of the same instance of its module. A path
-    // is relative to where it is written, so only two that name the same scope first, then
-    // different instances below it, as 'dst.a' and 'dst.b', are of different instances. Any
-    // others, as 'dst.a', 'a', 't.u.a' or '$root.t.u.a', may be of the same instance. The
-    // storage V3Scope later gives each instance would tell them apart exactly.
-    static bool samePath(const std::string& ap, const std::string& bp) {
-        if (ap.empty() || bp.empty()) return true;
-        const std::deque<std::string> as = VString::split(ap, '.');
-        const std::deque<std::string> bs = VString::split(bp, '.');
-        size_t common = 0;
-        while (common < as.size() && common < bs.size() && as[common] == bs[common]) ++common;
-        // Different below a shared first scope; a path a prefix of the other may be its scope
-        return !(common > 0 && common < as.size() && common < bs.size());
+    // Whether two connections of one net may be of the same instance of its module
+    static bool mayBeSameInstance(const DriveConn& ar, const DriveConn& br) {
+        if (ar.instanceps.empty() || br.instanceps.empty()) return true;
+        for (const CellChain& achain : ar.instanceps) {
+            for (const CellChain& bchain : br.instanceps) {
+                // The chains name the instance from different scopes, so compare them from
+                // the instance up; a chain ending the other may name the same instance
+                if (std::equal(achain.rbegin(),
+                               achain.rbegin() + std::min(achain.size(), bchain.size()),
+                               bchain.rbegin())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
     // Narrow the bits of its net a connection drives to those the connection 'fromr' reaching
     // it drives, as bits of the port the connection is of. Kept whole where either connection
