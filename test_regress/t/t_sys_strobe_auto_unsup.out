@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_sys_strobe_auto_unsup.v:9:22: Unsupported: $strobe of argument or automatic variable 'y' of a task or function.
+                                                    : ... note: In instance 't'
+    9 |     $strobe("y=%0d", y);   
+      |                      ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_sys_strobe_auto_unsup.v:13:22: Unsupported: $strobe of argument or automatic variable 'z' of a task or function.
+                                                     : ... note: In instance 't'
+   13 |     $strobe("z=%0d", z);   
+      |                      ^
+%Error-UNSUPPORTED: t/t_sys_strobe_auto_unsup.v:16:23: Unsupported: $monitor of argument or automatic variable 'w' of a task or function.
+                                                     : ... note: In instance 't'
+   16 |     $monitor("w=%0d", w);   
+      |                       ^
+%Error: Exiting due to
