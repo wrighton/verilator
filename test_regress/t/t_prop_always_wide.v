@@ -26,27 +26,27 @@ module t (
   // Wide range with multi-operand pure propp -- exercises the shared
   // $sampled(propp) hoist path; pre-fix would clone propp 33 times.
   assert property (@(posedge clk) always[1: 33] (a_high && b_high && c_high))
-    wide_pass_q.push_back(cyc);
+    wide_pass_q.push_back($sampled(cyc));
 
   // Wide range exercises the fixed-delay ring-buffer path
   assert property (@(posedge clk) always[1:1025] (a_high && b_high && c_high))
-    wide_ring_pass_q.push_back(cyc);
+    wide_ring_pass_q.push_back($sampled(cyc));
 
   // All 1025 live threads fail together when a_drop falls.
   assert property (@(posedge clk) always[1:1025] a_drop)
-  else wide_fail_q.push_back(cyc);
+  else wide_fail_q.push_back($sampled(cyc));
 
   // A one-cycle remainder uses a scalar state instead of a ring.
   assert property (@(posedge clk) always[1:2] a_drop)
-  else narrow_fail_q.push_back(cyc);
+  else narrow_fail_q.push_back($sampled(cyc));
 
   // A nested always may fail without rejecting a successful property or.
   assert property (@(posedge clk) (always [0:1] 1'b0) or a_high)
-  else nested_or_fail_q.push_back(cyc);
+  else nested_or_fail_q.push_back($sampled(cyc));
 
   // The same drop passes a negated always; it must not replay fail actions.
   assert property (@(posedge clk) not always[1:1025] a_drop)
-  else negated_fail_q.push_back(cyc);
+  else negated_fail_q.push_back($sampled(cyc));
 
   always @(posedge clk) begin
     cyc <= cyc + 1;

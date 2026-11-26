@@ -2930,6 +2930,11 @@ class AssertNfaVisitor final : public VNVisitor {
     AstSenTree* m_sampledValueClockp = nullptr;  // Inherited clock during scoped attachment
     V3UniqueNames m_propTempNames{"__VnfaSampled"};  // Hoisted $sampled(propp) temps
     V3UniqueNames m_failCountNames{"__VnfaRemainingFailCount"};  // Fail replay counter names
+    V3UniqueNames m_actionNames{"__VnfaAction"};  // Reactive action temporary names
+    std::vector<const AstBegin*> m_namedBeginps;  // Named blocks around the current assertion
+    AstNode* m_containerp = nullptr;  // Current module or generate block
+    bool m_procSuspends = false;  // Current procedure may suspend
+    V3AssertReactive m_reactive;  // Makes the actions run in the Reactive region
 
     template <typename T_Node>
     void visitSampledValue(T_Node* const nodep) {
@@ -3157,6 +3162,27 @@ class AssertNfaVisitor final : public VNVisitor {
         }
     }
 
+    void makeActionsReactive(AstNodeCoverOrAssert* assertp, AstSenTree* senTreep) {
+        // A sequence event control resumes its waiters from the cover action, and without
+        // coverage the cover statement is deleted
+        const AstCover* const coverp = VN_CAST(assertp, Cover);
+        if (coverp && (coverp->isSeqEvent() || !v3Global.opt.coverageUser())) return;
+        // A procedure that may suspend may evaluate it in a later time step
+        if (m_procSuspends) return;
+        std::string scope;
+        for (const AstBegin* const beginp : m_namedBeginps) scope += "__DOT__" + beginp->name();
+        const V3AssertReactive::Site site{assertp, m_modp, m_containerp, senTreep, scope};
+        if (AstNodeStmt* const passsp = assertp->passsp()) {
+            passsp->unlinkFrBackWithNext();
+            assertp->addPasssp(m_reactive.newPending(site, passsp, m_actionNames));
+        }
+        AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
+        if (AstNodeStmt* const failsp = assertAssertp ? assertAssertp->failsp() : nullptr) {
+            failsp->unlinkFrBackWithNext();
+            assertAssertp->addFailsp(m_reactive.newPending(site, failsp, m_actionNames));
+        }
+    }
+
     static bool splitsImplicationPasssp(const AstNodeCoverOrAssert* assertp,
                                         const PropertyParts& parts) {
         const AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
@@ -3179,6 +3205,11 @@ class AssertNfaVisitor final : public VNVisitor {
             outputExprp = new AstNeq{flp, matchCountp->cloneTreePure(false),
                                      newTypedConstp(flp, matchCountp->dtypep(), 0)};
         }
+
+        // Its actions run in the Reactive region, from the decisions at the evaluation, which
+        // the gating and replays below make
+        makeActionsReactive(assertp, senTreep);
+        assertp->nfaLowered(true);
 
         if (splitsImplicationPasssp(assertp, parts)) {
             splitImplicationPassActions(assertAssertp, parts, matchp);
@@ -3448,10 +3479,14 @@ class AssertNfaVisitor final : public VNVisitor {
     // VISITORS
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_modp);
+        VL_RESTORER(m_containerp);
+        VL_RESTORER_COPY(m_actionNames);
         VL_RESTORER(m_loweringp);
         VL_RESTORER(m_defaultClockingp);
         VL_RESTORER(m_defaultDisablep);
         m_modp = nodep;
+        m_containerp = nodep;
+        m_actionNames.reset();
         // A class nested in a module is in the scope of the module's default clocking
         if (!VN_IS(nodep, Class)) m_defaultClockingp = nullptr;
         m_defaultDisablep = nodep->defaultDisablep();
@@ -3465,8 +3500,32 @@ class AssertNfaVisitor final : public VNVisitor {
     }
     void visit(AstGenBlock* nodep) override {
         VL_RESTORER(m_defaultDisablep);
+        VL_RESTORER(m_containerp);
         m_defaultDisablep = nodep->defaultDisablep();
+        m_containerp = nodep;
         iterateChildren(nodep);
+    }
+    void visit(AstNodeProcedure* nodep) override {
+        VL_RESTORER_CLEAR(m_namedBeginps);
+        VL_RESTORER(m_procSuspends);
+        // The process of a concurrent assertion item does not suspend
+        m_procSuspends = !(VN_IS(nodep, Always)
+                           && VN_AS(nodep, Always)->keyword() == VAlwaysKwd::ASSERT_COVER)
+                         && V3AssertCommon::procSuspends(nodep->stmtsp());
+        iterateChildren(nodep);
+    }
+    // A fork branch is a process of its own, which also suspends if its own statements may
+    void visit(AstForkItem* nodep) override {
+        VL_RESTORER(m_procSuspends);
+        if (!nodep->disableWrapper()) {
+            m_procSuspends = m_procSuspends || V3AssertCommon::procSuspends(nodep->stmtsp());
+        }
+        iterateChildren(nodep);
+    }
+    void visit(AstBegin* nodep) override {
+        if (!nodep->name().empty()) m_namedBeginps.push_back(nodep);
+        iterateChildren(nodep);
+        if (!nodep->name().empty()) m_namedBeginps.pop_back();
     }
     void visit(AstDefaultDisable* nodep) override {}
     void visit(AstFell* nodep) override { visitSampledValue(nodep); }
