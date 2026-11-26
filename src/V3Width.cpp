@@ -15431,8 +15431,11 @@ public:
         std::vector<std::pair<AstCell*, AstPin*>> writtenPinps;  // Of written ports, in order
         std::unordered_set<const AstVar*> topPortps;
         std::unordered_set<const AstVar*> drivenps;  // Variables with a driver
-        std::unordered_set<const AstNode*> forcedRefps;  // Lvalues of force and release
+        // Lvalues not driving: of force and release, of a constant z, and of output connections
+        std::unordered_set<const AstNode*> undrivingRefps;
         std::vector<AstPin*> netPinps;  // Input connections, driving if their net is driven
+        // Variables driven if the key is: ports connected to a net, nets connected to an output
+        std::unordered_map<const AstVar*, std::vector<const AstVar*>> netPortps;
         // Input port connections of each port, for a written port driving its nets
         std::unordered_map<const AstVar*, std::vector<std::pair<AstCell*, AstPin*>>> inPinps;
         for (AstNode* modp = netlistp->modulesp(); modp; modp = modp->nextp()) {
@@ -15440,13 +15443,21 @@ public:
             // Pre-order, so a force is seen before the references in it
             modp->foreach([&](AstNode* np) {
                 if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
-                    if (refp->access().isWriteOrRW() && !forcedRefps.count(refp)) {
+                    if (refp->access().isWriteOrRW() && !undrivingRefps.count(refp)) {
                         drivenps.emplace(refp->varp());
                     }
                 } else if (VN_IS(np, AssignForce) || VN_IS(np, Release)) {
                     AstNode* const lhsp = VN_IS(np, Release) ? VN_AS(np, Release)->lhsp()
                                                              : VN_AS(np, AssignForce)->lhsp();
-                    lhsp->foreach([&](const AstNodeVarRef* refp) { forcedRefps.emplace(refp); });
+                    lhsp->foreach(
+                        [&](const AstNodeVarRef* refp) { undrivingRefps.emplace(refp); });
+                } else if (const AstAssignW* const assp = VN_CAST(np, AssignW)) {
+                    // A z has no strength, so drives nothing (IEEE 1800-2023 28.12)
+                    const AstConst* const constp = VN_CAST(assp->rhsp(), Const);
+                    if (constp && constp->num().isAllZ()) {
+                        assp->lhsp()->foreach(
+                            [&](const AstNodeVarRef* refp) { undrivingRefps.emplace(refp); });
+                    }
                 } else if (const AstPull* const pullp = VN_CAST(np, Pull)) {
                     pullp->lhsp()->foreach(
                         [&](const AstNodeVarRef* refp) { drivenps.emplace(refp->varp()); });
@@ -15460,7 +15471,17 @@ public:
                         if (m_writtenInputps.count(pinp->modVarp())) {
                             writtenPinps.emplace_back(cellp, pinp);
                         }
-                        if (!pinp->modVarp()->isNonOutput()) continue;
+                        if (!pinp->modVarp()->isNonOutput()) {
+                            // An output drives its connection if it is driven
+                            if (pinp->exprp()) {
+                                pinp->exprp()->foreach([&](const AstNodeVarRef* refp) {
+                                    if (!refp->access().isWriteOrRW()) return;
+                                    undrivingRefps.emplace(refp);
+                                    netPortps[pinp->modVarp()].push_back(refp->varp());
+                                });
+                            }
+                            continue;
+                        }
                         inPinps[pinp->modVarp()].emplace_back(cellp, pinp);
                         if (pulled) {
                             drivenps.emplace(pinp->modVarp());
@@ -15481,7 +15502,6 @@ public:
         }
         // A port connected to a net drives it only if the net has a driver, as they collapse
         // into one net (IEEE 1800-2023 23.3.3.7)
-        std::unordered_map<const AstVar*, std::vector<const AstVar*>> netPortps;
         for (AstPin* const pinp : netPinps) {
             std::vector<std::pair<int, int>> ranges;
             AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
@@ -15561,7 +15581,7 @@ public:
     // State of making written input ports drive the nets connected to them
     struct DriveContext final {
         std::unordered_set<const AstVar*> drivenps;  // Variables with a driver
-        // Ports connected to each net, driven if it is
+        // Variables driven if the key is, see coercePorts
         std::unordered_map<const AstVar*, std::vector<const AstVar*>> netPortps;
         // Input port connections of each port
         std::unordered_map<const AstVar*, std::vector<std::pair<AstCell*, AstPin*>>> inPinps;
@@ -15591,7 +15611,7 @@ public:
         // Two such ports on the same bits would both drive them, and neither would see the
         // other's writes, so these keep their connection driving the port, as do all the
         // connections decided together with theirs.
-        // Ports connected to driven nets are driven
+        // Ports connected to driven nets, and nets connected to driven outputs, are driven
         std::vector<const AstVar*> drivenWork{ctx.drivenps.begin(), ctx.drivenps.end()};
         while (!drivenWork.empty()) {
             const AstVar* const netp = drivenWork.back();

@@ -368,10 +368,12 @@ a hierarchical reference, drives the net it is connected to if that net has
 no other driver, as the port and the net collapse into one net (IEEE
 1800-2023 23.3.3.7). The connection may be a hierarchical reference, and a
 constant bit, part, or element select of the net. This fallback requires no
-other driver. A net has another driver if anything other than force or
-release writes any bit of it, if it is declared tri0 or tri1 or connected
-to a pullup or pulldown, if it is an input port connected in any instance
-to a value other than a net, or to a net that has another driver, or set by
+other driver. A net has another driver if anything other than force,
+release, a continuous assignment of a constant z, or an output port
+connection writes any bit of it, if it is connected to an output port that
+has another driver, if it is declared tri0 or tri1 or connected to a pullup
+or pulldown, if it is an input port connected in any instance to a value
+other than a net, or to a net that has another driver, or set by
 ```unconnected_drive``, if it is a port of the top-level module, or if it
 is public writable. An input port so driven in turn drives the nets it is
 connected to in the same way. This fallback does not collapse two ports
