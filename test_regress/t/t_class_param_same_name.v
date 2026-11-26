@@ -51,13 +51,85 @@ class OuterB;
   Inner #(byte) h;
 endclass
 
+// A class in each specialization of a module, using its parameter
+module ModClass #(
+    parameter int Q = 1
+);
+  class MC #(
+      int R = 3
+  );
+    static function int m();
+      return R + Q;
+    endfunction
+  endclass
+  class MT #(
+      type T = logic [Q-1:0]
+  );
+    static function int w();
+      return $bits(T);
+    endfunction
+  endclass
+  int r;
+  int t;
+  initial begin
+    r = MC#(4)::m();
+    t = MT#(logic [Q+1:0])::w();
+  end
+endmodule
+
 module t;
+  ModClass #(.Q(10)) u_q10 ();
+  ModClass #(.Q(20)) u_q20 ();
+  // A class in each generate loop iteration, using its genvar
+  for (genvar g = 0; g < 2; ++g) begin : gen
+    class GC #(
+        int S = 0
+    );
+      static function int s();
+        return S + g;
+      endfunction
+    endclass
+    // With only default values, depending on the genvar
+    class GD #(
+        int S = g * 3
+    );
+      static function int s();
+        return S;
+      endfunction
+    endclass
+    class GT #(
+        type T = logic [g:0]
+    );
+      static function int w();
+        return $bits(T);
+      endfunction
+    endclass
+    int z;
+    int d;
+    int w;
+    initial begin
+      z = GC#(30)::s();
+      d = GD#()::s();
+      w = GT#()::w();
+    end
+  end
   initial begin
     automatic PkgExt::Agent #(16) ext = new;
     automatic PkgBase::Agent #(16) base = ext;
     automatic PkgBase::Agent #(16) base2 = new;
     automatic OuterA oa = new;
     automatic OuterB ob = new;
+    #1;
+    `checkd(u_q10.r, 14);
+    `checkd(u_q20.r, 24);
+    `checkd(gen[0].z, 30);
+    `checkd(gen[1].z, 31);
+    `checkd(u_q10.t, 12);
+    `checkd(u_q20.t, 22);
+    `checkd(gen[0].d, 0);
+    `checkd(gen[1].d, 3);
+    `checkd(gen[0].w, 1);
+    `checkd(gen[1].w, 2);
     `checkd(ext.twice(), 32);
     `checkd(base.width(), 16);
     `checkd(base2.width(), 16);
