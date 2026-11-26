@@ -1648,6 +1648,7 @@ class AssertVisitor final : public VNVisitor {
     // STATE
     AstNodeModule* m_modp = nullptr;  // Last module
     const AstNode* m_beginp = nullptr;  // Last AstBegin/AstGenBlock
+    std::string m_genScope;  // Scope names of the named AstGenBlocks around, as V3Begin adds them
     unsigned m_modMonitorNum = 0;  // Module $monitor numbering
     AstVar* m_monitorNumVarp = nullptr;  // $monitor number variable
     AstVar* m_monitorNextVarp = nullptr;  // Last $monitor number given to an instance
@@ -1666,6 +1667,7 @@ class AssertVisitor final : public VNVisitor {
     std::unordered_set<const AstVar*> m_pastVarps;  // Registers of sampled value functions
     AstVar* m_obsEventp = nullptr;  // Current module event to run deferred calls
     AstAlwaysReactive* m_obsReactivep = nullptr;  // Current module block running deferred calls
+    AstAlwaysPostponed* m_finalPostponedp = nullptr;  // Current module block running final calls
     AstVar* m_actionEventp = nullptr;  // Current process's event to run queued PExpr actions
     AstAlwaysReactive* m_actionReactivep = nullptr;  // Block running them, beside the process
     std::vector<const AstBegin*> m_namedBeginps;  // Named blocks in the current process
@@ -2172,9 +2174,9 @@ class AssertVisitor final : public VNVisitor {
         return varpr;
     }
 
-    // Lower observed deferred action into a pending call with its input arguments snapshotted.
-    // Pending calls run in the Reactive region unless a flush of their process clears them
-    // (IEEE 1800-2023 16.4.1).
+    // Lower deferred action into a pending call with its input arguments snapshotted. Pending
+    // calls run in the Reactive region, or for a final deferred assertion in the Postponed
+    // region, unless a flush of their process clears them (IEEE 1800-2023 16.4.1).
     AstNodeStmt* newObservedDeferredAction(FileLine* flp, AstNodeStmt* actionsp,
                                            const AstNodeCoverOrAssert* assertp) {
         // The null statement of an 'else;', an empty implied block, has no call to defer
@@ -2235,6 +2237,14 @@ class AssertVisitor final : public VNVisitor {
     // before an $assertkill of its assertion is not run (IEEE 1800-2023 20.11).
     AstNodeStmt* newObservedDeferredCall(FileLine* flp, AstNodeStmt* callsp, AstNodeStmt* queuesp,
                                          const AstNodeCoverOrAssert* assertp) {
+        // The calls run in a block of the module, so keep the scope of the named blocks, which
+        // V3Begin would have added
+        std::string scope = m_genScope;
+        for (const AstBegin* const beginp : m_namedBeginps) scope += "__DOT__" + beginp->name();
+        if (!scope.empty()) {
+            callsp->foreachAndNext(
+                [&](AstScopeName* namep) { namep->scopeAttr(scope + namep->scopeAttr()); });
+        }
         AstVar* const pendingp
             = newModuleTemp(flp, m_obsNames.get("Pending"), m_modp->findUInt32DType(), m_modp);
         pendingp->setIgnoreSchedWrite();
@@ -2287,27 +2297,37 @@ class AssertVisitor final : public VNVisitor {
                                                  new AstConst{flp, 1}}}),
                                   dropsp);
         callsp = new AstIf{flp, new AstVarRef{flp, killedp, VAccess::READ}, dropsp, callsp};
-        if (!m_obsEventp) {
-            m_obsEventp = newModuleTemp(flp, m_obsNames.get("Event"),
-                                        m_modp->findBasicDType(VBasicDTypeKwd::EVENT), m_modp);
-            v3Global.setHasEvents();
-            v3Global.setUsesTiming();
-            m_obsReactivep = new AstAlwaysReactive{
-                flp,
-                new AstSenTree{flp,
-                               new AstSenItem{flp, VEdgeType::ET_EVENT,
-                                              new AstVarRef{flp, m_obsEventp, VAccess::READ}}},
-                nullptr};
-            m_obsReactivep->deferredReports(true);
-            m_modp->addStmtsp(m_obsReactivep);
-        }
         queuesp = AstNode::addNext(
             queuesp, new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
                                    new AstAdd{flp, new AstVarRef{flp, pendingp, VAccess::READ},
                                               new AstConst{flp, 1}}});
-        queuesp = AstNode::addNext(
-            queuesp,
-            new AstFireEvent{flp, new AstVarRef{flp, m_obsEventp, VAccess::WRITE}, false});
+        AstNodeProcedure* runnerp;
+        if (assertp->userType() == VAssertType::FINAL_DEFERRED_IMMEDIATE) {
+            if (!m_finalPostponedp) {
+                m_finalPostponedp = new AstAlwaysPostponed{flp, nullptr};
+                m_modp->addStmtsp(m_finalPostponedp);
+            }
+            runnerp = m_finalPostponedp;
+        } else {
+            if (!m_obsEventp) {
+                m_obsEventp = newModuleTemp(flp, m_obsNames.get("Event"),
+                                            m_modp->findBasicDType(VBasicDTypeKwd::EVENT), m_modp);
+                v3Global.setHasEvents();
+                v3Global.setUsesTiming();
+                m_obsReactivep = new AstAlwaysReactive{
+                    flp,
+                    new AstSenTree{flp,
+                                   new AstSenItem{flp, VEdgeType::ET_EVENT,
+                                                  new AstVarRef{flp, m_obsEventp, VAccess::READ}}},
+                    nullptr};
+                m_obsReactivep->deferredReports(true);
+                m_modp->addStmtsp(m_obsReactivep);
+            }
+            runnerp = m_obsReactivep;
+            queuesp = AstNode::addNext(
+                queuesp,
+                new AstFireEvent{flp, new AstVarRef{flp, m_obsEventp, VAccess::WRITE}, false});
+        }
 
         AstLoop* const reactLoopp = new AstLoop{flp};
         reactLoopp->addStmtsp(
@@ -2316,15 +2336,15 @@ class AssertVisitor final : public VNVisitor {
             flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
             new AstSub{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}});
         reactLoopp->addStmtsp(callsp);
-        // Every report pending when the Reactive region runs has matured, also if an action run
-        // before it kills its assertion, so the checks come before any of the calls
+        // Every report pending when its region runs has matured, also if an action run before it
+        // kills its assertion, so the checks come before any of the calls
         AstIf* const checkp = newKillCheck();
-        if (m_obsReactivep->stmtsp()) {
-            m_obsReactivep->stmtsp()->addHereThisAsNext(checkp);
+        if (runnerp->stmtsp()) {
+            runnerp->stmtsp()->addHereThisAsNext(checkp);
         } else {
-            m_obsReactivep->addStmtsp(checkp);
+            runnerp->addStmtsp(checkp);
         }
-        m_obsReactivep->addStmtsp(reactLoopp);
+        runnerp->addStmtsp(reactLoopp);
         return queuesp;
     }
 
@@ -2815,6 +2835,13 @@ class AssertVisitor final : public VNVisitor {
     void visitAssertionIterate(AstNodeCoverOrAssert* nodep, AstNodeStmt* failsp) {
         FileLine* const flp = nodep->fileline();
         const bool obsDeferred = nodep->userType() == VAssertType::OBSERVED_DEFERRED_IMMEDIATE;
+        // A final deferred assertion runs its action immediately without --timing, in a task or
+        // function or under a fork, sharing no queue between processes, and in a final
+        // procedure, after which no Postponed region runs (IEEE 1800-2023 9.2.3)
+        const bool deferred = obsDeferred
+                              || (nodep->userType() == VAssertType::FINAL_DEFERRED_IMMEDIATE
+                                  && v3Global.opt.timing().isSetTrue() && !m_ftaskp
+                                  && !m_inSpawnedFork && !VN_IS(m_procedurep, Final));
         if (obsDeferred && (!v3Global.opt.timing().isSetTrue() || m_ftaskp || m_inSpawnedFork)) {
             if (v3Global.opt.timing().isSetFalse()) {
                 nodep->v3warn(E_NOTIMING,
@@ -3014,7 +3041,7 @@ class AssertVisitor final : public VNVisitor {
                 if (message != "") covincp->declp()->comment(AstNode::prettyName(message));
                 // IEEE 1800-2023 16.4.2: Deferred coverage is flushed like a pending report
                 AstNodeStmt* creditsp = covincp;
-                if (obsDeferred) {
+                if (deferred) {
                     creditsp = newObservedDeferredCall(flp, covincp, nullptr, nodep);
                     if (passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
                 }
@@ -3042,7 +3069,7 @@ class AssertVisitor final : public VNVisitor {
                     nodep, VN_IS(nodep, AssertIntrinsic) ? "'$cast' failed." : "'assert' failed.");
                 defaultFailsp = failsp;
             }
-            if (obsDeferred) {
+            if (deferred) {
                 if (passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
                 if (failsp) failsp = newObservedDeferredAction(flp, failsp, nodep);
             }
@@ -4147,6 +4174,7 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_obsFlushp);
         VL_RESTORER(m_obsEventp);
         VL_RESTORER(m_obsReactivep);
+        VL_RESTORER(m_finalPostponedp);
         VL_RESTORER_COPY(m_actionNames);
         VL_RESTORER(m_actionEventp);
         VL_RESTORER(m_actionReactivep);
@@ -4165,6 +4193,7 @@ class AssertVisitor final : public VNVisitor {
         m_obsFlushp = nullptr;
         m_obsEventp = nullptr;
         m_obsReactivep = nullptr;
+        m_finalPostponedp = nullptr;
         m_actionNames.reset();
         m_actionEventp = nullptr;
         m_actionReactivep = nullptr;
@@ -4242,8 +4271,10 @@ class AssertVisitor final : public VNVisitor {
         // because V3Assert is called before V3Begin
         VL_RESTORER(m_beginp);
         VL_RESTORER(m_containerp);
+        VL_RESTORER_COPY(m_genScope);
         m_beginp = nodep;
         m_containerp = nodep;
+        if (!nodep->name().empty()) m_genScope += "__DOT__" + nodep->name();
         iterateChildren(nodep);
     }
     void visit(AstBegin* nodep) override {
