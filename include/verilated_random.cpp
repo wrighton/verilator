@@ -588,6 +588,7 @@ static bool solverSamples() {
 class VlSolverSession final {
     friend class VlRandomizer;
     friend class VlSolverTxn;
+    friend class VlSolverLimit;
     enum class State : uint8_t { UNSTARTED, LIVE, BROKEN, DISABLED };
     static constexpr int MAX_CONSEC_FAILS = 3;
 
