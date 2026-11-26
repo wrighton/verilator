@@ -981,6 +981,18 @@ bool VlRandomizer::next_check_only(VlRNGReseeds& rngr) { return nextRandomize(rn
 bool VlRandomizer::next(VlRNGReseeds& rngr) { return nextRandomize(rngr, false); }
 
 bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
+    if (VL_UNLIKELY(!m_nullRead.empty())) {
+        // Once per constraint
+        static VerilatedMutex s_mutex;
+        static std::set<std::pair<std::string, uint32_t>> s_warned VL_GUARDED_BY(s_mutex);
+        bool first;
+        {
+            const VerilatedLockGuard lock{s_mutex};
+            first = s_warned.emplace(m_nullReadFilename, m_nullReadLinenum).second;
+        }
+        if (first) VL_WARN_MT(m_nullReadFilename, m_nullReadLinenum, "", m_nullRead.c_str());
+        return false;
+    }
     // No rand variables: randomize() still checks the constraints (IEEE 1800-2023 18.11.1)
     if (!checkOnly && m_vars.empty() && m_uniqueArrays.empty() && m_constraints.empty()) {
         return true;
@@ -1771,6 +1783,7 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
 
 void VlRandomizer::hard(std::string constraint, std::initializer_list<const char*> varNames,
                         const char* filename, uint32_t linenum, const char* source) {
+    if (VL_UNLIKELY(!m_nullReads.empty())) nullReadCheck(constraint, filename, linenum);
     m_constraints.emplace_back(std::move(constraint));
     // Stored for every constraint: a randomize() with clause registers its constraints
     // before markRandc() marks its randc variables, so whether the names are needed isn't
@@ -1790,8 +1803,9 @@ void VlRandomizer::hard(std::string constraint, std::initializer_list<const char
     }
 }
 
-void VlRandomizer::soft(std::string constraint, const char* /*filename*/, uint32_t /*linenum*/,
+void VlRandomizer::soft(std::string constraint, const char* filename, uint32_t linenum,
                         const char* /*source*/) {
+    if (VL_UNLIKELY(!m_nullReads.empty())) nullReadCheck(constraint, filename, linenum);
     m_softConstraints.emplace_back(std::move(constraint));
 }
 
@@ -1803,7 +1817,36 @@ void VlRandomizer::disable_soft(const std::string& varName) {
         m_softConstraints.end());
 }
 
+void VlRandomizer::nullReadCheck(const std::string& constraint, const char* filename,
+                                 uint32_t linenum) {
+    if (!m_nullRead.empty()) return;
+    for (const auto& nameRead : m_nullReads) {
+        // The solver name as a whole term, not a prefix of a longer one
+        for (size_t pos = constraint.find(nameRead.first); pos != std::string::npos;
+             pos = constraint.find(nameRead.first, pos + 1)) {
+            const size_t end = pos + nameRead.first.size();
+            if (end != constraint.size() && constraint[end] != ' ' && constraint[end] != ')') {
+                continue;
+            }
+            m_nullRead = "randomize() constraint reads '" + nameRead.second
+                         + "', a member of a null handle, so randomize() returns 0 (IEEE "
+                           "1800-2023 18.5.12); warned once per constraint";
+            m_nullReadFilename = filename;
+            m_nullReadLinenum = linenum;
+            return;
+        }
+    }
+}
+
+std::string VlRandomizer::null_read(const std::string& name, const std::string& smtName) {
+    m_nullReads.emplace_back(smtName, name);
+    return smtName;
+}
+
 void VlRandomizer::clearConstraints() {
+    m_nullReads.clear();
+    m_nullRead.clear();
+    m_nullReadFilename = nullptr;
     m_constraints.clear();
     m_constraintVarNames.clear();
     m_constraintVarEnds.clear();
