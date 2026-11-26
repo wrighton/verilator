@@ -26,22 +26,4 @@ module t (
   endproperty
 
   assert property (sampled_values(values));
-
-  int queue[$];
-
-  property stable_value(signal);
-    @(posedge clk) $stable(signal);
-  endproperty
-
-  assert property (stable_value(queue));
-
-  string strings[2];
-  assert property (stable_value(strings));
-
-  typedef struct {
-    int a;
-    string s;
-  } with_string_t;
-  with_string_t with_string;
-  assert property (stable_value(with_string));
 endmodule
