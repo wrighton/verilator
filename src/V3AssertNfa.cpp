@@ -3334,6 +3334,40 @@ class AssertNfaVisitor final : public VNVisitor {
         return nullptr;
     }
 
+    // V3AssertPre lowers a single-cycle property to a boolean, so split the pass action of
+    // an implication here, where its antecedent tells a vacuous success apart
+    // (IEEE 1800-2023 16.14.8)
+    static void splitSingleCyclePasssp(AstNodeCoverOrAssert* assertp) {
+        if (hasMultiCycleExpr(assertp->propp())) return;
+        // A future value function delays the evaluation of the property, not of the antecedent
+        if (assertp->propp()->exists([](const AstNodeExpr* np) {
+                return VN_IS(np, Future) || VN_IS(np, Rising) || VN_IS(np, Falling)
+                       || VN_IS(np, Steady);
+            })) {
+            return;
+        }
+        PropertyParts parts = decomposeProperty(assertp->propp());
+        if (!splitsImplicationPasssp(assertp, parts)) return;
+        // Match item assignments belong to the antecedent, not to the vacuity check
+        AstNodeExpr* antp = parts.triggerExprp;
+        if (const AstExprStmt* const exprStmtp = VN_CAST(antp, ExprStmt)) {
+            antp = exprStmtp->resultp();
+        }
+        // One pass action, enabled by the control of the kind of success the antecedent tells.
+        // A single test, so a pass action that suspends does not see the antecedent change.
+        AstAssert* const assertAssertp = VN_AS(assertp, Assert);
+        FileLine* const flp = assertp->fileline();
+        AstNodeStmt* const passsp = assertAssertp->passsp()->unlinkFrBackWithNext();
+        AstNodeExpr* const passOnp = new AstCond{
+            flp, sampled(antp->cloneTreePure(false)),
+            assertPassOnCond(flp, assertp->userType(), assertp->directive(), /*vacuous=*/false),
+            assertPassOnCond(flp, assertp->userType(), assertp->directive(), /*vacuous=*/true)};
+        AstIf* const ifp = new AstIf{flp, passOnp, passsp};
+        ifp->isBoundsCheck(true);
+        ifp->user1(true);
+        assertAssertp->addPasssp(ifp);
+    }
+
     // Reject unsupported shapes.
     // Returns the PropSpec to lower, or nullptr when fully handled here.
     AstPropSpec* prepareAssertionProp(AstNodeCoverOrAssert* assertp) {
@@ -3363,7 +3397,10 @@ class AssertNfaVisitor final : public VNVisitor {
         if (assertp->immediate()) return;
 
         AstPropSpec* const propp = prepareAssertionProp(assertp);
-        if (!propp) return;
+        if (!propp) {
+            splitSingleCyclePasssp(assertp);
+            return;
+        }
 
         PropertyParts parts = decomposeProperty(propp);
         UASSERT_OBJ(parts.seqExprp, propp, "Property body must be an expression");

@@ -45,6 +45,12 @@ module t (
 
   int cyc = 0;
 
+  // The attempt at cyc 7 has a true antecedent, so it passes with vacuous successes off
+  int count_nonvacuous_at_8;
+  initial $assertvacuousoff;
+  assert property (@(posedge clk) a |-> $future_gclk(a) !== 1'bx)
+    if ($sampled(cyc) == 8) count_nonvacuous_at_8 = count_nonvacuous_at_8 + 1;
+
   always @(posedge clk) begin
 `ifdef TEST_VERBOSE
     $display("[%0t] cyc=%0d a=%0x gs=%x gsc=%x", $time, cyc, a, count_not_stable,
@@ -75,6 +81,7 @@ module t (
       `checkd(count_falling_gclk, 1);
       `checkd(count_future_gclk, 2);
       `checkd(count_rising_gclk, 1);
+      `checkd(count_nonvacuous_at_8, 1);
       `checkd(count_not_steady_gclk, 2);
       $write("*-* All Finished *-*\n");
       $finish;
