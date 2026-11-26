@@ -27,20 +27,20 @@ module t (
 
   // Constant-true input: never fails at any tick.
   assert property (@(posedge clk) always[2: $] a_high)
-  else high_fail_q.push_back(cyc);
+  else high_fail_q.push_back($sampled(cyc));
 
   // Constant-false input, m=0: fails at every observed tick.
   assert property (@(posedge clk) always[0: $] a_low)
-  else low0_fail_q.push_back(cyc);
+  else low0_fail_q.push_back($sampled(cyc));
 
   // Constant-false input, m=2: fails at every tick once the window is live.
   assert property (@(posedge clk) always[2: $] a_low)
-  else low2_fail_q.push_back(cyc);
+  else low2_fail_q.push_back($sampled(cyc));
 
   // a_drop is high then drops at cyc 5 and stays low: deterministic single
   // transition, so Verilator and others agree on the failing ticks exactly.
   assert property (@(posedge clk) always[2: $] a_drop)
-  else drop_fail_q.push_back(cyc);
+  else drop_fail_q.push_back($sampled(cyc));
 
   // Under an implication: a_dip is sampled low at cyc 7 only, a_dip2 at cyc 7 and 8, and
   // a_dip3 at cyc 8 only
@@ -53,27 +53,27 @@ module t (
   int impl0_twice_fail_q[$];
   int impl2_fail_q[$];
   assert property (@(posedge clk) cyc == 3 |-> always[0: $] a_dip)
-  else impl0_fail_q.push_back(cyc);
+  else impl0_fail_q.push_back($sampled(cyc));
   assert property (@(posedge clk) cyc == 7 |-> always[0: $] a_dip)
-  else impl0_now_fail_q.push_back(cyc);
+  else impl0_now_fail_q.push_back($sampled(cyc));
   assert property (@(posedge clk) cyc == 8 |-> always[0: $] a_dip)
-  else impl0_after_fail_q.push_back(cyc);
+  else impl0_after_fail_q.push_back($sampled(cyc));
   // The attempt ends at its first failure
   assert property (@(posedge clk) cyc == 3 |-> always[0: $] a_dip2)
-  else impl0_twice_fail_q.push_back(cyc);
+  else impl0_twice_fail_q.push_back($sampled(cyc));
   assert property (@(posedge clk) cyc == 3 |-> always[2: $] a_dip3)
-  else impl2_fail_q.push_back(cyc);
+  else impl2_fail_q.push_back($sampled(cyc));
 
   // Unranged always is always [0:$], also under other property operators
   int bare_impl_fail_q[$];
   int bare_nonovl_fail_q[$];
   int bare_if_fail_q[$];
   assert property (@(posedge clk) cyc == 3 |-> always a_dip)
-  else bare_impl_fail_q.push_back(cyc);
+  else bare_impl_fail_q.push_back($sampled(cyc));
   assert property (@(posedge clk) cyc == 3 |=> always a_dip)
-  else bare_nonovl_fail_q.push_back(cyc);
+  else bare_nonovl_fail_q.push_back($sampled(cyc));
   assert property (@(posedge clk) if (cyc == 3) always a_dip)
-  else bare_if_fail_q.push_back(cyc);
+  else bare_if_fail_q.push_back($sampled(cyc));
 
   always @(posedge clk) begin
     cyc <= cyc + 1;
