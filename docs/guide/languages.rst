@@ -342,8 +342,11 @@ than a net, or to a net that has another driver, or set by
 is public writable. An input port so driven in turn drives the nets it is
 connected to in the same way. Two such ports connected to overlapping bits
 of a net, at any level of the ports they so drive, keep all these
-connections driving the ports. :option:`ASSIGNIN` is still reported on a
-write inside the module or by a hierarchical reference.
+connections driving the ports. This is decided for a module port across all
+instances of the module, so overlapping bits in one instance also keep the
+connections of another instance, even to disjoint bits. :option:`ASSIGNIN`
+is still reported on a write inside the module or by a hierarchical
+reference.
 
 
 Gate Primitives
