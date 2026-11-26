@@ -1503,6 +1503,8 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         while (AstNodeExpr* const fromp = selectFromp(basep)) basep = fromp;
         const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
         bool isDefault = refp && hasDefaultValue(refp->varp());
+        // As for a whole variable, a dynamically sized selection keeps reading the variable
+        if (isDefault && nodep->dtypep()->skipRefp()->isDynamicallySized()) return;
         if (!isDefault) {
             AstNodeExpr* selp = nodep;
             for (; selectFromp(selp); selp = selectFromp(selp)) {
