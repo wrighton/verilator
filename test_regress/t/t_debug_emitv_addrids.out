@@ -1,3 +1,10 @@
+%Warning-ASYNCABORT: t/t_debug_emitv.v:620:58: Asynchronous 'accept_on' evaluated only at the clock ticks of its property, as 'sync_accept_on' (IEEE 1800-2023 16.12.14).
+                                             : ... note: In instance 't'
+                                             : ... Later asynchronous aborts are evaluated the same way, and not reported.
+  620 |   assert_prop_accept_on: assert property (@(posedge clk) accept_on (in) in);
+      |                                                          ^~~~~~~~~
+                     ... For warning description see https://verilator.org/warn/ASYNCABORT?v=latest
+                     ... Use "/* verilator lint_off ASYNCABORT */" and lint_on around source to disable this message.
 %Warning-COVERIGN: t/t_debug_emitv.v:678:37: Unsupported: '[->]' in cover transition
                                            : ... note: In instance 't'
   678 |       bins trep = (3'b000 => 3'b001 [->2]);

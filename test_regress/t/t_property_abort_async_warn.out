@@ -1,0 +1,8 @@
+%Warning-ASYNCABORT: t/t_property_abort_async_warn.v:23:35: Asynchronous 'reject_on' evaluated only at the clock ticks of its property, as 'sync_reject_on' (IEEE 1800-2023 16.12.14).
+                                                          : ... note: In instance 't'
+                                                          : ... Later asynchronous aborts are evaluated the same way, and not reported.
+   23 |   assert property (@(posedge clk) reject_on (r) a |=> b);
+      |                                   ^~~~~~~~~
+                     ... For warning description see https://verilator.org/warn/ASYNCABORT?v=latest
+                     ... Use "/* verilator lint_off ASYNCABORT */" and lint_on around source to disable this message.
+%Error: Exiting due to
