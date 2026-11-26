@@ -28,7 +28,7 @@
 //              OPTIMIZE: Must not collapse this initial back into the equation.
 //      Dynamic array and queue element indices:
 //          Convert to the runtime's 32-bit signed index, keeping an index whose value does
-//          not fit invalid
+//          not fit, or with X or Z bits, invalid
 //
 //   KnownVisitor:
 //      Variables and expressions:
@@ -212,12 +212,22 @@ class UnknownVisitor final : public VNVisitor {
             flp, new AstAdd{flp, highp, new AstConst{flp, AstConst::WidthedValue{}, highWidth, 1}},
             new AstConst{flp, AstConst::WidthedValue{}, highWidth, 2}};
         AstNodeExpr* const lowp = new AstSel{flp, valuep, 0, VL_IDATASIZE};
-        AstNodeExpr* const invalidp
-            = new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE, 1U << (VL_IDATASIZE - 1)};
-        return new AstCond{flp, fitsp, lowp, invalidp};
+        return new AstCond{flp, fitsp, lowp, newInvalidDynIndexp(flp)};
+    }
+    // The most negative index, which selects no element, also as an offset from the back
+    static AstConst* newInvalidDynIndexp(FileLine* flp) {
+        return new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE, 1U << (VL_IDATASIZE - 1)};
     }
     // Convert the index of dynamic array or queue element 'nodep' as newDynIndexp describes
     void visitDynElement(AstNodeSel* nodep) {
+        // An index with X or Z bits selects no element: a read gives the default value and a
+        // write is ignored (IEEE 1800-2023 7.4.6)
+        if (AstConst* const constp = VN_CAST(nodep->bitp(), Const)) {
+            if (constp->num().isFourState()) {
+                constp->replaceWith(newInvalidDynIndexp(constp->fileline()));
+                VL_DO_DANGLING(pushDeletep(constp), constp);
+            }
+        }
         iterateChildren(nodep);
         AstNodeExpr* const indexp = nodep->bitp();
         // A narrower unsigned index is zero extended by the C++ conversion
