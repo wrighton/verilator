@@ -26,8 +26,9 @@ module t (
     case (cyc)
       3: $assertoff(0, a.check_late);
       6: begin
-        // The selected site uses the same outcome gating as a global Off.
-        `checkd(a.failures, 0);
+        // Off starts no attempt of the selected site, but its attempt already executing
+        // completes.
+        `checkd(a.failures, 1);
         `checkd(b.failures, 1);
         $asserton(0, a);
       end
@@ -37,7 +38,7 @@ module t (
       end
       11: begin
         // Kill aborts the selected attempt, not the sibling's attempt.
-        `checkd(a.failures, 0);
+        `checkd(a.failures, 1);
         `checkd(b.failures, 2);
         $write("*-* All Finished *-*\n");
         $finish;
