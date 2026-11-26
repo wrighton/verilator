@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_constraint_nested_static_unsup.v:31:29: Unsupported: Constraint on static rand member 'g' of a class whose objects the randomization reaches through a class derived from the class of a rand class handle
+                                                              : ... note: In instance 't'
+   31 |   constraint c {y == cfg_t::g;}
+      |                             ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_nested_static_unsup.v:50:29: Unsupported: Constraint on static rand member 'g' of a class whose objects the randomization reaches through a class derived from the class of a rand class handle
+                                                              : ... note: In instance 't'
+   50 |   constraint c {y == cfg_t::g;}
+      |                             ^
+%Error-UNSUPPORTED: t/t_constraint_nested_static_unsup.v:71:30: Unsupported: Constraint on static rand member 'g' of a class whose objects the randomization reaches through a class derived from the class of a rand class handle
+                                                              : ... note: In instance 't'
+   71 |   constraint c {y == impl_t::g;}
+      |                              ^
+%Error-UNSUPPORTED: t/t_constraint_nested_static_unsup.v:98:31: Unsupported: Constraint on static rand member 'g' of a class whose objects the randomization reaches through a class derived from the class of a rand class handle
+                                                              : ... note: In instance 't'
+   98 |   constraint c {y == sib_cfg::g;}
+      |                               ^
+%Error-UNSUPPORTED: t/t_constraint_nested_static_unsup.v:134:29: Unsupported: Constraint on static rand member 'g' of a class whose objects the randomization reaches through a class derived from the class of a rand class handle
+                                                               : ... note: In instance 't'
+  134 |   constraint c {y == cfg_t::g;}
+      |                             ^
+%Error: Exiting due to
