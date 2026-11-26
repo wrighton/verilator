@@ -10,6 +10,7 @@ internalsDump:
 -V{t#,#}+    Vt_verilated_debug___024root___eval_debug_assertions
 -V{t#,#}+ Initial
 -V{t#,#}+    Vt_verilated_debug___024root___eval_static
+-V{t#,#}+    Vt_verilated_debug___024root___eval_sample
 -V{t#,#}+    Vt_verilated_debug___024root___eval_initial
 -V{t#,#}+    Vt_verilated_debug___024root___eval_initial__TOP
   Data: w96: 000000aa 000000bb 000000cc 
@@ -17,7 +18,6 @@ internalsDump:
 -V{t#,#}+    Vt_verilated_debug___024root___dump_triggers__stl
 -V{t#,#}+    Vt_verilated_debug___024root___trigger_anySet__stl
 -V{t#,#}         'stl' region trigger index 0 is active: Internal 'stl' trigger - first iteration
--V{t#,#}+    Vt_verilated_debug___024root___eval_sample
 -V{t#,#}+    Vt_verilated_debug___024root___eval_ico
 -V{t#,#}+    Vt_verilated_debug___024root___eval_triggers_vec__ico
 -V{t#,#}+    Vt_verilated_debug___024root___dump_triggers__ico

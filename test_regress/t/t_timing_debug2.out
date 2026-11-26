@@ -20,6 +20,7 @@
 -V{t#,#}+        Vt_timing_debug2_t__03A__03ANoDelay::new
 -V{t#,#}+        Vt_timing_debug2_t__03A__03AAssignDelayClass::new
 -V{t#,#}+        Vt_timing_debug2_t__03A__03AAssignDelayClass::_ctor_var_reset
+-V{t#,#}+    Vt_timing_debug2___024root___eval_sample
 -V{t#,#}+    Vt_timing_debug2___024root___eval_initial
 -V{t#,#}+      Vt_timing_debug2_t___eval_initial__TOP__t__Vtiming__0
 -V{t#,#}+    Vt_timing_debug2___024root____VbeforeTrig_h########__0
@@ -48,7 +49,6 @@
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__stl
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_anySet__stl
 -V{t#,#}         'stl' region trigger index 0 is active: Internal 'stl' trigger - first iteration
--V{t#,#}+    Vt_timing_debug2___024root___eval_sample
 -V{t#,#}+    Vt_timing_debug2___024root___eval_ico
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__ico
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_anySet__ico
