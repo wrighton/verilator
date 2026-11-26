@@ -16,10 +16,14 @@ if not test.have_solver:
 test.compile(threads=2 if test.vltmt else -1)
 solver_log = test.obj_dir + '/solver.log'
 test.execute(check_finished=True, all_run_flags=['+verilator+solver+file+' + solver_log])
-# The active array uses QF_ABV before and after the held constant-array solve.
+# The active arrays use QF_ABV before and after the held associative array's constant-array
+# solve; the held fixed-size array alone needs no constant array
 test.file_grep(
     solver_log, r'(?s)\(set-logic QF_ABV\)(?:(?!\(reset\)).)*\(assert '
     r'.*?\(set-logic ALL\)(?:(?!\(reset\)).)*\(as const \(Array '
+    r'.*?\(set-logic QF_ABV\)(?:(?!\(reset\)).)*\(store fixed_arr '
     r'.*?\(set-logic QF_ABV\)(?:(?!\(reset\)).)*\(assert ')
+test.file_grep_not(solver_log,
+                   r'(?s)\(set-logic (?!ALL\))[^)]*\)(?:(?!\(reset\)).)*\(as const \(Array ')
 
 test.passes()
