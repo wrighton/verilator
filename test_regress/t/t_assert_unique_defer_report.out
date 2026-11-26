@@ -1,0 +1,21 @@
+[1] reexecuted: before the Observed region
+[1] %Error: t_assert_unique_defer_report.v:14: Assertion failed in t.reexecuted: unique case, but multiple matches found for '31'h00000005'
+[2] unique_if_overlap: after the check
+[2] %Error: t_assert_unique_defer_report.v:34: Assertion failed in t.unique_if_overlap: 'unique if' statement violated
+[3] %Error: t_assert_unique_defer_report.v:44: Assertion failed in t.unique_if_none: 'unique if' statement violated
+[4] %Error: t_assert_unique_defer_report.v:54: Assertion failed in t.unique0_if_overlap: 'unique if' statement violated
+[5] %Error: t_assert_unique_defer_report.v:63: Assertion failed in t.unique_case_none: unique case, but none matched for '31'h00000009'
+[6] unique0_case_multiple: first item
+[6] %Error: t_assert_unique_defer_report.v:74: Assertion failed in t.unique0_case_multiple: unique0 case, but multiple matches found for '1'h1'
+[7] %Error: t_assert_unique_defer_report.v:84: Assertion failed in t.loop.unnamedblk1: 'unique if' statement violated
+[7] %Error: t_assert_unique_defer_report.v:84: Assertion failed in t.loop.unnamedblk1: 'unique if' statement violated
+[8] %Error: t_assert_unique_defer_report.v:99: Assertion failed in t.gen_blk.named: priority case, but non-match found for '1'h1'
+[10] %Error: t_assert_unique_defer_report.v:114: Assertion failed in t.check_in_function: unique case, but multiple matches found for '1'h1'
+[10] in_function: after the check
+[11] %Error: t_assert_unique_defer_report.v:131: Assertion failed in t.__VforkTask_0.in_join_none: unique case, but multiple matches found for '1'h1'
+[11] in_join_none: after the check
+[12] %Error: t_assert_unique_defer_report.v:149: Assertion failed in t.in_assertion_action: unique case, but multiple matches found for '1'h1'
+[12] in_assertion_action: after the check
+*-* All Finished *-*
+[20] %Error: t_assert_unique_defer_report.v:160: Assertion failed in t.in_final: unique case, but multiple matches found for '1'h1'
+[20] in_final: after the check
