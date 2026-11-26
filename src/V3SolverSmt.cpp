@@ -2118,16 +2118,24 @@ class ConstraintExprVisitor final : public VNVisitor {
         return new AstSFormatF{
             fl, "((_ " + extend + "_extend " + cvtToStr(toWidth - width) + ") %s)", false, textp};
     }
+    // Copy of translated solver text 'textp'. A block building text in it, as for a reduction of
+    // an array (see newTextBuildp), only sets its own variables, so may run once for each copy,
+    // and is named anew, so its variables are declared in each.
+    AstNodeExpr* cloneTextp(AstNodeExpr* textp) {
+        AstNodeExpr* const clonep = textp->cloneTree(false);
+        clonep->foreach(
+            [this](AstBegin* const beginp) { beginp->name(m_uniqueNames.get(beginp->name())); });
+        return clonep;
+    }
     // Record that the translated element select 'selp', whose index is a solver term of 'width'
     // bits, reads zero unless that index is below 'sizeTextp', of guardedIndexWidth, and select
     // with the index in the solver's 32-bit index sort
     void addSmtSelGuard(AstSFormatF* selp, int width, bool isSigned, AstNodeExpr* sizeTextp) {
         FileLine* const fl = selp->fileline();
         AstNodeExpr* const indexp = VN_AS(selp->exprsp()->nextp(), NodeExpr);
-        AstSFormatF* const guardp
-            = new AstSFormatF{fl, "(bvult %s %s)", false,
-                              newResizedTextp(indexp->cloneTreePure(false), width, isSigned,
-                                              guardedIndexWidth(width))};
+        AstSFormatF* const guardp = new AstSFormatF{
+            fl, "(bvult %s %s)", false,
+            newResizedTextp(cloneTextp(indexp), width, isSigned, guardedIndexWidth(width))};
         guardp->addExprsp(sizeTextp);
         m_selGuardsp->smtps.push_back(guardp);
         VNRelinker handle;
