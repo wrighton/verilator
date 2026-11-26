@@ -1913,6 +1913,27 @@ class WidthVisitor final : public VNVisitor {
                           "Unsupported/Illegal: empty queue ('{}') in this context");
         }
     }
+    // True if a variable is automatic (IEEE 1800-2023 6.21). An argument of a static task or
+    // function is static, though V3LinkParse makes it automatic.
+    bool isAutomaticVar(const AstVar* varp) const {
+        if (!varp->lifetime().isAutomatic()) return false;
+        return !(varp->isIO() && varp->isFuncLocal() && m_ftaskp
+                 && m_ftaskp->lifetime().isStatic());
+    }
+    // A clocking event of a sampled value function may not refer to an automatic variable
+    // (IEEE 1800-2023 16.9.3)
+    void checkSampledClock(const AstSenTree* sentreep) const {
+        const AstNodeVarRef* autoRefp = nullptr;
+        if (sentreep && sentreep->exists([&](const AstNodeVarRef* refp) {
+                autoRefp = refp;
+                return isAutomaticVar(refp->varp());
+            })) {
+            autoRefp->v3error("Automatic variable "
+                              << autoRefp->prettyNameQ()
+                              << " is not legal in the clocking event of a sampled value"
+                                 " function (IEEE 1800-2023 16.9.3).");
+        }
+    }
     void visit(AstFell* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
@@ -1920,6 +1941,7 @@ class WidthVisitor final : public VNVisitor {
                                   /* deferUntyped */ true);
             userIterate(nodep->sentreep(), nullptr);
             nodep->dtypeSetBit();
+            checkSampledClock(nodep->sentreep());
         }
     }
     void visit(AstFalling* nodep) override {
@@ -2119,6 +2141,7 @@ class WidthVisitor final : public VNVisitor {
                                   /* deferUntyped */ true);
             userIterate(nodep->sentreep(), nullptr);
             nodep->dtypeSetBit();
+            checkSampledClock(nodep->sentreep());
         }
     }
 
@@ -2187,6 +2210,7 @@ class WidthVisitor final : public VNVisitor {
                                   /* deferUntyped */ true);
             userIterate(nodep->sentreep(), nullptr);
             nodep->dtypeSetBit();
+            checkSampledClock(nodep->sentreep());
         }
     }
     void visit(AstSteady* nodep) override {
