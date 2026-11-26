@@ -30,6 +30,14 @@
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
+// True if nodep is a sampled value function, which samples the values it reads at clock ticks
+// (IEEE 1800-2023 16.9.3, 16.9.4)
+static bool isSampledValueFn(const AstNode* nodep) {
+    return VN_IS(nodep, Past) || VN_IS(nodep, Rose) || VN_IS(nodep, Fell) || VN_IS(nodep, Stable)
+           || VN_IS(nodep, Sampled) || VN_IS(nodep, Future) || VN_IS(nodep, Rising)
+           || VN_IS(nodep, Falling) || VN_IS(nodep, Steady);
+}
+
 //######################################################################
 // Link state, as a visitor of each AstNode
 
@@ -76,7 +84,7 @@ class LinkParseVisitor final : public VNVisitor {
     int m_randSequenceNum = 0;  // RandSequence uniqify number
     VLifetime m_lifetime = VLifetime::STATIC_IMPLICIT;  // Propagating lifetime
     bool m_lifetimeAllowed = false;  // True to allow lifetime settings
-    bool m_hasTimingControl = false;  // If current task has timing control
+    bool m_outlivesCall = false;  // If values of the current task can be used after it returns
     bool m_moduleWithGenericIface = false;  // If current module contains generic interface
     std::set<AstVar*> m_portDups;  // Non-ANSI port datatype duplicating input/output decls
 
@@ -295,9 +303,12 @@ class LinkParseVisitor final : public VNVisitor {
         VL_RESTORER(m_lifetime);
         VL_RESTORER(m_lifetimeAllowed);
         m_lifetimeAllowed = true;
-        VL_RESTORER(m_hasTimingControl);
-        m_hasTimingControl
-            = nodep->exists([](const AstNode* const nodep) { return nodep->isTimingControl(); });
+        VL_RESTORER(m_outlivesCall);
+        // Timing control lets a value be used after the task has ended, with fork..join_none,
+        // and a sampled value function samples it at later clock ticks
+        m_outlivesCall = nodep->exists([](const AstNode* const nodep) {
+            return nodep->isTimingControl() || isSampledValueFn(nodep);
+        });
         if (!nodep->lifetime().isNone()) {
             m_lifetime = nodep->lifetime().makeImplicit();
         } else {
@@ -445,9 +456,9 @@ class LinkParseVisitor final : public VNVisitor {
                 }
             }
         } else if (m_ftaskp && !nodep->isFuncReturn()) {  // Return variables are created automatic
-            // Variables in static tasks with timing control can be used after the task has ended
-            // with use of join..fork_none, so they need to be static
-            if (m_ftaskp->lifetime().isStatic() && m_hasTimingControl) {
+            // Variables of a static task whose values can be used after it returns need to be
+            // static, as IEEE 1800-2023 6.21 makes them
+            if (m_ftaskp->lifetime().isStatic() && m_outlivesCall) {
                 nodep->lifetime(VLifetime::STATIC_IMPLICIT);
             } else {
                 nodep->lifetime(VLifetime::AUTOMATIC_IMPLICIT);
