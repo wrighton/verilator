@@ -5146,6 +5146,29 @@ class LinkDotResolveVisitor final : public VNVisitor {
                           << " search start due to inlinedDots=" << inlinedDots);
         return dotSymp;
     }
+    // Whether a dotted path names, from within, the blocks or subroutines enclosing the
+    // reference at refSymp down to dotSymp, which so are of the current activation, not another
+    // instance's
+    static bool isEnclosingPath(const VSymEnt* dotSymp, const VSymEnt* refSymp,
+                                const string& dotted) {
+        const VSymEnt* abovep = refSymp;
+        while (abovep && abovep != dotSymp) abovep = abovep->parentp();
+        if (!abovep) return false;
+        // The names from dotSymp upwards are the path's, last first
+        const VSymEnt* symp = dotSymp;
+        string::size_type end = dotted.size();
+        while (true) {
+            if (!symp || VN_IS(symp->nodep(), Cell) || VN_IS(symp->nodep(), NodeModule)) {
+                return false;
+            }
+            const string::size_type pos = dotted.rfind('.', end ? end - 1 : 0);
+            const string::size_type begin = pos == string::npos || pos >= end ? 0 : pos + 1;
+            if (symp->nodep()->name() != dotted.substr(begin, end - begin)) return false;
+            if (begin == 0) return true;
+            end = begin - 1;
+            symp = symp->parentp();
+        }
+    }
     VSymEnt* findDottedRefSymp(AstNode* nodep, VSymEnt* lookupSymp, const string& dotted,
                                string& baddot, VSymEnt*& okSymp, bool* modportp = nullptr,
                                bool firstId = true, bool* upwardp = nullptr) {
@@ -7715,6 +7738,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 if (!nodep->varp() && isGlobalClockXRef(nodep)) {
                     nodep->v3error(globalClockMissingMessage);
                     return;
+                }
+                // Only static variables can be referenced hierarchically (IEEE 1800-2023 6.21),
+                // but a path from within an automatic variable's scope through the scopes
+                // enclosing the reference refers to the variable of the current activation, so
+                // is accepted, as upstream always has (t_var_init_static_automatic)
+                if (nodep->varp() && nodep->varp()->lifetime().isAutomatic()
+                    && !nodep->varp()->isClassMember()
+                    && !isEnclosingPath(dotSymp, m_curSymp, nodep->dotted())) {
+                    nodep->v3error("Hierarchical reference to automatic variable "
+                                   << nodep->varp()->prettyNameQ()
+                                   << " from outside its scope (IEEE 1800-2023 6.21).");
                 }
                 if (!nodep->varp()) {
                     nodep->v3error("Can't find definition of "
