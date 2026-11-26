@@ -1,0 +1,17 @@
+%Error: t/t_sequence_triggered_cycle_bad.v:17:33: Sequence instance 's_self' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                                : ... note: In instance 't'
+                                                : ... Cycle: 's_self' -> 's_self'
+   17 |     @(posedge clk) a ##1 s_self.triggered;
+      |                                 ^~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sequence_triggered_cycle_bad.v:26:26: Sequence instance 's1' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                                : ... note: In instance 't'
+                                                : ... Cycle: 's1' -> 's2' -> 's1'
+   26 |     @(posedge clk) b ##1 s1;
+      |                          ^~
+%Error: t/t_sequence_triggered_cycle_bad.v:35:40: Sequence instance 's_arg' forms a cyclic dependency among named sequences (IEEE 1800-2023 16.8).
+                                                : ... note: In instance 't'
+                                                : ... Cycle: 's_arg' -> 's_arg'
+   35 |     @(posedge clk) b ##1 s_pass(s_arg).triggered;
+      |                                        ^~~~~~~~~
+%Error: Exiting due to
