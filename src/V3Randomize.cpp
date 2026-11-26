@@ -44,6 +44,7 @@
 #include "V3Global.h"
 #include "V3MemberMap.h"
 #include "V3SolverBackend.h"
+#include "V3Stats.h"
 #include "V3UniqueNames.h"
 
 #include <queue>
@@ -256,6 +257,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
     std::vector<AstClass*> m_classps;  // All classes, in tree order
     std::unordered_set<const AstConstraint*> m_cloneps;  // Constraints made by cloning
     SelectedOwnRandSet& m_selectedOwnRandps;  // Selected handles keeping their randomize()
+    const RandDispatch& m_dispatch;  // Rand class handles whose objects' constraints dispatch
     AstClass* m_classp = nullptr;  // Current class
     AstNode* m_constraintExprGenp = nullptr;  // Current constraint or constraint if expression
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -496,6 +498,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
     // Clone into classp the constraints of the object of its globally constrained member varp
     void cloneHandleConstraints(AstClass* classp, AstVar* varp) {
         AstClass* const memberClassp = VN_AS(varp->dtypep()->skipRefp(), ClassRefDType)->classp();
+        // Its object's own class solves it (see V3SolverSmt), not the handle's class
+        if (m_dispatch.mergesHandle(classp, memberClassp)) return;
         AstVarRef* const rootVarRefp
             = new AstVarRef{varp->fileline(), classp, varp, VAccess::READ};
         const std::vector<AstVar*> emptyPath;
@@ -621,6 +625,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 = VN_CAST(memberVarp->dtypep()->skipRefp(), ClassRefDType);
             if (!memberClassRefp) return;
             AstClass* const nestedClassp = memberClassRefp->classp();
+            // Its object's own class solves it (see V3SolverSmt), not the handle's class
+            if (m_dispatch.mergesHandle(classp, nestedClassp)) return;
             // Rand handles may form a cycle, so the constraints of an object of a class already
             // on the path are not cloned again. If that is a different object, its constraints
             // are not solved (unsupported).
@@ -1026,8 +1032,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    RandomizeMarkVisitor(AstNode* nodep, SelectedOwnRandSet& selectedOwnRandps)
-        : m_selectedOwnRandps{selectedOwnRandps} {
+    RandomizeMarkVisitor(AstNode* nodep, SelectedOwnRandSet& selectedOwnRandps,
+                         const RandDispatch& dispatch)
+        : m_selectedOwnRandps{selectedOwnRandps}
+        , m_dispatch{dispatch} {
         // Derived classes are needed while marking constraints, so record them first
         nodep->foreach([&](AstClass* classp) {
             if (const AstClassExtends* const extendsp = classp->extendsp()) {
@@ -1367,8 +1375,13 @@ class RandomizeVisitor final : public VNVisitor {
     // their own randomize()
     std::unordered_set<const AstClass*> m_ownRandMemberHierps;
     const SelectedOwnRandSet& m_selectedOwnRandps;  // Selected handles keeping their randomize()
+    // Classes derived from each class, directly or not, in tree order (see derivedClasses)
+    std::unordered_map<const AstClass*, std::vector<AstClass*>> m_derivedClasses;
+    bool m_derivedClassesBuilt = false;  // m_derivedClasses is complete
+    VDouble0 m_statPrePostClasses;  // Statistic tracking
     ActiveSet m_activeClasses;  // Classes currently building randomize()
     RandModeVars m_modeVars;  // Static rand_mode/constraint_mode state vars per class
+    const RandDispatch& m_dispatch;  // Rand class handles whose objects' constraints dispatch
     const std::unique_ptr<V3SolverLowering> m_solverp;  // Constraint solver lowering
 
     // METHODS
@@ -1580,6 +1593,10 @@ class RandomizeVisitor final : public VNVisitor {
                     if (!classRefp) return;
                     findSubObjRandModes(classRefp->classp());
                 });
+            }
+            // A randomizer also solves the objects of the rand handles of merged classes
+            if (!hasConstraints && classp->user1()) {
+                hasConstraints = !m_dispatch.mergedPaths(classp).empty();
             }
             if (hasConstraints) m_solverp->prepareClass(classp);
             if (randModeCount > 0) {
@@ -2010,10 +2027,9 @@ class RandomizeVisitor final : public VNVisitor {
         const auto cachedIt = m_prePostWrap.find(classp);
         if (cachedIt != m_prePostWrap.end()) return cachedIt->second;
         std::vector<AstClass*> hierp{classp};
-        v3Global.rootp()->foreach([&](AstClass* subp) {
-            if (subp != classp && AstClass::isClassExtendedFrom(subp, classp))
-                hierp.push_back(subp);
-        });
+        const std::vector<AstClass*>& derivedps = derivedClasses(classp);
+        hierp.insert(hierp.end(), derivedps.begin(), derivedps.end());
+        m_statPrePostClasses += hierp.size();
         bool hasPre = false;
         bool hasPost = false;
         for (AstClass* const cp : hierp) {
@@ -2033,6 +2049,25 @@ class RandomizeVisitor final : public VNVisitor {
         const std::pair<bool, bool> result{hasPre, hasPost};
         m_prePostWrap.emplace(classp, result);
         return result;
+    }
+    // The classes derived from classp, directly or not, in tree order. Each class is listed
+    // for each of its bases, so this is quadratic in the depth of inheritance only, which is
+    // small in practice, and keeps the order the wrappers are made in.
+    const std::vector<AstClass*>& derivedClasses(const AstClass* classp) {
+        if (!m_derivedClassesBuilt) {
+            m_derivedClassesBuilt = true;
+            v3Global.rootp()->foreach([this](AstClass* subp) { addDerivedClass(subp, subp); });
+        }
+        return m_derivedClasses[classp];
+    }
+    void addDerivedClass(AstClass* subp, const AstClass* classp) {
+        if (!classp->extendsp()) return;
+        m_derivedClasses[classp->extendsp()->classp()].push_back(subp);
+        ++m_statPrePostClasses;
+        addDerivedClass(subp, classp->extendsp()->classp());
+    }
+    static bool hasPrePost(const std::pair<bool, bool>& wrappers, const string& which) {
+        return which == "pre_randomize" ? wrappers.first : wrappers.second;
     }
     AstNodeStmt* newVirtualPrePostCall(AstClass* const classp, const string& which) {
         FileLine* const fl = classp->fileline();
@@ -2101,14 +2136,15 @@ class RandomizeVisitor final : public VNVisitor {
     // Populate nested callback task body: calls pre/post_randomize on globally constrained members
     // The callback of a rand member to call. A member randomized by its own randomize() calls
     // that of the class of its object, maybe derived, as randomize() itself does (18.6.2).
-    AstTask* memberCallbackp(const AstVar* memberVarp, AstClass* memberClassp,
-                             const string& cbName) {
-        if (memberVarp->globalConstrained() || !memberClassp->isExtended()) {
-            return findPrePostTask(memberClassp, cbName);
-        }
-        const std::pair<bool, bool> wrap = buildPrePostVirtualWrappers(memberClassp);
-        const bool has = cbName == "pre_randomize" ? wrap.first : wrap.second;
-        return has ? getCreatePrePostCallback(memberClassp, cbName) : nullptr;
+    // A globally constrained one whose object's own class solves it too (see V3SolverSmt).
+    AstTask* memberCallbackp(const AstClass* classp, const AstVar* memberVarp,
+                             AstClass* memberClassp, const string& cbName) {
+        const bool dynamic
+            = !memberVarp->globalConstrained() || m_dispatch.mergesHandle(classp, memberClassp);
+        if (!dynamic || !memberClassp->isExtended()) return findPrePostTask(memberClassp, cbName);
+        return hasPrePost(buildPrePostVirtualWrappers(memberClassp), cbName)
+                   ? getCreatePrePostCallback(memberClassp, cbName)
+                   : nullptr;
     }
     void populateNestedCallbackTask(AstTask* const callbackTaskp, AstClass* const classp,
                                     const string& cbName) {
@@ -2129,7 +2165,8 @@ class RandomizeVisitor final : public VNVisitor {
             AstNodeStmt* stmtsp = nullptr;
 
             // 1. Call member.pre/post_randomize() if exists in hierarchy
-            if (AstTask* const userFuncp = memberCallbackp(memberVarp, memberClassp, cbName)) {
+            if (AstTask* const userFuncp
+                = memberCallbackp(classp, memberVarp, memberClassp, cbName)) {
                 AstMethodCall* const callp = new AstMethodCall{
                     fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::WRITE},
                     userFuncp->name()};
@@ -3135,11 +3172,13 @@ class RandomizeVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    RandomizeVisitor(AstNetlist* nodep, const SelectedOwnRandSet& selectedOwnRandps)
+    RandomizeVisitor(AstNetlist* nodep, const SelectedOwnRandSet& selectedOwnRandps,
+                     const RandDispatch& dispatch)
         : m_inlineUniqueNames{"__Vrandwith"}
         , m_selectedOwnRandps{selectedOwnRandps}
+        , m_dispatch{dispatch}
         , m_solverp{v3Global.solverBackendp()->newLowering(m_memberMap, m_uniqueNames, m_modeVars,
-                                                           deleter())} {
+                                                           dispatch, deleter())} {
         nodep->foreach([&](AstClass* const classp) { addDerivedClass(classp); });
         nodep->foreach([&](AstClass* const classp) { markHierarchies(classp); });
         createRandomizeClassVars(nodep);
@@ -3168,7 +3207,10 @@ public:
             VL_DO_DANGLING(pushDeletep(constrp->unlinkFrBack()), constrp);
         });
     }
-    ~RandomizeVisitor() override = default;
+    ~RandomizeVisitor() override {
+        V3Stats::addStatSum("Randomize, Classes scanned for pre/post_randomize wrappers",
+                            m_statPrePostClasses);
+    }
 };
 
 //######################################################################
@@ -3177,9 +3219,11 @@ public:
 void V3Randomize::randomizeNetlist(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
     {
+        // Before constraints are cloned, which would declare more in their classes
+        const RandDispatch dispatch{nodep};
         SelectedOwnRandSet selectedOwnRandps;
-        const RandomizeMarkVisitor markVisitor{nodep, selectedOwnRandps};
-        const RandomizeVisitor randomizeVisitor{nodep, selectedOwnRandps};
+        const RandomizeMarkVisitor markVisitor{nodep, selectedOwnRandps, dispatch};
+        const RandomizeVisitor randomizeVisitor{nodep, selectedOwnRandps, dispatch};
     }
     V3Global::dumpCheckGlobalTree("randomize", 0, dumpTreeEitherLevel() >= 3);
 }

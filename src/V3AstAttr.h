@@ -1110,7 +1110,11 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(SCHED_WAIT_FOREVER,                 "waitForever",            false,  CLEAN,  AWAITABLE,  "rrr") \
     macro(UNPACKED_ASSIGN,                    "assign",                 false,  CLEAN,  false,      "r") \
     macro(UNPACKED_FILL,                      "fill",                   false,  CLEAN,  false,      "r") \
-    macro(UNPACKED_NEQ,                       "neq",                    PURE,   CLEAN,  false,      "r")
+    macro(UNPACKED_NEQ,                       "neq",                    PURE,   CLEAN,  false,      "r") \
+    macro(RANDOMIZER_CLEAR_NESTED,            "clear_nested",           false,  CLEAN,  false,      "r") \
+    macro(RANDOMIZER_MERGE_NESTED,            "merge_nested",           false,  CLEAN,  false,      "rr") \
+    macro(RANDOMIZER_NESTED_BUSY,             "nested_busy",            false,  CLEAN,  false,      "") \
+    macro(RANDOMIZER_SET_NESTED_BUSY,         "set_nested_busy",        false,  CLEAN,  false,      "r")
 // clang-format on
 
 class VCMethod final {

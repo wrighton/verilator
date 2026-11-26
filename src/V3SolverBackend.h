@@ -88,12 +88,54 @@ public:
 // Lowering of the randomize sites of one V3Randomize pass, created by
 // V3SolverBackend::newLowering()
 
+// The rand class handles whose objects' constraints are those of the object's class, as a
+// class derived from the handle's declares constraints (IEEE 1800-2023 18.5.2), so are solved
+// at runtime by the object (see V3SolverSmt), not cloned from the handle's class
+class RandDispatch final {
+    // Classes with a derived class declaring constraints or rand class handles
+    std::unordered_set<const AstClass*> m_dispatchps;
+    // Classes whose objects may be merged by their own class: those and their derived
+    // classes, and the classes of their rand class handles, and so on
+    std::unordered_set<const AstClass*> m_mergedps;
+    // While constructing
+    std::unordered_map<const AstClass*, std::vector<const AstClass*>> m_derivedps;
+    std::vector<const AstClass*> m_pending;  // Merged classes whose relations to merge
+
+    // METHODS
+    static bool declaresDispatch(const AstClass* classp) VL_MT_DISABLED;
+    static bool isMergeable(const AstClass* classp) VL_MT_DISABLED;
+    static void addDispatchBases(const AstClass* classp,
+                                 std::unordered_set<const AstClass*>& basesr) VL_MT_DISABLED;
+    std::unordered_set<const AstClass*>
+    mergedClosure(const std::unordered_set<const AstClass*>& dispatchps) VL_MT_DISABLED;
+    void addMerged(const AstClass* classp) VL_MT_DISABLED;
+    void mergePending() VL_MT_DISABLED;
+
+public:
+    explicit RandDispatch(AstNetlist* netlistp) VL_MT_DISABLED;
+    // Whether objects of classp may be merged by their own class (has __Vnested_merge)
+    bool isMerged(const AstClass* classp) const { return m_mergedps.count(classp); }
+    // Whether the object of a rand class handle of handleClassp, held by an object of
+    // holderClassp, is merged by its own class, rather than solved by clones of the
+    // constraints of handleClassp: if objects of a derived class declare constraints, or if
+    // the holder's object is merged, as its handles' constraints are not cloned into it
+    bool mergesHandle(const AstClass* holderClassp, const AstClass* handleClassp) const {
+        return m_dispatchps.count(handleClassp) || m_mergedps.count(holderClassp);
+    }
+    // Class of a rand class handle member, else nullptr
+    static AstClass* randHandleClassp(const AstVar* varp) VL_MT_DISABLED;
+    // The paths of rand class handles, from classp through the handles of unmerged objects, to
+    // the handles of merged objects, which classp's randomizer merges
+    std::vector<std::vector<AstVar*>> mergedPaths(AstClass* classp) const VL_MT_DISABLED;
+};
+
 class V3SolverLowering VL_NOT_FINAL {
 protected:
     // MEMBERS, shared with the front end for one V3Randomize pass
     VMemberMap& m_memberMap;  // Member names cached for fast lookup
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
     const RandModeVars& m_modeVars;  // rand_mode/constraint_mode state arrays
+    const RandDispatch& m_dispatch;  // Rand class handles whose objects' constraints dispatch
     VNDeleter& m_deleter;  // Deferred deletion of nodes removed by the back-end
 
 public:
@@ -107,10 +149,12 @@ protected:
 
     // CONSTRUCTORS
     V3SolverLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
-                     const RandModeVars& modeVars, VNDeleter& deleter)
+                     const RandModeVars& modeVars, const RandDispatch& dispatch,
+                     VNDeleter& deleter)
         : m_memberMap{memberMap}
         , m_uniqueNames{uniqueNames}
         , m_modeVars{modeVars}
+        , m_dispatch{dispatch}
         , m_deleter{deleter} {}
 
     // METHODS
@@ -186,7 +230,7 @@ public:
     // Lowering for one V3Randomize pass, sharing the given state with the front end
     virtual std::unique_ptr<V3SolverLowering>
     newLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames, const RandModeVars& modeVars,
-                VNDeleter& deleter) const VL_MT_DISABLED
+                const RandDispatch& dispatch, VNDeleter& deleter) const VL_MT_DISABLED
         = 0;
 };
 

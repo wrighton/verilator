@@ -51,6 +51,7 @@
 #include "V3File.h"
 #include "V3MemberMap.h"
 #include "V3Randomize.h"
+#include "V3Stats.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
 
@@ -3095,6 +3096,14 @@ class SolverSmtLowering final : public V3SolverLowering {
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
     std::map<AstClass*, VInsertionSet<AstVar*>> m_sizeConstrainedArrays;  // Per-class arrays
     uint32_t m_uniqueConstraintId = 0;  // current ID of unique call
+    VDouble0 m_statNestedMerges;  // Statistic tracking
+    // The task merging an object of a class into a randomizer (see addNestedMergeBody)
+    struct NestedMergeTask final {
+        AstTask* taskp = nullptr;  // The task
+        AstVar* intop = nullptr;  // Its port of the randomizer merged into
+        AstVar* pathp = nullptr;  // Its port of the path of the handle to the object
+    };
+    std::unordered_map<const AstClass*, NestedMergeTask> m_nestedMergeTasks;
 
     // METHODS
     AstVar* getStaticRandModeVar(AstClass* const classp) {
@@ -3977,6 +3986,172 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
     }
 
+    // A call of a method of the randomizer genp
+    static AstCMethodHard* newGenCallp(FileLine* fl, AstVar* genp, VCMethod method,
+                                       AstNodeExpr* pinsp = nullptr) {
+        AstCMethodHard* const callp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(genp->user2p(), NodeModule), genp, VAccess::READWRITE},
+            method, pinsp};
+        callp->dtypeSetVoid();
+        return callp;
+    }
+    // The task merging the solver variables and constraints of an object of classp into a
+    // randomizer: virtual, so of the object's own class
+    NestedMergeTask& getCreateNestedMergeTask(AstClass* classp) {
+        NestedMergeTask& merge = m_nestedMergeTasks[classp];
+        if (merge.taskp) return merge;
+        FileLine* const fl = classp->fileline();
+        merge.taskp = new AstTask{fl, "__Vnested_merge"};
+        merge.taskp->classMethod(true);
+        merge.taskp->isVirtual(true);
+        merge.intop = new AstVar{fl, VVarType::MEMBER, "__Vinto",
+                                 classp->findBasicDType(VBasicDTypeKwd::RANDOM_GENERATOR)};
+        merge.intop->direction(VDirection::REF);
+        merge.pathp = new AstVar{fl, VVarType::MEMBER, "__Vpath", classp->findStringDType()};
+        merge.pathp->direction(VDirection::INPUT);
+        for (AstVar* const varp : {merge.intop, merge.pathp}) addTaskPort(merge.taskp, varp);
+        classp->addMembersp(merge.taskp);
+        m_memberMap.insert(classp, merge.taskp);
+        return merge;
+    }
+    static void addTaskPort(AstTask* taskp, AstVar* varp) {
+        varp->funcLocal(true);
+        varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        taskp->addDeclsp(varp);
+    }
+    // Merge into the randomizer genp the solver variables and constraints of the objects of
+    // the rand class handles of merged classes (see RandDispatch), which the object's own class
+    // sets up (IEEE 1800-2023 18.5.2), in classp's constraint setup setupTaskp
+    void addNestedMerges(AstClass* classp, AstTask* setupTaskp, AstVar* genp) {
+        const std::vector<std::vector<AstVar*>> paths = m_dispatch.mergedPaths(classp);
+        if (paths.empty()) return;
+        FileLine* const fl = classp->fileline();
+        addForeignStaticRegistrations(classp, setupTaskp);
+        setupTaskp->addStmtsp(newGenCallp(fl, genp, VCMethod::RANDOMIZER_SET_NESTED_BUSY,
+                                          new AstConst{fl, AstConst::BitTrue{}})
+                                  ->makeStmt());
+        for (const std::vector<AstVar*>& path : paths) addNestedMerge(setupTaskp, genp, path);
+        setupTaskp->addStmtsp(newGenCallp(fl, genp, VCMethod::RANDOMIZER_SET_NESTED_BUSY,
+                                          new AstConst{fl, AstConst::BitFalse{}})
+                                  ->makeStmt());
+    }
+    // Register the static members of other classes classp's constraints use before the merges
+    // too, so a merged object's registration of the same storage takes this name (see
+    // VlRandomizer::merge_nested). The registrations in the constraint setups then are no-ops.
+    void addForeignStaticRegistrations(AstClass* classp, AstTask* setupTaskp) {
+        classp->foreachMember([&](AstClass* const, AstConstraint* const constrp) {
+            AstTask* const taskp = VN_CAST(constrp->user2p(), Task);
+            if (taskp) addTaskForeignStaticRegistrations(classp, taskp, setupTaskp);
+        });
+    }
+    void addTaskForeignStaticRegistrations(const AstClass* classp, AstTask* taskp,
+                                           AstTask* setupTaskp) {
+        for (AstNode* const stmtp : taskp->stmtspList()) {
+            AstBegin* const blockp = VN_CAST(stmtp, Begin);
+            if (blockp && registersForeignStatic(classp, blockp)) {
+                setupTaskp->addStmtsp(blockp->cloneTree(false));
+            }
+        }
+    }
+    static bool registersForeignStatic(const AstClass* classp, const AstBegin* blockp) {
+        return blockp->exists([&](const AstCMethodHard* methodp) {
+            if (methodp->method() != VCMethod::RANDOMIZER_WRITE_VAR) return false;
+            const AstVarRef* const refp = VN_CAST(methodp->pinsp(), VarRef);
+            if (!refp || !refp->varp()->lifetime().isStatic()) return false;
+            const AstClass* const declClassp = VN_CAST(refp->varp()->user2p(), Class);
+            return declClassp && !AstClass::isClassRelated(classp, declClassp);
+        });
+    }
+    // The object held through a path of rand class handles, and the condition that the handles
+    // are not null and have rand_mode on, so it is randomized (IEEE 1800-2023 18.8)
+    struct NestedPath final {
+        AstNodeExpr* objp = nullptr;  // The object, through the handles so far
+        AstNodeExpr* condp = nullptr;  // The condition, so far
+        std::string name;  // Path, as a prefix of solver variable names
+    };
+    static void andCond(FileLine* fl, NestedPath& path, AstNodeExpr* termp) {
+        termp->dtypeSetBit();
+        path.condp = path.condp ? new AstLogAnd{fl, path.condp, termp} : termp;
+        path.condp->dtypeSetBit();
+    }
+    // A reference to member varp of the object path.objp, else of this object
+    static AstNodeExpr* newPathRefp(FileLine* fl, const NestedPath& path, AstVar* varp) {
+        AstNodeExpr* const refp
+            = path.objp
+                  ? static_cast<AstNodeExpr*>(
+                        new AstMemberRef{fl, path.objp->cloneTree(false), varp})
+                  : new AstVarRef{fl, VN_AS(varp->user2p(), NodeModule), varp, VAccess::READ};
+        refp->dtypep(varp->dtypep());
+        return refp;
+    }
+    static void addPathHandle(FileLine* fl, NestedPath& path, AstVar* varp) {
+        const RandomizeMode randMode = {.asUQuad = varp->user1()};
+        AstVar* const modeVarp = randMode.usesMode
+                                     ? RandModeVars::randModeVarp(VN_AS(varp->user2p(), Class))
+                                     : nullptr;
+        if (modeVarp) {
+            AstDynArraySel* const atp = new AstDynArraySel{fl, newPathRefp(fl, path, modeVarp),
+                                                           new AstConst{fl, randMode.index}};
+            atp->dtypeSetUInt32();
+            andCond(fl, path, new AstNeq{fl, atp, new AstConst{fl, 0}});
+        }
+        AstNodeExpr* const objp = newPathRefp(fl, path, varp);
+        if (path.objp) VL_DO_DANGLING(path.objp->deleteTree(), path.objp);
+        path.objp = objp;
+        andCond(fl, path,
+                new AstNeq{fl, objp->cloneTree(false), new AstConst{fl, AstConst::Null{}}});
+        path.name += (path.name.empty() ? "" : ".") + varp->name();
+    }
+    void addNestedMerge(AstTask* setupTaskp, AstVar* genp, const std::vector<AstVar*>& handles) {
+        FileLine* const fl = handles.back()->fileline();
+        NestedPath path;
+        ++m_statNestedMerges;
+        for (AstVar* const varp : handles) addPathHandle(fl, path, varp);
+        AstNodeExpr* const objp = path.objp;
+        AstNodeExpr* const condp = path.condp;
+        const std::string& pathName = path.name;
+        // Merged before, perhaps of an object no longer held
+        setupTaskp->addStmtsp(newGenCallp(fl, genp, VCMethod::RANDOMIZER_CLEAR_NESTED,
+                                          new AstConst{fl, AstConst::String{}, pathName})
+                                  ->makeStmt());
+        AstClass* const handleClassp = RandDispatch::randHandleClassp(handles.back());
+        AstTask* const mergeTaskp = getCreateNestedMergeTask(handleClassp).taskp;
+        AstArg* const argsp = new AstArg{
+            fl, "",
+            new AstVarRef{fl, VN_AS(genp->user2p(), NodeModule), genp, VAccess::READWRITE}};
+        argsp->addNext(new AstArg{fl, "", new AstConst{fl, AstConst::String{}, pathName}});
+        AstMethodCall* const callp = new AstMethodCall{fl, objp, mergeTaskp->name(), argsp};
+        callp->taskp(mergeTaskp);
+        callp->dtypeSetVoid();
+        setupTaskp->addStmtsp(new AstIf{fl, condp, callp->makeStmt()});
+    }
+    // Body of the task merging an object of classp into a randomizer: its constraints are set
+    // up, with the registrations of the variables they use, in its own randomizer, merged
+    void addNestedMergeBody(AstClass* classp, AstVar* genp) {
+        const NestedMergeTask& merge = getCreateNestedMergeTask(classp);
+        AstTask* const taskp = merge.taskp;
+        AstVar* const intop = merge.intop;
+        AstVar* const pathp = merge.pathp;
+        FileLine* const fl = classp->fileline();
+        AstNode* thensp = implementConstraintsClear(fl, genp);
+        AstTask* const setupTaskp = SmtUtil::getCreateConstraintSetupFunc(classp, m_memberMap);
+        thensp = AstNode::addNext(thensp, (new AstTaskRef{fl, setupTaskp})->makeStmt());
+        AstNodeExpr* const argsp
+            = new AstVarRef{fl, VN_AS(genp->user2p(), NodeModule), genp, VAccess::READ};
+        argsp->addNext(new AstVarRef{fl, pathp, VAccess::READ});
+        AstCMethodHard* const mergep
+            = new AstCMethodHard{fl, new AstVarRef{fl, intop, VAccess::READWRITE},
+                                 VCMethod::RANDOMIZER_MERGE_NESTED, argsp};
+        mergep->dtypeSetVoid();
+        thensp = AstNode::addNext(thensp, static_cast<AstNode*>(mergep->makeStmt()));
+        // Not again in a cycle of rand class handles back to the object
+        AstCMethodHard* const busyp = newGenCallp(fl, genp, VCMethod::RANDOMIZER_NESTED_BUSY);
+        busyp->dtypeSetBit();
+        AstNodeExpr* const idlep = new AstLogNot{fl, busyp};
+        idlep->dtypeSetBit();
+        taskp->addStmtsp(new AstIf{fl, idlep, VN_AS(thensp, NodeStmt)});
+    }
+
     static AstCExpr* newSolverCallp(AstVar* const genp) {
         AstCExpr* const callp = new AstCExpr{genp->fileline()};
         callp->dtypeSetBit();
@@ -4022,9 +4197,12 @@ class SolverSmtLowering final : public V3SolverLowering {
 public:
     // CONSTRUCTORS
     SolverSmtLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
-                      const RandModeVars& modeVars, VNDeleter& deleter)
-        : V3SolverLowering{memberMap, uniqueNames, modeVars, deleter} {}
-    ~SolverSmtLowering() override = default;
+                      const RandModeVars& modeVars, const RandDispatch& dispatch,
+                      VNDeleter& deleter)
+        : V3SolverLowering{memberMap, uniqueNames, modeVars, dispatch, deleter} {}
+    ~SolverSmtLowering() override {
+        V3Stats::addStatSum("Randomize, Merged rand class handles", m_statNestedMerges);
+    }
 
     // V3SolverLowering
     void prepareClass(AstClass* classp) override { createRandomGenerator(classp); }
@@ -4138,6 +4316,7 @@ public:
                 });
                 AstTask* const setupAllTaskp
                     = SmtUtil::getCreateConstraintSetupFunc(nodep, m_memberMap);
+                addNestedMerges(nodep, setupAllTaskp, genp);
                 for (int d = maxDepth; d >= 0; --d) {
                     nodep->foreachMember(
                         [&](AstClass* const classp, AstConstraint* const constrp) {
@@ -4212,6 +4391,7 @@ public:
             beginValp = new AstConst{fl, AstConst::WidthedValue{}, 32, 1};
         }
 
+        if (genp && m_dispatch.isMerged(nodep)) addNestedMergeBody(nodep, genp);
         addUpdateRandVarsBody(nodep, randomizep);
         return beginValp;
     }
@@ -4594,9 +4774,10 @@ public:
 std::unique_ptr<V3SolverLowering> V3SolverSmt::newLowering(VMemberMap& memberMap,
                                                            V3UniqueNames& uniqueNames,
                                                            const RandModeVars& modeVars,
+                                                           const RandDispatch& dispatch,
                                                            VNDeleter& deleter) const {
     return std::unique_ptr<V3SolverLowering>{
-        new SolverSmtLowering{memberMap, uniqueNames, modeVars, deleter}};
+        new SolverSmtLowering{memberMap, uniqueNames, modeVars, dispatch, deleter}};
 }
 
 std::vector<std::string> V3SolverSmt::runtimeCFlags() const {

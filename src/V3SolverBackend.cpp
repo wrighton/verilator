@@ -54,6 +54,9 @@
 #include "V3MemberMap.h"
 #include "V3UniqueNames.h"
 
+#include <algorithm>
+#include <functional>
+
 AstVar* RandModeVars::randModeVarp(AstNodeModule* classp) {
     while (classp) {
         if (classp->user2p()) return VN_AS(classp->user2p(), Var);
@@ -102,6 +105,127 @@ AstVar* RandModeVars::constraintModeVarp(AstClass* classp) {
         return constraintModeVarp(extendsp->classp());
     }
     return nullptr;
+}
+
+AstClass* RandDispatch::randHandleClassp(const AstVar* varp) {
+    if (!varp->rand().isRandomizable()) return nullptr;
+    const AstClassRefDType* const classRefp = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
+    return classRefp ? classRefp->classp() : nullptr;
+}
+
+bool RandDispatch::declaresDispatch(const AstClass* classp) {
+    return classp->existsMember([&](const AstClass* declClassp, const AstNode* memberp) {
+        const AstVar* const varp = VN_CAST(memberp, Var);
+        return declClassp == classp
+               && (VN_IS(memberp, Constraint) || (varp && randHandleClassp(varp)));
+    });
+}
+
+void RandDispatch::addDispatchBases(const AstClass* classp,
+                                    std::unordered_set<const AstClass*>& basesr) {
+    const AstClassExtends* const extendsp = classp->extendsp();
+    if (!extendsp) return;
+    basesr.insert(extendsp->classp());
+    addDispatchBases(extendsp->classp(), basesr);
+}
+
+void RandDispatch::addMerged(const AstClass* classp) {
+    if (m_mergedps.insert(classp).second) m_pending.push_back(classp);
+}
+
+void RandDispatch::mergePending() {
+    const AstClass* const classp = m_pending.back();
+    m_pending.pop_back();
+    for (const AstClass* const derivedp : m_derivedps[classp]) addMerged(derivedp);
+    classp->existsMember([&](const AstClass*, const AstVar* varp) {
+        if (const AstClass* const handleClassp = randHandleClassp(varp)) addMerged(handleClassp);
+        return false;
+    });
+}
+
+bool RandDispatch::isMergeable(const AstClass* classp) {
+    // SMT symbols the constraints may use, which an SMT let binding of the name of a variable
+    // of a merged object would hide (see VlRandomizer::merge_nested)
+    static const std::unordered_set<std::string> s_smtSymbols{
+        "_",      "and",         "bvadd",        "bvand",      "bvashr",
+        "bvcomp", "bvlshr",      "bvmul",        "bvnand",     "bvneg",
+        "bvnor",  "bvnot",       "bvor",         "bvsdiv",     "bvsge",
+        "bvsgt",  "bvshl",       "bvsle",        "bvslt",      "bvsmod",
+        "bvsrem", "bvsub",       "bvudiv",       "bvuge",      "bvugt",
+        "bvule",  "bvult",       "bvurem",       "bvxnor",     "bvxor",
+        "concat", "distinct",    "exists",       "extract",    "false",
+        "forall", "ite",         "let",          "not",        "or",
+        "repeat", "rotate_left", "rotate_right", "select",     "sign_extend",
+        "store",  "true",        "xor",          "zero_extend"};
+    // Nor array sizes, which the object's own randomize() solves first
+    const bool sizes = classp->existsMember([](const AstClass*, const AstConstraint* constrp) {
+        return constrp->exists([](const AstCMethodHard* methodp) {
+            return methodp->method() == VCMethod::DYN_SIZE
+                   || methodp->method() == VCMethod::ASSOC_SIZE;
+        });
+    });
+    if (sizes) return false;
+    // Nor arrays of class handles, whose objects' constraints are cloned into each class
+    // randomizing them, not set up by the class holding the array
+    return !classp->existsMember([](const AstClass*, const AstVar* varp) {
+        if (!varp->rand().isRandomizable()) return false;
+        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+        const bool handleArray
+            = dtypep->isNonPackedArray() && VN_IS(dtypep->subDTypep()->skipRefp(), ClassRefDType);
+        return handleArray || s_smtSymbols.count(varp->name());
+    });
+}
+
+std::unordered_set<const AstClass*>
+RandDispatch::mergedClosure(const std::unordered_set<const AstClass*>& dispatchps) {
+    m_mergedps.clear();
+    for (const AstClass* const classp : dispatchps) addMerged(classp);
+    while (!m_pending.empty()) mergePending();
+    return std::move(m_mergedps);
+}
+
+RandDispatch::RandDispatch(AstNetlist* netlistp) {
+    // A class whose objects may be of a derived class declaring constraints or rand class
+    // handles needs the object's own constraints, so its handles dispatch
+    std::unordered_set<const AstClass*> candidateps;
+    netlistp->foreach([&](const AstClass* classp) {
+        if (declaresDispatch(classp)) addDispatchBases(classp, candidateps);
+        if (classp->extendsp()) m_derivedps[classp->extendsp()->classp()].push_back(classp);
+    });
+    // Merged: the dispatching classes, their derived classes, and the classes of their rand
+    // class handles, and so on; unless one of those cannot be merged
+    for (const AstClass* const classp : candidateps) {
+        const std::unordered_set<const AstClass*> closureps = mergedClosure({classp});
+        if (std::all_of(closureps.begin(), closureps.end(), isMergeable)) {
+            m_dispatchps.insert(classp);
+        }
+    }
+    m_mergedps = mergedClosure(m_dispatchps);
+    m_derivedps.clear();
+}
+
+std::vector<std::vector<AstVar*>> RandDispatch::mergedPaths(AstClass* classp) const {
+    std::vector<std::vector<AstVar*>> paths;
+    if (m_mergedps.empty()) return paths;
+    std::vector<AstVar*> path;
+    std::unordered_set<const AstClass*> activeps{classp};
+    const std::function<void(AstClass*)> walkp = [&](AstClass* holderp) {
+        holderp->foreachMember([&](AstClass*, AstVar* varp) {
+            AstClass* const handleClassp = randHandleClassp(varp);
+            // Others are randomized by their own randomize(), so of their object's class
+            if (!handleClassp || !varp->globalConstrained()) return;
+            path.push_back(varp);
+            if (mergesHandle(holderp, handleClassp)) {
+                paths.push_back(path);
+            } else if (activeps.insert(handleClassp).second) {
+                walkp(handleClassp);
+                activeps.erase(handleClassp);
+            }
+            path.pop_back();
+        });
+    };
+    walkp(classp);
+    return paths;
 }
 
 //######################################################################

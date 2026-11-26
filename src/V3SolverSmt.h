@@ -31,7 +31,7 @@ public:
     std::vector<std::string> runtimeCFlags() const override VL_MT_DISABLED;
     std::unique_ptr<V3SolverLowering>
     newLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames, const RandModeVars& modeVars,
-                VNDeleter& deleter) const override VL_MT_DISABLED;
+                const RandDispatch& dispatch, VNDeleter& deleter) const override VL_MT_DISABLED;
 };
 
 #endif  // Guard
