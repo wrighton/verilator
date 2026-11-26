@@ -75,6 +75,25 @@ module t;
       `checkh(na.xor() with (65'(item) << 63), 65'h0);
     end
     begin
+      // 'with' expressions computed on the elements
+      bit [69:0] f[3];
+      bit [69:0] d[];
+      bit [69:0] q[$];
+      f = '{70'h3f_ffff_ffff_ffff_fffe, 70'h1, 70'h20_0000_0000_0000_0002};
+      d = f;
+      q = f;
+      `checkh(d.sum() with (item + 1), 70'h20_0000_0000_0000_0004);
+      `checkh(q.sum() with (item + 1), 70'h20_0000_0000_0000_0004);
+      `checkh(f.sum() with (item + 1), 70'h20_0000_0000_0000_0004);
+      `checkh(d.product() with (item + 1), 70'h3f_ffff_ffff_ffff_fffa);
+      `checkh(q.and() with (item | 1), 70'h1);
+      `checkh(d.and() with (item | 1), 70'h1);
+      `checkh(q.or() with (item << 1), 70'h3f_ffff_ffff_ffff_fffe);
+      `checkh(f.xor() with (item ^ 70'h1), 70'h1f_ffff_ffff_ffff_fffc);
+      `checkh(d.sum() with (int'(item + 1)), 4);
+      `checkh(q.sum() with (item.index == 1 ? item + 1 : item), 70'h20_0000_0000_0000_0002);
+    end
+    begin
       bit [64:0] e[];
       int ea[int];
       `checkh(e.sum(), 65'h0);
