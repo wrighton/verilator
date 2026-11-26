@@ -15144,6 +15144,21 @@ public:
         m_splitIfaceElemVarps.clear();
         return nodep;
     }
+    // Index ranges selected of a variable, from it outwards, as selectedNetp gives them, an
+    // empty list being the whole variable
+    using RangeList = std::vector<std::pair<int, int>>;
+    // Each driven variable, to the bits of it its drivers write: one entry per driver
+    using DrivenRanges = std::unordered_map<const AstVar*, std::vector<RangeList>>;
+    // Each variable, to the variables driven if the bits an entry names are driven
+    // A variable driven if bits of another are: a port connected to bits of a net, or a net
+    // connected to an output
+    struct NetPort final {
+        const AstVar* varp;  // The variable so driven
+        RangeList ranges;  // The bits of the other that drive it
+        bool bitwise;  // Its bits are those bits, in order, so which of them are driven is known
+    };
+    // Each variable, to the variables driven if bits of it are
+    using NetPorts = std::unordered_map<const AstVar*, std::vector<NetPort>>;
     // Coerce written input ports to inout, or make them drive their connections
     void coercePorts(AstNetlist* netlistp) {
         // A port driven inside its module may be coerced to inout (IEEE 1800-2023 23.3.3.1).
@@ -15162,14 +15177,22 @@ public:
         std::vector<std::pair<AstCell*, AstPin*>> writtenPinps;  // Of written ports, in order
         std::unordered_set<const AstVar*> topPortps;
         std::unordered_set<const AstVar*> drivenps;  // Variables with a driver
+        DrivenRanges drivenRanges;  // The bits of each its drivers write
+        std::vector<const AstNodeVarRef*> writtenRefps;  // Driving references, to take them from
+        // The whole variable is driven, as which bits a driver writes is not known statically
+        const auto addDrivenAll = [&](const AstVar* varp) {
+            drivenps.emplace(varp);
+            drivenRanges[varp].emplace_back();
+        };
         // Lvalues not driving: of force and release, of a constant z, and of output connections
         std::unordered_set<const AstNode*> undrivingRefps;
         std::unordered_set<const AstNode*> zRefps;  // Lvalues of a constant z
         std::unordered_set<const AstVar*> zWrittenps;  // Variables so written
         std::unordered_set<const AstVar*> otherWrittenps;  // Variables written otherwise
         std::vector<AstPin*> netPinps;  // Input connections, driving if their net is driven
-        // Variables driven if the key is: ports connected to a net, nets connected to an output
-        std::unordered_map<const AstVar*, std::vector<const AstVar*>> netPortps;
+        // Variables driven if the bits of the key an entry names are: ports connected to a
+        // net, nets connected to an output
+        NetPorts netPortps;
         // Input port connections of each port, for a written port driving its nets
         std::unordered_map<const AstVar*, std::vector<std::pair<AstCell*, AstPin*>>> inPinps;
         for (AstNode* modp = netlistp->modulesp(); modp; modp = modp->nextp()) {
@@ -15179,7 +15202,9 @@ public:
                 if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
                     if (refp->access().isWriteOrRW()) {
                         (zRefps.count(refp) ? zWrittenps : otherWrittenps).emplace(refp->varp());
-                        if (!undrivingRefps.count(refp)) drivenps.emplace(refp->varp());
+                        // Which bits it writes is taken once the scan is done, as folding
+                        // its index edits the tree this traversal is over
+                        if (!undrivingRefps.count(refp)) writtenRefps.push_back(refp);
                     }
                 } else if (VN_IS(np, AssignForce) || VN_IS(np, Release)) {
                     AstNode* const lhsp = VN_IS(np, Release) ? VN_AS(np, Release)->lhsp()
@@ -15196,9 +15221,9 @@ public:
                     }
                 } else if (const AstPull* const pullp = VN_CAST(np, Pull)) {
                     pullp->lhsp()->foreach(
-                        [&](const AstNodeVarRef* refp) { drivenps.emplace(refp->varp()); });
+                        [&](const AstNodeVarRef* refp) { addDrivenAll(refp->varp()); });
                 } else if (const AstMemberRef* const selp = VN_CAST(np, MemberRef)) {
-                    if (selp->access().isWriteOrRW()) drivenps.emplace(selp->varp());
+                    if (selp->access().isWriteOrRW()) addDrivenAll(selp->varp());
                 } else if (AstCell* const cellp = VN_CAST(np, Cell)) {
                     // Unconnected inputs may be driven by `unconnected_drive
                     const bool pulled = !cellp->modp()->unconnectedDrive().isDefault();
@@ -15213,14 +15238,15 @@ public:
                                 pinp->exprp()->foreach([&](const AstNodeVarRef* refp) {
                                     if (!refp->access().isWriteOrRW()) return;
                                     undrivingRefps.emplace(refp);
-                                    netPortps[pinp->modVarp()].push_back(refp->varp());
+                                    netPortps[pinp->modVarp()].push_back(
+                                        NetPort{refp->varp(), RangeList{}, false});
                                 });
                             }
                             continue;
                         }
                         inPinps[pinp->modVarp()].emplace_back(cellp, pinp);
                         if (pulled) {
-                            drivenps.emplace(pinp->modVarp());
+                            addDrivenAll(pinp->modVarp());
                         } else if (pinp->exprp()) {
                             netPinps.push_back(pinp);
                         }
@@ -15231,10 +15257,21 @@ public:
                     // Driven from outside the model, or pulled
                     if (topPort || varp->isSigUserRWPublic() || varp->isPullup()
                         || varp->isPulldown()) {
-                        drivenps.emplace(varp);
+                        addDrivenAll(varp);
                     }
                 }
             });
+        }
+        // The bits each driver writes, so a driver of other bits of its net is not taken for
+        // a driver of these (IEEE 1800-2023 23.3.3.7)
+        for (const AstNodeVarRef* const refp : writtenRefps) {
+            RangeList ranges;
+            if (writtenRanges(refp, ranges)) {
+                drivenps.emplace(refp->varp());
+                drivenRanges[refp->varp()].push_back(std::move(ranges));
+            } else {
+                addDrivenAll(refp->varp());
+            }
         }
         // A port written only by continuous assignments of a z, with no other driver (e.g. a
         // pull), drives nothing, so is not coerced, nor drives its connections
@@ -15255,9 +15292,11 @@ public:
             std::vector<std::pair<int, int>> ranges;
             AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
             if (const AstVar* const netp = exprp ? selectedNetp(exprp, ranges) : nullptr) {
-                netPortps[netp].push_back(pinp->modVarp());
+                // Driven only if the bits it connects are (IEEE 1800-2023 23.3.3.7)
+                const bool bitwise = connectsBitwise(netp, pinp->modVarp(), ranges);
+                netPortps[netp].push_back(NetPort{pinp->modVarp(), std::move(ranges), bitwise});
             } else {
-                drivenps.emplace(pinp->modVarp());
+                addDrivenAll(pinp->modVarp());
             }
         }
         // Candidates, with the parent input ports each connects to
@@ -15320,18 +15359,21 @@ public:
                 coercibleConn(pinp->exprp(), netps);
                 for (AstVar* const netp : netps) {
                     netp->icoMaybeWritten(true);
-                    drivenps.emplace(netp);
+                    addDrivenAll(netp);
                 }  // LCOV_EXCL_LINE
             }
         }  // LCOV_EXCL_LINE
-        driveConnections(writtenPinps, DriveContext{std::move(drivenps), std::move(netPortps),
-                                                    std::move(inPinps)});
+        driveConnections(writtenPinps, DriveContext{std::move(drivenps), std::move(drivenRanges),
+                                                    std::move(netPortps), std::move(inPinps)});
     }
     // State of making written input ports drive the nets connected to them
     struct DriveContext final {
         std::unordered_set<const AstVar*> drivenps;  // Variables with a driver
+        // The bits of each driven variable a driver writes, as the ranges selectedNetp gives,
+        // an empty entry being the whole variable (see DrivenRanges)
+        DrivenRanges drivenRanges;
         // Variables driven if the key is, see coercePorts
-        std::unordered_map<const AstVar*, std::vector<const AstVar*>> netPortps;
+        NetPorts netPortps;
         // Input port connections of each port
         std::unordered_map<const AstVar*, std::vector<std::pair<AstCell*, AstPin*>>> inPinps;
     };
@@ -15342,7 +15384,15 @@ public:
         AstNodeExpr* exprp;  // The connection, or the part of a concatenation of it
         int lsb;  // Of the port bits exprp is connected to
         AstVar* netp;
-        std::vector<std::pair<int, int>> ranges;  // Selected, from the net outwards
+        // The dotted path of the reference to the net, so the nets of two instances of one
+        // module are not taken for one (see samePath)
+        std::string path;
+        RangeList ranges;  // Selected, from the net outwards, narrowed to those it drives
+        RangeList partRanges;  // Selected, from the net outwards
+        // The bits of exprp the port drives, from its lsb, if not all: the others drive the
+        // port, as the port's driver reaches only these (see narrowToReached)
+        int driveLo = 0;
+        int driveHi = -1;
         size_t chain;  // Union-find parent, of connections that are decided together
         bool keep;  // Keeps driving the port, of the chain's root
     };
@@ -15362,15 +15412,34 @@ public:
         // Two such ports on the same bits would both drive them, and neither would see the
         // other's writes, so these keep their connection driving the port, as do all the
         // connections decided together with theirs.
-        // Ports connected to driven nets, and nets connected to driven outputs, are driven
-        std::vector<const AstVar*> drivenWork{ctx.drivenps.begin(), ctx.drivenps.end()};
+        // Ports connected to driven nets, and nets connected to driven outputs, are driven,
+        // in the bits of them so driven where a connection maps bits one to one
+        std::vector<std::pair<const AstVar*, RangeList>> drivenWork;
+        for (const auto& it : ctx.drivenRanges) {
+            for (const RangeList& ranges : it.second) drivenWork.emplace_back(it.first, ranges);
+        }
         while (!drivenWork.empty()) {
-            const AstVar* const netp = drivenWork.back();
+            const AstVar* const netp = drivenWork.back().first;
+            const RangeList driven = std::move(drivenWork.back().second);
             drivenWork.pop_back();
             const auto it = ctx.netPortps.find(netp);
             if (it == ctx.netPortps.end()) continue;
-            for (const AstVar* const portp : it->second) {
-                if (ctx.drivenps.emplace(portp).second) drivenWork.push_back(portp);
+            for (const NetPort& netPort : it->second) {
+                if (!rangesOverlap(driven, netPort.ranges)) continue;
+                RangeList portDriven;  // Whole, unless the connection maps the bits
+                if (netPort.bitwise) portDriven = mappedRanges(driven, netPort.ranges);
+                std::vector<RangeList>& portRanges = ctx.drivenRanges[netPort.varp];
+                // Each range is propagated once; a whole entry covers every other
+                if (std::find_if(portRanges.begin(), portRanges.end(),
+                                 [&](const RangeList& rangesr) {
+                                     return rangesr.empty() || rangesr == portDriven;
+                                 })
+                    != portRanges.end()) {
+                    continue;
+                }
+                ctx.drivenps.emplace(netPort.varp);
+                portRanges.push_back(portDriven);
+                drivenWork.emplace_back(netPort.varp, std::move(portDriven));
             }
         }
         // A port so driving an input port of its parent drives what that port connects to,
@@ -15381,9 +15450,30 @@ public:
         // Parts of the connection of each pin not yet taken out of it
         std::unordered_map<const AstPin*, size_t> partsLeft;
         std::unordered_map<const AstVar*, std::vector<size_t>> netConns;  // Indices into conns
+        std::unordered_map<const AstPin*, size_t> pinParts;  // Parts of the connection of each
         std::vector<std::pair<AstCell*, AstPin*>> visitedPinps;  // Also those not candidates
         // Connections to visit, with the index of the one reaching it, if not a written port
         std::vector<std::pair<size_t, std::pair<AstCell*, AstPin*>>> work;
+        // Decide whether a connection keeps driving the port, and if not, visit the connections
+        // of its net, if an input port, which it then drives. Run again when the bits of its
+        // net it drives grow.
+        const auto decide = [&](size_t i) {
+            DriveConn& conn = conns[i];
+            // A net with another driver of the bits it connects drives the chain
+            if (drivenOverlaps(ctx.drivenRanges, conn.netp, conn.ranges)) conn.keep = true;
+            // Quadratic only in the ports written on one net, which are few
+            for (const size_t j : netConns[conn.netp]) {
+                if (j != i && samePath(conns[j].path, conn.path)
+                    && rangesOverlap(conns[j].ranges, conn.ranges)) {
+                    conns[j].keep = true;
+                    conn.keep = true;
+                }
+            }  // LCOV_EXCL_LINE
+            if (conn.keep || !conn.netp->isInput()) return;
+            const auto it = ctx.inPinps.find(conn.netp);
+            if (it == ctx.inPinps.end()) return;
+            for (const auto& inPin : it->second) work.emplace_back(i, inPin);
+        };
         for (const auto& cellPin : cellPinps) work.emplace_back(SIZE_MAX, cellPin);
         while (!work.empty()) {
             const size_t fromi = work.back().first;
@@ -15394,6 +15484,10 @@ public:
             if (pinIt != pinConns.end()) {
                 if (fromi != SIZE_MAX) {
                     conns[driveChain(conns, fromi)].chain = driveChain(conns, pinIt->second);
+                    // Reached again, it also drives the bits this driver reaches
+                    for (size_t k = pinIt->second; k < pinIt->second + pinParts[pinp]; ++k) {
+                        if (widenToReached(conns[k], conns[fromi])) decide(k);
+                    }
                 }
                 continue;
             }
@@ -15416,28 +15510,20 @@ public:
             const size_t firsti = conns.size();
             pinConns.emplace(pinp, firsti);
             partsLeft.emplace(pinp, pinConnList.size());
+            pinParts.emplace(pinp, pinConnList.size());
             for (DriveConn& conn : pinConnList) {
                 const size_t i = conns.size();
                 conn.chain = i;
-                // A net with another driver drives the chain
-                conn.keep = ctx.drivenps.count(conn.netp) != 0;
-                // Quadratic only in the ports written on one net, which are few
-                for (const size_t j : netConns[conn.netp]) {
-                    if (rangesOverlap(conns[j].ranges, conn.ranges)) {
-                        conns[j].keep = true;
-                        conn.keep = true;
-                    }
-                }  // LCOV_EXCL_LINE
+                // Reached from a port driving bits of this one, only the bits of the net those
+                // drive are, where the connection maps the bits
+                if (fromi != SIZE_MAX) narrowToReached(conn, conns[fromi]);
                 netConns[conn.netp].push_back(i);
                 conns.push_back(conn);
                 conns[driveChain(conns, i)].chain = driveChain(conns, firsti);
                 if (fromi != SIZE_MAX) {
                     conns[driveChain(conns, fromi)].chain = driveChain(conns, i);
                 }
-                if (conns[i].keep || !conn.netp->isInput()) continue;
-                const auto it = ctx.inPinps.find(conn.netp);
-                if (it == ctx.inPinps.end()) continue;
-                for (const auto& inPin : it->second) work.emplace_back(i, inPin);
+                decide(i);
             }
         }
         for (size_t i = 0; i < conns.size(); ++i) {
@@ -15457,13 +15543,34 @@ public:
             conn.netp->icoMaybeWritten(true);
             conn.netp->isContinuously(true);
             FileLine* const flp = exprp->fileline();
-            AstNodeExpr* rhsp
-                = new AstVarXRef{flp, conn.pinp->modVarp(), conn.cellp->name(), VAccess::READ};
-            if (part) {
-                rhsp->dtypeFrom(conn.pinp->modVarp());
-                rhsp = new AstSel{flp, rhsp, conn.lsb, exprp->width()};
+            const int width = exprp->width();
+            const auto portSelp = [&](int lsb, int bits, VAccess access) -> AstNodeExpr* {
+                AstNodeExpr* const refp
+                    = new AstVarXRef{flp, conn.pinp->modVarp(), conn.cellp->name(), access};
+                refp->dtypeFrom(conn.pinp->modVarp());
+                if (lsb == 0 && bits == conn.pinp->modVarp()->width()) return refp;
+                return new AstSel{flp, refp, lsb, bits};
+            };
+            if (conn.driveLo == 0 && conn.driveHi == width - 1) {
+                conn.cellp->addNextHere(new AstAlways{
+                    new AstAssignW{flp, exprp, portSelp(conn.lsb, width, VAccess::READ)}});
+                continue;
             }
-            conn.cellp->addNextHere(new AstAlways{new AstAssignW{flp, exprp, rhsp}});
+            // The port drives only the bits its driver reaches, and the net the others of it
+            const auto addNetToPort = [&](int lo, int hi) {
+                if (lo > hi) return;
+                AstNodeExpr* const netp
+                    = new AstSel{flp, exprp->cloneTreePure(false), lo, hi - lo + 1};
+                netp->foreach([](AstNodeVarRef* refp) { refp->access(VAccess::READ); });
+                AstNodeExpr* const lhsp = portSelp(conn.lsb + lo, hi - lo + 1, VAccess::WRITE);
+                conn.cellp->addNextHere(new AstAlways{new AstAssignW{flp, lhsp, netp}});
+            };
+            addNetToPort(0, conn.driveLo - 1);
+            addNetToPort(conn.driveHi + 1, width - 1);
+            const int bits = conn.driveHi - conn.driveLo + 1;
+            conn.cellp->addNextHere(new AstAlways{
+                new AstAssignW{flp, new AstSel{flp, exprp, conn.driveLo, bits},
+                               portSelp(conn.lsb + conn.driveLo, bits, VAccess::READ)}});
         }
         // All written formals have now been classified. A true net connection may
         // carry the local continuous drive back even if a different pin is value-only.
@@ -15515,11 +15622,140 @@ public:
                    && addDriveConns(cellp, pinp, catp->lhsp(), lsb + catp->rhsp()->width(),
                                     connsr);
         }
-        DriveConn conn{cellp, pinp, exprp, lsb, nullptr, {}, 0, false};
+        DriveConn conn{cellp, pinp, exprp, lsb, nullptr, "", {}, {}, 0, exprp->width() - 1,
+                       0,     false};
         conn.netp = selectedNetp(exprp, conn.ranges);
         if (!conn.netp) return false;
+        conn.partRanges = conn.ranges;
+        conn.path = netPath(exprp);
         connsr.push_back(std::move(conn));
         return true;
+    }
+    // The constant index ranges selected of a written reference, from the net outwards, as
+    // selectedNetp gives them. Returns false if a select of it is not constant, so which bits
+    // it writes is unknown.
+    static bool writtenRanges(const AstNodeVarRef* refp,
+                              std::vector<std::pair<int, int>>& ranges) {
+        const AstNode* nodep = refp;
+        while (const AstNode* const backp = nodep->backp()) {
+            if (const AstSel* const selp = VN_CAST(backp, Sel)) {
+                if (selp->fromp() != nodep) return true;  // In the index, not selected by it
+                const AstConst* const lsbp = foldedConstp(selp->lsbp());
+                if (!lsbp) return false;
+                ranges.emplace_back(lsbp->toSInt(), lsbp->toSInt() + selp->width() - 1);
+            } else if (const AstArraySel* const selp = VN_CAST(backp, ArraySel)) {
+                if (selp->fromp() != nodep) return true;
+                const AstConst* const bitp = foldedConstp(selp->bitp());
+                if (!bitp) return false;
+                ranges.emplace_back(bitp->toSInt(), bitp->toSInt());
+            } else {
+                return true;
+            }
+            nodep = backp;
+        }
+        return true;
+    }
+    // The dotted path of the reference to the net an expression selects, or "" if it is not
+    // a hierarchical reference
+    static std::string netPath(const AstNodeExpr* exprp) {
+        while (true) {
+            if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+                exprp = selp->fromp();
+            } else if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
+                exprp = selp->fromp();
+            } else {
+                const AstVarXRef* const xrefp = VN_CAST(exprp, VarXRef);
+                return xrefp ? xrefp->dotted() : "";
+            }
+        }
+    }
+    // Whether two references of one variable may be of the same instance of its module. A path
+    // is relative to where it is written, so only two that name the same scope first, then
+    // different instances below it, as 'dst.a' and 'dst.b', are of different instances. Any
+    // others, as 'dst.a', 'a', 't.u.a' or '$root.t.u.a', may be of the same instance. The
+    // storage V3Scope later gives each instance would tell them apart exactly.
+    static bool samePath(const std::string& ap, const std::string& bp) {
+        if (ap.empty() || bp.empty()) return true;
+        const std::deque<std::string> as = VString::split(ap, '.');
+        const std::deque<std::string> bs = VString::split(bp, '.');
+        size_t common = 0;
+        while (common < as.size() && common < bs.size() && as[common] == bs[common]) ++common;
+        // Different below a shared first scope; a path a prefix of the other may be its scope
+        return !(common > 0 && common < as.size() && common < bs.size());
+    }
+    // Narrow the bits of its net a connection drives to those the connection 'fromr' reaching
+    // it drives, as bits of the port the connection is of. Kept whole where either connection
+    // does not map bits one to one.
+    static void narrowToReached(DriveConn& conn, const DriveConn& fromr) {
+        if (fromr.ranges.size() != 1) return;  // All of the port, or bits not known
+        const AstVar* const portp = conn.pinp->modVarp();
+        if (fromr.netp != portp || !portp->dtypep()->skipRefp()->isIntegralOrPacked()) return;
+        if (!conn.netp->dtypep()->skipRefp()->isIntegralOrPacked()) return;
+        const int width = conn.exprp->width();
+        if (conn.ranges.size() > 1) return;
+        if (conn.ranges.empty() ? conn.netp->width() != width
+                                : conn.ranges[0].second - conn.ranges[0].first + 1 != width) {
+            return;
+        }
+        // Port bits [lsb, lsb + width - 1] are net bits from 'base'
+        const int base = conn.ranges.empty() ? 0 : conn.ranges[0].first;
+        const int lo = std::max(fromr.ranges[0].first, conn.lsb);
+        const int hi = std::min(fromr.ranges[0].second, conn.lsb + width - 1);
+        if (lo > hi) return;  // Drives none of them, decided with the rest of its pin
+        conn.ranges = {{base + lo - conn.lsb, base + hi - conn.lsb}};
+        conn.driveLo = lo - conn.lsb;
+        conn.driveHi = hi - conn.lsb;
+    }
+    // Widen the bits of its net a connection drives to also those 'fromr' reaching it again
+    // drives. Returns whether they grew.
+    static bool widenToReached(DriveConn& conn, const DriveConn& fromr) {
+        const int width = conn.exprp->width();
+        if (conn.driveLo == 0 && conn.driveHi == width - 1) return false;  // Already all
+        DriveConn reached = conn;
+        reached.ranges = conn.partRanges;
+        reached.driveLo = 0;
+        reached.driveHi = width - 1;
+        narrowToReached(reached, fromr);
+        const int lo = std::min(conn.driveLo, reached.driveLo);
+        const int hi = std::max(conn.driveHi, reached.driveHi);
+        if (lo == conn.driveLo && hi == conn.driveHi) return false;
+        conn.driveLo = lo;
+        conn.driveHi = hi;
+        if (lo == 0 && hi == width - 1) {
+            conn.ranges = conn.partRanges;
+        } else {
+            // Narrowed before, so a select of a packed net, or all of it
+            const int base = conn.partRanges.empty() ? 0 : conn.partRanges[0].first;
+            conn.ranges = {{base + lo, base + hi}};
+        }
+        return true;
+    }
+    // Whether a port connected to the bits 'ranges' of a net is those bits, in order: so for a
+    // packed net, a select of one range of it, or all of it, as wide as the port
+    static bool connectsBitwise(const AstVar* netp, const AstVar* portp, const RangeList& ranges) {
+        if (!netp->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
+        if (!portp->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
+        if (ranges.empty()) return netp->width() == portp->width();
+        return ranges.size() == 1 && ranges[0].second - ranges[0].first + 1 == portp->width();
+    }
+    // The bits of a port connected bitwise to the bits 'connected' of a net that the bits
+    // 'driven' of the net are, an empty list being all of them
+    static RangeList mappedRanges(const RangeList& driven, const RangeList& connected) {
+        if (driven.empty()) return {};  // All of the net, so all of the port
+        if (connected.empty()) return driven;  // The port is the whole net
+        const int lsb = std::max(driven[0].first, connected[0].first) - connected[0].first;
+        const int msb = std::min(driven[0].second, connected[0].second) - connected[0].first;
+        return {{lsb, msb}};
+    }
+    // Whether a driver of the variable writes bits the ranges select
+    static bool drivenOverlaps(const DrivenRanges& drivenRanges, const AstVar* varp,
+                               const RangeList& ranges) {
+        const auto it = drivenRanges.find(varp);
+        if (it == drivenRanges.end()) return false;
+        for (const RangeList& drivenp : it->second) {
+            if (rangesOverlap(drivenp, ranges)) return true;
+        }
+        return false;
     }
     // Whether constant selects of a net, as from selectedNetp, may share bits
     static bool rangesOverlap(const std::vector<std::pair<int, int>>& ap,
