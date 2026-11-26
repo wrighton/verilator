@@ -51,6 +51,7 @@
 #include "V3File.h"
 #include "V3MemberMap.h"
 #include "V3Randomize.h"
+#include "V3Stats.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
 
@@ -174,6 +175,10 @@ class ConstraintExprVisitor final : public VNVisitor {
     std::vector<AstVar*> m_rangeConstrainedEnums;  // Enums that are already range-constrained
     // First expression found under an inside index
     AstNode* m_firstExpressionInsideIndexp = nullptr;
+    // Array 'inside's of the current constraint it is monotone in (see markPositiveInsides)
+    std::unordered_set<const AstCMethodHard*> m_positiveInsides;
+    const AstNodeExpr* m_freshIndexp = nullptr;  // Fresh element index, see newFreshInsidep
+    VDouble0 m_statFreshInsides;  // Statistic tracking
     AstBegin* m_foreachBodyp = nullptr;  // Holder of the body of the innermost constraint-foreach
     std::set<const AstVar*> m_foreachIdxVars;  // Index vars of all enclosing constraint-foreaches
     // Solver variables named by constraints folded into a single expression (m_wantSingle)
@@ -840,6 +845,80 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstSFormatF* const formatp = new AstSFormatF{fl, "(select %s %s)", false, argsp};
         return formatp;
     }
+    // Whether element 'elemp' of an array 'inside' equals the value 'valuep'
+    static AstNodeExpr* newElementEqp(FileLine* fl, AstNodeExpr* elemp, AstNodeExpr* valuep) {
+        AstNodeExpr* const eqp = new AstEq{fl, elemp, valuep};
+        eqp->user1(true);
+        return eqp;
+    }
+    // Collect into m_positiveInsides the array 'inside's of constraint expression 'nodep' the
+    // constraint is monotone in: under &&, ||, an implication's consequent or a ?: branch, but
+    // not negated, in a condition or compared. Only there may an 'inside' hold for some element
+    // a fresh constant picks (see newFreshInsidep). Only rand-dependent nodes, which are all
+    // visited, so visit(AstCMethodHard) erases each before its address can be reused.
+    void markPositiveInsides(AstNode* nodep) {
+        if (!nodep->user1()) return;
+        if (const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard)) {
+            if (methodp->method() == VCMethod::ARRAY_INSIDE) m_positiveInsides.emplace(methodp);
+        } else if (const AstLogIf* const ifp = VN_CAST(nodep, LogIf)) {
+            markPositiveInsides(ifp->rhsp());
+        } else if (const AstCond* const condp = VN_CAST(nodep, Cond)) {
+            markPositiveInsides(condp->thenp());
+            markPositiveInsides(condp->elsep());
+        } else if (const AstNodeBiop* const biopp = VN_CAST(nodep, NodeBiop)) {
+            // A 1-bit & or | is a logical one
+            if (VN_IS(biopp, LogAnd) || VN_IS(biopp, LogOr)
+                || ((VN_IS(biopp, And) || VN_IS(biopp, Or)) && biopp->width() == 1)) {
+                markPositiveInsides(biopp->lhsp());
+                markPositiveInsides(biopp->rhsp());
+            }
+        }
+    }
+    // 'x inside {arr}' as one term over a fresh constant index instead of one term per
+    // element, which is quadratic to solve:
+    //   (let ((__Vk <fresh>)) (and (bvult __Vk <size>) (= (select arr __Vk) x)))
+    // The runtime never samples the constant, so a value in several elements is not picked
+    // more often. Only for an 'inside' the constraint is monotone in, as the constant is
+    // existential. Returns nullptr if 'arr' is not one plain solver array.
+    AstSFormatF* newFreshInsidep(AstCMethodHard* nodep) {
+        AstVarRef* const refp = VN_CAST(nodep->fromp(), VarRef);
+        if (!refp || !refp->user1() || m_structSel || m_nestedAccessp) return nullptr;
+        const AstNodeDType* const arrDtp = refp->dtypep()->skipRefp();
+        const AstUnpackArrayDType* const fixedDtp = VN_CAST(arrDtp, UnpackArrayDType);
+        if (!fixedDtp && !VN_IS(arrDtp, DynArrayDType) && !VN_IS(arrDtp, QueueDType)) {
+            return nullptr;
+        }
+        if (!arrDtp->subDTypep()->skipRefp()->isIntegralOrPacked()) return nullptr;
+        const AstVar* const varp = refp->varp();
+        // An array with a rand_mode, or of another class, may be state: formatted per element
+        const RandomizeMode randMode = {.asUQuad = varp->user1()};
+        if (randMode.usesMode || isForeignStatic(varp)) return nullptr;
+        FileLine* const fl = nodep->fileline();
+        AstNodeExpr* sizep;
+        if (fixedDtp) {
+            sizep = new AstConst{fl, static_cast<uint32_t>(fixedDtp->elementsConst())};
+        } else {
+            sizep = new AstCMethodHard{fl, refp->cloneTreePure(false), VCMethod::DYN_SIZE};
+            sizep->dtypeSetInt();
+        }
+        AstSFormatF* const idxp = new AstSFormatF{fl, "__Vk", false, nullptr};
+        idxp->dtypeSetString();
+        VL_RESTORER(m_freshIndexp);
+        m_freshIndexp = idxp;
+        AstNodeExpr* const selp = newSel(fl, nodep->fromp()->unlinkFrBack(), idxp);
+        selp->user1(true);
+        AstNodeExpr* const termp = VN_AS(
+            iterateSubtreeReturnEdits(newElementEqp(fl, selp, nodep->pinsp()->unlinkFrBack())),
+            NodeExpr);
+        // The constant, named when the constraint is set up, so each instance has its own
+        AstNodeExpr* const constp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_FRESH_CONST};
+        constp->dtypeSetString();
+        AstNodeExpr* const argsp = AstNode::addNext(AstNode::addNext(constp, sizep), termp);
+        return new AstSFormatF{fl, "(let ((__Vk %s)) (bvand (__Vbv (bvult __Vk #x%8x)) %s))",
+                               false, argsp};
+    }
 
     void setRandMode(AstVar* const varp, AstMemberRef* const memberRefp,
                      const std::string& smtName, const RandomizeMode& randMode,
@@ -1193,6 +1272,14 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visitElementSel(AstNodeSel* nodep) {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
+        if (nodep->bitp() == m_freshIndexp) {
+            // The fresh index of an array 'inside', already an SMT term (see newFreshInsidep)
+            iterateAndNextNull(nodep->fromp());
+            nodep->replaceWith(createSolverArrDerefp(fl, nodep->fromp()->unlinkFrBack(),
+                                                     nodep->bitp()->unlinkFrBack()));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
 
         addStringNamePart(nodep->bitp(), "%x");
         const bool indexIsRand = nodep->bitp()->exists([](const AstNodeVarRef* const vrefp) {
@@ -1988,6 +2075,11 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
+        if (nodep->bitp() == m_freshIndexp) {
+            // The fresh index of an array 'inside', already an SMT term (see newFreshInsidep)
+            editSMT(nodep, nodep->fromp(), nodep->bitp());
+            return;
+        }
         FileLine* const fl = nodep->fileline();
         VNRelinker handle;
         // Check if index actually references a rand variable (not just user1,
@@ -2539,6 +2631,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             return;
         }
+        VL_RESTORER_CLEAR(m_positiveInsides);
+        markPositiveInsides(nodep->exprp());
         // IEEE 1800-2023 18.5.1: A bare expression used as a constraint is
         // implicitly treated as "expr != 0" when wider than 1 bit.
         // Must wrap before iterateChildren, which converts to SMT format.
@@ -2610,10 +2704,19 @@ class ConstraintExprVisitor final : public VNVisitor {
         editFormat(nodep);
     }
     void visit(AstCMethodHard* nodep) override {
+        const bool positiveInside = m_positiveInsides.erase(nodep);
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
 
         if (nodep->method() == VCMethod::ARRAY_INSIDE) {
+            if (positiveInside) {
+                if (AstSFormatF* const newp = newFreshInsidep(nodep)) {
+                    ++m_statFreshInsides;
+                    nodep->replaceWith(newp);
+                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                    return;
+                }
+            }
             const bool randArr = nodep->fromp()->user1();
 
             const AstNodeDType* const arrDtp = nodep->fromp()->dtypep()->skipRefp();
@@ -2632,8 +2735,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstNodeExpr* const selp
                 = newSel(nodep->fileline(), nodep->fromp()->unlinkFrBack(), idxRefp);
             selp->user1(randArr);
-            AstNode* const itemp = new AstEq{fl, selp, nodep->pinsp()->unlinkFrBack()};
-            itemp->user1(true);
+            AstNode* const itemp = newElementEqp(fl, selp, nodep->pinsp()->unlinkFrBack());
 
             AstVar* const textVarp = newTextVarp(nodep);
             AstStmtExpr* const appendp
@@ -3087,6 +3189,10 @@ public:
             nodep->addNext(hoistListp);
         }
         iterateAndNextNull(nodep);
+    }
+    ~ConstraintExprVisitor() override {
+        V3Stats::addStatSum("Optimizations, Constraint inside over a fresh index",
+                            m_statFreshInsides);
     }
 };
 

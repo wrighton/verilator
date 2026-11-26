@@ -1059,6 +1059,9 @@ void VlRandomizer::emitDefines(std::ostream& os) const {
 }
 
 void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
+    for (const std::string& name : m_freshVars) {
+        os << "(declare-fun " << name << " () (_ BitVec 32))\n";
+    }
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) {
             auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
@@ -1803,8 +1806,14 @@ void VlRandomizer::disable_soft(const std::string& varName) {
         m_softConstraints.end());
 }
 
+std::string VlRandomizer::fresh_const() {
+    m_freshVars.emplace_back("__Vf" + std::to_string(m_freshVars.size()));
+    return m_freshVars.back();
+}
+
 void VlRandomizer::clearConstraints() {
     m_constraints.clear();
+    m_freshVars.clear();
     m_constraintVarNames.clear();
     m_constraintVarEnds.clear();
     m_constraints_line.clear();
