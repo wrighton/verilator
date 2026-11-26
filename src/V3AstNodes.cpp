@@ -2623,7 +2623,15 @@ void AstInitial::dumpJson(std::ostream& str) const {
     dumpJsonGen(str);
 }
 AstNodeExpr* AstInsideRange::newAndFromInside(AstNodeExpr* exprp, AstNodeExpr* lhsp,
-                                              AstNodeExpr* rhsp) {
+                                              AstNodeExpr* rhsp, bool typed) {
+    const auto newCompare = [&](VNType type, AstNodeExpr* ap, AstNodeExpr* bp) -> AstNodeExpr* {
+        if (typed && ap->dtypep()->skipRefp()->isIntegralOrPacked()
+            && bp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            return AstNodeBiop::newTypedCompare(type, fileline(), ap, bp);
+        }
+        if (type == VNType::Gte) return AstGte::newTyped(fileline(), ap, bp);
+        return AstLte::newTyped(fileline(), ap, bp);
+    };
     const bool lhsUnbounded = VN_IS(lhsp, Unbounded);
     const bool rhsUnbounded = VN_IS(rhsp, Unbounded);
 
@@ -2640,26 +2648,26 @@ AstNodeExpr* AstInsideRange::newAndFromInside(AstNodeExpr* exprp, AstNodeExpr* l
         // [$:N] - only check expr <= rhs
         // Use exprp directly (not cloned) so ExprStmt side effects are preserved
         VL_DO_DANGLING(lhsp->deleteTree(), lhsp);
-        AstNodeExpr* const bp = AstLte::newTyped(fileline(), exprp, rhsp);
+        AstNodeExpr* const bp = newCompare(VNType::Lte, exprp, rhsp);
         bp->fileline()->modifyWarnOff(V3ErrorCode::CMPCONST, true);
         return bp;
     } else if (rhsUnbounded) {
         // [N:$] - only check expr >= lhs
         VL_DO_DANGLING(rhsp->deleteTree(), rhsp);
-        AstNodeExpr* const ap = AstGte::newTyped(fileline(), exprp, lhsp);
+        AstNodeExpr* const ap = newCompare(VNType::Gte, exprp, lhsp);
         ap->fileline()->modifyWarnOff(V3ErrorCode::UNSIGNED, true);
         return ap;
     }
 
     // Normal case: [N:M] - check expr >= lhs && expr <= rhs
-    AstNodeExpr* const ap = AstGte::newTyped(fileline(), exprp, lhsp);
+    AstNodeExpr* const ap = newCompare(VNType::Gte, exprp, lhsp);
     AstNodeExpr* lteLhsp;
     if (const AstExprStmt* const exprStmtp = VN_CAST(exprp, ExprStmt)) {
         lteLhsp = exprStmtp->resultp()->cloneTreePure(true);
     } else {
         lteLhsp = exprp->cloneTreePure(true);
     }
-    AstNodeExpr* const bp = AstLte::newTyped(fileline(), lteLhsp, rhsp);
+    AstNodeExpr* const bp = newCompare(VNType::Lte, lteLhsp, rhsp);
     ap->fileline()->modifyWarnOff(V3ErrorCode::UNSIGNED, true);
     bp->fileline()->modifyWarnOff(V3ErrorCode::CMPCONST, true);
     return new AstLogAnd{fileline(), ap, bp};
