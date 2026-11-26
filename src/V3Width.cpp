@@ -1645,8 +1645,14 @@ class WidthVisitor final : public VNVisitor {
                         }
                     }
                 }
-                widthCheckSized(nodep, "Extract Range", nodep->bitp(), selwidthDTypep, EXTEND_EXP,
-                                false /*NOWARN*/);
+                // A constraint keeps the whole index into an array of integral elements, as there
+                // it reads zero out of range
+                const AstNodeDType* elemDtp = nodep->dtypep()->skipRefp();
+                while (elemDtp->isNonPackedArray()) elemDtp = elemDtp->subDTypep()->skipRefp();
+                if (!m_constraintItem || !elemDtp->isIntegralOrPacked()) {
+                    widthCheckSized(nodep, "Extract Range", nodep->bitp(), selwidthDTypep,
+                                    EXTEND_EXP, false /*NOWARN*/);
+                }
             }
         }
     }
