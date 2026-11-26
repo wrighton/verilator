@@ -6188,10 +6188,15 @@ class AssertNfaVisitor final : public VNVisitor {
     void splitImplicationPassActions(AstAssert* assertp, const PropertyParts& parts,
                                      AstNodeExpr* nonvacuousMatchp) {
         FileLine* const flp = assertp->fileline();
+        // A vacuous success is of the attempt starting on this tick
         AstNodeExpr* const vacuousp
             = parts.isFollowedBy
                   ? nullptr
-                  : new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))};
+                  : new AstLogAnd{
+                        flp,
+                        assertOnCond(assertp->controlVarp(), flp, assertp->userType(),
+                                     assertp->directive()),
+                        new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))}};
         AstNodeStmt* const splitsp
             = newSplitPassActions(assertp, vacuousp, nonvacuousMatchp, m_actionNames);
         // Another attempt failing on the same tick runs the fail action instead
@@ -6402,11 +6407,20 @@ class AssertNfaVisitor final : public VNVisitor {
 
         const bool splitImplicationPasssp = splitsImplicationPasssp(assertp, parts);
         if (assertAssertp) {
-            attachActionHandlers(assertAssertp, splitImplicationPasssp ? nullptr : matchp,
-                                 senTreep, failCountp, passCountp);
+            attachActionHandlers(assertAssertp, parts.hasImplication ? nullptr : matchp, senTreep,
+                                 failCountp, passCountp);
         }
         // After the replays, which clone the fail action without the pass action prefix
-        if (splitImplicationPasssp) splitImplicationPassActions(assertAssertp, parts, matchp);
+        if (splitImplicationPasssp) {
+            splitImplicationPassActions(assertAssertp, parts, matchp);
+        } else if (matchp && parts.hasImplication) {
+            // Without a match per attempt, the pass of a delayed antecedent follows from no
+            // rejection. After Off, only the attempts already executing still pass.
+            AstNodeStmt* const passsp = assertAssertp->passsp()->unlinkFrBackWithNext();
+            AstNodeExpr* const onp = assertOnCond(assertp->controlVarp(), flp, assertp->userType(),
+                                                  assertp->directive());
+            assertAssertp->addPasssp(new AstIf{flp, new AstLogOr{flp, onp, matchp}, passsp});
+        }
 
         AstNode* const innerPropp = propp->propp();
         innerPropp->replaceWith(outputExprp);
@@ -6785,9 +6799,7 @@ class AssertNfaVisitor final : public VNVisitor {
             return;
         }
 
-        const bool splitImplicationPasssp = splitsImplicationPasssp(assertp, parts);
-        const bool needMatch = assertAssertp && assertAssertp->passsp()
-                               && (!parts.hasImplication || splitImplicationPasssp);
+        const bool needMatch = assertAssertp && assertAssertp->passsp();
 
         // The rejected threads of a negated property's operand are passes of the property
         const bool replayFails = assertAssertp && assertAssertp->failsp() && !negated;
