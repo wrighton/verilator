@@ -361,6 +361,15 @@ public:
 };
 
 //######################################################################
+// An automatic variable of a block, task or function, whose sampled and past values are its
+// current value (IEEE 1800-2023 16.5.1). Not a class property: its implicit automatic lifetime
+// is that of its object.
+
+static bool isProceduralAutomatic(const AstVar* varp) {
+    return varp->lifetime().isAutomatic() && !varp->isClassMember();
+}
+
+//######################################################################
 // AssertPastSplitVisitor
 // The past value of an automatic variable is its current value (IEEE 1800-2023 16.5.1).
 // Split a $past of an expression reading one, so the $past applies to each largest operand
@@ -417,7 +426,7 @@ class AssertPastSplitVisitor final : public VNVisitor {
         m_operands.push_back({nodep, false, true});
     }
     void visit(AstNodeVarRef* nodep) override {
-        m_operands.push_back({nodep, nodep->varp()->lifetime().isAutomatic(), true});
+        m_operands.push_back({nodep, isProceduralAutomatic(nodep->varp()), true});
     }
     void visit(AstNodeExpr* nodep) override {
         const size_t first = m_operands.size();
@@ -1581,7 +1590,7 @@ class AssertVisitor final : public VNVisitor {
     void visit(AstNodeVarRef* nodep) override {
         // Sampled values of automatic variables are their current values (IEEE 1800-2023 16.5.1)
         if (m_inSampled && !nodep->user2() && !nodep->varp()->isTemp()
-            && !nodep->varp()->lifetime().isAutomatic()) {
+            && !isProceduralAutomatic(nodep->varp())) {
             if (!nodep->access().isReadOnly()) {
                 nodep->v3warn(E_UNSUPPORTED,
                               "Unsupported: Write to variable in sampled expression");
