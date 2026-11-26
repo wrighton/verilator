@@ -172,6 +172,71 @@ class lineage_derived extends lineage_base;
   static rand bit [3:0] x;
 endclass
 
+// Test: a static rand member reached through two levels of rand members by class scope,
+// solved with its class's constraints
+class joint_cfg;
+  static rand bit [6:0] g;
+  rand bit [6:0] m;
+  constraint c {
+    g inside {[10 : 20]};
+    m == g + 1;
+  }
+endclass
+
+class joint_mid;
+  rand joint_cfg cfg;
+  function new();
+    cfg = new;
+  endfunction
+endclass
+
+class joint_holder;
+  rand joint_mid mid;
+  rand bit [6:0] y;
+  constraint c {y == joint_cfg::g;}
+  function new();
+    mid = new;
+  endfunction
+endclass
+
+// Test: a static rand member only a non-rand handle reaches is a state variable, though the
+// handle holds an object of a derived class with a rand handle reaching it, and objects of a
+// rand handle's class and its derived classes do not reach it
+class passive_cfg;
+  static rand bit [6:0] g;
+endclass
+
+class passive_base;
+  rand bit [6:0] b;
+endclass
+
+class passive_derived extends passive_base;
+  rand passive_cfg cfg;
+  function new();
+    cfg = new;
+  endfunction
+endclass
+
+class other_base;
+  rand bit [6:0] o;
+endclass
+
+class other_derived extends other_base;
+  rand bit [6:0] p;
+endclass
+
+class passive_user;
+  passive_base h;
+  rand other_base other;
+  rand bit [6:0] y;
+  constraint c {y == passive_cfg::g;}
+  function new();
+    passive_derived d = new;
+    h = d;
+    other = new;
+  endfunction
+endclass
+
 // Test: a base class constraint on a static rand member reached by a derived class rand handle
 class handle_cfg;
   static rand bit [3:0] g;
@@ -189,6 +254,33 @@ class handle_derived extends handle_base;
   rand handle_cfg s;
   function new();
     s = new;
+  endfunction
+endclass
+
+// Test: a static rand member reached through a rand handle that holds an object of a derived
+// class adding nothing, which reaches it through the handle it inherits
+class inh_cfg;
+  static rand bit [6:0] g;
+  constraint c {g == 7'd23;}
+endclass
+
+class inh_base;
+  rand inh_cfg item;
+  function new();
+    item = new;
+  endfunction
+endclass
+
+class inh_derived extends inh_base;
+endclass
+
+class inh_holder;
+  rand inh_base h;
+  rand bit [6:0] y;
+  constraint c {y == inh_cfg::g;}
+  function new();
+    inh_derived d = new;
+    h = d;
   endfunction
 endclass
 
@@ -341,6 +433,43 @@ module t;
         `checkd(ok, 1);
         `checkd(handle_cfg::g, 7);
         `checkd(hd.y, 7);
+      end
+    end
+
+    begin
+      automatic inh_holder ih = new;
+      automatic int ok;
+      inh_cfg::g = 7'd35;
+      ok = ih.randomize();
+      `checkd(ok, 1);
+      `checkd(inh_cfg::g, 23);
+      `checkd(ih.y, 23);
+    end
+
+    begin
+      automatic joint_holder jh = new;
+      automatic int ok;
+      automatic bit seen[bit [6:0]];
+      repeat (20) begin
+        ok = jh.randomize();
+        `checkd(ok, 1);
+        `checkd(joint_cfg::g >= 10 && joint_cfg::g <= 20, 1);
+        `checkd(jh.mid.cfg.m, joint_cfg::g + 1);
+        `checkd(jh.y, joint_cfg::g);
+        seen[joint_cfg::g] = 1;
+      end
+      `checkd(seen.size() > 1, 1);
+    end
+
+    begin
+      automatic passive_user pu = new;
+      automatic int ok;
+      passive_cfg::g = 7'd99;
+      repeat (20) begin
+        ok = pu.randomize();
+        `checkd(ok, 1);
+        `checkd(passive_cfg::g, 99);
+        `checkd(pu.y, 99);
       end
     end
 
