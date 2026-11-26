@@ -3301,6 +3301,13 @@ class AssertVisitor final : public VNVisitor {
     }
 
     void visit(AstPast* nodep) override {
+        // Checked before the expression is rewritten into its history
+        if (reportNonStaticProperty(nodep->exprp())) {
+            nodep->replaceWith(
+                new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         // When clocked in the Observed region, the history of a nested sampled value function
         // would already be updated in the time step
         if (isObservedEventClock(nodep->sentreep())
@@ -3354,17 +3361,24 @@ class AssertVisitor final : public VNVisitor {
     }
 
     //========== Move $sampled down to read-only variables
-    void visit(AstSampled* nodep) override {
-        if (nodep->user1()) return;
-        // Sampled values and their history are static, so not of each object
-        nodep->exprp()->foreach([](const AstNodeVarRef* refp) {
+    // Report a sampled value of a non-static class property, as sampled values and their
+    // history are static, so not of each object. Return whether reported.
+    static bool reportNonStaticProperty(const AstNode* exprp) {
+        bool reported = false;
+        exprp->foreach([&](const AstNodeVarRef* refp) {
             const AstVar* const varp = refp->varp();
             if (varp->isClassMember() && !varp->lifetime().isStatic()) {
                 refp->v3warn(E_UNSUPPORTED,
                              "Unsupported: sampled value of non-static class property "
                                  << refp->prettyNameQ() << ".");
+                reported = true;
             }
         });
+        return reported;
+    }
+    void visit(AstSampled* nodep) override {
+        if (nodep->user1()) return;
+        reportNonStaticProperty(nodep->exprp());
         VL_RESTORER(m_inSampled);
         {
             m_inSampled = true;
