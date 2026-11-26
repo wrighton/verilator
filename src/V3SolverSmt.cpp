@@ -6123,7 +6123,7 @@ private:
     }
     // Whether the elements of queue or dynamic array 'arrayp' can be counted where its element
     // select is checked: it is a variable, a member through class handles, or an element of
-    // such an array selected by non-random indices
+    // such an array selected by non-random indices or integral keys
     static bool countableArray(const AstNodeExpr* arrayp) {
         if (VN_IS(arrayp, VarRef)) return true;
         if (const AstMemberRef* const refp = VN_CAST(arrayp, MemberRef)) {
@@ -6132,6 +6132,10 @@ private:
         const AstNodeExpr* indexp = nullptr;
         const AstNodeExpr* fromp = nullptr;
         if (const AstArraySel* const selp = VN_CAST(arrayp, ArraySel)) {
+            indexp = selp->bitp();
+            fromp = selp->fromp();
+        } else if (const AstAssocSel* const selp = VN_CAST(arrayp, AssocSel)) {
+            if (!selp->bitp()->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
             indexp = selp->bitp();
             fromp = selp->fromp();
         } else if (const AstCMethodHard* const atp = VN_CAST(arrayp, CMethodHard)) {
@@ -6181,6 +6185,15 @@ private:
                 // From the variable outwards, so no member of a null handle is read
                 nonNullp = nonNullp ? new AstLogAnd{fl, neqp, nonNullp} : neqp;
                 pathp = refp->fromp();
+            } else if (const AstAssocSel* const selp = VN_CAST(pathp, AssocSel)) {
+                // A key that does not exist has no elements, and is not read
+                AstCMethodHard* const existsp = new AstCMethodHard{
+                    fl, selp->fromp()->cloneTreePure(false), VCMethod::ASSOC_EXISTS,
+                    selp->bitp()->cloneTreePure(false)};
+                existsp->dtypeSetBit();
+                nonNullp = nonNullp ? new AstLogAnd{fl, existsp, nonNullp}
+                                    : static_cast<AstNodeExpr*>(existsp);
+                pathp = selp->fromp();
             } else {
                 // An element select, see countableArray
                 pathp = V3Const::selectionFromp(pathp);
