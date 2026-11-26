@@ -1,0 +1,16 @@
+%Error-UNSUPPORTED: t/t_stream_with_unsup.v:13:14: Unsupported: with[] stream expression as a stream target
+                                                 : ... note: In instance 't'
+   13 |     {>>{data with [0:n-1]}} = 16'h1234;
+      |              ^~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_stream_with_unsup.v:14:11: Unsupported: with[] stream expression as a stream target
+                                                 : ... note: In instance 't'
+   14 |     {>>{f with [n+:2]}} = 16'h1234;
+      |           ^~~~
+%Warning-WIDTHEXPAND: t/t_stream_with_unsup.v:14:25: Stream target requires 32 bits, but source expression only provides 16 bits (IEEE 1800-2023 11.4.14.3)
+                                                   : ... note: In instance 't'
+   14 |     {>>{f with [n+:2]}} = 16'h1234;
+      |                         ^
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Error: Exiting due to

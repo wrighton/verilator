@@ -50,6 +50,9 @@ module t;
       `checkp(q8, i == 0 ? "'{'h55, 'h44, 'h33, 'h11}" : "'{'h55, 'h44, 'h33, 'h21}");
       w7 = 7'h5a + 7'(i);
       q4 = '{4'h1, 4'h2};
+      q8 = '{8'haa, 8'hbb, 8'hcc + 8'(i), 8'hdd};
+      p40 = {>>{dyn with [0:i], q8 with [1:2]}};  // Selected items
+      `checkh(p40, i == 0 ? 40'h33bbcc0000 : 40'h3344bbcd00);
       p40 = {>>{hdr, {<<8{dyn}}, 8'h66}};  // A stream of a dynamically sized operand
       `checkh(p40, {hdr, 32'h55443366});
       p40 = {>>{hdr, {<<{dyn}}}};
