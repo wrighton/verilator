@@ -2776,6 +2776,28 @@ class AssertVisitor final : public VNVisitor {
             }
             // A task is not a process, so the assertion gets its own beside the task
             if (m_ftaskp) {
+                // Outside the task, its variables, other than the automatic ones of the
+                // assertion's own blocks, are out of scope
+                std::unordered_set<const AstVar*> ownps;
+                nodep->foreach([&](const AstVar* varp) {
+                    if (varp->lifetime().isAutomatic()) ownps.emplace(varp);
+                });
+                const AstVarRef* localRefp = nullptr;
+                nodep->exists([&](const AstVarRef* refp) {
+                    if (refp->varp()->isFuncLocal() && !ownps.count(refp->varp())) {
+                        localRefp = refp;
+                    }
+                    return localRefp != nullptr;
+                });
+                if (localRefp) {
+                    localRefp->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: Procedural concurrent assertion in a task "
+                                      "referencing a variable of the task "
+                                          << localRefp->varp()->prettyNameQ()
+                                          << " (IEEE 1800-2023 16.14.6).");
+                    VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                    return;
+                }
                 // Its actions move with it, out of the task
                 dropOutwardActionJumps(nodep);
                 // As above, for a block under a fork item in the task
