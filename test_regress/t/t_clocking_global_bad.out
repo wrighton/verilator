@@ -1,0 +1,6 @@
+%Error: t/t_clocking_global_bad.v:9:12: No global clocking in the instance, or in an enclosing instance, for '$global_clock' (IEEE 1800-2023 14.14).
+                                      : ... note: In instance 't.u_none.l'
+    9 |   always @($global_clock) $display;
+      |            ^~~~~~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to
