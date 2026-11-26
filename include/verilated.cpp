@@ -4273,14 +4273,17 @@ void VerilatedEvalLoop::evalImpl() {
         VL_DEBUG_IF(VL_DBG_MSGF("+ Initial\n"););
         // Static initializers
         m_model.evalStatic();
+        // Time 0 samples the default sampled values, before the initial blocks
+        // (IEEE 1800-2023 16.5.1)
+        m_model.evalSample();
         // Initial blocks
         m_model.evalInitial();
         settle();
         m_model.m_didInit = true;
+    } else {
+        // Sampled values are collected before anything can read them
+        m_model.evalSample();
     }
-
-    // Sampled values are collected before anything can read them
-    m_model.evalSample();
 
     // The 'Input combinational' region updates combinational logic driven from primary inputs
     {
