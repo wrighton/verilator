@@ -6357,16 +6357,16 @@ private:
                || VN_IS(dtypep, QueueDType) || VN_IS(dtypep, AssocArrayDType)
                || VN_IS(dtypep, WildcardArrayDType);
     }
-    // Whether every member of 'nodep' is a whole one-dimensional array, not associative, of the
-    // class or of a member object reached through member selects, whose rand_mode is not used;
-    // these the runtime makes distinct together, from the elements they hold at solve time
+    // Whether every member of 'nodep' is a whole one-dimensional random array, not associative,
+    // of the class or of a member object reached through member selects, whose rand_mode is not
+    // used; these the runtime makes distinct together, from the elements they hold at solve time
     static bool isWholeArrayGroup(const AstConstraintUnique* nodep) {
         for (const AstNodeExpr* const itemp : nodep->rangespList()) {
             const AstNode* rootp = itemp;
             while (const AstMemberRef* const selp = VN_CAST(rootp, MemberRef)) {
                 rootp = selp->fromp();
             }
-            if (!VN_IS(rootp, VarRef)) return false;
+            if (!VN_IS(rootp, VarRef) || !itemp->user1()) return false;
             const AstVar* const varp = VN_IS(itemp, MemberRef) ? VN_AS(itemp, MemberRef)->varp()
                                                                : VN_AS(itemp, VarRef)->varp();
             const RandomizeMode randMode = {.asUQuad = varp->user1()};
