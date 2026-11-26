@@ -116,6 +116,7 @@ class AssertElabVisitor final : public VNVisitor {
     // In the property expression of an assertion, the only place left where a sequence or
     // property instance is legal, as SeqEventLowerVisitor lowered the sequence event controls
     bool m_inPropExpr = false;
+    bool m_inDisable = false;  // In a disable condition
     V3UniqueNames m_propVarNames{"__Vpropvar"};  // Property-local variable names
     // Declaration file line -> its copy with coverage off, for inlined bodies
     std::unordered_map<FileLine*, FileLine*> m_noCoverFileLines;
@@ -380,11 +381,36 @@ class AssertElabVisitor final : public VNVisitor {
             }
         }
         iterateAndNextNull(nodep->sensesp());
-        iterateAndNextNull(nodep->disablep());
+        {
+            VL_RESTORER(m_inDisable);
+            m_inDisable = true;
+            iterateAndNextNull(nodep->disablep());
+        }
         VL_RESTORER(m_inPropExpr);
         m_inPropExpr = true;
         iterateAndNextNull(nodep->propp());
     }
+    void visit(AstDefaultDisable* nodep) override {
+        VL_RESTORER(m_inDisable);
+        m_inDisable = true;
+        iterateChildren(nodep);
+    }
+    // A sampled value function in a disable condition has its own clocking event
+    // (IEEE 1800-2023 16.9.3)
+    void visitSampledValue(AstNodeExpr* nodep, const AstSenTree* sentreep) {
+        if (m_inDisable && !sentreep) {
+            nodep->v3error("Sampled value function in a disable condition has no clocking event"
+                           " (IEEE 1800-2023 16.9.3).\n"
+                           << nodep->warnMore()
+                           << "... Suggest providing a clocking event argument, or computing the"
+                              " value in a clocked procedure");
+        }
+        iterateChildren(nodep);
+    }
+    void visit(AstFell* nodep) override { visitSampledValue(nodep, nodep->sentreep()); }
+    void visit(AstPast* nodep) override { visitSampledValue(nodep, nodep->sentreep()); }
+    void visit(AstRose* nodep) override { visitSampledValue(nodep, nodep->sentreep()); }
+    void visit(AstStable* nodep) override { visitSampledValue(nodep, nodep->sentreep()); }
     void visit(AstSenItem* nodep) override {
         // A clocking event inside a property expression has an expression condition
         VL_RESTORER(m_inPropExpr);
