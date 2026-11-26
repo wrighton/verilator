@@ -6594,6 +6594,15 @@ class AssertNfaVisitor final : public VNVisitor {
         }
         AstSenItem* sensesp = propp->sensesp();
         if (!sensesp && m_alwaysp && !isSeqEvent) {
+            sensesp = m_alwaysClockp;
+            if (!sensesp) {
+                assertp->v3error("Concurrent assertion has no clock (IEEE 1800-2023 16.16)\n"
+                                 << assertp->warnMore()
+                                 << "... Suggest provide a clocking event, a default clocking,"
+                                    " or a clocked always procedure (IEEE 1800-2023 16.14.6)");
+                replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+                return;
+            }
             // The NFA starts an attempt on every clock, not only when the procedure reaches the
             // assertion, and the assertion reports each time the procedure runs
             if (isUnderProceduralCondition(assertp)) {
@@ -6607,15 +6616,6 @@ class AssertNfaVisitor final : public VNVisitor {
                 assertp->v3warn(E_UNSUPPORTED,
                                 "Unsupported: multi-cycle procedural concurrent assertion in an"
                                 " always procedure with several events (IEEE 1800-2023 16.14.6)");
-                replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
-                return;
-            }
-            sensesp = m_alwaysClockp;
-            if (!sensesp) {
-                assertp->v3error("Concurrent assertion has no clock (IEEE 1800-2023 16.16)\n"
-                                 << assertp->warnMore()
-                                 << "... Suggest provide a clocking event, a default clocking,"
-                                    " or a clocked always procedure (IEEE 1800-2023 16.14.6)");
                 replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
                 return;
             }

@@ -41,5 +41,9 @@ module t (
   always_comb begin
     assert property (a |-> ##1 b);
   end
+  always @(posedge clk or negedge rst_n) begin
+    x <= clk & rst_n;
+    assert property (a |-> ##1 b);
+  end
 
 endmodule

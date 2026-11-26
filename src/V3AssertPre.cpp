@@ -134,7 +134,7 @@ private:
     // Reset each assertion:
     AstSenItem* m_senip = nullptr;  // Last sensitivity
     // Reset each always:
-    AstSenItem* m_seniAlwaysp = nullptr;  // Last sensitivity in always
+    AstSenItem* m_seniAlwaysp = nullptr;  // Clock taken from the always
     AstSenItem* m_seniInferredp = nullptr;  // Clock inferred from that always
     // Reset each assertion:
     AstNodeExpr* m_disablep = nullptr;  // Last disable
@@ -334,7 +334,8 @@ private:
             newp = new AstSenTree{nodep->fileline(), nullptr};
         } else {
             if (cassertp && fromAlways) cassertp->senFromAlways(true);
-            newp = new AstSenTree{nodep->fileline(), senip->cloneTree(true)};
+            // The procedure's clock is one event expression of its event control
+            newp = new AstSenTree{nodep->fileline(), senip->cloneTree(!fromAlways)};
         }
         return newp;
     }
@@ -917,8 +918,11 @@ private:
     void visit(AstAlways* nodep) override {
         VL_RESTORER(m_seniInferredp);
         iterateAndNextNull(nodep->sentreep());
-        if (nodep->sentreep()) m_seniAlwaysp = nodep->sentreep()->sensesp();
         m_seniInferredp = V3AssertCommon::inferredClock(nodep);
+        m_seniAlwaysp = m_seniInferredp;
+        // Without an inferred clock, an only event expression is still the clock
+        AstSenItem* const sensesp = nodep->sentreep() ? nodep->sentreep()->sensesp() : nullptr;
+        if (!m_seniAlwaysp && sensesp && !sensesp->nextp()) m_seniAlwaysp = sensesp;
         iterateAndNextNull(nodep->stmtsp());
         m_seniAlwaysp = nullptr;
     }
