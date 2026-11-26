@@ -399,6 +399,7 @@ class WidthVisitor final : public VNVisitor {
     const bool m_paramsOnly;  // Computing parameter value; limit operation
     const bool m_doGenerate;  // Do errors later inside generate statement
     bool m_streamConcat = false;  // True if visiting arguments of stream concatenation
+    bool m_constraintItem = false;  // Inside a constraint item, of a class or an inline 'with'
     // Function whose port default or static initial value is visited, evaluated outside it
     const AstNodeFTask* m_valueOutsideFTaskp = nullptr;
     bool m_inParamOverride = false;  // True if visiting the value of a parameter override pin
@@ -1556,8 +1557,11 @@ class WidthVisitor final : public VNVisitor {
                 // we want the select to be truncated to fit within the
                 // maximum select range, e.g. turn Xs outside of the select
                 // into something fast which pulls from within the array.
-                widthCheckSized(nodep, "Extract Range", nodep->lsbp(), selwidthDTypep, EXTEND_EXP,
-                                false /*NOWARN*/);
+                // A constraint keeps the whole position, as there it reads zero out of range.
+                if (!m_constraintItem) {
+                    widthCheckSized(nodep, "Extract Range", nodep->lsbp(), selwidthDTypep,
+                                    EXTEND_EXP, false /*NOWARN*/);
+                }
             }
             // UINFOTREE(9, nodep, "", "seldone");
         }
@@ -4116,6 +4120,8 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->rhssp(), WidthVP{SELF, BOTH}.p());
     }
     void visit(AstConstraintExpr* nodep) override {
+        VL_RESTORER(m_constraintItem);
+        m_constraintItem = true;
         userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
     }
     void visit(AstConstraintForeach* nodep) override {
@@ -4125,6 +4131,8 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->bodyp(), nullptr);
     }
     void visit(AstConstraintIf* nodep) override {
+        VL_RESTORER(m_constraintItem);
+        m_constraintItem = true;
         userIterateAndNext(nodep->thensp(), nullptr);
         userIterateAndNext(nodep->elsesp(), nullptr);
         iterateCheckBool(nodep, "If", nodep->condp(), BOTH);
@@ -8700,6 +8708,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstNodeFTask* nodep) override {
         VL_RESTORER(m_underCast);
         m_underCast = false;  // A called function's body is outside the cast expression.
+        VL_RESTORER(m_constraintItem);
+        m_constraintItem = false;  // A called function's body is procedural
         // Grab width from the output variable (if it's a function)
         if (nodep->didWidth()) return;
         if (nodep->doingWidth()) {
