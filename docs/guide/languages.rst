@@ -539,10 +539,7 @@ checker
 
 disable
    A disable statement outside the block or task it disables requires
-   :vlopt:`--timing`. When such a statement is executed by a process that
-   is running the disabled block or task, e.g. in a task or function called
-   from it, the process stops only at its next timing control, so the
-   statements up to that timing control still execute.
+   :vlopt:`--timing`.
 
 force, release
    Verilator supports the procedural `force` (and corresponding `release`)
