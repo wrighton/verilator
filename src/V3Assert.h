@@ -27,13 +27,13 @@
 class V3AssertCommon final {
 public:
     static void collectDefaultDisable(AstNetlist* nodep) VL_MT_DISABLED;
-    // Add an event to modp, fired at each end point of sequence instance schemaRefp, unless
-    // nullptr
-    static AstVar* newSequenceEvent(FileLine* flp, AstNodeModule* modp, const string& name,
+    // Add an event to scopep, a module or generate block, fired at each end point of sequence
+    // instance schemaRefp, unless nullptr
+    static AstVar* newSequenceEvent(FileLine* flp, AstNode* scopep, const string& name,
                                     AstSchemaRef* schemaRefp) VL_MT_DISABLED;
-    // Add a count to modp, incremented at each end point of sequence instance schemaRefp,
-    // unless nullptr
-    static AstVar* newSequenceEndCount(FileLine* flp, AstNodeModule* modp, const string& name,
+    // Add a count to scopep, a module or generate block, incremented at each end point of
+    // sequence instance schemaRefp, unless nullptr
+    static AstVar* newSequenceEndCount(FileLine* flp, AstNode* scopep, const string& name,
                                        AstSchemaRef* schemaRefp) VL_MT_DISABLED;
     static string assertCtlGetCall(const char* query, VAssertType type,
                                    VAssertDirectiveType directiveType) VL_MT_DISABLED;

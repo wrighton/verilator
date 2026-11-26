@@ -1,0 +1,10 @@
+%Error: t/t_sequence_method_auto_bad.v:22:19: Sequence method 'triggered' on a sequence instance referencing automatic variable 'v' (IEEE 1800-2023 9.4.2.4, 16.6).
+                                            : ... Only a procedural concurrent assertion can reference an automatic variable
+   22 |     wait (s(v, b).triggered);
+      |                   ^~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sequence_method_auto_bad.v:27:20: Sequence method 'triggered' on a sequence instance referencing automatic variable 'v' (IEEE 1800-2023 9.4.2.4, 16.6).
+                                            : ... Only a procedural concurrent assertion can reference an automatic variable
+   27 |     return s(a, v).triggered;
+      |                    ^~~~~~~~~
+%Error: Exiting due to

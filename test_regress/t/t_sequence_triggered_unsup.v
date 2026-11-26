@@ -4,7 +4,8 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
-// Sequence method 'triggered' on an instance referencing a non-module-scope declaration
+// Sequence method 'triggered' on an instance referencing a declaration outside its module,
+// generate block or package
 
 interface ifc (
     input clk
@@ -40,24 +41,11 @@ module t (
   endsequence
   cover property (s2(a));
 
-  // Automatic variable
-  task automatic wait_triggered(input logic v);
-    wait (s(v).triggered);
-  endtask
-  initial wait_triggered(a);
-
-  for (genvar i = 0; i < 2; ++i) begin : g_loop
-    logic v;
-    assign v = d[i];
-    // Generate block variable
-    always @(posedge clk) if (s(v).triggered) $display("v");
-    // Genvar
-    always @(posedge clk) if (s(d[i]).triggered) $display("d");
-    // Generate block sequence
-    sequence s_gen;
-      @(posedge clk) d[i];
-    endsequence
-    always @(posedge clk) if (s_gen.triggered) $display("s_gen");
+  // Automatic variable in a procedural concurrent assertion
+  always @(posedge clk) begin
+    for (int k = 0; k < 2; ++k) begin
+      assert property (s(d[k]).triggered);
+    end
   end
   // verilog_format: on
 
