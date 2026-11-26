@@ -330,6 +330,11 @@ Will be converted to:
 External logic will be needed to combine these signals with any external
 drivers.
 
+A top-level input port has the value the caller writes to it, also if it is
+declared tri0 or tri1 or connected to a pullup or pulldown, so before the
+first write it has the default value of the model's input, not the pulled
+value.
+
 Tristate drivers are not supported inside functions and tasks; an inout
 there will be considered a two-state variable that is read and written
 instead of a four-state variable. Likewise, a z procedurally assigned to
