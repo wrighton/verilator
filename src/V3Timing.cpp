@@ -2854,6 +2854,9 @@ void V3Timing::chooseMailboxWaits(AstNetlist* nodep) {
         V3Stats::addStat("Timing, std waits polled",
                          visitor.impure() ? visitor.choiceps().size() : 0);
     }
+    // The scan cached purities, which within a cycle of calls may be provisional (see
+    // AstNodeFTaskRef::isPure), and the pass may make no edit to clear them
+    VIsCached::clearCacheTree();
     V3Global::dumpCheckGlobalTree("mailboxwait", 0, dumpTreeEitherLevel() >= 6);
 }
 
