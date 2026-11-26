@@ -663,7 +663,7 @@ public:
 class ForkXRefRescope final {
     // STATE
     const std::string& m_callScope;  // Recorded scope of the call of the task
-    const std::set<std::string>& m_keptPaths;  // Paths of kept blocks, below m_callScope
+    const std::unordered_set<std::string>& m_keptPaths;  // Paths of kept blocks, below m_callScope
     std::unordered_set<const AstTask*> m_taskps;  // Tasks rescoped, each once
 
     // METHODS
@@ -710,7 +710,7 @@ class ForkXRefRescope final {
 
     // CONSTRUCTORS
     ForkXRefRescope(AstTask* taskp, const std::string& callScope,
-                    const std::set<std::string>& keptPaths)
+                    const std::unordered_set<std::string>& keptPaths)
         : m_callScope{callScope}
         , m_keptPaths{keptPaths} {
         rescopeTask(taskp);
@@ -718,7 +718,7 @@ class ForkXRefRescope final {
 
 public:
     static void apply(AstTask* taskp, const std::string& callScope,
-                      const std::set<std::string>& keptPaths) {
+                      const std::unordered_set<std::string>& keptPaths) {
         ForkXRefRescope{taskp, callScope, keptPaths};
     }
 };
@@ -798,10 +798,11 @@ class ForkVisitor final : public VNVisitor {
 
     // Move the static variables of named blocks moved into the given fork branch task into
     // blocks of the same names before its call
-    std::set<std::string> keepStaticBlocks(AstTask* taskp, AstNodeStmt* callStmtp) {
+    std::unordered_set<std::string> keepStaticBlocks(AstTask* taskp, AstNodeStmt* callStmtp) {
         const ForkStaticVarsVisitor varsVisitor{taskp};
-        std::map<std::vector<std::string>, AstBegin*> blockps;  // Made, by path
-        std::set<std::string> paths;  // Their recorded paths, below the call's scope
+        // Made, by path; a std::map, as std::vector has no std::hash (lookups only)
+        std::map<std::vector<std::string>, AstBegin*> blockps;
+        std::unordered_set<std::string> paths;  // Their recorded paths, below the call's scope
         for (const auto& varBlocks : varsVisitor.varps()) {
             AstVar* const varp = varBlocks.first;
             std::vector<std::string> path;
@@ -831,14 +832,14 @@ class ForkVisitor final : public VNVisitor {
     }
     // Report hierarchical references to automatic variables moved into a fork branch task, which
     // only static variables may have (IEEE 1800-2023 6.21)
-    static void checkAutomaticXRefs(AstTask* taskp) {
-        taskp->foreach([](AstVarXRef* refp) {
+    void checkAutomaticXRefs(AstTask* taskp) {
+        taskp->foreach([this](AstVarXRef* refp) {
             AstVar* const varp = refp->varp();
             if (!varp || !varp->lifetime().isAutomatic() || varp->isClassMember()) return;
             refp->v3error("Hierarchical reference to automatic variable "
                           << varp->prettyNameQ() << " (IEEE 1800-2023 6.21).");
             refp->replaceWith(new AstVarRef{refp->fileline(), varp, refp->access()});
-            VL_DO_DANGLING(refp->deleteTree(), refp);
+            VL_DO_DANGLING(pushDeletep(refp), refp);
         });
     }
 
@@ -904,7 +905,7 @@ class ForkVisitor final : public VNVisitor {
         // Static variables of the blocks moved into the task stay in blocks of the same names at
         // the call, so hierarchical references reach them in the scopes of those blocks. They are
         // one variable for all processes of the branch anyway.
-        std::set<std::string> keptPaths;
+        std::unordered_set<std::string> keptPaths;
         if (!m_ftaskp && !VN_IS(m_modp, Class)) {
             keptPaths = keepStaticBlocks(taskp, callStmtp);
             checkAutomaticXRefs(taskp);
