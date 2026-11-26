@@ -1155,7 +1155,11 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(WAIT_QUEUE_POLLED,                  "polled",                 false,  CLEAN,  false,      "", "") \
     macro(WAIT_QUEUE_RELEASE,                 "release",                false,  CLEAN,  false,      "r", "") \
     macro(WAIT_QUEUE_TAKE,                    "take",                   false,  CLEAN,  false,      "r", "") \
-    macro(WAIT_QUEUE_WAKE,                    "wake",                   false,  CLEAN,  false,      "r", "")
+    macro(WAIT_QUEUE_WAKE,                    "wake",                   false,  CLEAN,  false,      "r", "") \
+    macro(RANDOMIZER_CLEAR_NESTED,            "clear_nested",           false,  CLEAN,  false,      "r", "") \
+    macro(RANDOMIZER_MERGE_NESTED,            "merge_nested",           false,  CLEAN,  false,      "rr", "") \
+    macro(RANDOMIZER_NESTED_BUSY,             "nested_busy",            false,  CLEAN,  false,      "", "") \
+    macro(RANDOMIZER_SET_NESTED_BUSY,         "set_nested_busy",        false,  CLEAN,  false,      "r", "")
 // clang-format on
 
 class VCMethod final {

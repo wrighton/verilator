@@ -81,6 +81,12 @@ public:
     int width() const { return m_width; }
     int dimension() const { return m_dimension; }
     virtual void* datap(int /*idx*/) const { return m_datap; }
+    virtual bool isArray() const { return false; }  // Whether an array, of elements
+    // A copy named 'name', with no rand_mode index, to merge into another randomizer
+    virtual std::shared_ptr<const VlRandomVar> renamed(const std::string& name) const {
+        return std::make_shared<const VlRandomVar>(name, m_width, m_datap, m_dimension,
+                                                   std::numeric_limits<std::uint32_t>::max());
+    }
     std::uint32_t randModeIdx() const { return m_randModeIdx; }
     bool randModeIdxNone() const { return randModeIdx() == std::numeric_limits<unsigned>::max(); }
     void set(const std::string& idx, const std::string& val) const;
@@ -138,6 +144,12 @@ public:
                              std::uint32_t randModeIdx, const std::vector<size_t>& idxWidths = {})
         : VlRandomVar{name, width, datap, dimension, randModeIdx}
         , m_fallbackIdxWidths{idxWidths} {}
+    bool isArray() const override { return true; }
+    std::shared_ptr<const VlRandomVar> renamed(const std::string& name) const override {
+        return std::make_shared<const VlRandomArrayVarTemplate>(
+            name, width(), VlRandomVar::datap(0), dimension(),
+            std::numeric_limits<std::uint32_t>::max(), m_fallbackIdxWidths);
+    }
     void* datap(int idx) const override {
         const auto it = m_arrVarsRefp->find({name(), idx});
         if (VL_LIKELY(it != m_arrVarsRefp->end())) return it->second->m_datap;
@@ -338,6 +350,23 @@ class VlRandomizer VL_NOT_FINAL {
     static void keepValues(const VlRandomVar& var, KeptValues& valuesr);
     void keepVars(KeptValues& valuesr) const;
     void setValues(const KeptValues& values) const;
+    // The solver variables and constraints of the objects of rand class handles (see
+    // merge_nested), by the handle's path: names added, and names disabled
+    std::map<std::string, std::pair<std::vector<std::string>, std::vector<std::string>>> m_nested;
+    bool m_nestedBusy = false;  // Merging the objects of rand class handles (see nested_busy)
+    // First key of the unique arrays of merged randomizers (see merge_nested)
+    static constexpr uint32_t s_mergedUniqueKey = 1U << 31;
+    // While merging, the names of the variables registered here, by their storage
+    std::unordered_map<const void*, std::string> m_nestedNames;
+    // The name here of variable 'fromName' of a merged randomizer, registered if new
+    std::string mergeVar(const VlRandomizer& from, const std::string& fromName,
+                         const std::string& path, std::vector<std::string>& addedr);
+    // Register the elements of array 'fromName' of a merged randomizer as of array 'name'
+    void mergeArrayElements(const VlRandomizer& from, const std::string& fromName,
+                            const std::string& name);
+    // The name here of a variable of a merged randomizer
+    static std::string renamedVar(const std::unordered_map<std::string, std::string>& renames,
+                                  const std::string& name);
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
@@ -1233,6 +1262,18 @@ public:
     void solveBefore(const std::string& beforeName, IData beforeLsb, IData beforeWidth,
                      const std::string& afterName, IData afterLsb, IData afterWidth);
     void set_randmode(const VlQueue<CData>& randmode) { m_randmodep = &randmode; }
+    // The solver variables and constraints of the object a rand class handle holds, of the
+    // object's class (IEEE 1800-2023 18.5.2), set up in 'from', are solved with this
+    // randomizer's. A variable named by 'path', the handle's path, prefixed to its name in
+    // 'from', unless already registered here, as by a constraint of this randomizer's class.
+    // A variable of 'from' with rand_mode off is disabled here.
+    void merge_nested(const VlRandomizer& from, const std::string& path);
+    // Remove what merge_nested() added for 'path', as its handle may hold another object
+    void clear_nested(const std::string& path);
+    // Whether merging the objects of rand class handles into this randomizer, so a cycle of
+    // handles back to its object is not merged again
+    bool nested_busy() const { return m_nestedBusy; }
+    void set_nested_busy(bool flag);
     // Shared across all instances; consulted instead of m_randmodep for vars marked via
     // mark_var_static().
     void set_static_randmode(const VlQueue<CData>& randmode) { m_static_randmodep = &randmode; }
