@@ -30,6 +30,14 @@
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
+// True if nodep is a sampled value function, which samples the values it reads at clock ticks
+// (IEEE 1800-2023 16.9.3, 16.9.4)
+static bool isSampledValueFn(const AstNode* nodep) {
+    return VN_IS(nodep, Past) || VN_IS(nodep, Rose) || VN_IS(nodep, Fell) || VN_IS(nodep, Stable)
+           || VN_IS(nodep, Sampled) || VN_IS(nodep, Future) || VN_IS(nodep, Rising)
+           || VN_IS(nodep, Falling) || VN_IS(nodep, Steady);
+}
+
 //######################################################################
 // Link state, as a visitor of each AstNode
 
@@ -335,9 +343,11 @@ class LinkParseVisitor final : public VNVisitor {
         m_lifetimeAllowed = true;
         VL_RESTORER(m_outlivesCall);
         // Timing control lets a value be used after the task has ended, with fork..join_none,
-        // and a force keeps evaluating its value after the force statement
+        // a force keeps evaluating its value after the force statement, and a sampled value
+        // function samples it at later clock ticks
         m_outlivesCall = nodep->exists([](const AstNode* const nodep) {
-            return nodep->isTimingControl() || VN_IS(nodep, AssignForce);
+            return nodep->isTimingControl() || VN_IS(nodep, AssignForce)
+                   || isSampledValueFn(nodep);
         });
         if (!nodep->lifetime().isNone()) {
             m_lifetime = nodep->lifetime().makeImplicit();
