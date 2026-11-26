@@ -208,9 +208,31 @@ module self_writer #(
   proc_value li ();
   if (WRITE) begin : g_write
     initial begin
+      li.value = 33'h0_0000_0055;
       self_drive.li.value = 'z;
       #1;
       self_drive.li.value = 33'h1_0000_0404;
+    end
+  end
+endmodule
+
+// A process without declarations, so its statements stay directly in the generate block, unlike
+// port_shadow where a declaration wraps the process in an unnamed block.
+module mixed_scope (
+    proc_value p
+);
+  bit on = 1'b1;
+  if (1) begin : g
+    proc_value p ();
+    initial begin
+      begin : b
+        p.value = on ? 33'h1_0000_0006 : 'z;
+        #1;
+        `checkh(p.value, 33'h1_0000_0006);
+      end
+      p.value = 33'h0_0000_0009;
+      #1;
+      `checkh(p.value, 33'h0_0000_0009);
     end
   end
 endmodule
@@ -227,6 +249,9 @@ module port_shadow (
         p.value = data[1] ? data : 'z;
         #1;
         `checkh(p.value, 33'h1_0000_0006);
+        p.value = data[0] ? data : 'z;
+        #1;
+        `checkh(p.value === 33'bz, 1'b1);
       end
     end
   end
@@ -435,6 +460,9 @@ module t;
     t.proc.value = 33'h1_0000_000b;
     #1;
     `checkh(proc.value, 33'h1_0000_000b);
+    t.proc.value = 'z;
+    #1;
+    `checkh(proc.value === 33'bz, 1'b1);
   end
 
   // The same within a generate block that declares the instance.
@@ -457,10 +485,13 @@ module t;
     end
   end
 
-  // A write and a read in a named block reach the same instance, also when a generate block
-  // declares an instance named like an interface port.
+  // A write and reads in a named block agree on the instance they reach when a generate block
+  // declares an instance named like an interface port; which one is not checked here.
   proc_value shadowed_port ();
   port_shadow shadow_drive (shadowed_port);
+  // The same with writes and reads both inside and outside a named block of one process.
+  proc_value mixed_port ();
+  mixed_scope mixed_drive (mixed_port);
 
   // A path from the top module, written inside a named block.
   proc_value upward ();
@@ -489,11 +520,12 @@ module t;
   initial begin
     #2;
     `checkh(self_drive.li.value, 33'h1_0000_0404);
-    `checkh(other_drive.li.value, 33'bz);
+    `checkh(other_drive.li.value, 33'h0_0000_0055);
   end
 
-  // A write and a read in one nested generate block reach the same instance, also when an
-  // instance of the same name is declared further out.
+  // A write and a read in a nested generate block agree on the instance they reach when an
+  // enclosing generate block and the module both declare an instance of that name; which one
+  // is not checked here.
   default_zero hidden ();
   bit hidden_on = 1'b0;
   if (1) begin : g_inner
