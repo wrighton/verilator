@@ -3576,6 +3576,7 @@ class AstClass final : public AstNodeModule {
     bool m_implChecksDeferred = false;  // V3LinkDot checks implementations after V3Param
     bool m_interfaceClass = false;  // Interface class
     bool m_needRNG = false;  // Need RNG, uses srandom/randomize
+    bool m_needRNGAccessor = false;  // Interface class whose handles reach their object's RNG
     bool m_useVirtualPublic = false;  // Subclasses need virtual public as uses interface class
     bool m_virtual = false;  // Virtual class
     bool m_printedFrom = false;  // This class is printed from i.e. is used as format arg.
@@ -3619,6 +3620,8 @@ public:
     void isVirtual(bool flag) { m_virtual = flag; }
     bool needRNG() const { return m_needRNG; }
     void needRNG(bool flag) { m_needRNG = flag; }
+    bool needRNGAccessor() const { return m_needRNGAccessor; }
+    void needRNGAccessor(bool flag) { m_needRNGAccessor = flag; }
     bool useVirtualPublic() const { return m_useVirtualPublic; }
     void useVirtualPublic(bool flag) { m_useVirtualPublic = flag; }
     void markPrintedFrom() { m_printedFrom = true; }
@@ -3661,8 +3664,12 @@ public:
     }
     void baseOverride(const VBaseOverride& flag) { m_baseOverride = flag; }
     VBaseOverride baseOverride() const { return m_baseOverride; }
+    // The class this class extends, nullptr if none: an implemented interface class is not one
+    AstClass* baseClassp() const;
     // Return the lowest class extended from, or this class
     AstClass* baseMostClassp();
+    // Whether an interface class this class implements, directly or not, has needRNGAccessor()
+    bool implementsRNGAccessor() const;
     static bool isCacheableChild(const AstNode* nodep);
     // Iterates top level members of the class, taking into account inheritance (starting from the
     // root superclass). Note: after V3Scope, several children are moved under an AstScope and will
