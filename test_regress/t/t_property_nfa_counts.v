@@ -195,13 +195,15 @@ module t (
       `checkd(imp_fail, 1);
       `checkd(chain_pass, 1);
       `checkd(chain_fail, 11);
+      // Two attempts succeed on one tick, each running the pass action
       `checkd(range_pass, 2);
       `checkd(range_fail, 10);
       `checkd(range_cover, 2);
-      `checkd(large_pass, 1);
+      `checkd(large_pass, 2);
       `checkd(large_fail, 10);
       `checkd(large_cover, 2);
-      `checkd(large_imp_at_b, 2);
+      // Two attempts complete and one succeeds vacuously on that tick
+      `checkd(large_imp_at_b, 3);
       `checkd(neg_fail_at_b, 2);
       `checkd(neg_large_fail_at_b, 1);
       `checkd(neg_chain_pass, 2);
