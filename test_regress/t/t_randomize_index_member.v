@@ -101,7 +101,7 @@ module t;
     SeqCfg c = new;
     int randomize_result;
     int seen[int];
-    repeat (60) begin
+    repeat (180) begin
       randomize_result = c.randomize();
       `checkd(randomize_result, 1)
       if (!(c.vc inside {c.m_cfg.e2w[c.slice].cnoc_vc_q})) `stop;
@@ -117,7 +117,7 @@ module t;
     c.arr = new[3];
     c.arr[0].q = '{3, 4};
     c.arr[2].q = '{7, 8, 9};
-    repeat (80) begin
+    repeat (240) begin
       randomize_result = c.randomize();
       `checkd(randomize_result, 1)
       // Element 1 has an empty set and indices -2, -1, 3, 4 do not exist
@@ -148,7 +148,7 @@ module t;
       `checkd(h.idx, pos)
     end
     h.x7 = 0;
-    repeat (40) begin
+    repeat (120) begin
       randomize_result = h.randomize() with {
         idx inside {[-3 : 5]};
         x7 == arr[idx].a;
@@ -185,7 +185,7 @@ module t;
       end
     end
     // Fixed-size array with a non-zero low bound
-    repeat (40) begin
+    repeat (120) begin
       randomize_result = h.randomize() with {
         idx inside {[3 : 5]};
         x inside {fixed[idx].q};
@@ -229,7 +229,7 @@ module t;
       `checkd(h.idx, 3)
     end
     // Member queue of a class handle as an 'inside' set; items[1] has an empty set
-    repeat (80) begin
+    repeat (240) begin
       randomize_result = h.randomize() with {x inside {items[idx].q};};
       `checkd(randomize_result, 1)
       if (h.idx == 1) `stop;
@@ -273,7 +273,7 @@ module t;
     `checkd(randomize_result, 1)
     `checkd(int'(h.x7), 32)
     // Fixed-size array of class handles, one null
-    repeat (30) begin
+    repeat (90) begin
       randomize_result = h.randomize() with {
         idx inside {[0 : 2]};
         x7 == fitems[idx].val;
@@ -326,7 +326,7 @@ module t;
     int vc;
     int idx;
     for (int sel = 0; sel < 3; ++sel) begin
-      repeat (30) begin
+      repeat (90) begin
         idx = pick_vc(sel, vc);
         if (idx == sel) `stop;
         seen[vc] = 1;
