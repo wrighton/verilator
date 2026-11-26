@@ -130,6 +130,11 @@ struct VlWide final {
         for (size_t i = 0; i < N_Words; ++i) m_storage[i] = out.m_storage[i];
         return *this;
     }
+    VlWide<N_Words> operator~() const {
+        VlWide<N_Words> out;
+        VL_NOT_W(N_Words, out, *this);
+        return out;
+    }
 
     // METHODS
     EData& at(size_t index) VL_MT_SAFE { return m_storage[index]; }
@@ -1862,68 +1867,68 @@ public:
     }
 
     T_Value r_sum() const {
-        T_Value out(0);  // Type must have assignment operator
+        T_Value out{};  // Type must have assignment operator
         for (const auto& i : m_deque) out += i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_sum(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{};
         IData index = 0;
         for (const auto& i : m_deque) out += with_func(index++, i);
         return out;
     }
     T_Value r_product() const {
-        if (m_deque.empty()) return T_Value(0);  // The big three do it this way
-        T_Value out = T_Value(1);
+        if (m_deque.empty()) return T_Value{};  // The big three do it this way
+        T_Value out = T_Value{1};
         for (const auto& i : m_deque) out *= i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_product(T_Func with_func) const {
-        if (m_deque.empty()) return WithFuncReturnType<T_Func>(0);  // The big three do it this way
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(1);
+        if (m_deque.empty()) return WithFuncReturnType<T_Func>{};  // The big three do it this way
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{1};
         IData index = 0;
         for (const auto& i : m_deque) out *= with_func(index++, i);
         return out;
     }
     T_Value r_and() const {
-        if (m_deque.empty()) return T_Value(0);  // The big three do it this way
-        T_Value out = ~T_Value(0);
+        if (m_deque.empty()) return T_Value{};  // The big three do it this way
+        T_Value out = ~T_Value{};
         for (const auto& i : m_deque) out &= i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_and(T_Func with_func) const {
-        if (m_deque.empty()) return WithFuncReturnType<T_Func>(0);  // The big three do it this way
+        if (m_deque.empty()) return WithFuncReturnType<T_Func>{};  // The big three do it this way
         IData index = 0;
-        WithFuncReturnType<T_Func> out = ~WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = ~WithFuncReturnType<T_Func>{};
         for (const auto& i : m_deque) out &= with_func(index++, i);
         return out;
     }
     T_Value r_or() const {
-        T_Value out = T_Value(0);
+        T_Value out = T_Value{};
         for (const auto& i : m_deque) out |= i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_or(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{};
         IData index = 0;
         for (const auto& i : m_deque) out |= with_func(index++, i);
         return out;
     }
     T_Value r_xor() const {
 #ifdef VERILATOR_BIG3_NULLARY_ARITHMETICS_QUIRKS
-        if (m_deque.empty()) return T_Value(0);
+        if (m_deque.empty()) return T_Value{};
 #endif
-        T_Value out = T_Value(0);
+        T_Value out = T_Value{};
         for (const auto& i : m_deque) out ^= i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_xor(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{};
         IData index = 0;
         for (const auto& i : m_deque) out ^= with_func(index++, i);
         return out;
@@ -2322,7 +2327,7 @@ public:
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_sum(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{};
         for (const auto& i : m_map) out += with_func(i.first, i.second);
         return out;
     }
@@ -2335,8 +2340,8 @@ public:
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_product(T_Func with_func) const {
-        if (m_map.empty()) return WithFuncReturnType<T_Func>(0);  // The big three do it this way
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(1);
+        if (m_map.empty()) return WithFuncReturnType<T_Func>{};  // The big three do it this way
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{1};
         for (const auto& i : m_map) out *= with_func(i.first, i.second);
         return out;
     }
@@ -2349,8 +2354,8 @@ public:
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_and(T_Func with_func) const {
-        if (m_map.empty()) return WithFuncReturnType<T_Func>(0);  // The big three do it this way
-        WithFuncReturnType<T_Func> out = ~WithFuncReturnType<T_Func>(0);
+        if (m_map.empty()) return WithFuncReturnType<T_Func>{};  // The big three do it this way
+        WithFuncReturnType<T_Func> out = ~WithFuncReturnType<T_Func>{};
         for (const auto& i : m_map) out &= with_func(i.first, i.second);
         return out;
     }
@@ -2361,7 +2366,7 @@ public:
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_or(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{};
         for (const auto& i : m_map) out |= with_func(i.first, i.second);
         return out;
     }
@@ -2372,7 +2377,7 @@ public:
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_xor(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{};
         for (const auto& i : m_map) out ^= with_func(i.first, i.second);
         return out;
     }
@@ -2755,59 +2760,59 @@ public:
     }
 
     T_Value r_sum() const {
-        T_Value out(0);  // Type must have assignment operator
+        T_Value out{};  // Type must have assignment operator
         for (const auto& i : m_storage) out += i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_sum(T_Func with_func) const {
         WithFuncReturnType<T_Func> out
-            = WithFuncReturnType<T_Func>(0);  // Type must have assignment operator
+            = WithFuncReturnType<T_Func>{};  // Type must have assignment operator
         for (IData i = 0; i < N_Depth; ++i) out += with_func(i, m_storage[i]);
         return out;
     }
     T_Value r_product() const {
-        T_Value out = T_Value(1);
+        T_Value out = T_Value{1};
         for (const auto& i : m_storage) out *= i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_product(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(1);
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{1};
         for (IData i = 0; i < N_Depth; ++i) out *= with_func(i, m_storage[i]);
         return out;
     }
     T_Value r_and() const {
-        if (m_storage.empty()) return T_Value(0);  // The big three do it this way
-        T_Value out = ~T_Value(0);
+        if (m_storage.empty()) return T_Value{};  // The big three do it this way
+        T_Value out = ~T_Value{};
         for (const auto& i : m_storage) out &= i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_and(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = ~WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = ~WithFuncReturnType<T_Func>{};
         for (IData i = 0; i < N_Depth; ++i) out &= with_func(i, m_storage[i]);
         return out;
     }
     T_Value r_or() const {
-        T_Value out = T_Value(0);
+        T_Value out = T_Value{};
         for (const auto& i : m_storage) out |= i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_or(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{};
         for (IData i = 0; i < N_Depth; ++i) out |= with_func(i, m_storage[i]);
         return out;
     }
     T_Value r_xor() const {
-        T_Value out = T_Value(0);
+        T_Value out = T_Value{};
         for (const auto& i : m_storage) out ^= i;
         return out;
     }
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_xor(T_Func with_func) const {
-        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
+        WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>{};
         for (IData i = 0; i < N_Depth; ++i) out ^= with_func(i, m_storage[i]);
         return out;
     }
