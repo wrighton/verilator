@@ -4484,6 +4484,7 @@ system_f_or_t_expr_call<nodeExprp>:  // IEEE: part of system_tf_call (can be tas
         |       yD_BITSTOSHORTREAL '(' expr ')'         { $$ = new AstBitsToRealD{$1, $3}; UNSUPREAL($1); }
         |       yD_CEIL '(' expr ')'                    { $$ = new AstCeilD{$1, $3}; }
         |       yD_CHANGED '(' expr ')'                 { $$ = new AstLogNot{$1, new AstStable{$1, $3, nullptr}}; }
+        |       yD_CHANGED '(' expr ',' ')'             { $$ = new AstLogNot{$1, new AstStable{$1, $3, nullptr}}; }
         |       yD_CHANGED '(' expr ',' expr ')'
                         { $$ = new AstLogNot{$1, new AstStable{$1, $3, GRAMMARP->createSenTreeChanged($1, $5)}}; }
         |       yD_CHANGED_GCLK '(' expr ')'
@@ -4515,6 +4516,7 @@ system_f_or_t_expr_call<nodeExprp>:  // IEEE: part of system_tf_call (can be tas
         |       yD_EXP '(' expr ')'                     { $$ = new AstExpD{$1, $3}; }
         |       yD_FALLING_GCLK '(' expr ')'            { $$ = new AstFalling{$1, $3}; }
         |       yD_FELL '(' expr ')'                    { $$ = new AstFell{$1, $3, nullptr}; }
+        |       yD_FELL '(' expr ',' ')'                { $$ = new AstFell{$1, $3, nullptr}; }
         |       yD_FELL '(' expr ',' expr ')'           { $$ = new AstFell{$1, $3, GRAMMARP->createSenTreeChanged($1, $5)}; }
         |       yD_FELL_GCLK '(' expr ')'               { $$ = new AstFell{$1, $3, GRAMMARP->createGlobalClockSenTree($1)}; }
         |       yD_FEOF '(' expr ')'                    { $$ = new AstFEof{$1, $3}; }
@@ -4573,6 +4575,7 @@ system_f_or_t_expr_call<nodeExprp>:  // IEEE: part of system_tf_call (can be tas
         |       yD_RIGHT '(' exprOrDataType ',' expr ')'        { $$ = new AstAttrOf{$1, VAttrType::DIM_RIGHT, $3, $5}; }
         |       yD_RISING_GCLK '(' expr ')'             { $$ = new AstRising{$1, $3}; }
         |       yD_ROSE '(' expr ')'                    { $$ = new AstRose{$1, $3, nullptr}; }
+        |       yD_ROSE '(' expr ',' ')'                { $$ = new AstRose{$1, $3, nullptr}; }
         |       yD_ROSE '(' expr ',' expr ')'           { $$ = new AstRose{$1, $3, GRAMMARP->createSenTreeChanged($1, $5)}; }
         |       yD_ROSE_GCLK '(' expr ')'               { $$ = new AstRose{$1, $3, GRAMMARP->createGlobalClockSenTree($1)}; }
         |       yD_RTOI '(' expr ')'                    { $$ = new AstRToIS{$1, $3}; }
@@ -4587,6 +4590,7 @@ system_f_or_t_expr_call<nodeExprp>:  // IEEE: part of system_tf_call (can be tas
         |       yD_SQRT '(' expr ')'                    { $$ = new AstSqrtD{$1, $3}; }
         |       yD_SSCANF '(' expr ',' str commaVRDListE ')'    { $$ = new AstSScanF{$1, *$5, $3, $6}; }
         |       yD_STABLE '(' expr ')'                  { $$ = new AstStable{$1, $3, nullptr}; }
+        |       yD_STABLE '(' expr ',' ')'              { $$ = new AstStable{$1, $3, nullptr}; }
         |       yD_STABLE '(' expr ',' expr ')'         { $$ = new AstStable{$1, $3, GRAMMARP->createSenTreeChanged($1, $5)}; }
         |       yD_STABLE_GCLK '(' expr ')'             { $$ = new AstStable{$1, $3, GRAMMARP->createGlobalClockSenTree($1)}; }
         |       yD_STEADY_GCLK '(' expr ')'             { $$ = new AstSteady{$1, $3}; }
