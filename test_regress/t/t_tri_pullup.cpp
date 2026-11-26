@@ -29,7 +29,7 @@ bool check() {
     bool verbose = false;
 #endif
 
-    if (tb->Z == Z && tb->Y == Y && tb->X == X) {
+    if (tb->Z == Z && tb->Y == Y && tb->X == X && tb->U == tb->B && tb->V == tb->C) {
         if (verbose) printf("PASS: ");
         pass = true;
     } else {
@@ -38,8 +38,8 @@ bool check() {
         pass = false;
     }
     if (verbose)
-        printf("OE=%d A=%d  X=%d xexp=%d  Y=%d yexp=%d  Z=%d zexp=%d\n", tb->OE, tb->A, tb->X, X,
-               tb->Y, Y, tb->Z, Z);
+        printf("OE=%d A=%d  X=%d xexp=%d  Y=%d yexp=%d  Z=%d zexp=%d  B=%d U=%d  C=%d V=%d\n",
+               tb->OE, tb->A, tb->X, X, tb->Y, Y, tb->Z, Z, tb->B, tb->U, tb->C, tb->V);
     return pass;
 }
 
@@ -52,6 +52,8 @@ int main() {
     bool pass = true;
     for (tb->OE = 0; tb->OE < 2; tb->OE++) {
         for (tb->A = 0; tb->A < 2; tb->A++) {
+            tb->B = tb->A;
+            tb->C = !tb->A;
             tb->eval();
             if (!check()) pass = false;
         }
