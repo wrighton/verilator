@@ -28,7 +28,8 @@ module t;
       f[i].in = i % 2 == 1 ? b : a;
       f[i].out = i % 2 == 1 ? a : b;
       fork
-        f[i].run();
+        automatic int k = i;
+        f[k].run();
       join_none
     end
     #1;

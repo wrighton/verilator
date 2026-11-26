@@ -2184,6 +2184,9 @@ module escapes;
     endcovergroup
     \cg.g  \cg.i ;
     \cg.i  = new();
+    task nba_handle(input Cls c);
+        c.member <= 32'sh1;
+    endtask
 endmodule
 package p;
     logic pkgvar;
