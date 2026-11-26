@@ -16,8 +16,8 @@ if not test.have_solver:
 
 test.compile()
 
-# UniGen2 can serve the same m_idx for ten calls in a row for some seeds, which the
-# test counts as no randomization, so use a seed where it varies
+# The sampler can serve the same value for ten calls in a row for some seeds, so the
+# test requires a change across thirty calls, and uses a seed where it varies
 test.execute(all_run_flags=['+verilator+seed+2'])
 
 test.passes()
