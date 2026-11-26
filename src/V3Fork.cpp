@@ -788,7 +788,6 @@ class ForkVisitor final : public VNVisitor {
         varp->direction(VDirection::INPUT);
         varp->funcLocal(true);
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-        varp->isPastValue(refp->varp()->isPastValue());
         m_capturedVarsp = AstNode::addNext(m_capturedVarsp, varp);
         // Pass variable as argument
         AstArg* const argp = new AstArg{flp, refp->name(), refp->cloneTree(false)};
@@ -1067,6 +1066,10 @@ class ForkVisitor final : public VNVisitor {
         if (varp->lifetime().isStatic()) return;
         // If this ref is to a variable that will move into the task, then nothing to do
         if (m_forkLocalsp.count(varp)) return;
+        // The sampled value of the register of a sampled value function is the past value when
+        // the process reads it, so read the register
+        const AstSampled* const sampledp = VN_CAST(nodep->backp(), Sampled);
+        if (varp->isPastValue() && sampledp && sampledp->exprp() == nodep) return;
 
         if (nodep->access().isWriteOrRW() && (!nodep->isClassHandleValue() || nodep->user2())
             && !m_inInitStmt) {
