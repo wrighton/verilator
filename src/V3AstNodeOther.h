@@ -1442,6 +1442,7 @@ class AstDefParam final : public AstNode {
     bool m_fromBind = false;  // From a bind to an instance path (see V3LinkCells)
     bool m_checkTarget = false;  // Kept only for V3LinkDot to check its target once elaborated
     bool m_sharedName = false;  // Also checked by V3Param, see AstPin::defparamSharedName
+    bool m_valueCheck = false;  // Superseded, kept only for V3Param to check its value
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, AstNodeExpr* targetp, AstNode* rhsp)
         : ASTGEN_SUPER_DefParam(fl) {
@@ -1456,7 +1457,7 @@ public:
     bool sameNode(const AstNode* samep) const override {
         const AstDefParam* const sp = VN_DBG_AS(samep, DefParam);
         return m_fromBind == sp->m_fromBind && m_checkTarget == sp->m_checkTarget
-               && m_sharedName == sp->m_sharedName;
+               && m_sharedName == sp->m_sharedName && m_valueCheck == sp->m_valueCheck;
     }
     bool fromBind() const { return m_fromBind; }
     void fromBind(bool flag) { m_fromBind = flag; }
@@ -1464,6 +1465,8 @@ public:
     void checkTarget(bool flag) { m_checkTarget = flag; }
     bool sharedName() const { return m_sharedName; }
     void sharedName(bool flag) { m_sharedName = flag; }
+    bool valueCheck() const { return m_valueCheck; }
+    void valueCheck(bool flag) { m_valueCheck = flag; }
 };
 class AstDefaultClocking final : public AstNode {
     std::string m_name;  // Clocking block name
