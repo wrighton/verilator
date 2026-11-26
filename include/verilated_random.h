@@ -267,6 +267,7 @@ enum class VlSolverStatus : uint8_t;
 class VlRandomizer VL_NOT_FINAL {
     // MEMBERS
     std::vector<std::string> m_constraints;  // Solver-dependent hard constraints
+    std::vector<std::string> m_freshVars;  // Solver constants of fresh_const()
     // Solver variables the hard constraints name, flattened in m_constraints order; the
     // string literals of the generated code, so stored without copying
     std::vector<const char*> m_constraintVarNames;
@@ -1243,6 +1244,9 @@ public:
         }
     }
 
+    // Name a new solver constant for the constraints, as the element index of an array
+    // 'inside'. It is not a variable: never sampled, pinned or read back.
+    std::string fresh_const();
     // varNames are the solver variables the constraint names, kept without copying until
     // clearConstraints(), so they must live that long (the generated code passes literals)
     void hard(std::string constraint, std::initializer_list<const char*> varNames = {},
