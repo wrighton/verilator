@@ -21,6 +21,11 @@
 #include "verilatedos.h"
 
 #include "V3Ast.h"
+#include "V3UniqueNames.h"
+
+#include <map>
+#include <unordered_map>
+#include <vector>
 
 //============================================================================
 
@@ -38,6 +43,44 @@ public:
     static void checkSvaCycleDelay(AstDelay* nodep, AstNode* errp) VL_MT_DISABLED;
     // True if the expression references a formal argument of a sequence or property
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
+    // True if the statements of a process may suspend it, so evaluate a procedural concurrent
+    // assertion in a later time step than that of its clock
+    static bool procSuspends(AstNode* stmtsp) VL_MT_DISABLED;
+};
+
+// Makes the actions of concurrent assertions run in the Reactive region, after the NBA updates
+// of the time step of their evaluation (IEEE 1800-2023 16.14.1, 4.4.2.6). The evaluation makes
+// an action pending, and one process per clock of each module or generate block runs the
+// pending actions, unless an $assertkill came after their evaluation (IEEE 1800-2023 20.11).
+
+class V3AssertReactive final {
+public:
+    struct Site final {  // Where an assertion is evaluated
+        const AstNodeCoverOrAssert* assertp;  // The assertion
+        AstNodeModule* modp;  // Its module
+        AstNode* containerp;  // Module or generate block holding its process
+        AstSenTree* senTreep;  // Clock of its evaluation
+        string scope;  // Named blocks around it in its process, for %m
+    };
+
+private:
+    struct Runner final {  // Process running the pending actions of one clock
+        AstAlwaysReactive* runnerp;  // The process
+        AstAlways* samplerp;  // Process sampling the $assertkill counts at the evaluation
+        // Dropping what is pending if an $assertkill came after the evaluation, by assertion
+        // type and directive
+        std::map<std::pair<int, int>, AstIf*> killIfps;
+    };
+    // Runners by the module or generate block holding them
+    std::unordered_map<const AstNode*, std::vector<Runner>> m_runners;
+
+    Runner& runnerFor(const Site& site, V3UniqueNames& names) VL_MT_DISABLED;
+    AstIf* killIfp(const Site& site, Runner& runner, V3UniqueNames& names) VL_MT_DISABLED;
+
+public:
+    // Return what makes actionsp pending at the evaluation, or actionsp if it stays there
+    AstNodeStmt* newPending(const Site& site, AstNodeStmt* actionsp,
+                            V3UniqueNames& names) VL_MT_DISABLED;
 };
 
 class V3Assert final {

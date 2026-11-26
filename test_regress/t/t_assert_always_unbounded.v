@@ -27,20 +27,20 @@ module t (
 
   // Constant-true input: never fails at any tick.
   assert property (@(posedge clk) always[2: $] a_high)
-  else high_fail_q.push_back(cyc);
+  else high_fail_q.push_back($sampled(cyc));
 
   // Constant-false input, m=0: fails at every observed tick.
   assert property (@(posedge clk) always[0: $] a_low)
-  else low0_fail_q.push_back(cyc);
+  else low0_fail_q.push_back($sampled(cyc));
 
   // Constant-false input, m=2: fails at every tick once the window is live.
   assert property (@(posedge clk) always[2: $] a_low)
-  else low2_fail_q.push_back(cyc);
+  else low2_fail_q.push_back($sampled(cyc));
 
   // a_drop is high then drops at cyc 5 and stays low: deterministic single
   // transition, so Verilator and others agree on the failing ticks exactly.
   assert property (@(posedge clk) always[2: $] a_drop)
-  else drop_fail_q.push_back(cyc);
+  else drop_fail_q.push_back($sampled(cyc));
 
   always @(posedge clk) begin
     cyc <= cyc + 1;
