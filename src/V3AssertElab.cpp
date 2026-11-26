@@ -117,6 +117,7 @@ class AssertElabVisitor final : public VNVisitor {
     // In the property expression of an assertion, the only place left where a sequence or
     // property instance is legal, as SeqEventLowerVisitor lowered the sequence event controls
     bool m_inPropExpr = false;
+    bool m_inDisable = false;  // In a disable condition
     V3UniqueNames m_propVarNames{"__Vpropvar"};  // Property-local variable names
     // Declaration file line -> its copy with coverage off, for inlined bodies
     std::unordered_map<FileLine*, FileLine*> m_noCoverFileLines;
@@ -411,14 +412,6 @@ class AssertElabVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(specp), specp);
     }
     void inlineSequence(AstSchemaRef* schemaRefp, AstSequence* seqp) {
-        for (AstNode* const declp : seqp->declspList()) {
-            if (VN_AS(declp, Var)->isIO()) continue;
-            declp->v3warn(E_UNSUPPORTED, "Unsupported: local variable in a sequence declaration"
-                                         " (IEEE 1800-2023 16.10)");
-            schemaRefp->replaceWith(new AstConst{schemaRefp->fileline(), AstConst::BitFalse{}});
-            VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
-            return;
-        }
         // Clone the body expression since the sequence may be referenced multiple times
         AstNodeExpr* clonedp = VN_AS(
             V3AssertCommon::relinkSvaInstanceBody(seqp->exprp()->cloneTree(false), schemaRefp),
@@ -447,7 +440,11 @@ class AssertElabVisitor final : public VNVisitor {
             }
         }
         iterateAndNextNull(nodep->sensesp());
-        iterateAndNextNull(nodep->disablep());
+        {
+            VL_RESTORER(m_inDisable);
+            m_inDisable = true;
+            iterateAndNextNull(nodep->disablep());
+        }
         VL_RESTORER(m_inPropExpr);
         m_inPropExpr = true;
         iterateAndNextNull(nodep->propp());
@@ -460,6 +457,27 @@ class AssertElabVisitor final : public VNVisitor {
         }
         iterateChildren(nodep);
     }
+    void visit(AstDefaultDisable* nodep) override {
+        VL_RESTORER(m_inDisable);
+        m_inDisable = true;
+        iterateChildren(nodep);
+    }
+    // A sampled value function in a disable condition has its own clocking event
+    // (IEEE 1800-2023 16.9.3)
+    void visitSampledValue(AstNodeExpr* nodep, const AstSenTree* sentreep) {
+        if (m_inDisable && !sentreep) {
+            nodep->v3error("Sampled value function in a disable condition has no clocking event"
+                           " (IEEE 1800-2023 16.9.3).\n"
+                           << nodep->warnMore()
+                           << "... Suggest providing a clocking event argument, or computing the"
+                              " value in a clocked procedure");
+        }
+        iterateChildren(nodep);
+    }
+    void visit(AstFell* nodep) override { visitSampledValue(nodep, nodep->sentreep()); }
+    void visit(AstPast* nodep) override { visitSampledValue(nodep, nodep->sentreep()); }
+    void visit(AstRose* nodep) override { visitSampledValue(nodep, nodep->sentreep()); }
+    void visit(AstStable* nodep) override { visitSampledValue(nodep, nodep->sentreep()); }
     void visit(AstSenItem* nodep) override {
         // A clocking event inside a property expression has an expression condition
         VL_RESTORER(m_inPropExpr);

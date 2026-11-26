@@ -3,4 +3,29 @@
    25 |   assert property (disable iff (val == 0) check(1, 1));
       |                                     ^~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_disable_bad.v:30:23: Sampled value function in a disable condition has no clocking event (IEEE 1800-2023 16.9.3).
+                                      : ... note: In instance 't'
+                                      : ... Suggest providing a clocking event argument, or computing the value in a clocked procedure
+   30 |   default disable iff $rose(rst);
+      |                       ^~~~~
+%Error: t/t_assert_disable_bad.v:31:48: Sampled value function in a disable condition has no clocking event (IEEE 1800-2023 16.9.3).
+                                      : ... note: In instance 't'
+                                      : ... Suggest providing a clocking event argument, or computing the value in a clocked procedure
+   31 |   assert property (@(posedge clk) disable iff ($fell(rst)) val);
+      |                                                ^~~~~
+%Error: t/t_assert_disable_bad.v:32:49: Sampled value function in a disable condition has no clocking event (IEEE 1800-2023 16.9.3).
+                                      : ... note: In instance 't'
+                                      : ... Suggest providing a clocking event argument, or computing the value in a clocked procedure
+   32 |   assert property (@(posedge clk) disable iff (!$stable(rst) || $past(rst) || $changed(rst)) val);
+      |                                                 ^~~~~~~
+%Error: t/t_assert_disable_bad.v:32:65: Sampled value function in a disable condition has no clocking event (IEEE 1800-2023 16.9.3).
+                                      : ... note: In instance 't'
+                                      : ... Suggest providing a clocking event argument, or computing the value in a clocked procedure
+   32 |   assert property (@(posedge clk) disable iff (!$stable(rst) || $past(rst) || $changed(rst)) val);
+      |                                                                 ^~~~~
+%Error: t/t_assert_disable_bad.v:32:79: Sampled value function in a disable condition has no clocking event (IEEE 1800-2023 16.9.3).
+                                      : ... note: In instance 't'
+                                      : ... Suggest providing a clocking event argument, or computing the value in a clocked procedure
+   32 |   assert property (@(posedge clk) disable iff (!$stable(rst) || $past(rst) || $changed(rst)) val);
+      |                                                                               ^~~~~~~~
 %Error: Exiting due to
