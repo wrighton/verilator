@@ -75,6 +75,7 @@ tamper = 'VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py"'
 rows = [
     ("whole_asarray", 2, "solved", True),
     ("whole_dup_let", 2, "solved", True),
+    ("whole_error", 2, "solved", True),
     ("whole_lambda", 1, "solved", True),
     ("whole_narrow", 2, "solved", True),
     ("whole_chain", 2, "stores", False),
