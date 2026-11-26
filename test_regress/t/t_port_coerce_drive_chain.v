@@ -51,6 +51,26 @@ endmodule
 
 bind dut drv u_drv ();
 
+// Drives only z, which drives nothing
+module zstub (
+    output logic v
+);
+  assign v = 1'bz;
+endmodule
+
+// Output only driven by z, through one and two levels of output ports
+module zrelay (
+    output logic v
+);
+  zstub u_s (.v);
+endmodule
+
+module zrelay2 (
+    output wire v
+);
+  zrelay u_r (.v);
+endmodule
+
 // Bound drivers of separate bits of one net, through chains of different depth
 module bdut (
     input logic clk,
@@ -145,6 +165,30 @@ module t;
       .seen(bseen)
   );
   dut u (.*);
+  wire zv;
+  logic zseen;
+  zstub u_zs (.v(zv));
+  dut u_z (
+      .clk,
+      .v(zv),
+      .seen(zseen)
+  );
+  wire zrv;
+  wire zrv2;
+  logic zrseen;
+  logic zrseen2;
+  zrelay u_zr (.v(zrv));
+  dut u_zrd (
+      .clk,
+      .v(zrv),
+      .seen(zrseen)
+  );
+  zrelay2 u_zr2 (.v(zrv2));
+  dut u_zrd2 (
+      .clk,
+      .v(zrv2),
+      .seen(zrseen2)
+  );
   wire sw;
   logic [3:0] sseen;
   sdut u_s1 (
@@ -178,6 +222,12 @@ module t;
     `checkh(v, 1'b1);
     `checkh(mseen, 1'b1);
     `checkh(mv, 1'b1);
+    `checkh(zseen, 1'b1);
+    `checkh(zv, 1'b1);
+    `checkh(zrseen, 1'b1);
+    `checkh(zrv, 1'b1);
+    `checkh(zrseen2, 1'b1);
+    `checkh(zrv2, 1'b1);
     `checkh(bseen, 2'b11);
     `checkh(bv, 2'b11);
     $write("*-* All Finished *-*\n");
