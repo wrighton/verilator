@@ -1519,6 +1519,7 @@ private:
     AstNodeExpr* m_conditionp = nullptr;  // Condition under which current expression is defined
                                           // (nullptr == always defined)
     const AstArraySel* m_inRangeSelp = nullptr;  // Select already guarded by its range check
+    const AstNodeExpr* m_heldSelp = nullptr;  // Select already split by its rand_mode()
     AstNodeFTask* m_prepareConstrainedArraysp = nullptr;  // Grow arrays for indexed struct access
     uint32_t* m_uniqueConstraintIdp = nullptr;  // Current ID of unique call
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
@@ -3388,6 +3389,17 @@ private:
             return exprp;
         }
 
+        AstNodeExpr* const onp = newRandModeOnp(nodep, randMode, memberRefp, varp);
+        AstNodeExpr* const condp
+            = handlesActivep ? new AstLogAnd{varp->fileline(), onp, handlesActivep} : onp;
+        exprp = new AstCond{varp->fileline(), condp, exprp, constFormatp};
+        exprp->user1(true);  // Mark as formatted
+        return exprp;
+    }
+    // Read of whether the rand_mode() of variable varp, of the object memberRefp selects it
+    // from if any, is on
+    AstNodeExpr* newRandModeOnp(const AstNode* nodep, const RandomizeMode randMode,
+                                AstMemberRef* memberRefp, AstVar* const varp) {
         // Static rand vars route through the var's owning class's static array
         // (may differ from m_classp when the rand var lives in a sub-object).
         AstNodeExpr* randModeAccessp = newStaticRandModeRefp(varp);
@@ -3414,16 +3426,47 @@ private:
                 = new AstVarRef{varp->fileline(), VN_AS(m_randModeVarp->user2p(), NodeModule),
                                 m_randModeVarp, VAccess::READ};
         }
-
-        AstDynArraySel* const atp = new AstDynArraySel{
-            nodep->fileline(), randModeAccessp, new AstConst{nodep->fileline(), randMode.index}};
+        AstCMethodHard* const atp
+            = new AstCMethodHard{nodep->fileline(), randModeAccessp, VCMethod::ARRAY_AT,
+                                 new AstConst{nodep->fileline(), randMode.index}};
         atp->dtypeSetUInt32();
-        AstNodeExpr* const condp = handlesActivep
-                                       ? new AstLogAnd{varp->fileline(), atp, handlesActivep}
-                                       : static_cast<AstNodeExpr*>(atp);
-        exprp = new AstCond{varp->fileline(), condp, exprp, constFormatp};
-        exprp->user1(true);  // Mark as formatted
-        return exprp;
+        return atp;
+    }
+    // Split the select nodep of an integral element by the random index indexp, from the array
+    // fromp, whose rand_mode() can be off: then read as state, by a lookup of its elements,
+    // which solvers handle much faster than an array term. Return whether split.
+    bool editHeldArraySel(AstNodeExpr* nodep, AstNodeExpr* fromp, const AstNodeExpr* indexp) {
+        if (nodep == m_heldSelp || m_structSel || m_nestedAccessp || !fromp->user1()) {
+            return false;
+        }
+        if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked() || !isRandIndex(indexp)) {
+            return false;
+        }
+        AstMemberRef* const memberRefp = VN_CAST(fromp, MemberRef);
+        const AstNodeVarRef* const varRefp = VN_CAST(fromp, NodeVarRef);
+        if (!(memberRefp && VN_IS(memberRefp->fromp(), NodeVarRef)) && !varRefp) return false;
+        AstVar* const varp = memberRefp ? memberRefp->varp() : varRefp->varp();
+        const RandomizeMode randMode = {.asUQuad = varp->user1()};
+        if (!randMode.usesMode) return false;
+        FileLine* const fl = nodep->fileline();
+        AstNodeExpr* const onp = newRandModeOnp(nodep, randMode, memberRefp, varp);
+        AstNodeExpr* const heldp = nodep->cloneTree(false);
+        VNRelinker handle;
+        nodep->unlinkFrBack(&handle);
+        AstCond* const condp = new AstCond{fl, onp, nodep, heldp};
+        condp->user1(true);  // Mark as formatted
+        handle.relink(condp);
+        // Its elements, read as state
+        AstNodeExpr* const heldFromp = VN_IS(heldp, ArraySel) ? VN_AS(heldp, ArraySel)->fromp()
+                                                              : VN_AS(heldp, CMethodHard)->fromp();
+        heldFromp->user1(false);
+        const bool edited = editStateArraySel(heldp);
+        UASSERT_OBJ(edited, nodep, "Held array select not read as state");
+        VL_RESTORER(m_heldSelp);
+        m_heldSelp = nodep;
+        iterate(nodep);
+        condp->dtypeSetString();  // Of its formatted arms
+        return true;
     }
 
     // Whether selp is the member select of a variable captured by captureRefByThis()
@@ -5813,6 +5856,7 @@ private:
                 return;
             }
         }
+        if (editHeldArraySel(nodep, nodep->fromp(), nodep->bitp())) return;
         const bool indexIsRand = isRandIndex(nodep->bitp());
         // The range check of the non-random indices of a translated select, before they are
         // truncated below. An unpacked array has no zero to read instead, nor a named element.
@@ -6899,6 +6943,7 @@ private:
                 unsupportedObjectRandIndex(nodep);
                 return;
             }
+            if (editHeldArraySel(nodep, nodep->fromp(), nodep->pinsp())) return;
             if (nodep->fromp()->user1()) {
                 // Queue/dynamic element: pre-edit clone for the rand_mode hoist, non-rand index
                 // only. A std::randomize() with-clause argument carries no rand qualifier of its
