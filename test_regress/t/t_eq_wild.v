@@ -22,6 +22,37 @@ module t;
 
     // string/real/shortreal is illegal so not tested here
 
+    // Non-constant right-hand side
+    begin
+      bit [3:0] a;
+      bit [3:0] b;
+      logic [3:0] l;
+      bit [94:0] wa;
+      bit [94:0] wb;
+      a = 4'd1;
+      b = 4'd2;
+      l = 4'd1;
+      `checkd(a ==? b, 1'b0);
+      `checkd(a !=? b, 1'b1);
+      `checkd(!(a ==? b), 1'b1);
+      `checkd(4'd1 !=? b, 1'b1);
+      `checkd(l !=? b, 1'b1);
+      `checkd(4'b1x10 !=? b, !(4'b1x10 ==? b));
+      `checkd(!(a inside {b}), 1'b1);
+      b = a;
+      `checkd(a ==? b, 1'b1);
+      `checkd(a !=? b, 1'b0);
+      `checkd(l !=? b, 1'b0);
+      `checkd(!(a inside {b}), 1'b0);
+      wa = {31'h1, 64'h5};
+      wb = {31'h2, 64'h5};
+      `checkd(wa ==? wb, 1'b0);
+      `checkd(wa !=? wb, 1'b1);
+      wb = wa;
+      `checkd(wa ==? wb, 1'b1);
+      `checkd(wa !=? wb, 1'b0);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
