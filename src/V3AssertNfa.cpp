@@ -3074,6 +3074,8 @@ class SvaNfaLowering final {
     size_t m_statLinkEdgeVisits = 0;  // Incoming edges visited while resolving Links
     size_t m_statVertices = 0;  // NFA state vertices lowered
     size_t m_statLinkCloneNodes = 0;  // Nodes of source signals cloned while resolving Links
+    size_t m_statLinkHoists = 0;  // Link state signals computed in temporaries
+    V3UniqueNames m_linkStateNames{"__VnfaLinkState"};  // Link state signal temporaries
 
     // Per-lowering shared context (passed to phase sub-functions)
     // Per-vertex lowering state is stored in SvaVertexData and accessed via
@@ -4015,6 +4017,43 @@ class SvaNfaLowering final {
                && !vtxp->datap()->delayRingVarp && !vtxp->m_isMatch && !vtxp->m_isRejectSink
                && !vtxp->m_isAndCombiner;
     }
+    // Whether the reader of the state signals of vtxp moves them, see resolveLinkState
+    static bool isMovedByReader(const LowerCtx& c, const SvaStateVertex* const vtxp,
+                                const std::vector<bool>& pinned) {
+        if (!vtxp->outSize1() || pinned[vtxp->color()] || !isLinkOnly(c, vtxp)) return false;
+        return !static_cast<const SvaTransEdge*>(vtxp->outEdges().frontp())->m_rejectOnFail;
+    }
+    // Whether nodep reads only $sampled values and variables of the lowering
+    static bool readsOnlySampledOrTemps(const AstNode* const nodep) {
+        if (VN_IS(nodep, Sampled)) return true;
+        if (const AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
+            return refp->varp()->varType() == VVarType::MODULETEMP;
+        }
+        for (const AstNode* const opp :
+             {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+            for (const AstNode* itemp = opp; itemp; itemp = itemp->nextp()) {
+                if (!readsOnlySampledOrTemps(itemp)) return false;
+            }
+        }
+        return true;
+    }
+    // A large state signal read more than once goes in a temporary, so that its readers do
+    // not clone it, which along a chain of such vertices would grow quadratically. An
+    // always_comb computes the temporary from the registers and $sampled values it reads, as
+    // tryHoistSampled does.
+    void hoistLinkSig(LowerCtx& c, AstNodeExpr*& sigp) {
+        constexpr int HOIST_MIN_NODES = 64;
+        if (!sigp || sigp->nodeCount() < HOIST_MIN_NODES) return;
+        if (!sigp->isPure() || !readsOnlySampledOrTemps(sigp)) return;
+        AstVar* const varp
+            = new AstVar{c.flp, VVarType::MODULETEMP, m_linkStateNames.get(sigp), sigp->dtypep()};
+        m_modp->addStmtsp(varp);
+        AstAssign* const assignp
+            = new AstAssign{c.flp, new AstVarRef{c.flp, varp, VAccess::WRITE}, sigp};
+        m_modp->addStmtsp(newAssertAlways(c.flp, VAlwaysKwd::ALWAYS_COMB, nullptr, assignp));
+        sigp = new AstVarRef{c.flp, varp, VAccess::READ};
+        ++m_statLinkHoists;
+    }
     // Move sigp out of its owner if move, else clone it
     AstNodeExpr* takeSig(AstNodeExpr*& sigp, const bool move) {
         if (!move) {
@@ -4076,8 +4115,7 @@ class SvaNfaLowering final {
                             "Link source missing state signal");
                 // The signals of a Link-only source read only by this Link move here, as
                 // cloning them along a chain of such vertices grows quadratically
-                const bool move = fromVtxp->outSize1() && !te.m_rejectOnFail
-                                  && !pinned[fromVtxp->color()] && isLinkOnly(c, fromVtxp);
+                const bool move = isMovedByReader(c, fromVtxp, pinned);
                 AstNodeExpr* const contributionp
                     = andCond(c.flp, takeSig(fromDatap->stateSigp, move), te.m_condp);
                 nextStatep = orExprs(c.flp, nextStatep, contributionp);
@@ -4100,6 +4138,11 @@ class SvaNfaLowering final {
             vtxp->datap()->stateSigp = nextStatep;
             vtxp->datap()->stateCountSigp = nextStateCountp;
             vtxp->datap()->stateCountOverflowSigp = nextStateCountOverflowp;
+        }
+        if ((vtxp->m_isAndCombiner || isLinkOnly(c, vtxp)) && !isMovedByReader(c, vtxp, pinned)) {
+            hoistLinkSig(c, vtxp->datap()->stateSigp);
+            hoistLinkSig(c, vtxp->datap()->stateCountSigp);
+            hoistLinkSig(c, vtxp->datap()->stateCountOverflowSigp);
         }
         visit = LinkVisit::RESOLVED;
     }
@@ -4265,6 +4308,7 @@ public:
         V3Stats::addStatSum("Assertions, NFA link edge visits", m_statLinkEdgeVisits);
         V3Stats::addStatSum("Assertions, NFA state vertices", m_statVertices);
         V3Stats::addStatSum("Assertions, NFA link signal nodes cloned", m_statLinkCloneNodes);
+        V3Stats::addStatSum("Assertions, NFA link signals in temporaries", m_statLinkHoists);
     }
 
     // Return the statements run by an assertion failing at end of simulation
