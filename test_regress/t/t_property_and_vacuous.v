@@ -59,9 +59,9 @@ module t (
 
   assert property (@(posedge clk) (a |-> b) and (b |-> a)) ++passes[0];
   else ++fails[0];
-  assert property (@(posedge clk) accept_on (1'b0) (a |-> b)) ++passes[1];
+  assert property (@(posedge clk) sync_accept_on (1'b0) (a |-> b)) ++passes[1];
   else ++fails[1];
-  assert property (@(posedge clk) accept_on (c) (a |-> b)) ++passes[2];
+  assert property (@(posedge clk) sync_accept_on (c) (a |-> b)) ++passes[2];
   else ++fails[2];
   assert property (@(posedge clk) sync_reject_on (c) (a |-> b)) ++passes[3];
   else ++fails[3];
