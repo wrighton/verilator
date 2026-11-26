@@ -53,6 +53,11 @@ class VSymEnt final {
         // Case-folded hashes (see similarHash) of the names of checkSimilarname entries, to
         // quickly rule out names with no similar entry
         std::unordered_set<uint64_t> m_idNameSimilar;
+        // Interface symbol tables imported with importFromIface(), in import order, and whether
+        // only for the symbols not permissible in a modport. Their symbols are imported into the
+        // name map on first lookup, as copying every symbol is O(interface size) per importing
+        // symbol, such as each virtual interface variable or argument.
+        std::vector<std::pair<VSymEnt*, bool>> m_ifaceImports;
     };
     std::unique_ptr<Names> m_namesp;
     // Packages imported with 'import pkg::*', in import order. Per IEEE 1800-2023 26.3 their
@@ -69,6 +74,7 @@ class VSymEnt final {
     bool m_exported = true;  // Allow importing
     bool m_imported = false;  // Was imported
     bool m_wildImported = false;  // Was imported on lookup through a wildcard import
+    mutable bool m_ifaceImportBusy = false;  // Searching its interface imports, see m_ifaceImports
     bool m_importAmbiguous = false;  // Wildcard imported, but a different item of the same name
                                      // was also wildcard imported (IEEE 1800-2023 26.3)
     bool m_hidesWildcard = false;  // Declaration hides a wildcard imported item of the same name
@@ -126,11 +132,21 @@ public:
                                             itr.first);
                 }
             }
+            dumpIfaceImports(os, indent);
             for (const VSymEnt* const pkgSymp : m_wildImportps) {
                 os << indent << "| * wildcard import se" << cvtToHex(pkgSymp)
                    << "  n=" << cvtToHex(pkgSymp->nodep()) << '\n';
             }
         }
+    }
+    void dumpIfaceImports(std::ostream& os, const string& indent) const {
+        if (!m_namesp) return;
+        for (const auto& import : m_namesp->m_ifaceImports) dumpIfaceImport(os, indent, import);
+    }
+    static void dumpIfaceImport(std::ostream& os, const string& indent,
+                                const std::pair<VSymEnt*, bool>& import) {
+        os << indent << "| * interface import se" << cvtToHex(import.first)
+           << "  n=" << cvtToHex(import.first->nodep()) << '\n';
     }
     void dumpSelf(std::ostream& os, const string& indent = "", int numLevels = 1) const {
         VSymConstMap doneSyms;
@@ -139,6 +155,7 @@ public:
 
     // METHODS
     VSymEnt(VSymGraph* graphp, const VSymEnt* symp);  // Below
+    inline void countIfaceImport();  // Below
     VSymEnt(VSymGraph* graphp, AstNode* nodep);  // Below
     ~VSymEnt() {
         // Change links so we coredump if used
@@ -186,7 +203,8 @@ public:
         IdNameMap& nameMap = namesWritable().m_idName;
         if (name.empty()) return insertAt(nameMap.end(), name, entp);
         const auto it = nameMap.lower_bound(name);
-        if (it != nameMap.end() && it->first == name) {
+        // A name an interface import gives counts too, as importing it replaced any before
+        if ((it != nameMap.end() && it->first == name) || ifaceImportSource(name)) {
             UINFO(9, "     SymInsert se" << cvtToHex(this) << " '" << name << "' se"
                                          << cvtToHex(entp) << "  " << entp->nodep());
             // If didn't already report warning
@@ -240,6 +258,8 @@ public:
                                               : "se" + cvtToHex(it->second)
                                                     + " n=" + cvtToHex(it->second->nodep())));
         if (it != nameMapr.end()) return it->second;
+        // Then import it from the last imported interface that has it
+        if (VSymEnt* const symp = findIfaceImport(name)) return symp;
         // Then import it from a wildcard imported package
         return importWildCandidate(name);
     }
@@ -256,6 +276,7 @@ public:
         const IdNameMap& nameMapr = idNameMap();
         const auto it = nameMapr.find(name);
         if (it != nameMapr.end()) return it->second->m_wildImported;
+        if (ifaceImportSource(name)) return false;  // Imported from an interface first
         return wildImportSourcep(name);
     }
     static bool checkSimilarname(const AstNode* nodep) {
@@ -298,8 +319,9 @@ public:
         if (m_fallbackp) return m_fallbackp->findIdFallback(name);
         return nullptr;
     }
-    void candidateIdFlat(VSpellCheck* spellerp, const VNodeMatcher* matcherp,
-                         bool includeType) const {
+    void candidateIdFlat(VSpellCheck* spellerp, const VNodeMatcher* matcherp, bool includeType) {
+        // Report the names of interface imports too, in name order as when copied eagerly
+        importIfaceSymbols();
         // Suggest alternative symbol candidates without looking upward through symbol
         // hierarchy
         for (const auto& itr : idNameMap()) {
@@ -312,7 +334,7 @@ public:
             }
         }
     }
-    void candidateIdFallback(VSpellCheck* spellerp, const VNodeMatcher* matcherp) const {
+    void candidateIdFallback(VSpellCheck* spellerp, const VNodeMatcher* matcherp) {
         // Suggest alternative symbol candidates with looking upward through symbol hierarchy
         // Note VSpellCheck wants the most important (closest) items pushed first
         candidateIdFlat(spellerp, matcherp, false);
@@ -396,6 +418,70 @@ private:
             // Also visible through this package, so not only through a wildcard export
             symp->m_exportedWildcardp = nullptr;
         }
+    }
+    // The symbol in the interface tables imported with importFromIface() that gives the name,
+    // if any. A later import takes precedence, as it replaced the symbols of earlier ones. The
+    // tables are read at lookup, not import, which gives the same symbols, as tables are only
+    // imported into after they all are built.
+    VSymEnt* ifaceImportSource(const string& name) const {
+        if (!m_namesp) return nullptr;
+        UASSERT(!m_ifaceImportBusy, "Interface symbol tables import each other in a cycle");
+        VL_RESTORER(m_ifaceImportBusy);
+        m_ifaceImportBusy = true;
+        const std::vector<std::pair<VSymEnt*, bool>>& imports = m_namesp->m_ifaceImports;
+        for (auto it = imports.rbegin(); it != imports.rend(); ++it) {
+            const VSymEnt* const srcp = it->first;
+            // The source's own symbol, or one it imports from an interface in turn
+            const IdNameMap& srcNameMapr = srcp->idNameMap();
+            const auto srcIt = srcNameMapr.find(name);
+            VSymEnt* const subSrcp
+                = srcIt != srcNameMapr.end() ? srcIt->second : srcp->ifaceImportSource(name);
+            if (subSrcp && ifaceImportable(subSrcp, it->second)) return subSrcp;
+        }
+        return nullptr;
+    }
+    // The symbol the interface tables imported with importFromIface() give the name, if any,
+    // imported now
+    VSymEnt* findIfaceImport(const string& name) {
+        VSymEnt* const subSrcp = ifaceImportSource(name);
+        return subSrcp ? importIfaceSymbol(name, subSrcp) : nullptr;
+    }
+    static bool ifaceImportable(const VSymEnt* subSrcp, bool onlyUnmodportable) {
+        const AstVar* const varp = VN_CAST(subSrcp->nodep(), Var);
+        return !onlyUnmodportable || (varp && varp->isParam());
+    }
+    VSymEnt* importIfaceSymbol(const string& name, VSymEnt* subSrcp) {
+        VSymEnt* const subSymp = new VSymEnt{m_graphp, subSrcp};
+        countIfaceImport();
+        reinsert(name, subSymp);
+        // And import its children, except under an AstVar: an interface reference may be of the
+        // interface being imported, so would recurse forever, and lookups through it go to its
+        // own symbol or its interface, never this copy.
+        if (!VN_IS(subSrcp->nodep(), Var)) subSymp->importFromIface(subSrcp);
+        return subSymp;
+    }
+    // Import every symbol the interface tables imported with importFromIface() give, for the
+    // users of every name, which are rare or report errors
+    void importIfaceSymbols() {
+        if (!m_namesp || m_namesp->m_ifaceImports.empty()) return;
+        for (const string& name : ifaceImportNames()) {
+            const IdNameMap& nameMapr = idNameMap();
+            if (nameMapr.find(name) == nameMapr.end()) findIfaceImport(name);
+        }
+    }
+    // The names the interface tables imported with importFromIface() have, imported into them
+    std::vector<string> ifaceImportNames() {
+        UASSERT(!m_ifaceImportBusy, "Interface symbol tables import each other in a cycle");
+        VL_RESTORER(m_ifaceImportBusy);
+        m_ifaceImportBusy = true;
+        std::vector<string> names;
+        for (const auto& import : m_namesp->m_ifaceImports) import.first->appendNames(names);
+        return names;
+    }
+    // Append the names of this table, with those its interface imports give, imported now
+    void appendNames(std::vector<string>& names) {
+        importIfaceSymbols();
+        for (const auto& itr : idNameMap()) names.push_back(itr.first);
     }
     void addWildImport(const VSymEnt* pkgSymp) {
         // Repeated imports of a package would only slow lookups that miss
@@ -504,6 +590,7 @@ public:
     }
     void exportStarStar() {
         // Export *:*: Export all tokens from imported packages
+        importIfaceSymbols();
         for (const VSymEnt* const pkgSymp : m_wildImportps) {
             for (const auto& itr : pkgSymp->idNameMap()) {
                 // Import, so marked exported below, but not as a reference
@@ -517,30 +604,24 @@ public:
             if (symp->m_wildImported) symp->m_wildExported = true;
         }
     }
-    void importFromIface(const VSymEnt* srcp, bool onlyUnmodportable = false) {
-        // Import interface tokens from source symbol table into this symbol table, recursively
+    void importFromIface(VSymEnt* srcp, bool onlyUnmodportable = false) {
+        // Import interface tokens from source symbol table into this symbol table, recursively,
+        // on first lookup of each (see findIfaceImport)
         UINFO(9, "     importIf  se" << cvtToHex(this) << " from se" << cvtToHex(srcp));
         // Not for a modport, as only its items are visible through it; modport parameter and
         // type lookups fall back to the interface itself, which resolves its wildcard imports
         if (!onlyUnmodportable) {
             for (const VSymEnt* const pkgSymp : srcp->m_wildImportps) addWildImport(pkgSymp);
         }
-        for (const auto& itr : srcp->idNameMap()) {
-            const string& name = itr.first;
-            VSymEnt* const subSrcp = itr.second;
-            const AstVar* const varp = VN_CAST(subSrcp->nodep(), Var);
-            if (!onlyUnmodportable || (varp && varp->isParam())) {
-                VSymEnt* const subSymp = new VSymEnt{m_graphp, subSrcp};
-                reinsert(name, subSymp);
-                // And recurse to create children, except under an AstVar: an interface reference
-                // may be of the interface being imported, so would recurse forever, and lookups
-                // through it go to its own symbol or its interface, never this copy.
-                if (!varp) subSymp->importFromIface(subSrcp);
-            }
-        }
+        // Imported names would replace symbols already here, so a lookup would miss them. Never
+        // happens, as only the tables of interface references and modport items, which are
+        // empty, are imported into, after all tables are built, and so are their copies.
+        UASSERT(idNameMap().empty(), "Interface imported into a symbol table with symbols");
+        namesWritable().m_ifaceImports.emplace_back(srcp, onlyUnmodportable);
     }
     string cellErrorScopes(const AstNode* lookp, string prettyName = "") {
         if (prettyName == "") prettyName = lookp->prettyName();
+        importIfaceSymbols();
         string scopes;
         for (const auto& itr : idNameMap()) {
             const AstNode* const itemp = itr.second->nodep();
@@ -590,6 +671,7 @@ class VSymGraph final {
     // MEMBERS
     VSymEnt* m_symRootp;  // Root symbol table
     SymStack m_symsp;  // All symbol tables, to cleanup
+    size_t m_ifaceImports = 0;  // Symbols imported from interfaces, for statistics
     uint64_t m_wildSourceEdits = 0;  // Count of edits of wildcard imported tables
     // Indexes of wildcard imported packages, by the list of packages. Not iterated.
     std::map<std::vector<const VSymEnt*>, std::unique_ptr<VSymWildIndex>> m_wildIndexes;
@@ -617,6 +699,7 @@ public:
     size_t wildIndexBuilds() const { return m_wildIndexBuilds; }
     size_t wildIndexEntriesPeak() const { return m_wildIndexEntriesPeak; }
     size_t wildPackageLookups() const { return m_wildPackageLookups; }
+    size_t ifaceImports() const { return m_ifaceImports; }
     size_t importedCount() const {
         return std::count_if(m_symsp.begin(), m_symsp.end(),
                              [](const VSymEnt* const entp) { return entp->imported(); });
@@ -650,6 +733,7 @@ public:
 protected:
     friend class VSymEnt;
     void pushNewEnt(VSymEnt* entp) { m_symsp.push_back(entp); }
+    void countIfaceImport() { ++m_ifaceImports; }
     VSymWildIndex* wildIndexp(const std::vector<const VSymEnt*>& pkgps) {
         std::unique_ptr<VSymWildIndex>& indexpr = m_wildIndexes[pkgps];
         if (!indexpr) indexpr = std::make_unique<VSymWildIndex>();
@@ -783,5 +867,7 @@ const VSymEnt* VSymEnt::wildImportSourcep(const string& name) {
     }
     return nullptr;
 }
+
+void VSymEnt::countIfaceImport() { m_graphp->countIfaceImport(); }
 
 #endif  // guard
