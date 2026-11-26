@@ -1437,6 +1437,30 @@ bool VlRandomizer::hasFrozenVar() const {
     return false;
 }
 
+void VlRandomizer::hideUnnamedFrozen(
+    std::map<std::string, std::shared_ptr<const VlRandomVar>>& hiddenr) {
+    // A solve-before ordering reads the values of its layers through their names, an element
+    // of an array by a name of its own
+    if (m_heldLookups.empty() || !m_solveBefore.empty()) return;
+    // The variables the constraints name whatever their rand_mode, as the compiler lists them
+    std::unordered_set<std::string> named{m_constraintVarNames.begin(),
+                                          m_constraintVarNames.end()};
+    named.insert(m_softVarNames.begin(), m_softVarNames.end());
+    for (const auto& unique : m_uniqueArrays) {
+        named.insert(unique.second.begin(), unique.second.end());
+    }
+    for (const auto& pin : m_frozenPins) named.insert(pin.first);
+    for (const std::string& name : m_heldLookups) {
+        const auto it = m_vars.find(name);
+        if (it == m_vars.end() || !isFrozenVar(name, *it->second) || named.count(name)
+            || m_randcVarNames.count(name) || m_sizeVars.count(name)) {
+            continue;
+        }
+        hiddenr.emplace(name, it->second);
+        m_vars.erase(it);
+    }
+}
+
 bool VlRandomizer::next_check_only(VlRNGReseeds& rngr) { return nextRandomize(rngr, true); }
 
 bool VlRandomizer::next(VlRNGReseeds& rngr) { return nextRandomize(rngr, false); }
@@ -2007,6 +2031,11 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
         }
     }
 
+    // A frozen array the solver is given no text naming keeps its value, unregistered: the
+    // solver needs no array logic or values for it (IEEE 1800-2023 18.8)
+    std::map<std::string, std::shared_ptr<const VlRandomVar>> hidden;
+    hideUnnamedFrozen(hidden);
+
     // Pinned vars make phase ordering moot; skip phased path in check-only.
     bool result;
     if (!m_checkOnly && !m_solveBefore.empty()) {
@@ -2014,6 +2043,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
     } else {
         result = nextFlat(rngr, sess, uniqueExprs);
     }
+    m_vars.insert(hidden.begin(), hidden.end());
     m_ug2.rngReseeds = rngr.reseeds();
     m_checkOnly = false;
     m_sizeSolve = false;
@@ -2565,6 +2595,8 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
     std::vector<PinTerm> terms;
     for (const auto& var : m_vars) {
         if (fixedp && fixedp->count(var.first)) continue;
+        // Nor one with rand_mode off, which keeps its value (IEEE 1800-2023 18.8)
+        if (isFrozenVar(var.first, *var.second)) continue;
         const int width = var.second->width();
         for (int j = 0; j < var.second->totalWidth() / width; ++j) {
             terms.push_back({var.second.get(), j, 0, width, static_cast<int>(terms.size())});
