@@ -13,4 +13,12 @@ module t;
     $write("*-* All Finished *-*\n");
     $finish;
   end
+
+  // Reductions without 'with' need integral elements
+  typedef struct {int x;} us_t;
+  initial begin
+    us_t s[2];
+    int i;
+    i = s.sum();
+  end
 endmodule
