@@ -84,6 +84,7 @@
 #include "V3Number.h"
 #include "V3PreShell.h"
 #include "V3Randomize.h"
+#include "V3Stats.h"
 #include "V3String.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
@@ -369,6 +370,7 @@ class WidthVisitor final : public VNVisitor {
                                       // `inside` expressions
     V3UniqueNames m_bitstreamTempNames;  // Impure values in bit-stream casts
     VMemberMap m_memberMap;  // Member names cached for fast lookup
+    VDouble0 m_statIfaceMemberSteps;  // Interface items examined, or lookups, for member refs
     std::unordered_map<const AstModport*, std::unordered_set<string>>
         m_modportNames;  // Names listed by each modport
     std::unordered_map<const AstClass*, std::unordered_map<string, AstNodeFuncCovItem*>>
@@ -5306,14 +5308,17 @@ class WidthVisitor final : public VNVisitor {
         // by sub-interface selection, enabling chained access (e.g. vif.tx.Tx).
         AstNodeModule* const ifacep = adtypep->ifaceViaCellp();
         UASSERT_OBJ(ifacep, nodep, "Unlinked");
+        // Looked up by name, as scanning the items for each reference is quadratic
+        ++m_statIfaceMemberSteps;
+        if (AstNode* const itemp = m_memberMap.findMember(ifacep, nodep->name())) {
+            if (!modportAllowsItem(nodep, adtypep, itemp)) {
+                return nullptr;  // Caller handles error
+            }
+            return itemp;
+        }
         VSpellCheck speller;
         for (AstNode* const itemp : ifacep->stmtspList()) {
-            if (itemp->name() == nodep->name()) {
-                if (!modportAllowsItem(nodep, adtypep, itemp)) {
-                    return nullptr;  // Caller handles error
-                }
-                return itemp;
-            }
+            ++m_statIfaceMemberSteps;
             if (VN_IS(itemp, Var) || VN_IS(itemp, Modport) || VN_IS(itemp, Cell)) {
                 speller.pushCandidate(itemp->prettyName());
             }
@@ -12505,7 +12510,12 @@ public:
             }
         }
     }
-    ~WidthVisitor() override = default;
+    ~WidthVisitor() override {
+        // Many visitors width a single parameter, so only report a count
+        if (m_statIfaceMemberSteps) {
+            V3Stats::addStatSum("Width, Interface member lookup steps", m_statIfaceMemberSteps);
+        }
+    }
 };
 
 //######################################################################
