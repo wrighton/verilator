@@ -2125,7 +2125,7 @@ class TaskVisitor final : public VNVisitor {
     static AstVarRef* getterVarRefp(AstNodeFTask* taskp) {
         // Only the return variable is declared, so no arguments or locals
         const AstVar* const fvarp = taskp->fvarp();
-        if (taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
+        if (!fvarp || taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
         AstNode* stmtp = taskp->stmtsp();
         // Skip the default initialization of the function's return value
         if (const AstAssign* const initp = VN_CAST(stmtp, Assign)) {
