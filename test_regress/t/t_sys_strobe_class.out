@@ -1,0 +1,6 @@
+[0] strobe v=2
+[5] monitor v=2
+[10] monitor v=3
+[25] strobe sget=4 other.w=8
+[25] strobe self.y mode=0
+*-* All Finished *-*
