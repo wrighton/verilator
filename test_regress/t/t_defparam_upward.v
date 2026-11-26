@@ -43,6 +43,41 @@ module holder;
   end
 endmodule
 
+// From generate blocks a literal condition, or a localparam of a literal value, builds
+module holder_lit;
+  localparam bit ON = 1;
+  leaf s ();
+  leaf s2 ();
+  if (1) begin : g
+    cfg_lit c ();
+  end
+  if (ON) begin : h
+    cfg_block2 c ();
+  end else begin : e
+    cfg_block2 c ();
+  end
+endmodule
+
+module cfg_lit;
+  defparam s.P = 46;
+endmodule
+
+module cfg_block2;
+  defparam s2.P = 48;
+endmodule
+
+// Not from a generate block a literal condition does not build, naming another instance
+module cfg_top;
+  defparam t.u2.P = 49;
+endmodule
+
+module box_lit;
+  bank u2 ();
+  if (0) begin : inactive
+    cfg_top c ();
+  end
+endmodule
+
 // One instance of a cell of a module instantiated twice
 module mid;
   leaf x ();
@@ -67,6 +102,11 @@ module t;
   mid m1 ();
   mid m2 ();
   cfg_one c1 ();
+  holder_lit hl1 ();
+  holder_lit hl2 ();
+  leaf u2 ();
+  box_lit bl ();
+  cfg_top ct ();
   mid s ();
   for (genvar i = 0; i < 2; ++i) begin : g
     mid s ();
@@ -81,6 +121,12 @@ module t;
     `checkd(hv.s.P, 47);
     `checkd(m1.x.P, 5);
     `checkd(m2.x.P, 0);
+    `checkd(hl1.s.P, 46);
+    `checkd(hl2.s.P, 46);
+    `checkd(hl1.s2.P, 48);
+    `checkd(hl2.s2.P, 48);
+    `checkd(u2.P, 49);
+    `checkd(bl.u2.u.P, 0);
     `checkd(s.x.P, 47);
     `checkd(g[0].s.x.P, 0);
     `checkd(g[1].s.x.P, 0);
