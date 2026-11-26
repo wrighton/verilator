@@ -24,5 +24,10 @@ test.file_grep(solver_log, r'\(set-logic QF_BV\)')
 test.file_grep_not(solver_log, r'declare-fun table_ ')
 # Except where named
 test.file_grep(solver_log, r'declare-fun mid\.leaf\.deep ')
+# A table of positions tests the bits of the index, not each position
+test.file_grep(
+    solver_log, r'\(define-fun __Vt[0-9]+ \(\(\?i \(_ BitVec 32\)\)\) \(_ BitVec 16\) '
+    r'\(ite \(bvult \?i \(_ bv1000 32\)\) \(ite \(= \(\(_ extract 9 9\) \?i\) #b1\) ')
+test.file_grep_not(solver_log, r'\(ite \(= \?i #x000003e7\) ')
 
 test.passes()
