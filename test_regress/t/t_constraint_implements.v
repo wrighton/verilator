@@ -164,6 +164,44 @@ class cyc_t extends cyc_base_t implements sub_getter_t;
   endfunction
 endclass
 
+// Test: the object of a rand interface class handle is not randomized when the solve of its
+// holder fails
+class unsat_holder_t;
+  rand getter_t h;
+  rand bit [6:0] z;
+  constraint c {
+    z == 1;
+    z == 2;
+  }
+endclass
+
+// Test: a rand interface class handle of a member object without constraints of its own
+class iface_member_t;
+  rand getter_t g;
+endclass
+
+class iface_outer_t;
+  rand iface_member_t m;
+  rand bit [6:0] o;
+  constraint co {o < 7'd3;}
+endclass
+
+// Test: the objects of a rand array of interface class handles
+class iface_array_t;
+  rand getter_t arr[2];
+  rand bit [6:0] z;
+  constraint c {z < 7'd3;}
+endclass
+
+class unsat_array_t;
+  rand getter_t arr[2];
+  rand bit [6:0] z;
+  constraint c {
+    z == 1;
+    z == 2;
+  }
+endclass
+
 // Test: get_randstate() and set_randstate() through a rand interface class handle
 class plain_t implements getter_t;
   rand int x;
@@ -251,8 +289,11 @@ module t;
       automatic iholder_t ih = new;
       automatic iderived_t id = new;
       ih.ih = id;
+      id.y = 7'd100;
       randomize_result = ih.randomize();
       `checkd(randomize_result, 1);
+      `checkd(id.y < 10, 1);
+      `checkd(id.x, id.y + 1);
       randomize_result = id.randomize();
       `checkd(randomize_result, 1);
       `checkd(id.y < 10, 1);
@@ -310,6 +351,71 @@ module t;
       randomize_result = c0.randomize();
       `checkd(randomize_result, 1);
       `checkd(c1.n < 5, 1);
+    end
+    // The object of a rand interface class handle is randomized with its own constraints
+    begin
+      automatic impl_t hi;
+      `checkd($cast(hi, h.h), 1);
+      repeat (5) begin
+        hi.v = 7'd100;
+        randomize_result = h.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(hi.v < 40, 1);
+        `checkd(hi.u, hi.v + 1);
+      end
+      `checkd(hi.posts, 15);
+      h.h.rand_mode(0);
+      hi.v = 7'd100;
+      randomize_result = h.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(hi.v, 100);
+    end
+    begin
+      automatic iface_outer_t io = new;
+      automatic impl_t mi = new;
+      io.m = new;
+      io.m.g = mi;
+      repeat (5) begin
+        mi.v = 7'd100;
+        randomize_result = io.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(io.o < 3, 1);
+        `checkd(mi.v < 40, 1);
+        `checkd(mi.u, mi.v + 1);
+      end
+    end
+    begin
+      automatic iface_array_t ia = new;
+      automatic unsat_array_t ua = new;
+      automatic impl_t a0 = new;
+      automatic impl_t a1 = new;
+      ia.arr[0] = a0;
+      ia.arr[1] = a1;
+      a0.v = 7'd100;
+      a1.v = 7'd100;
+      randomize_result = ia.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(a0.v < 40, 1);
+      `checkd(a1.v < 40, 1);
+      ua.arr[0] = a0;
+      a0.v = 7'd100;
+      randomize_result = ua.randomize();
+      `checkd(randomize_result, 0);
+      `checkd(a0.v, 100);
+    end
+    begin
+      automatic unsat_holder_t uh = new;
+      automatic impl_t ui = new;
+      uh.h = ui;
+      ui.v = 7'd100;
+      uh.z = 7'd9;
+      randomize_result = uh.randomize();
+      `checkd(randomize_result, 0);
+      `checkd(uh.z, 9);
+      `checkd(ui.v, 100);
+      randomize_result = uh.randomize() with {z > 0;};
+      `checkd(randomize_result, 0);
+      `checkd(ui.v, 100);
     end
     g = i;
     `checkd(g.get(), int'(i.v));
