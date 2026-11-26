@@ -45,31 +45,31 @@ module t (
   assert property (@(posedge clk) not always[0: 1] a_low);
 
   // Bounded weak always over constant-true input.
-  assert property (@(posedge clk) always[0: 3] a_high) high_bounded_pass_q.push_back(cyc);
+  assert property (@(posedge clk) always[0: 3] a_high) high_bounded_pass_q.push_back($sampled(cyc));
 
   // Degenerate [0:0]: equivalent to immediate sample.
-  assert property (@(posedge clk) always[0: 0] a_high) high_degenerate_pass_q.push_back(cyc);
+  assert property (@(posedge clk) always[0: 0] a_high) high_degenerate_pass_q.push_back($sampled(cyc));
 
   // Constant-false: every attempt fails.
   assert property (@(posedge clk) always[0: 3] a_low)
-  else low_bounded_fail_q.push_back(cyc);
+  else low_bounded_fail_q.push_back($sampled(cyc));
 
   assert property (@(posedge clk) always[0: 0] a_low)
-  else low_degenerate_fail_q.push_back(cyc);
+  else low_degenerate_fail_q.push_back($sampled(cyc));
 
   // CRC-driven random input: window [cyc..cyc+3] of a_rand.
-  assert property (@(posedge clk) always[0: 3] a_rand) rand_bounded_pass_q.push_back(cyc);
-  else rand_bounded_fail_q.push_back(cyc);
+  assert property (@(posedge clk) always[0: 3] a_rand) rand_bounded_pass_q.push_back($sampled(cyc));
+  else rand_bounded_fail_q.push_back($sampled(cyc));
 
   // disable iff also aborts pending windows when the disable becomes true. The
   // disable window starts and ends in the Observed region, so it includes the
   // rst_rand update made at the same clock edge.
   assert property (@(posedge clk) disable iff (rst_rand) always[0: 3] a_rand)
-    disable_bounded_pass_q.push_back(cyc);
-  else disable_bounded_fail_q.push_back(cyc);
+    disable_bounded_pass_q.push_back($sampled(cyc));
+  else disable_bounded_fail_q.push_back($sampled(cyc));
   assert property (@(posedge clk) disable iff (rst_mid) always[0: 3] a_rand)
-    mid_disable_bounded_pass_q.push_back(cyc);
-  else mid_disable_bounded_fail_q.push_back(cyc);
+    mid_disable_bounded_pass_q.push_back($sampled(cyc));
+  else mid_disable_bounded_fail_q.push_back($sampled(cyc));
 
   // Bare always inside named property.
   property p_always_true;

@@ -864,6 +864,156 @@ void V3AssertCommon::checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) {
     }
 }
 
+// Whether the action of a concurrent assertion can run in the Reactive region, not in the
+// process of its evaluation: it reads no automatic variable it does not declare, does not leave
+// itself by disable or jump, has no named block, and reads no sampled value of a past tick
+static bool actionRunsReactive(const AstNode* actionsp) {
+    std::unordered_set<const AstNode*> ownps;  // What the action declares, or jumps in
+    actionsp->foreachAndNext([&](const AstNode* np) {
+        if (VN_IS(np, Var) || VN_IS(np, JumpBlock)) ownps.insert(np);
+    });
+    return !actionsp->existsAndNext([&](const AstNode* np) {
+        if (const AstVarRef* const refp = VN_CAST(np, VarRef)) {
+            return refp->varp()->lifetime().isAutomatic() && !ownps.count(refp->varp());
+        }
+        // A named block may be referenced by its name, also from a copy of the action
+        if (const AstBegin* const beginp = VN_CAST(np, Begin)) {
+            if (!beginp->name().empty()) return true;
+        }
+        // Sampled values of past ticks would read the registers of later ticks
+        if (VN_IS(np, Past) || VN_IS(np, Rose) || VN_IS(np, Fell) || VN_IS(np, Stable)) {
+            return true;
+        }
+        const AstJumpGo* const gop = VN_CAST(np, JumpGo);
+        return VN_IS(np, Disable) || (gop && !ownps.count(gop->blockp()));
+    });
+}
+
+// Find a timing control of a procedure
+
+class AssertProcSuspendsVisitor final : public VNVisitorConst {
+    bool m_suspends = false;  // Found one
+
+    // The cycle delays of the property of an assertion in it are not its timing controls
+    void visit(AstNodeCoverOrAssert*) override {}
+    // A fork...join_none does not wait for the processes it starts
+    void visit(AstFork* nodep) override {
+        if (nodep->joinType().joinNone()) return;
+        m_suspends = true;
+    }
+    // A task, unlike a function, may suspend its caller
+    void visit(AstNodeFTaskRef* nodep) override {
+        if (VN_IS(nodep->taskp(), Task)) m_suspends = true;
+        if (!m_suspends) iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override {
+        if (m_suspends) return;
+        if (nodep->isTimingControl()) {
+            m_suspends = true;
+            return;
+        }
+        iterateChildrenConst(nodep);
+    }
+
+public:
+    explicit AssertProcSuspendsVisitor(AstNode* stmtsp) { iterateAndNextConstNull(stmtsp); }
+    bool suspends() const { return m_suspends; }
+};
+
+bool V3AssertCommon::procSuspends(AstNode* stmtsp) {
+    return AssertProcSuspendsVisitor{stmtsp}.suspends();
+}
+
+// Return a new module temporary of the assertion's module
+static AstVar* newReactiveTemp(const V3AssertReactive::Site& site, V3UniqueNames& names,
+                               const char* namep) {
+    FileLine* const flp = site.assertp->fileline();
+    AstVar* const varp
+        = new AstVar{flp, VVarType::MODULETEMP, names.get(namep), site.modp->findUInt32DType()};
+    varp->isInternal(true);
+    varp->lifetime(VLifetime::STATIC_EXPLICIT);
+    varp->setIgnoreSchedWrite();
+    site.modp->addStmtsp(varp);
+    return varp;
+}
+
+V3AssertReactive::Runner& V3AssertReactive::runnerFor(const Site& site, V3UniqueNames& names) {
+    std::vector<Runner>& runners = m_runners[site.containerp];
+    for (Runner& runner : runners) {
+        if (runner.runnerp->sentreep()->sameTree(site.senTreep)) return runner;
+    }
+    FileLine* const flp = site.assertp->fileline();
+    // Output of the time step's earlier regions, queued by multithreaded tasks, comes first
+    AstNodeStmt* const flushp
+        = v3Global.opt.mtasks()
+              ? new AstCStmt{flp, "Verilated::endOfEval(vlSymsp->__Vm_evalMsgQp);"}
+              : nullptr;
+    runners.push_back(
+        {new AstAlwaysReactive{flp, site.senTreep->cloneTree(false), flushp},
+         new AstAlways{flp, VAlwaysKwd::ALWAYS, site.senTreep->cloneTree(false), nullptr},
+         {}});
+    Runner& runner = runners.back();
+    if (AstGenBlock* const genp = VN_CAST(site.containerp, GenBlock)) {
+        genp->addItemsp(runner.samplerp);
+        genp->addItemsp(runner.runnerp);
+    } else {
+        site.modp->addStmtsp(runner.samplerp);
+        site.modp->addStmtsp(runner.runnerp);
+    }
+    return runner;
+}
+
+AstIf* V3AssertReactive::killIfp(const Site& site, Runner& runner, V3UniqueNames& names) {
+    AstIf*& ifpr = runner.killIfps[{site.assertp->userType(), site.assertp->directive()}];
+    if (ifpr) return ifpr;
+    FileLine* const flp = site.assertp->fileline();
+    const auto newKillp = [&]() {
+        return V3AssertCommon::newAssertCtlGetp(
+            flp, VAssertCtlQuery::KILL, site.assertp->userType(), site.assertp->directive(),
+            site.assertp->controlVarp());
+    };
+    // The count at the evaluation, sampled in the same region, against the count when the
+    // runner runs, before any action
+    AstVar* const countp = newReactiveTemp(site, names, "KillCount");
+    runner.samplerp->addStmtsp(
+        new AstAssign{flp, new AstVarRef{flp, countp, VAccess::WRITE}, newKillp()});
+    ifpr = new AstIf{flp, new AstNeq{flp, new AstVarRef{flp, countp, VAccess::READ}, newKillp()}};
+    if (AstNode* const firstp = runner.runnerp->stmtsp()) {
+        firstp->addHereThisAsNext(ifpr);
+    } else {
+        runner.runnerp->addStmtsp(ifpr);
+    }
+    return ifpr;
+}
+
+AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actionsp,
+                                          V3UniqueNames& names) {
+    // Class processes run in the scope of their instance, not one of a module
+    if (VN_IS(site.modp, Class) || !actionRunsReactive(actionsp)) return actionsp;
+    FileLine* const flp = actionsp->fileline();
+    // The action keeps the scope of the assertion, which V3Begin would have added
+    if (!site.scope.empty()) {
+        actionsp->foreachAndNext(
+            [&](AstScopeName* namep) { namep->scopeAttr(site.scope + namep->scopeAttr()); });
+    }
+    Runner& runnerr = runnerFor(site, names);
+    AstVar* const pendingp = newReactiveTemp(site, names, "Pending");
+    // Run what is pending, unless an $assertkill came after it
+    killIfp(site, runnerr, names)
+        ->addThensp(new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
+                                  new AstConst{flp, 0}});
+    AstLoop* const loopp = new AstLoop{flp};
+    loopp->addStmtsp(new AstLoopTest{flp, loopp, new AstVarRef{flp, pendingp, VAccess::READ}});
+    loopp->addStmtsp(new AstAssign{
+        flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
+        new AstSub{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}});
+    loopp->addStmtsp(actionsp);
+    runnerr.runnerp->addStmtsp(loopp);
+    return new AstAssign{
+        flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
+        new AstAdd{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}};
+}
+
 bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
     return nodep->exists([](const AstNodeVarRef* refp) {
         const AstVar* const varp = refp->varp();
@@ -1519,6 +1669,9 @@ class AssertVisitor final : public VNVisitor {
     AstVar* m_actionEventp = nullptr;  // Current process's event to run queued PExpr actions
     AstAlwaysReactive* m_actionReactivep = nullptr;  // Block running them, beside the process
     std::vector<const AstBegin*> m_namedBeginps;  // Named blocks in the current process
+    AstNode* m_containerp = nullptr;  // Current module or generate block
+    bool m_procSuspends = false;  // Current procedure may suspend
+    V3AssertReactive m_reactive;  // Makes concurrent assertion actions run in Reactive
     bool m_inPExprFinal = false;  // In the end-of-simulation check of a PExpr
     AstBegin* m_pexprBodyp = nullptr;  // Body of the current PExpr, its attempt's process
     AstVar* m_strongPassOnp = nullptr;  // Strong property's active attempts started PassOn
@@ -2338,6 +2491,18 @@ class AssertVisitor final : public VNVisitor {
             return VN_IS(np, Disable) || (gop && !blockps.count(gop->blockp()));
         });
     }
+    // Run the actions of the current concurrent assertion in the Reactive region, see
+    // V3AssertReactive
+    AstNodeStmt* newReactiveAction(const AstNodeCoverOrAssert* assertp, AstSenTree* senTreep,
+                                   AstNodeStmt* actionsp) {
+        // A procedure that may suspend may evaluate it in a later time step
+        if (m_procSuspends) return actionsp;
+        std::string scope;
+        for (const AstBegin* const beginp : m_namedBeginps) scope += "__DOT__" + beginp->name();
+        return m_reactive.newPending({assertp, m_modp, m_containerp, senTreep, scope}, actionsp,
+                                     m_actionNames);
+    }
+
     // Queue the action of a PExpr clause, run in the Reactive region (IEEE 1800-2023 4.4.2.6).
     // Return what queues it, at the decision of the attempt. An entry of the queue holds the
     // values of the automatic variables it reads (IEEE 1800-2023 16.14.6.1).
@@ -2736,6 +2901,14 @@ class AssertVisitor final : public VNVisitor {
         // rejects future value functions in immediate assertions and $cast (IEEE 1800-2023 16.9.4)
         if (!nodep->immediate()) AssertDeFutureVisitor{nodep->propp(), m_modp, m_modPastNum++};
 
+        // A $past in an action, lowered below, keeps it inline, see actionRunsReactive
+        const auto hasPast = [](const AstNode* actionsp) {
+            return actionsp
+                   && actionsp->existsAndNext([](const AstNode* np) { return VN_IS(np, Past); });
+        };
+        const AstAssert* const failAssertp = VN_CAST(nodep, Assert);
+        const bool passPast = hasPast(nodep->passsp());
+        const bool failPast = failAssertp && hasPast(failAssertp->failsp());
         iterateAndNextNull(nodep->sentreep());
         {
             // The actions of a concurrent assertion run in a process of their own, so its
@@ -2755,6 +2928,9 @@ class AssertVisitor final : public VNVisitor {
         }
         AstSenTree* sentreep = nodep->sentreep();
         AstSenTree* procClockp = nullptr;  // Leading clock of a procedural assertion
+        // Clocking the actions of a concurrent assertion, not a property expression, whose
+        // process runs its actions
+        AstSenTree* actionSenTreep = nullptr;
         if (nodep->immediate()) {
             UASSERT_OBJ(!sentreep, nodep, "Immediate assertions don't have sensitivity");
         } else {
@@ -2785,6 +2961,12 @@ class AssertVisitor final : public VNVisitor {
                 return;  // Later iterate will pick up
             }
             sentreep->unlinkFrBack();
+            const AstPropSpec* const specp = VN_CAST(nodep->propp(), PropSpec);
+            const AstNode* propp = specp ? specp->propp() : nodep->propp();
+            if (const AstSampled* const sampledp = VN_CAST(propp, Sampled)) {
+                propp = sampledp->exprp();
+            }
+            if (!VN_IS(propp, PExpr)) actionSenTreep = sentreep;
             if (m_procedurep) {
                 procClockp = sentreep;
                 sentreep = nullptr;
@@ -2804,6 +2986,7 @@ class AssertVisitor final : public VNVisitor {
         //
         const string& message = nodep->name();
         AstNodeStmt* passsp = nodep->passsp();
+        const AstNodeStmt* defaultFailsp = nullptr;  // Fail action made here, if no action
         if (passsp) passsp->unlinkFrBackWithNext();
         if (AstAssert* const assertp = VN_CAST(nodep, Assert)) {
             failsp = assertp->failsp();
@@ -2835,6 +3018,9 @@ class AssertVisitor final : public VNVisitor {
                     creditsp = newObservedDeferredCall(flp, covincp, nullptr, nodep);
                     if (passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
                 }
+                if (passsp && actionSenTreep && !nodep->nfaLowered() && !passPast) {
+                    passsp = newReactiveAction(nodep, actionSenTreep, passsp);
+                }
                 if (passsp) {
                     passsp = newIfAssertPassOn(nodep->controlVarp(), passsp, nodep->directive(),
                                                nodep->userType(),
@@ -2851,9 +3037,11 @@ class AssertVisitor final : public VNVisitor {
             } else {
                 ++m_statAsNotImm;
             }
-            if (!failsp)
+            if (!failsp) {
                 failsp = newFireAssertUnchecked(
                     nodep, VN_IS(nodep, AssertIntrinsic) ? "'$cast' failed." : "'assert' failed.");
+                defaultFailsp = failsp;
+            }
             if (obsDeferred) {
                 if (passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
                 if (failsp) failsp = newObservedDeferredAction(flp, failsp, nodep);
@@ -2913,6 +3101,16 @@ class AssertVisitor final : public VNVisitor {
             // Its actions run in the Reactive region (IEEE 1800-2023 4.4.2.6)
             if (mature && passsp) passsp = newQueuedAction(flp, passsp);
             if (mature && failsp) failsp = newQueuedAction(flp, failsp);
+        }
+        // Otherwise those of a clocked assertion run in the Reactive region from a process on
+        // its clock. V3AssertNfa made those of what it lowered so already, except a default.
+        if (!mature && actionSenTreep && !coverp) {
+            if (passsp && !nodep->nfaLowered() && !passPast) {
+                passsp = newReactiveAction(nodep, actionSenTreep, passsp);
+            }
+            if (failsp && (!nodep->nfaLowered() || failsp == defaultFailsp) && !failPast) {
+                failsp = newReactiveAction(nodep, actionSenTreep, failsp);
+            }
         }
         bool passspAlreadyGated = false;
         if (passsp && VN_IS(passsp, If)) passspAlreadyGated = VN_AS(passsp, If)->user1();
@@ -3687,6 +3885,14 @@ class AssertVisitor final : public VNVisitor {
             addObsFlushes(branchp);
         }
     }
+    // A fork branch is a process of its own, which also suspends if its own statements may
+    void visit(AstForkItem* nodep) override {
+        VL_RESTORER(m_procSuspends);
+        if (!nodep->disableWrapper()) {
+            m_procSuspends = m_procSuspends || V3AssertCommon::procSuspends(nodep->stmtsp());
+        }
+        iterateChildren(nodep);
+    }
     void visit(AstAssert* nodep) override {  //
         visitAssertionIterate(nodep, nodep->failsp());
     }
@@ -3944,6 +4150,7 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER_COPY(m_actionNames);
         VL_RESTORER(m_actionEventp);
         VL_RESTORER(m_actionReactivep);
+        VL_RESTORER(m_containerp);
         VL_RESTORER(m_modPastNum);
         VL_RESTORER(m_modStrobeNum);
         VL_RESTORER(m_modMonitorNum);
@@ -3952,6 +4159,7 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER_CLEAR(m_modExpr2Sen2DefaultDelayedAlwaysp);
         VL_RESTORER_CLEAR(m_delayedAlways2TickTimep);
         m_modp = nodep;
+        m_containerp = nodep;
         m_modPastNum = 0;
         m_obsNames.reset();
         m_obsFlushp = nullptr;
@@ -3977,6 +4185,8 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_actionEventp);
         VL_RESTORER(m_actionReactivep);
         VL_RESTORER_CLEAR(m_namedBeginps);
+        VL_RESTORER(m_procSuspends);
+        m_procSuspends = false;
         VL_RESTORER(m_obsFlushp);
         VL_RESTORER(m_obsDoneVarp);
         VL_RESTORER_CLEAR(m_obsWaitsp);
@@ -4001,7 +4211,9 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_actionEventp);
         VL_RESTORER(m_actionReactivep);
         VL_RESTORER_CLEAR(m_namedBeginps);
+        VL_RESTORER(m_procSuspends);
         m_procedurep = nodep;
+        m_procSuspends = V3AssertCommon::procSuspends(nodep->stmtsp());
         m_actionEventp = nullptr;
         m_actionReactivep = nullptr;
         AstBegin* const scopep = VN_CAST(nodep->stmtsp(), Begin);
@@ -4029,7 +4241,9 @@ class AssertVisitor final : public VNVisitor {
         // This code is needed rather than a visitor in V3Begin,
         // because V3Assert is called before V3Begin
         VL_RESTORER(m_beginp);
+        VL_RESTORER(m_containerp);
         m_beginp = nodep;
+        m_containerp = nodep;
         iterateChildren(nodep);
     }
     void visit(AstBegin* nodep) override {
