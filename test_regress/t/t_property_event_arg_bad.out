@@ -1,0 +1,30 @@
+%Error: t/t_property_event_arg_bad.v:24:11: Event expression as an argument of a call that is not a sequence or property instance (IEEE 1800-2023 16.8.1).
+                                          : ... note: In instance 't'
+   24 |     if (f(posedge clk)) $stop;
+      |           ^~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_event_arg_bad.v:25:11: Event expression as an argument of a call that is not a sequence or property instance (IEEE 1800-2023 16.8.1).
+                                          : ... note: In instance 't'
+   25 |     tk(.x(negedge clk));
+      |           ^~~~~~~
+%Error: t/t_property_event_arg_bad.v:26:13: Event expression as an argument of a call that is not a sequence or property instance (IEEE 1800-2023 16.8.1).
+                                          : ... note: In instance 't'
+   26 |     c = new(edge clk);
+      |             ^~~~
+%Error: t/t_property_event_arg_bad.v:27:9: Event expression as an argument of a call that is not a sequence or property instance (IEEE 1800-2023 16.8.1).
+                                         : ... note: In instance 't'
+   27 |     c.m(posedge clk);
+      |         ^~~~~~~
+%Error: t/t_property_event_arg_bad.v:34:28: Event expression as the actual argument of formal 'ev', which is not of type event or untyped (IEEE 1800-2023 16.8.1).
+                                          : ... note: In instance 't'
+   34 |   assert property (p_typed(posedge clk));
+      |                            ^~~~~~~
+%Error: t/t_property_event_arg_bad.v:38:43: Event expression as the actual argument of formal 'ev', which is not of type event or untyped (IEEE 1800-2023 16.8.1).
+                                          : ... note: In instance 't'
+   38 |   assert property (@(posedge clk) s_typed(posedge clk));
+      |                                           ^~~~~~~
+%Error: t/t_property_event_arg_bad.v:39:47: Event expression as the actual argument of formal 'ev', which is not of type event or untyped (IEEE 1800-2023 16.8.1).
+                                          : ... note: In instance 't'
+   39 |   assert property (@(posedge clk) s_typed(.ev(negedge clk)));
+      |                                               ^~~~~~~
+%Error: Exiting due to
