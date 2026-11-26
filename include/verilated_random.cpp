@@ -1494,8 +1494,7 @@ VlRandomizer::FastRanges VlRandomizer::fastUnion(FastRanges ranges) {
     return result;
 }
 
-// b is a sorted, disjoint membership domain. a may be the original overlapping
-// dist buckets: retain each contribution so overlaps add their weights.
+// b is a sorted, disjoint membership domain.
 VlRandomizer::FastRanges VlRandomizer::fastIntersect(const FastRanges& a, const FastRanges& b) {
     FastRanges result;
     for (const FastRange& range : a) {
@@ -1518,6 +1517,142 @@ static QData vl_fastBelow(VlRNG& rngr, QData bound) {
     return value % bound;
 }
 
+// High 64 bits of the 128-bit product a * b.
+static QData vl_fastMulHi(QData a, QData b) {
+    const QData mask = VL_MASK_Q(VL_IDATASIZE);
+    const QData low = (a & mask) * (b & mask);
+    const QData mid1 = (a >> VL_IDATASIZE) * (b & mask);
+    const QData mid2 = (a & mask) * (b >> VL_IDATASIZE);
+    const QData carry = ((low >> VL_IDATASIZE) + (mid1 & mask) + (mid2 & mask)) >> VL_IDATASIZE;
+    return (a >> VL_IDATASIZE) * (b >> VL_IDATASIZE) + (mid1 >> VL_IDATASIZE)
+           + (mid2 >> VL_IDATASIZE) + carry;
+}
+
+// Binary digits of a 128-bit numerator divided by a 64-bit divisor, most
+// significant first: the numerator's remaining bits, then fraction bits.
+struct VlFastQuotient final {
+    QData hi = 0;  // Numerator bits not yet consumed, left-aligned
+    QData lo = 0;
+    QData divisor = 1;
+    QData remainder = 0;
+    bool nextBit() {
+        const QData in = hi >> (VL_QUADSIZE - 1);
+        hi = (hi << 1) | (lo >> (VL_QUADSIZE - 1));
+        lo <<= 1;
+        // remainder * 2 + in >= divisor, without overflow
+        const bool carry = remainder >= divisor - remainder - in;
+        remainder = carry ? remainder - (divisor - remainder - in) : 2 * remainder + in;
+        return carry;
+    }
+    bool isZero() const { return !(hi | lo | remainder); }
+    // Significant bits in the unconsumed numerator
+    int bits() const {
+        return hi ? VL_QUADSIZE + static_cast<int>(VL_MOSTSETBITP1_Q(hi))
+                  : static_cast<int>(VL_MOSTSETBITP1_Q(lo));
+    }
+    // Consume count < 2 * VL_QUADSIZE numerator bits that are zero
+    void shiftLeft(int count) {
+        if (count >= VL_QUADSIZE) {
+            hi = lo << (count - VL_QUADSIZE);
+            lo = 0;
+        } else {
+            // Two right shifts avoid an undefined shift by VL_QUADSIZE when count is 0
+            hi = (hi << count) | ((lo >> (VL_QUADSIZE - 1 - count)) >> 1);
+            lo <<= count;
+        }
+    }
+};
+
+// One dist item's feasible values, a contiguous span of ranks in the domain.
+// Its mass, count * weight / divisor, is scaled into whole units plus, when
+// the scaled mass is not whole, a final unit accepted with probability equal
+// to the fraction whose binary digits remain in fraction.
+struct VlFastBucket final {
+    QData first = 0;  // Rank of the first feasible value
+    QData count = 0;  // Number of feasible values
+    QData weight = 0;
+    QData divisor = 0;
+    QData units = 0;
+    QData end = 0;  // Cumulative units, including any final partial unit
+    VlFastQuotient fraction{};
+};
+
+static constexpr QData s_fastMax = std::numeric_limits<QData>::max();
+
+// Exact integer masses over the least common denominator, when they fit.
+static QData vl_fastExactMasses(std::vector<VlFastBucket>& buckets) {
+    QData denominator = 1;
+    for (const VlFastBucket& bucket : buckets) {
+        QData a = denominator;
+        QData b = bucket.divisor;
+        while (b) {
+            const QData remainder = a % b;
+            a = b;
+            b = remainder;
+        }
+        const QData factor = bucket.divisor / a;
+        if (factor > s_fastMax / denominator) return 0;
+        denominator *= factor;
+    }
+    QData total = 0;
+    for (VlFastBucket& bucket : buckets) {
+        const QData scale = denominator / bucket.divisor;
+        if (bucket.weight > s_fastMax / scale) return 0;
+        const QData weight = bucket.weight * scale;
+        if (bucket.count > s_fastMax / weight) return 0;
+        bucket.units = bucket.count * weight;
+        if (bucket.units > s_fastMax - total) return 0;
+        total += bucket.units;
+        bucket.end = total;
+    }
+    return total;
+}
+
+// Masses scaled by a common power of two when no 64-bit common denominator
+// exists. Long division of each 128-bit count * weight by the divisor gives
+// its whole scaled units; the remaining quotient digits are the fraction of
+// its final unit. With every mass below 2^maxBits, the shift keeps the total
+// below 2^63 + buckets and the largest mass at least 2^60 / buckets units.
+static QData vl_fastScaledMasses(std::vector<VlFastBucket>& buckets) {
+    // Every mass < 2^maxBits; buckets is nonempty (asserted in fastSample)
+    int maxBits = std::numeric_limits<int>::min();
+    for (VlFastBucket& bucket : buckets) {
+        VlFastQuotient& fraction = bucket.fraction;
+        fraction = {vl_fastMulHi(bucket.count, bucket.weight), bucket.count * bucket.weight,
+                    bucket.divisor};
+        const int bits = fraction.bits() - static_cast<int>(VL_MOSTSETBITP1_Q(bucket.divisor)) + 1;
+        maxBits = std::max(maxBits, bits);
+    }
+    // At least -2 * VL_QUADSIZE, as maxBits <= 2 * VL_QUADSIZE and buckets.size() < 2^63
+    const int shift = 63 - maxBits - static_cast<int>(VL_MOSTSETBITP1_Q(buckets.size()));
+    QData total = 0;
+    for (VlFastBucket& bucket : buckets) {
+        VlFastQuotient& fraction = bucket.fraction;
+        // The quotient digits weighing at least 2^-shift are the whole units.
+        // Leading zero numerator bits add nothing, so skip them directly.
+        int digits = 2 * VL_QUADSIZE + shift;
+        const int skip = std::min(digits, 2 * VL_QUADSIZE - fraction.bits());
+        fraction.shiftLeft(skip);
+        for (bucket.units = 0, digits -= skip; digits; --digits) {
+            bucket.units = 2 * bucket.units + fraction.nextBit();
+        }
+        total += bucket.units + !fraction.isZero();
+        bucket.end = total;
+    }
+    return total;
+}
+
+// True with probability equal to the binary fraction whose digits fraction yields.
+static bool vl_fastBernoulli(VlRNG& rngr, VlFastQuotient fraction) {
+    while (true) {
+        QData bits = VL_RANDOM_RNG_Q(rngr);
+        for (int i = 0; i < VL_QUADSIZE; ++i, bits <<= 1) {
+            const bool digit = fraction.nextBit();
+            if (digit != static_cast<bool>(bits >> (VL_QUADSIZE - 1))) return digit;
+        }
+    }
+}
+
 bool VlRandomizer::fastSample(VlRNG& rngr, const FastRanges& domain, const FastConstraint* distp,
                               QData& valuer) {
     // A full, single power-of-two range has an unbiased procedural pick already.
@@ -1531,49 +1666,65 @@ bool VlRandomizer::fastSample(VlRNG& rngr, const FastRanges& domain, const FastC
             return true;
         }
     }
-    const FastRanges ranges = distp ? fastIntersect(distp->ranges, domain) : domain;
-    // Convert rational :/ per-value weights to exact integer masses. No floating
-    // point rounding and no rejection from the original (possibly huge) domain.
-    QData denominator = 1;
-    for (const FastRange& range : ranges) {
-        if (!range.divisor) return false;
-        QData a = denominator;
-        QData b = range.divisor;
-        while (b) {
-            const QData remainder = a % b;
-            a = b;
-            b = remainder;
-        }
-        const QData factor = range.divisor / a;
-        if (factor > std::numeric_limits<QData>::max() / denominator) return false;
-        denominator *= factor;
-    }
-    QData total = 0;
-    std::vector<QData> masses;
-    masses.reserve(ranges.size());
-    for (const FastRange& range : ranges) {
-        const QData scale = denominator / range.divisor;
-        if (range.weight > std::numeric_limits<QData>::max() / scale) return false;
-        const QData weight = range.weight * scale;
+    // Number the legal values in order. Each dist item then covers one span of
+    // ranks, however many domain ranges it crosses.
+    std::vector<QData> prefix;
+    prefix.reserve(domain.size() + 1);
+    prefix.push_back(0);
+    for (const FastRange& range : domain) {
         const QData count = range.hi - range.lo + 1;
-        if (!count) return false;  // The finite cardinality cannot be represented
-        if (count > std::numeric_limits<QData>::max() / weight) return false;
-        const QData mass = count * weight;
-        if (mass > std::numeric_limits<QData>::max() - total) return false;
-        total += mass;
-        masses.push_back(mass);
+        // Disjoint, non-adjacent ranges total 2^64 values only as one full range
+        if (!count) return false;
+        prefix.push_back(prefix.back() + count);
     }
-    if (!total) return false;
-    QData pick = vl_fastBelow(rngr, total);
-    for (size_t i = 0; i < ranges.size(); ++i) {
-        if (pick < masses[i]) {
-            // Consecutive equal-weight units map uniformly onto the legal values.
-            valuer = ranges[i].lo + pick / (masses[i] / (ranges[i].hi - ranges[i].lo + 1));
-            return true;
+    std::vector<VlFastBucket> buckets;
+    if (distp) {
+        // Rank of key, given the first domain range that does not end before key
+        const auto rankAt = [&](FastRanges::const_iterator it, QData key, bool inclusive) {
+            const QData before = prefix[it - domain.begin()];
+            return it != domain.end() && key >= it->lo ? before + (key - it->lo) + inclusive
+                                                       : before;
+        };
+        const auto endsBefore = [](const FastRange& r, QData key) { return r.hi < key; };
+        buckets.reserve(distp->ranges.size());
+        for (const FastRange& range : distp->ranges) {
+            const auto loIt = std::lower_bound(domain.begin(), domain.end(), range.lo, endsBefore);
+            const auto hiIt = loIt == domain.end() || range.hi <= loIt->hi
+                                  ? loIt
+                                  : std::lower_bound(loIt, domain.end(), range.hi, endsBefore);
+            const QData first = rankAt(loIt, range.lo, false);
+            const QData count = rankAt(hiIt, range.hi, true) - first;
+            if (count) buckets.push_back({first, count, range.weight, range.divisor});
         }
-        pick -= masses[i];
+        assert(!buckets.empty());  // The domain is a subset of the retained dist's union
+    } else {
+        buckets.push_back({0, prefix.back(), 1, 1});
     }
-    return false;  // Unreachable: the cumulative masses equal total
+    // IEEE 1800-2023 18.5.3: each feasible value carries its item's per-value
+    // weight, so an item's mass is its feasible count times weight / divisor.
+    QData total = vl_fastExactMasses(buckets);
+    if (!total) total = vl_fastScaledMasses(buckets);
+    // Only a final partial unit can reject, below B^2 / 2^60 of proposals
+    while (true) {
+        const QData pick = vl_fastBelow(rngr, total);
+        const auto it = std::upper_bound(buckets.begin(), buckets.end(), pick,
+                                         [](QData p, const VlFastBucket& b) { return p < b.end; });
+        const QData unit = pick - (it == buckets.begin() ? 0 : (it - 1)->end);
+        QData offset;
+        if (unit < it->units) {
+            // Whole units map in order onto the feasible values when they divide
+            // evenly among them; otherwise the value is drawn separately.
+            offset = (it->units % it->count) ? vl_fastBelow(rngr, it->count)
+                                             : unit / (it->units / it->count);
+        } else {
+            if (!vl_fastBernoulli(rngr, it->fraction)) continue;
+            offset = vl_fastBelow(rngr, it->count);
+        }
+        const QData rank = it->first + offset;
+        const size_t i = std::upper_bound(prefix.begin(), prefix.end(), rank) - prefix.begin() - 1;
+        valuer = domain[i].lo + (rank - prefix[i]);
+        return true;
+    }
 }
 
 // A hard singleton view fixes exactly those physical bits. It does not
