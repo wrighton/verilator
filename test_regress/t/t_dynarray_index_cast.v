@@ -287,6 +287,23 @@ module t (
     `checkd(q[1], 21);
   end
 
+  // An index with X bits selects no element: a read gives the default value and a write is
+  // ignored (IEEE 1800-2023 7.4.6)
+  initial begin
+    automatic int xd[] = '{10, 11, 12, 13};
+    automatic int xq[$] = '{20, 21, 22, 23};
+    `checkd(xd[4'bx001], 0);
+    `checkd(xq[4'bx000], 0);
+    `checkd(xq[$-4'bx001], 0);
+    xd[4'bx000] = 99;
+    xq[4'bx001] = 98;
+    xq[$-4'bx000] = 97;
+    `checkd(xd[0], 10);
+    `checkd(xq[1], 21);
+    `checkd(xq[3], 23);
+    `checkd(xq.size(), 4);
+  end
+
   // Nested dynamic arrays and queues, also below a fixed dimension with nonzero bounds
   int static_d[] = '{10, 11, 12};
   initial begin
