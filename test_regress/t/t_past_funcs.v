@@ -103,6 +103,11 @@ module Test (  /*AUTOARG*/
       `checkd($fell(fell1), 1);
       `checkd($stable(stable1), 1);
       `checkd($changed(stable1), 0);
+      // An omitted clocking event
+      `checkd($rose(stable1, ), 0);
+      `checkd($fell(fell1, ), 1);
+      `checkd($stable(stable1, ), 1);
+      `checkd($changed(stable1, ), 0);
     end
     stable1 <= ~stable1;
   end
