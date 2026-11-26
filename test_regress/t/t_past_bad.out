@@ -1,8 +1,12 @@
+%Error: t/t_past_bad.v:47:21: Automatic variable 'c' is not legal in the clocking event of a sampled value function (IEEE 1800-2023 16.9.3).
+                            : ... note: In instance 't.sub_i'
+   47 |     return $rose(d, c);
+      |                     ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_past_bad.v:14:18: Expecting expression to be constant, but variable isn't const: 'num'
                             : ... note: In instance 't'
    14 |     if ($past(d, num)) $stop;   
       |                  ^~~
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_past_bad.v:14:9: $past tick value must be constant (IEEE 1800-2023 16.9.3)
                            : ... note: In instance 't'
    14 |     if ($past(d, num)) $stop;   
@@ -30,4 +34,24 @@
                                        : ... note: In instance 't'
    19 |     if ($past(d, 32'h7ffffffc)) $stop;
       |         ^~~~~
+%Error: t/t_past_bad.v:26:55: Automatic variable 'i' is not legal in the clocking event of a sampled value function (IEEE 1800-2023 16.9.3).
+                            : ... note: In instance 't'
+   26 |     for (int i = 0; i < 4; i++) q[i] <= $rose(d, clks[i]);
+      |                                                       ^
+%Error: t/t_past_bad.v:27:70: Automatic variable 'i' is not legal in the clocking event of a sampled value function (IEEE 1800-2023 16.9.3).
+                            : ... note: In instance 't'
+   27 |     for (int i = 0; i < 4; i++) q[i] <= $past(d, 1, , @(posedge clks[i]));
+      |                                                                      ^
+%Error: t/t_past_bad.v:28:67: Automatic variable 'i' is not legal in the clocking event of a sampled value function (IEEE 1800-2023 16.9.3).
+                            : ... note: In instance 't'
+   28 |     for (int i = 0; i < 4; i++) q[i] <= $stable(d, @(negedge clks[i]));
+      |                                                                   ^
+%Error: t/t_past_bad.v:33:22: Automatic variable 'c' is not legal in the clocking event of a sampled value function (IEEE 1800-2023 16.9.3).
+                            : ... note: In instance 't'
+   33 |     q[0] <= $fell(d, c);
+      |                      ^
+%Error: t/t_past_bad.v:36:20: Automatic variable 'c' is not legal in the clocking event of a sampled value function (IEEE 1800-2023 16.9.3).
+                            : ... note: In instance 't'
+   36 |     o = $stable(d, c);
+      |                    ^
 %Error: Exiting due to
