@@ -38,7 +38,15 @@ interface ifc (
     @(posedge clk);
   end
 
-  final `checkd(n_wait, n_ref);
+  // Same clock: 'matched' sees each end point at the next tick (IEEE 1800-2023 F.6.1)
+  int n_matched = 0;
+  assert property (@(posedge clk) !s_ab.matched)
+  else ++n_matched;
+
+  final begin
+    `checkd(n_wait, n_ref);
+    `checkd(n_matched, n_ref);
+  end
 endinterface
 
 module leaf (
@@ -66,7 +74,14 @@ module leaf (
     @(posedge clk);
   end
 
-  final `checkd(n_wait, n_ref);
+  int n_matched = 0;
+  assert property (@(posedge clk) !s_ab.matched)
+  else ++n_matched;
+
+  final begin
+    `checkd(n_wait, n_ref);
+    `checkd(n_matched, n_ref);
+  end
 endmodule
 
 module mid (
@@ -100,7 +115,14 @@ module mid (
     @(posedge clk);
   end
 
-  final `checkd(n_wait, n_ref);
+  int n_matched = 0;
+  assert property (@(posedge clk) !s_ca.matched)
+  else ++n_matched;
+
+  final begin
+    `checkd(n_wait, n_ref);
+    `checkd(n_matched, n_ref);
+  end
 endmodule
 
 module t (

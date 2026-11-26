@@ -111,24 +111,44 @@ AstClocking* V3AssertCommon::moduleDefaultClockingp(const AstNodeModule* modp) {
     return nullptr;
 }
 
+// Add to modp an internal cover sequence of schemaRefp running stmtp at each end point
+// (IEEE 1800-2023 9.4.2.4)
+static void addSequenceEndCover(FileLine* flp, AstNodeModule* modp, AstSchemaRef* schemaRefp,
+                                AstNodeStmt* stmtp) {
+    AstCover* const coverp = new AstCover{flp, new AstPropSpec{flp, nullptr, nullptr, schemaRefp},
+                                          stmtp, VAssertType::CONCURRENT};
+    coverp->isCoverSeq(true);
+    coverp->isSeqEvent(true);
+    // A concurrent assertion is in its own process, clocked by it in AssertVisitor
+    modp->addStmtsp(new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, coverp});
+}
+
 AstVar* V3AssertCommon::newSequenceEvent(FileLine* flp, AstNodeModule* modp, const string& name,
                                          AstSchemaRef* schemaRefp) {
-    // The event is fired by an internal cover sequence (IEEE 1800-2023 9.4.2.4)
     AstVar* const eventp
         = new AstVar{flp, VVarType::MODULETEMP, name, modp->findBasicDType(VBasicDTypeKwd::EVENT)};
     eventp->lifetime(VLifetime::STATIC_EXPLICIT);
     modp->addStmtsp(eventp);
     v3Global.setHasEvents();
     if (!schemaRefp) return eventp;
-    AstFireEvent* const firep
-        = new AstFireEvent{flp, new AstVarRef{flp, eventp, VAccess::WRITE}, false};
-    AstCover* const coverp = new AstCover{flp, new AstPropSpec{flp, nullptr, nullptr, schemaRefp},
-                                          firep, VAssertType::CONCURRENT};
-    coverp->isCoverSeq(true);
-    coverp->isSeqEvent(true);
-    // A concurrent assertion is in its own process, clocked by it in AssertVisitor
-    modp->addStmtsp(new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, coverp});
+    addSequenceEndCover(flp, modp, schemaRefp,
+                        new AstFireEvent{flp, new AstVarRef{flp, eventp, VAccess::WRITE}, false});
     return eventp;
+}
+
+AstVar* V3AssertCommon::newSequenceEndCount(FileLine* flp, AstNodeModule* modp, const string& name,
+                                            AstSchemaRef* schemaRefp) {
+    // Not a temporary, so read as sampled in assertions. Wraps only after 2**32 end points
+    // between two reads, far beyond any clock ratio.
+    AstVar* const countp = new AstVar{flp, VVarType::VAR, name, modp->findUInt32DType()};
+    countp->lifetime(VLifetime::STATIC_EXPLICIT);
+    modp->addStmtsp(countp);
+    if (!schemaRefp) return countp;
+    addSequenceEndCover(flp, modp, schemaRefp,
+                        new AstAssign{flp, new AstVarRef{flp, countp, VAccess::WRITE},
+                                      new AstAdd{flp, new AstVarRef{flp, countp, VAccess::READ},
+                                                 new AstConst{flp, 1}}});
+    return countp;
 }
 
 string V3AssertCommon::assertCtlGetCall(VAssertCtlQuery query, VAssertType type,
