@@ -19,10 +19,6 @@
                                             : ... note: In instance 't'
    56 |     i = int'(s15_t'(15'h1234));   
       |            ^
-%Error: t/t_cast_unpacked_struct_bad.v:57:19: Expecting expression to be constant, but variable isn't const: 'i'
-                                            : ... note: In instance 't'
-   57 |     s = s15_t'({<<i{v15}});   
-      |                   ^
 %Error: t/t_cast_unpacked_struct_bad.v:57:17: Slice size isn't a constant or basic data type.
                                             : ... note: In instance 't'
    57 |     s = s15_t'({<<i{v15}});   
