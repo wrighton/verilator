@@ -155,6 +155,11 @@ void VlDelayScheduler::resumeForkStarts() {
     while (!m_forkStarts.empty()) {
         m_forkStartsSwap.swap(m_forkStarts);
         for (const VlDelayedCoroutineQueue::iterator& it : m_forkStartsSwap) {
+            // After $finish, they do not start, as resume() then drops what waits
+            if (VL_UNLIKELY(m_context.gotFinish())) {
+                m_queue.erase(it);
+                continue;
+            }
             VlCoroutineHandle handle = std::move(it->second);
             m_queue.erase(it);
             handle.resume();

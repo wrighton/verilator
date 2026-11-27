@@ -215,7 +215,7 @@ class VlDelayScheduler final {
         void await_suspend(std::coroutine_handle<VlPromise> coro) {
             if (phase == VlDelayPhase::ACTIVE) {
                 sched.m_queue.emplace(time, VlCoroutineHandle{coro, process, fileline});
-            } else if (phase == VlDelayPhase::FORK_START) {
+            } else if (VL_UNLIKELY(phase == VlDelayPhase::FORK_START)) {
                 sched.m_forkStarts.push_back(
                     sched.m_queue.emplace(time, VlCoroutineHandle{coro, process, fileline}));
             } else if (phase == VlDelayPhase::INACTIVE) {

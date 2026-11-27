@@ -1578,6 +1578,14 @@ class TimingControlVisitor final : public VNVisitor {
         const AstConst* const constp = VN_CAST(delayp->lhsp(), Const);
         return constp && !constp->isZero();
     }
+    // Whether the processes a fork starts would start after the region of the forking procedure
+    static bool forkStartsLate(const AstFork* forkp) {
+        if (!forkp->joinType().joinNone() || forkp->immediateStart()) return false;
+        for (const AstForkItem* const itemp : forkp->forkspList()) {
+            if (!startsWithDelay(itemp)) return true;
+        }
+        return false;
+    }
     void visit(AstAlways* nodep) override {
         if (v3Global.usesSuspendableExports() && hasFlags(nodep, T_DPI_CALL)) {
             nodep->v3warn(E_UNSUPPORTED,
@@ -1597,13 +1605,8 @@ class TimingControlVisitor final : public VNVisitor {
 
         // The processes this one forks start when it returns, in its region (IEEE 1800-2023
         // 9.3.2), not after it, unless they start the same at any point of the time step
-        const bool forksStart = nodep->exists([](const AstFork* forkp) {
-            if (!forkp->joinType().joinNone() || forkp->immediateStart()) return false;
-            for (const AstForkItem* const itemp : forkp->forkspList()) {
-                if (!startsWithDelay(itemp)) return true;
-            }
-            return false;
-        });
+        const bool forksStart
+            = nodep->exists([](const AstFork* forkp) { return forkStartsLate(forkp); });
         iterateChildren(nodep);
         if (hasFlags(nodep, T_HAS_PROC)) nodep->setNeedsVlProcess();
         if (!hasFlags(nodep, T_SUSPENDEE)) {
