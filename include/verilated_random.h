@@ -283,6 +283,8 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<std::pair<std::string, std::string>>
         m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
     bool m_checkOnly = false;  // Set for randomize(null)
+    bool m_spreadFailed = false;  // A solver failure cut this call's spreading short
+    bool m_warnedSpreadFailed = false;  // Warned of a spreading cut short
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen

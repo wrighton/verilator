@@ -77,6 +77,8 @@
 #   unsupported_once - answer the Nth status with unsupported
 #   upper_hex        - replace the Nth model reply with uppercase hex digits
 # TAMPER_AT: reply index to act on (default 3)
+# TAMPER_EXIT: exit status of die_at, die_status_at and model_trunc (default 0); z3
+#   exits with 101 when out of memory
 # TAMPER_ONCE: file marking that the tamper already acted. The runtime restarts
 #   a solver that died, which starts this wrapper again, so without the file a
 #   mode acts once per solver rather than once per simulation.
@@ -95,6 +97,7 @@ import types
 mode = os.environ.get("TAMPER", "none")
 at = int(os.environ.get("TAMPER_AT", "3"))
 once = os.environ.get("TAMPER_ONCE", "")
+exit_status = int(os.environ.get("TAMPER_EXIT", "0"))
 
 # Modes acting on the TAMPER_AT'th status line rather than the Nth model reply
 STATUS_MODES = ("die_status_at", "err_extra", "err_marker", "err_multiline", "err_mute",
@@ -407,7 +410,7 @@ for line in proc.stdout:
         emit("((a #x0b)")
         proc.kill()
         proc.wait()
-        sys.exit(0)
+        sys.exit(exit_status)
     if mode == "no_digits":
         emit("((a #x0b) (b #x))")
         swallow(line)
@@ -477,6 +480,6 @@ for line in proc.stdout:
     if mode in ("die_at", "die_status_at"):
         proc.kill()
         proc.wait()
-        sys.exit(0)
+        sys.exit(exit_status)
     if mode == "mute_at":
         mute()
