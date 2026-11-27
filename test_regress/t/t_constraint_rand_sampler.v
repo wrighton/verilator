@@ -46,6 +46,40 @@ module t;
     randc bit [2:0] r;
   endclass
 
+  // Constraints all off: the variables they name are as free as those in no constraint,
+  // whichever the sampler (IEEE 1800-2023 18.9)
+  class Off;
+    rand bit [6:0] f[4];
+    rand bit [6:0] g;
+    constraint c {
+      foreach (f[i]) f[i] < 7'd10;
+      g < 7'd10;
+    }
+  endclass
+
+  // A variable whose constraints are off beside constraints that cannot hold
+  class Unmet;
+    rand bit [6:0] f;
+    int limit;
+    constraint c {limit > 3;}
+    constraint d {f < 7'd10;}
+  endclass
+
+  class Obj;
+    rand bit [6:0] x;
+  endclass
+
+  // Member objects a constraint names through their array of handles, beside a unique array
+  class Handles;
+    rand Obj objs[2];
+    rand bit [6:0] w[3];
+    constraint c {foreach (objs[i]) objs[i].x < 7'd10;}
+    constraint u {unique {w};}
+    function new;
+      foreach (objs[i]) objs[i] = new;
+    endfunction
+  endclass
+
   initial begin
     Scalars s;
     Elems e;
@@ -107,6 +141,32 @@ module t;
     `checkd(randomize_result, 0);
     `checkd(s.a0, 5);
     `checkd(s.b, 5);
+
+    begin
+      automatic Off off = new;
+      automatic Handles h = new;
+      automatic Unmet unmet = new;
+      automatic int big = 0;
+      off.c.constraint_mode(0);
+      // Of 250 values, about 230 at 10 or more
+      for (int i = 0; i < 50; ++i) begin
+        randomize_result = off.randomize();
+        `checkd(randomize_result, 1);
+        foreach (off.f[j]) if (off.f[j] >= 7'd10) ++big;
+        if (off.g >= 7'd10) ++big;
+        randomize_result = h.randomize();
+        `checkd(randomize_result, 1);
+        foreach (h.objs[j]) `checkd(h.objs[j].x < 7'd10, 1'b1);
+        `checkd(h.w[0] != h.w[1] && h.w[0] != h.w[2] && h.w[1] != h.w[2], 1'b1);
+      end
+      `checkd(big > 150, 1'b1);
+      unmet.d.constraint_mode(0);
+      unmet.limit = 2;
+      unmet.f = 7'd5;
+      randomize_result = unmet.randomize();
+      `checkd(randomize_result, 0);
+      `checkd(unmet.f, 5);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
