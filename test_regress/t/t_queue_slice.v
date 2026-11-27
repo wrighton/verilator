@@ -283,6 +283,11 @@ module t;
       `checkp(ri, "'{'h0, 'h0}");
       ri = d[64'sh1_0000_0000:64'sh1_0000_0001];
       `checkp(ri, "'{'h0, 'h0}");
+      ri = d[64'h1_0000_0000:64'h1_0000_0001];
+      `checkp(ri, "'{'h0, 'h0}");
+      // Constant positions without a 64-bit value give no constant size
+      ri = d[0:64'hffff_ffff_ffff_ffff];
+      `checkp(ri, "'{'h14, 'h15}");
       ri = d[neg+:2];
       `checkp(ri, "'{'h0, 'h14}");
       ri = iq[wide+:2];
