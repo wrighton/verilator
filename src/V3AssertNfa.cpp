@@ -487,6 +487,14 @@ class SvaNfaBuilder final {
         return isPlainBoolean(nodep) ? 0 : -1;
     }
 
+    // The count N of `b[*N]` with N >= 1 and b a plain boolean, which holds b on N
+    // consecutive ticks (IEEE 1800-2023 16.9.2), or 0 for other repetitions
+    static int fixedRepCount(const AstSConsRep* repp) {
+        // cppcheck-suppress knownConditionTrueFalse
+        if (repp->maxCountp() || repp->unbounded() || !isPlainBoolean(repp->exprp())) return 0;
+        return static_cast<int>(getConstUInt(repp->countp()));
+    }
+
     // Contiguous match-length range [lo,hi] for an operand whose length varies
     // from AT MOST ONE ranged cycle delay; {-1,-1} otherwise. Drives the
     // variable-length `intersect` lowering (IEEE 1800-2023 16.9.6): more than
@@ -1941,6 +1949,13 @@ class SvaNfaBuilder final {
                 if (preLen < 0) return false;
             }
             return flattenFixedSeq(sexprp->exprp(), baseOffset + preLen + delayCycles, out);
+        }
+        if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            // A boolean on each of its repetitions
+            const int count = fixedRepCount(repp);
+            if (!count) return false;
+            for (int i = 0; i < count; ++i) out[baseOffset + i].push_back(repp->exprp());
+            return true;
         }
         if (AstSThroughout* const throughp = VN_CAST(nodep, SThroughout)) {
             // Over a single-cycle sequence, both conditions hold at that tick (IEEE 1800-2023
