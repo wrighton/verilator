@@ -711,6 +711,8 @@ public:
     bool failed() const VL_REQUIRES(m_mutex) { return m_stale || m_dirty || m_proc.fail(); }
     // Start a randomize() call
     void beginCall() VL_REQUIRES(m_mutex) { m_broke = false; }
+    // Whether a transaction of this call broke the solver
+    bool broke() const VL_REQUIRES(m_mutex) { return m_broke; }
     // End a randomize() call. One returning 1 has its solution, so is not a failed one even if
     // the solver broke after finding it; one returning 0 because the solver broke says so.
     void endCall(bool result) VL_REQUIRES(m_mutex) {
@@ -856,6 +858,10 @@ private:
         VL_WARN_MT("", 0, "randomize", str.c_str());
     }
 };
+
+// Most calls a break of the solver while spreading pauses an object's spreading for; each
+// further break doubles the pause, up to this
+static constexpr uint32_t spreadPauseMax = 1024;
 
 // Constructed before main(), so nothing here may touch the thread context
 static VlSolverSession s_solverSession;
@@ -2188,6 +2194,9 @@ int VlRandomizer::nextFast(VlRNG& rngr) {
     return 1;
 }
 
+// Whether this call spreads its solution; otherwise the solver's own, seeded, is the result
+bool VlRandomizer::spreads() const { return !solverSamples() && !m_spreadPause.now; }
+
 bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
     m_unsat = false;
     // A native array is not solved: checked before the solve, or sampled once it succeeds
@@ -2270,6 +2279,9 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
     bool result;
     m_spreadFailed = false;
     sess.beginCall();
+    // A check-only call spreads nothing, so leaves the pause as it is
+    m_spreadPause.now = !m_checkOnly && m_spreadPause.skips != 0;
+    if (m_spreadPause.now) --m_spreadPause.skips;
     if (!m_checkOnly && !m_solveBefore.empty()) {
         result = nextPhased(rngr, sess, uniqueExprs);
     } else {
@@ -2280,11 +2292,29 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
     // returned (IEEE 1800-2023 18.6.3), though less random
     const std::string heldReply = sess.takeHeldReply();
     if (!result && !heldReply.empty()) warnSolverReply(heldReply);
-    if (result && (m_spreadFailed || !heldReply.empty()) && !m_warnedSpreadFailed) {
-        m_warnedSpreadFailed = true;
-        VL_WARN_MT(__FILE__, __LINE__, "randomize",
-                   "Solver failed while spreading the solution, so this randomize() returned "
-                   "it less random; warned once per object.");
+    if (result && (m_spreadFailed || !heldReply.empty())) {
+        if (sess.broke()) {
+            // A solver that broke spreading likely breaks again, each time restarted, so later
+            // calls do not spread for a while, twice as long after each further break, and
+            // keep the solutions of a solver seeded afresh
+            m_spreadPause.length
+                = m_spreadPause.length ? std::min(2 * m_spreadPause.length, spreadPauseMax) : 1;
+            m_spreadPause.skips = m_spreadPause.length;
+            if (!m_warnedSpreadBroke) {
+                m_warnedSpreadBroke = true;
+                VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                           "Solver died or replied unreadably while spreading the solution, so "
+                           "this randomize() returned it less random, and spreading pauses for "
+                           "this object; warned once per object.");
+            }
+        } else if (!m_warnedSpreadFailed) {
+            m_warnedSpreadFailed = true;
+            VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                       "Solver failed while spreading the solution, so this randomize() returned "
+                       "it less random; warned once per object.");
+        }
+    } else if (result && !m_checkOnly && !m_spreadPause.now) {
+        m_spreadPause.length = 0;
     }
     sess.endCall(result);
     m_ug2.rngReseeds = rngr.reseeds();
@@ -2546,9 +2576,10 @@ void VlRandomizer::emitFlat(std::ostream& os, const std::vector<std::string>& un
 bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
                             const std::vector<std::string>& uniqueExprs)
     VL_REQUIRES(sess.m_mutex) {
-    if (!solverSamples() && m_randcVarNames.empty() && !m_checkOnly && !hasFrozenVar()
-        && unigen2(rngr, sess, uniqueExprs)) {
-        return true;
+    if (spreads() && m_randcVarNames.empty() && !m_checkOnly && !hasFrozenVar()) {
+        if (unigen2(rngr, sess, uniqueExprs)) return true;
+        // Sampling that broke the solver is a spread that broke it
+        if (sess.broke()) m_spreadFailed = true;
     }
     VlSolverTxn txn{sess};
     if (!txn.ok()) return false;
@@ -2558,7 +2589,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
     decltype(m_randcUsedValues) usedValues;  // The history cleared for the retry
     for (int attempt = 0; attempt < (hasRandc ? 2 : 1); ++attempt) {
         os << "(set-option :produce-models true)\n";
-        if (!solverSamples()) {
+        if (spreads()) {
             // Lets the diversity pins learn which assumptions conflict.
             os << "(set-option :produce-unsat-assumptions true)\n";
         } else if (!m_checkOnly) {
@@ -2592,7 +2623,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
         if (!applyModel(sess)) return false;
 
         if (!m_checkOnly) {
-            if (!solverSamples()) {
+            if (spreads()) {
                 sess.holdReplies(true);
                 solveDiversity(rngr, sess, nullptr, &uniqueExprs);
                 sess.holdReplies(false);
@@ -4651,7 +4682,7 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
 
         if (!keepBase) {
             os << "(set-option :produce-models true)\n";
-            if (solverSamples()) {
+            if (!spreads()) {
                 emitSolverSeed(os, rngr);
             } else {
                 // Every phase's variables are spread (solvePhaseValues, solveDiversity)
@@ -4696,7 +4727,7 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
             if (status != VlSolverStatus::SAT) return false;
         } else if (isFinalPhase) {
             if (!applyModel(sess)) return false;
-            if (!solverSamples()) {
+            if (spreads()) {
                 std::set<std::string> fixed;  // Variables of the earlier layers
                 for (size_t i = 0; i < phase; ++i)
                     fixed.insert(layers[i].begin(), layers[i].end());
@@ -4887,7 +4918,7 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
     // spreading it would cost a check or more per term, many times the solve itself on a slow
     // solver, and the solver's choice within the parity remains (a residual too). The values
     // are then read again, with the elements up to the sizes.
-    if (!solverSamples()) {
+    if (spreads()) {
         sess.holdReplies(true);
         std::vector<PinTerm> spread;
         // A layer can hold an array and some of its elements by name: each element is spread
