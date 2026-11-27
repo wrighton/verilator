@@ -487,6 +487,7 @@ class WidthVisitor final : public VNVisitor {
     std::vector<AstNodeSchema*> m_untypedFormalDecls;  // Such declarations, deleted at the end
     std::unordered_set<const AstVar*> m_typedCopyFormals;  // Their formals typed in the copies
     WidthVP* m_vup = nullptr;  // Current node state
+    const AstNodePreSel* m_streamWithSelp = nullptr;  // Part-select of the with[] widthed
     bool m_underFork = false;  // Visiting under a fork
     bool m_underCast = false;  // Visiting the expression of a size or integral type cast
     bool m_underSExpr = false;  // Visiting a sequence or boolean operand, not a property
@@ -2220,7 +2221,11 @@ class WidthVisitor final : public VNVisitor {
         }
         nodep->replaceWith(selp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
-        userIterateChildren(selp, WidthVP{CONTEXT_DET, PRELIM}.p());
+        {
+            VL_RESTORER(m_streamWithSelp);
+            m_streamWithSelp = selp;
+            userIterateChildren(selp, WidthVP{CONTEXT_DET, PRELIM}.p());
+        }
         // A range past the end of the array streams the whole array, then the default value for
         // the items it lacks (IEEE 1800-2023 11.4.14.4), as a dynamic array slice reads them
         AstNode* const newp = V3Width::widthSelNoIterEdit(selp, true);
@@ -2903,13 +2908,29 @@ class WidthVisitor final : public VNVisitor {
         if (const auto* const pinp = VN_CAST(nodep->backp(), Pin)) {
             if (pinp->param()) return;  // Ok, leave
         }
+        AstNode* basep = nodep;  // '$', or the '$ - k' it is in
         AstNode* backp = nodep->backp();
-        if (VN_IS(backp, Sub)) backp = backp->backp();
+        // Only '$ - k' is relative to the back, not 'k - $'
+        if (const AstSub* const subp = VN_CAST(backp, Sub)) {
+            if (subp->lhsp() == nodep) {
+                basep = backp;
+                backp = backp->backp();
+            }
+        }
         if (const auto* const selp = VN_CAST(backp, SelExtract)) {
             if (VN_IS(selp->fromp()->dtypep()->skipRefp(), QueueDType)) return;
         }
         if (const auto* const selp = VN_CAST(backp, SelBit)) {
             if (VN_IS(selp->fromp()->dtypep()->skipRefp(), QueueDType)) return;
+        }
+        // The base, not the width, of an indexed part-select, e.g. "q[$-1+:2]"
+        if (const AstNodePreSel* const selp = VN_CAST(backp, NodePreSel)) {
+            if (selp->rhsp() == basep && VN_IS(selp->fromp()->dtypep()->skipRefp(), QueueDType)) {
+                if (selp != m_streamWithSelp) return;
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: unbounded ('$') in the base of a"
+                                             " with[] stream expression part-select.");
+                return;
+            }
         }
         // queue_slice[#:$] and queue_bitsel[$] etc handled in V3WidthSel
         nodep->v3warn(E_UNSUPPORTED,
@@ -9914,6 +9935,8 @@ class WidthVisitor final : public VNVisitor {
                 assignMethod = VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK;
             } else if (slicep->method() == VCMethod::DYN_SLICE_PLUS) {
                 assignMethod = VCMethod::DYN_SLICE_ASSIGN_PLUS;
+            } else if (slicep->method() == VCMethod::DYN_SLICE_PLUS_BACK) {
+                assignMethod = VCMethod::DYN_SLICE_ASSIGN_PLUS_BACK;
             } else if (slicep->method() == VCMethod::DYN_SLICE_PLUS_PAD) {
                 assignMethod = VCMethod::DYN_SLICE_ASSIGN_PLUS_PAD;
             } else {
