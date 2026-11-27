@@ -479,11 +479,29 @@ module t;
     `checkp(data, "'{'h11, 'h22}");
     data = {>>{q with [0:wide]}};
     `checkp(data, "'{'h11, 'h22}");
-    // A range of variable size is limited to the array
-    data = {>>{q with [0:n+999999999]}};
-    `checkp(data, "'{'h11, 'h22}");
+    // Also with positions known only at runtime
+    data = {>>{q with [0:n+3]}};
+    `checkp(data, "'{'h11, 'h22, 'h0, 'h0, 'h0, 'h0}");
     data = {>>{q with [n-1+:3]}};
     `checkp(data, "'{'h22, 'h0, 'h0}");
+    data = {>>{q with [n:n]}};
+    `checkp(data, "'{'h0}");
+    data = {>>{q with [n+1:n+1]}};
+    `checkp(data, "'{'h0}");
+    data = {>>{q with [n-1:n]}};
+    `checkp(data, "'{'h22, 'h0}");
+    data = {>>{q with [2:2]}};
+    `checkp(data, "'{'h0}");
+    data = {>>{q with [n:n-1]}};
+    `checkp(data, "'{}");
+    // A dynamic array streamed into a queue
+    data = '{8'ha3, 8'hc5};
+    q = {>>{data}};
+    `checkp(q, "'{'ha3, 'hc5}");
+    q = {>>{data with [n:n]}};
+    `checkp(q, "'{'h0}");
+    q = {>>{data with [n-1:n]}};
+    `checkp(q, "'{'hc5, 'h0}");
     data = '{8'h11, 8'h22, 8'h33};
     data = {>>{data with [1:5]}};
     `checkp(data, "'{'h22, 'h33, 'h0, 'h0, 'h0}");
