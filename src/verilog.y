@@ -6796,7 +6796,8 @@ property_declaration<propertyp>:  // ==IEEE: property_declaration
 property_declarationFront<propertyp>:  // IEEE: part of property_declaration
                 yPROPERTY idAny/*property_identifier*/
                         { $$ = new AstProperty{$<fl>2, *$2};
-                          GRAMMARP->m_insideProperty = true; }
+                          GRAMMARP->m_insideProperty = true;
+                          GRAMMARP->m_typedPropertyPort = false; }
         ;
 
 property_port_listE<nodep>:  // IEEE: [ ( [ property_port_list ] ) ]
@@ -6897,7 +6898,8 @@ sequence_declaration<sequencep>:  // ==IEEE: sequence_declaration
 sequence_declarationFront<sequencep>:  // IEEE: part of sequence_declaration
                 ySEQUENCE idAny/*new_sequence*/
                         { $$ = new AstSequence{$<fl>2, *$2};
-                          GRAMMARP->m_insideProperty = true; }
+                          GRAMMARP->m_insideProperty = true;
+                          GRAMMARP->m_typedPropertyPort = false; }
         ;
 
 sequence_port_listE<nodep>:  // IEEE: [ ( [ sequence_port_list ] ) ]
