@@ -544,14 +544,13 @@ public:
     }
 
     void visit(AstCvtArrayToArray* nodep) override {
-        puts(nodep->reverse() ? "VL_REVCLONE_Q" : "VL_CLONE_Q");
-        // A bounded queue result, see AstNodeDType::cTypeRecurse
-        const AstQueueDType* const qdtypep = VN_CAST(nodep->dtypep()->skipRefp(), QueueDType);
-        if (qdtypep && qdtypep->boundp()) puts("<" + cvtToStr(qdtypep->boundConst() + 1) + ">");
-        puts("(");
+        // The result type, as its elements and bound may differ from the source's
+        puts(nodep->reverse() ? "VL_REVCLONE_Q<" : "VL_CLONE_Q<");
+        puts(nodep->dtypep()->cType("", false, false));
+        puts(">(");
         iterateAndNextConstNull(nodep->fromp());
         puts(", ");
-        puts(cvtToStr(nodep->blockSize()));
+        puts(cvtToStr(nodep->blockSize()) + "U");
         puts(", ");
         puts(cvtToStr(nodep->srcElementBits()));
         puts(", ");
@@ -784,7 +783,7 @@ public:
             rhs = false;
             iterateAndNextConstNull(castp->fromp());
             puts(", ");
-            puts(cvtToStr(castp->blockSize()));
+            puts(cvtToStr(castp->blockSize()) + "U");
             puts(", ");
             puts(cvtToStr(castp->srcElementBits()));
             puts(", ");
