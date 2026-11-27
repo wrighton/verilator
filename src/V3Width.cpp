@@ -12518,23 +12518,58 @@ class WidthVisitor final : public VNVisitor {
         iterateChildrenBackwardsConst(nodep);
     }
     // The net that is the expression or a constant select of it, or nullptr
-    static AstVar* selectedNetp(AstNodeExpr* exprp, std::vector<std::pair<int, int>>& ranges) {
+    // Variables written otherwise than as a net is (see continuousWrite)
+    using ProcWritten = std::unordered_set<const AstVar*>;
+    // The net, or with procWrittenpsp a variable that may be one (see netLikeVar), an
+    // expression selects, if any
+    static AstVar* selectedNetp(AstNodeExpr* exprp, std::vector<std::pair<int, int>>& ranges,
+                                const ProcWritten* procWrittenpsp = nullptr) {
         // The selected index ranges are appended from the net outwards
         AstVar* netp = nullptr;
         if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
             const AstConst* const lsbp = foldedConstp(selp->lsbp());
-            netp = lsbp ? selectedNetp(selp->fromp(), ranges) : nullptr;
+            netp = lsbp ? selectedNetp(selp->fromp(), ranges, procWrittenpsp) : nullptr;
             if (netp) ranges.emplace_back(lsbp->toSInt(), lsbp->toSInt() + selp->width() - 1);
             return netp;
         }
         if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
             const AstConst* const bitp = foldedConstp(selp->bitp());
-            netp = bitp ? selectedNetp(selp->fromp(), ranges) : nullptr;
+            netp = bitp ? selectedNetp(selp->fromp(), ranges, procWrittenpsp) : nullptr;
             if (netp) ranges.emplace_back(bitp->toSInt(), bitp->toSInt());
             return netp;
         }
         const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
-        return refp && refp->varp()->isNetOrNetPort() ? refp->varp() : nullptr;
+        if (!refp) return nullptr;
+        if (refp->varp()->isNetOrNetPort()
+            || (procWrittenpsp && netLikeVar(*procWrittenpsp, refp->varp()))) {
+            return refp->varp();
+        }
+        return nullptr;
+    }
+    // Whether a variable is driven only as a net is, so may be one: a variable of a module,
+    // not a port, written only by continuous assignments and output port connections, and
+    // not initialized. A written input port connected to it then drives it as it would a
+    // net, as it does with the net semantics of ports some tools offer (VCS -sv_net_ports).
+    static bool netLikeVar(const ProcWritten& procWrittenps, AstVar* varp) {
+        return varp->varType() == VVarType::VAR && !varp->isIO() && !varp->valuep()
+               && !varp->isFuncLocal() && !procWrittenps.count(varp)
+               && varp->dtypep()->skipRefp()->isIntegralOrPacked()
+               && VN_IS(findParentModule(varp), Module);
+    }
+    // Whether a written reference is written by a continuous assignment or an output port
+    // connection, as a net is
+    static bool continuousWrite(const AstNodeVarRef* refp) {
+        for (const AstNode* np = refp; np;) {
+            // The node np is under, not the one before it in a list
+            while (np->backp() && np->backp()->nextp() == np) np = np->backp();
+            np = np->backp();
+            if (VN_IS(np, AssignW) || VN_IS(np, Pin)) return true;
+            if (!np || VN_IS(np, NodeProcedure) || VN_IS(np, NodeFTask) || VN_IS(np, NodeModule)
+                || VN_IS(np, NodeStmt)) {
+                return false;
+            }
+        }
+        return false;  // LCOV_EXCL_LINE
     }
     // The index expression folded, if it is a constant, else nullptr
     static const AstConst* foldedConstp(AstNodeExpr* indexp) {
@@ -12626,6 +12661,7 @@ public:
         std::unordered_set<const AstNode*> zRefps;  // Lvalues of a constant z
         std::unordered_set<const AstVar*> zWrittenps;  // Variables so written
         std::unordered_set<const AstVar*> otherWrittenps;  // Variables written otherwise
+        ProcWritten procWrittenps;  // Variables written otherwise than as a net is
         std::vector<AstPin*> netPinps;  // Input connections, driving if their net is driven
         // Variables driven if the bits of the key an entry names are: ports connected to a
         // net, nets connected to an output
@@ -12639,6 +12675,7 @@ public:
                 if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
                     if (refp->access().isWriteOrRW()) {
                         (zRefps.count(refp) ? zWrittenps : otherWrittenps).emplace(refp->varp());
+                        if (!continuousWrite(refp)) procWrittenps.emplace(refp->varp());
                         // Which bits it writes is taken once the scan is done, as folding
                         // its index edits the tree this traversal is over
                         if (!undrivingRefps.count(refp)) writtenRefps.push_back(refp);
@@ -12728,7 +12765,8 @@ public:
         for (AstPin* const pinp : netPinps) {
             std::vector<std::pair<int, int>> ranges;
             AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
-            if (const AstVar* const netp = exprp ? selectedNetp(exprp, ranges) : nullptr) {
+            if (const AstVar* const netp
+                = exprp ? selectedNetp(exprp, ranges, &procWrittenps) : nullptr) {
                 // Driven only if the bits it connects are (IEEE 1800-2023 23.3.3.7)
                 const bool bitwise = connectsBitwise(netp, pinp->modVarp(), ranges);
                 netPortps[netp].push_back(NetPort{pinp->modVarp(), std::move(ranges), bitwise});
@@ -12794,9 +12832,9 @@ public:
             }
         }  // LCOV_EXCL_LINE
         const InstancePaths instancePaths{netlistp};
-        driveConnections(writtenPinps,
-                         DriveContext{std::move(drivenps), std::move(drivenRanges),
-                                      std::move(netPortps), std::move(inPinps), instancePaths});
+        driveConnections(writtenPinps, DriveContext{std::move(drivenps), std::move(drivenRanges),
+                                                    std::move(netPortps), std::move(inPinps),
+                                                    instancePaths, std::move(procWrittenps)});
     }
     // The instances of each module, by the cells creating them, to tell apart the instances
     // hierarchical references to the module's variables are of (see cellsOf)
@@ -12892,6 +12930,7 @@ public:
         // Input port connections of each port
         std::unordered_map<const AstVar*, std::vector<std::pair<AstCell*, AstPin*>>> inPinps;
         const InstancePaths& instancePaths;  // To tell apart instances of one module
+        ProcWritten procWrittenps;  // Variables written otherwise than as a net is
     };
     // A connection of a port that would drive the net connected to it
     struct DriveConn final {
@@ -13011,7 +13050,9 @@ public:
             // A concatenation connects each of its parts to bits of the port, as a whole
             std::vector<DriveConn> pinConnList;
             AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
-            if (!exprp || !addDriveConns(cellPin.first, pinp, exprp, 0, pinConnList)) continue;
+            if (!exprp || !addDriveConns(cellPin.first, pinp, exprp, 0, ctx, pinConnList)) {
+                continue;
+            }
             const size_t firsti = conns.size();
             pinConns.emplace(pinp, firsti);
             partsLeft.emplace(pinp, pinConnList.size());
@@ -13046,6 +13087,9 @@ public:
                 VL_DO_DANGLING(pushDeletep(pinExprp->unlinkFrBack()), pinExprp);
             }
             V3LinkLValue::linkLValueSet(exprp);
+            // A variable driven only as a net is, now with a second driver, becomes one, so
+            // its drivers resolve (see netLikeVar)
+            if (!conn.netp->isNetOrNetPort()) conn.netp->varType(VVarType::WIRE);
             conn.netp->icoMaybeWritten(true);
             conn.netp->isContinuously(true);
             FileLine* const flp = exprp->fileline();
@@ -13082,20 +13126,20 @@ public:
     // Add to connsr the connections exprp makes, connected to the port bits from lsb, if it
     // is a net or a constant select of one, or a concatenation of those
     static bool addDriveConns(AstCell* cellp, AstPin* pinp, AstNodeExpr* exprp, int lsb,
-                              std::vector<DriveConn>& connsr) {
+                              const DriveContext& ctx, std::vector<DriveConn>& connsr) {
         // A concatenation '{a, b}' is a replication of one
         if (AstReplicate* const repp = VN_CAST(exprp, Replicate)) {
             return VN_AS(repp->countp(), Const)->toUInt() == 1
-                   && addDriveConns(cellp, pinp, repp->srcp(), lsb, connsr);
+                   && addDriveConns(cellp, pinp, repp->srcp(), lsb, ctx, connsr);
         }
         if (AstConcat* const catp = VN_CAST(exprp, Concat)) {
-            return addDriveConns(cellp, pinp, catp->rhsp(), lsb, connsr)
-                   && addDriveConns(cellp, pinp, catp->lhsp(), lsb + catp->rhsp()->width(),
+            return addDriveConns(cellp, pinp, catp->rhsp(), lsb, ctx, connsr)
+                   && addDriveConns(cellp, pinp, catp->lhsp(), lsb + catp->rhsp()->width(), ctx,
                                     connsr);
         }
         DriveConn conn{cellp, pinp, exprp, lsb, nullptr, {}, {}, {}, 0, exprp->width() - 1,
                        0,     false};
-        conn.netp = selectedNetp(exprp, conn.ranges);
+        conn.netp = selectedNetp(exprp, conn.ranges, &ctx.procWrittenps);
         if (!conn.netp) return false;
         conn.partRanges = conn.ranges;
         connsr.push_back(std::move(conn));
