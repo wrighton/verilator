@@ -16876,6 +16876,13 @@ public:
                 AstNodeExpr* const dstp = streamp->lhsp()->unlinkFrBack();
                 AstNodeExpr* srcp = nodep->rhsp()->unlinkFrBack();
                 if (VN_IS(streamp, StreamL)) {
+                    // The bits needed are consumed from the left of the source, and then
+                    // reordered (IEEE 1800-2023 11.4.14.3)
+                    if (srcp->dtypep()->skipRefp()->isIntegralOrPacked()
+                        && srcp->width() > lwidth) {
+                        srcp = new AstSel{streamp->fileline(), srcp, srcp->width() - lwidth,
+                                          lwidth};
+                    }
                     streamp->lhsp(srcp);
                     streamp->dtypeSetBitOrLogicUnsized(
                         srcp->width(), srcp->widthMin(), VSigning::UNSIGNED,
