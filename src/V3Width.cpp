@@ -12547,12 +12547,14 @@ class WidthVisitor final : public VNVisitor {
         return nullptr;
     }
     // Whether a variable is driven only as a net is, so may be one: a variable of a module,
-    // not a port, written only by continuous assignments and output port connections, and
-    // not initialized. A written input port connected to it then drives it as it would a
-    // net, as it does with the net semantics of ports some tools offer (VCS -sv_net_ports).
+    // not a port nor public, written by one continuous assignment or output port connection
+    // and nothing else, and not initialized. A written input port connected to it then drives
+    // it as it would a net, as it does with the net semantics of ports some tools offer (VCS
+    // -sv_net_ports). With two such writers it stays a variable driven twice (IEEE 1800-2023
+    // 6.5), which is an error.
     static bool netLikeVar(const ProcWritten& procWrittenps, AstVar* varp) {
         return varp->varType() == VVarType::VAR && !varp->isIO() && !varp->valuep()
-               && !varp->isFuncLocal() && !procWrittenps.count(varp)
+               && !varp->isFuncLocal() && !varp->isSigPublic() && !procWrittenps.count(varp)
                && varp->dtypep()->skipRefp()->isIntegralOrPacked()
                && VN_IS(findParentModule(varp), Module);
     }
@@ -12661,7 +12663,9 @@ public:
         std::unordered_set<const AstNode*> zRefps;  // Lvalues of a constant z
         std::unordered_set<const AstVar*> zWrittenps;  // Variables so written
         std::unordered_set<const AstVar*> otherWrittenps;  // Variables written otherwise
-        ProcWritten procWrittenps;  // Variables written otherwise than as a net is
+        // Variables written otherwise than as a net is, or by two continuous writers
+        ProcWritten procWrittenps;
+        std::unordered_set<const AstVar*> contWrittenps;  // Variables with a continuous writer
         std::vector<AstPin*> netPinps;  // Input connections, driving if their net is driven
         // Variables driven if the bits of the key an entry names are: ports connected to a
         // net, nets connected to an output
@@ -12675,7 +12679,11 @@ public:
                 if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
                     if (refp->access().isWriteOrRW()) {
                         (zRefps.count(refp) ? zWrittenps : otherWrittenps).emplace(refp->varp());
-                        if (!continuousWrite(refp)) procWrittenps.emplace(refp->varp());
+                        // A second continuous writer also keeps it a variable (see netLikeVar)
+                        if (!continuousWrite(refp)
+                            || !contWrittenps.emplace(refp->varp()).second) {
+                            procWrittenps.emplace(refp->varp());
+                        }
                         // Which bits it writes is taken once the scan is done, as folding
                         // its index edits the tree this traversal is over
                         if (!undrivingRefps.count(refp)) writtenRefps.push_back(refp);
