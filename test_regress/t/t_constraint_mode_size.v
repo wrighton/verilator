@@ -57,6 +57,11 @@ module t;
       `checkd(s.q.size(), 2);
       `checkd(s.d.size(), 2);
       if (s.q[0] != 1 || s.q[1] != 2) seen_diff = 1;
+      randomize_result = s.randomize() with { x == 2; };
+      `checkd(randomize_result, 1);
+      `checkd(s.q.size(), 2);
+      `checkd(s.d.size(), 2);
+      `checkd(s.x, 2);
     end
     `checkd(seen_diff, 1);  // Elements still randomized
     s.c_q.constraint_mode(1);
