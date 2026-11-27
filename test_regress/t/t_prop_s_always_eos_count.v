@@ -4,7 +4,7 @@
 // SPDX-FileCopyrightText: 2026 PlanV GmbH
 // SPDX-License-Identifier: CC0-1.0
 
-// s_always end-of-simulation failures. Comments below describe #7946 per-attempt multiplicity; golden reflects its revert (#8258)
+// s_always end-of-simulation failures, one for each attempt pending at $finish
 
 module t (
 `ifdef VERILATOR
@@ -20,6 +20,7 @@ module t (
   int cyc = 0;
   bit data = 0;
   bit disable_now = 0;
+  bit disable_mid = 0;
   bit abort_now = 0;
 
   // Finish-edge sample differs from the preceding clock's sample
@@ -40,6 +41,14 @@ module t (
   assert property (@(posedge clk) s_always[1: 1] 1'b1)
   else $display("EOS_PAST=%0d", $past(data));
 
+  // s_always [0:2]: the attempts of the last two ticks are pending.
+  assert property (@(posedge clk) s_always[0: 2] 1'b1)
+  else $display("EOS_WINDOW");
+
+  // Only the attempt at cyc 8 holds its antecedent; its window needs ticks 11 and 12.
+  assert property (@(posedge clk) (cyc == 8) |-> s_always[3: 4] 1'b1)
+  else $display("EOS_IMPLIED");
+
   // Branch states OR-fold by attempt start cycle before EOS multiplicity
   assert property (@(posedge clk) (s_always[1: 3] 1'b1) or(s_always[1: 3] 1'b1))
   else $display("EOS_BRANCH");
@@ -54,6 +63,15 @@ module t (
   assert property (@(posedge clk) s_always[300: 300] 1'b1)
   else $display("EOS_DELAY_ALONE");
 
+  // Attempts told apart by age across operands: the [2:2] operand resolves all but two
+  assert property (@(posedge clk) (s_always[300: 300] 1'b1) or(s_always[2: 2] 1'b1))
+  else $display("EOS_OR_MIXED");
+
+  // Unsupported: where threads of attempts may merge, the assertion fails once, not once
+  // for each pending attempt (here those at cyc 8, 9 and 10)
+  assert property (@(posedge clk) (cyc >= 6) |-> ##[1: 2] s_always[1: 2] 1'b1)
+  else $display("EOS_MERGED_ONCE");
+
   // Attempts resolved by the immediate sibling are not EOS failures
   assert property (@(posedge clk) 1'b1 or(s_always[1: 3] 1'b1))
   else $display("EOS_RESOLVED_BAD");
@@ -62,6 +80,13 @@ module t (
 
   assert property (@(posedge clk) disable iff (disable_now) s_always[1: 3] 1'b1)
   else $display("EOS_DISABLE_BAD");
+
+  // Disabled on tick 8 alone, which cancels the attempts started up to it, so those of ticks 9
+  // and 10 are pending
+  assert property (@(posedge clk) disable iff (disable_mid) s_always[2: 5] 1'b1)
+  else $display("EOS_DISABLE_MID");
+  assert property (@(posedge clk) disable iff (disable_mid) s_always[300: 300] 1'b1)
+  else $display("EOS_DISABLE_MID_RING");
 
   assert property (@(posedge clk) sync_accept_on (abort_now) s_always[1: 3] 1'b1)
   else $display("EOS_ABORT_BAD");
@@ -101,6 +126,7 @@ module t (
   else $display("EOS_NOT_OR_BAD");
 
   always @(negedge clk) begin
+    disable_mid = cyc == 8;
     if (cyc == 9) abort_now = 1;
     if (cyc == 10) disable_now = 1;
   end

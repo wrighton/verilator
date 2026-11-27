@@ -18,8 +18,16 @@
 [35] EVENT
 *-* All Finished *-*
 [55] %Error: t_prop_s_always_eos_timing.v:28: Assertion failed in top.t
+[55] %Error: t_prop_s_always_eos_timing.v:28: Assertion failed in top.t
+[55] %Error: t_prop_s_always_eos_timing.v:28: Assertion failed in top.t
+[55] %Error: t_prop_s_always_eos_timing.v:33: Assertion failed in top.t
+[55] %Error: t_prop_s_always_eos_timing.v:33: Assertion failed in top.t
 [55] %Error: t_prop_s_always_eos_timing.v:33: Assertion failed in top.t
 [55] PLAIN
+[55] PLAIN
+[55] PLAIN
+[55] OTHER_PLAIN
+[55] OTHER_PLAIN
 [55] OTHER_PLAIN
 [55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
 [55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
@@ -37,4 +45,6 @@
 [55] UNTIL_PLAIN
 [55] UNTIL_PLAIN
 [55] PLAIN
+[55] WAIT
+[55] WAIT
 [55] WAIT

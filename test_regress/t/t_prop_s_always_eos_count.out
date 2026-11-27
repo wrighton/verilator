@@ -1,13 +1,64 @@
 *-* All Finished *-*
 EOS_FAIL
+EOS_FAIL
+EOS_FAIL
+EOS_RING
 EOS_RING
 EOS_PAST=0
+EOS_WINDOW
+EOS_WINDOW
+EOS_IMPLIED
+EOS_BRANCH
+EOS_BRANCH
 EOS_BRANCH
 EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_LARGE_RING
+EOS_DELAY_RING
+EOS_DELAY_RING
+EOS_DELAY_RING
+EOS_DELAY_RING
+EOS_DELAY_RING
+EOS_DELAY_RING
+EOS_DELAY_RING
+EOS_DELAY_RING
+EOS_DELAY_RING
+EOS_DELAY_RING
 EOS_DELAY_RING
 EOS_DELAY_ALONE
-[115] %Error: t_prop_s_always_eos_count.v:78: Assertion failed in top.t: EOS_ERROR
--Info: t/t_prop_s_always_eos_count.v:78: Verilog $stop, ignored due to +verilator+error+limit
-[115] %Error: t_prop_s_always_eos_count.v:81: Assertion failed in top.t
+EOS_DELAY_ALONE
+EOS_DELAY_ALONE
+EOS_DELAY_ALONE
+EOS_DELAY_ALONE
+EOS_DELAY_ALONE
+EOS_DELAY_ALONE
+EOS_DELAY_ALONE
+EOS_DELAY_ALONE
+EOS_DELAY_ALONE
+EOS_DELAY_ALONE
+EOS_OR_MIXED
+EOS_OR_MIXED
+EOS_MERGED_ONCE
+EOS_DISABLE_MID
+EOS_DISABLE_MID
+EOS_DISABLE_MID_RING
+EOS_DISABLE_MID_RING
+[115] %Error: t_prop_s_always_eos_count.v:103: Assertion failed in top.t: EOS_ERROR
+-Info: t/t_prop_s_always_eos_count.v:103: Verilog $stop, ignored due to +verilator+error+limit
+[115] %Error: t_prop_s_always_eos_count.v:103: Assertion failed in top.t: EOS_ERROR
+[115] %Error: t_prop_s_always_eos_count.v:103: Assertion failed in top.t: EOS_ERROR
+[115] %Error: t_prop_s_always_eos_count.v:106: Assertion failed in top.t
+[115] %Error: t_prop_s_always_eos_count.v:106: Assertion failed in top.t
+[115] %Error: t_prop_s_always_eos_count.v:106: Assertion failed in top.t
+EOS_NBA=1
+EOS_NBA=1
 EOS_NBA=1
 EOS_UNTIL
