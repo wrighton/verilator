@@ -85,4 +85,25 @@ module t;
     `checkh($changed(c), n == 1);
     n++;
   end
+
+  // Nor a value another process wrote with a blocking assignment earlier in the time step,
+  // whichever process runs first
+  bit [6:0] d = 7'h11;
+  bit e = 0;
+  always @(posedge clk) begin
+    d = d + 7'h23;
+    e = ~e;
+  end
+  int m = 0;
+  always @(posedge clk) begin
+    `checkh($sampled(d), m == 0 ? 7'h11 : 7'h34);
+    `checkh($past(d), 7'h11);
+    `checkh($stable(d), m == 0);
+    `checkh($changed(d), m == 1);
+    `checkh($sampled(e), m == 1);
+    `checkh($rose(e), m == 1);
+    `checkh($fell(e), 1'b0);
+    `checkh($stable(e), m == 0);
+    m++;
+  end
 endmodule
