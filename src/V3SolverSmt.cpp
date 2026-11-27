@@ -13273,6 +13273,10 @@ public:
         // them against post-resize arrays if a size phase is needed below.
         AstBegin* const capturedClonep
             = SmtUtil::newItemsHolderp(nodep->fileline(), cloneWithDistPreambles(capturedTreep));
+        // Its blocks renamed, as of dist picks, so the locals they hold are not declared twice
+        capturedClonep->foreach([&](AstBegin* blockp) {
+            if (blockp != capturedClonep) blockp->name(m_uniqueNames.get(blockp->name()));
+        });
         // A function that is not pure the with-block calls would be called again on each retry
         // of the size solve, so then the sizes are not retried (see impureConstraintCalls)
         const bool withImpureCalls = hasImpureCalls(capturedClonep);
