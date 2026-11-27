@@ -3323,52 +3323,48 @@ inline void VL_UNPACK_RQ_Q(int lbits, int rbits, VlQueue<QData>& q, QData from) 
 inline void VL_UNPACK_RI_W(int lbits, int rbits, VlQueue<CData>& q, WDataInP rwp) {
     const int size = (rbits + lbits - 1) / lbits;
     q.renew(size);
-    const IData mask = VL_MASK_I(lbits);
     for (size_t i = 0; i < size; ++i) {
         // Extract from MSB to LSB: MSB goes to index 0
         const int bitPos = rbits - (i + 1) * lbits;
         const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
         const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
-        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, actualBitPos, actualWidth) & mask;
+        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, actualBitPos, actualWidth) & VL_MASK_I(actualWidth);
     }
 }
 
 inline void VL_UNPACK_RI_W(int lbits, int rbits, VlQueue<SData>& q, WDataInP rwp) {
     const int size = (rbits + lbits - 1) / lbits;
     q.renew(size);
-    const IData mask = VL_MASK_I(lbits);
     for (size_t i = 0; i < size; ++i) {
         // Extract from MSB to LSB: MSB goes to index 0
         const int bitPos = rbits - (i + 1) * lbits;
         const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
         const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
-        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, actualBitPos, actualWidth) & mask;
+        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, actualBitPos, actualWidth) & VL_MASK_I(actualWidth);
     }
 }
 
 inline void VL_UNPACK_RI_W(int lbits, int rbits, VlQueue<IData>& q, WDataInP rwp) {
     const int size = (rbits + lbits - 1) / lbits;
     q.renew(size);
-    const IData mask = VL_MASK_I(lbits);
     for (size_t i = 0; i < size; ++i) {
         // Extract from MSB to LSB: MSB goes to index 0
         const int bitPos = rbits - (i + 1) * lbits;
         const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
         const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
-        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, actualBitPos, actualWidth) & mask;
+        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, actualBitPos, actualWidth) & VL_MASK_I(actualWidth);
     }
 }
 
 inline void VL_UNPACK_RQ_W(int lbits, int rbits, VlQueue<QData>& q, WDataInP rwp) {
     const int size = (rbits + lbits - 1) / lbits;
     q.renew(size);
-    const QData mask = VL_MASK_Q(lbits);
     for (size_t i = 0; i < size; ++i) {
         // Extract from MSB to LSB: MSB goes to index 0
         const int bitPos = rbits - (i + 1) * lbits;
         const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
         const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
-        q.atWrite(i) = VL_SEL_QWII(rbits, rwp, actualBitPos, actualWidth) & mask;
+        q.atWrite(i) = VL_SEL_QWII(rbits, rwp, actualBitPos, actualWidth) & VL_MASK_Q(actualWidth);
     }
 }
 
@@ -3382,7 +3378,8 @@ inline void VL_UNPACK_RW_W(int lbits, int rbits, VlQueue<VlWide<N_Words>>& q, WD
         const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
         const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
         VL_SEL_WWII(actualWidth, rbits, q.atWrite(i), rwp, actualBitPos, actualWidth);
-        q.atWrite(i)[VL_WORDS_I(lbits) - 1] &= VL_MASK_E(lbits);  // Clean it
+        // VL_SEL_WWII may copy whole words: clean the bits above the selection
+        q.atWrite(i)[VL_WORDS_I(actualWidth) - 1] &= VL_MASK_E(actualWidth);
     }
 }
 

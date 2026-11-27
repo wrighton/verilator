@@ -157,4 +157,35 @@ module t (
     `checkh(x96, {crc[23:16], crc[15:8], crc[7:0], 72'h0});
   end
 
+  // Unpacking a wide stream into a dynamic array or queue, with a partial last element
+  always @(posedge clk) begin
+    logic [74:0] s75;
+    logic [69:0] w70[$];
+    logic [63:0] l64[$];
+    byte unsigned b8[$];
+    shortint unsigned h16[$];
+    int unsigned i32[$];
+    s75 = {crc[10:0], crc};
+    {>>{w70}} = s75;
+    `checkh(w70.size(), 2);
+    `checkh(w70[0], s75[74:5]);
+    `checkh(w70[1], {65'h0, s75[4:0]});
+    {>>{l64}} = s75;
+    `checkh(l64.size(), 2);
+    `checkh(l64[0], s75[74:11]);
+    `checkh(l64[1], {53'h0, s75[10:0]});
+    {>>{b8}} = s75;
+    `checkh(b8.size(), 10);
+    `checkh(b8[0], s75[74:67]);
+    `checkh(b8[9], {5'h0, s75[2:0]});
+    {>>{h16}} = s75;
+    `checkh(h16.size(), 5);
+    `checkh(h16[0], s75[74:59]);
+    `checkh(h16[4], {5'h0, s75[10:0]});
+    {>>{i32}} = s75;
+    `checkh(i32.size(), 3);
+    `checkh(i32[0], s75[74:43]);
+    `checkh(i32[2], {21'h0, s75[10:0]});
+  end
+
 endmodule
