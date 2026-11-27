@@ -3264,114 +3264,122 @@ inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_S
 // Expressions needing insert/select
 
 inline void VL_UNPACK_RI_I(int lbits, int rbits, VlQueue<CData>& q, IData from) {
-    const size_t size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
     const IData mask = VL_MASK_I(lbits);
-    for (size_t i = 0; i < size; ++i) q.atWrite(size - 1 - i) = (from >> (i * lbits)) & mask;
+    for (int i = 0; i < size; ++i) q.atWrite(i) = (from >> (rbits - (i + 1) * lbits)) & mask;
 }
 
 inline void VL_UNPACK_RI_I(int lbits, int rbits, VlQueue<SData>& q, IData from) {
-    const size_t size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
     const IData mask = VL_MASK_I(lbits);
-    for (size_t i = 0; i < size; ++i) q.atWrite(size - 1 - i) = (from >> (i * lbits)) & mask;
+    for (int i = 0; i < size; ++i) q.atWrite(i) = (from >> (rbits - (i + 1) * lbits)) & mask;
 }
 
 inline void VL_UNPACK_RI_I(int lbits, int rbits, VlQueue<IData>& q, IData from) {
-    const size_t size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
     const IData mask = VL_MASK_I(lbits);
-    for (size_t i = 0; i < size; ++i) q.atWrite(size - 1 - i) = (from >> (i * lbits)) & mask;
+    for (int i = 0; i < size; ++i) q.atWrite(i) = (from >> (rbits - (i + 1) * lbits)) & mask;
 }
 
 inline void VL_UNPACK_RI_Q(int lbits, int rbits, VlQueue<CData>& q, QData from) {
-    const size_t size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
     const IData mask = VL_MASK_I(lbits);
-    for (size_t i = 0; i < size; ++i) q.atWrite(size - 1 - i) = (from >> (i * lbits)) & mask;
+    for (int i = 0; i < size; ++i) q.atWrite(i) = (from >> (rbits - (i + 1) * lbits)) & mask;
 }
 
 inline void VL_UNPACK_RI_Q(int lbits, int rbits, VlQueue<SData>& q, QData from) {
-    const size_t size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
     const IData mask = VL_MASK_I(lbits);
-    for (size_t i = 0; i < size; ++i) q.atWrite(size - 1 - i) = (from >> (i * lbits)) & mask;
+    for (int i = 0; i < size; ++i) q.atWrite(i) = (from >> (rbits - (i + 1) * lbits)) & mask;
 }
 
 inline void VL_UNPACK_RI_Q(int lbits, int rbits, VlQueue<IData>& q, QData from) {
-    const size_t size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
     const IData mask = VL_MASK_I(lbits);
-    for (size_t i = 0; i < size; ++i) q.atWrite(size - 1 - i) = (from >> (i * lbits)) & mask;
+    for (int i = 0; i < size; ++i) q.atWrite(i) = (from >> (rbits - (i + 1) * lbits)) & mask;
 }
 
 inline void VL_UNPACK_RQ_Q(int lbits, int rbits, VlQueue<QData>& q, QData from) {
-    const size_t size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
     const QData mask = VL_MASK_Q(lbits);
-    for (size_t i = 0; i < size; ++i) q.atWrite(size - 1 - i) = (from >> (i * lbits)) & mask;
+    for (int i = 0; i < size; ++i) q.atWrite(i) = (from >> (rbits - (i + 1) * lbits)) & mask;
+}
+
+// A source narrower than one element unpacks no element (IEEE 1800-2023 11.4.14.3)
+inline void VL_UNPACK_RQ_I(int, int, VlQueue<QData>& q, IData) { q.renew(0); }
+
+template <std::size_t N_Words>
+inline void VL_UNPACK_RW_I(int, int, VlQueue<VlWide<N_Words>>& q, IData) {
+    q.renew(0);
+}
+
+template <std::size_t N_Words>
+inline void VL_UNPACK_RW_Q(int, int, VlQueue<VlWide<N_Words>>& q, QData) {
+    q.renew(0);
 }
 
 inline void VL_UNPACK_RI_W(int lbits, int rbits, VlQueue<CData>& q, WDataInP rwp) {
-    const int size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
-    for (size_t i = 0; i < size; ++i) {
-        // Extract from MSB to LSB: MSB goes to index 0
-        const int bitPos = rbits - (i + 1) * lbits;
-        const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
-        const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
-        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, actualBitPos, actualWidth) & VL_MASK_I(actualWidth);
+    const IData mask = VL_MASK_I(lbits);
+    for (int i = 0; i < size; ++i) {
+        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, rbits - (i + 1) * lbits, lbits) & mask;
     }
 }
 
 inline void VL_UNPACK_RI_W(int lbits, int rbits, VlQueue<SData>& q, WDataInP rwp) {
-    const int size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
-    for (size_t i = 0; i < size; ++i) {
-        // Extract from MSB to LSB: MSB goes to index 0
-        const int bitPos = rbits - (i + 1) * lbits;
-        const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
-        const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
-        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, actualBitPos, actualWidth) & VL_MASK_I(actualWidth);
+    const IData mask = VL_MASK_I(lbits);
+    for (int i = 0; i < size; ++i) {
+        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, rbits - (i + 1) * lbits, lbits) & mask;
     }
 }
 
 inline void VL_UNPACK_RI_W(int lbits, int rbits, VlQueue<IData>& q, WDataInP rwp) {
-    const int size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
-    for (size_t i = 0; i < size; ++i) {
-        // Extract from MSB to LSB: MSB goes to index 0
-        const int bitPos = rbits - (i + 1) * lbits;
-        const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
-        const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
-        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, actualBitPos, actualWidth) & VL_MASK_I(actualWidth);
+    const IData mask = VL_MASK_I(lbits);
+    for (int i = 0; i < size; ++i) {
+        q.atWrite(i) = VL_SEL_IWII(rbits, rwp, rbits - (i + 1) * lbits, lbits) & mask;
     }
 }
 
 inline void VL_UNPACK_RQ_W(int lbits, int rbits, VlQueue<QData>& q, WDataInP rwp) {
-    const int size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
-    for (size_t i = 0; i < size; ++i) {
-        // Extract from MSB to LSB: MSB goes to index 0
-        const int bitPos = rbits - (i + 1) * lbits;
-        const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
-        const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
-        q.atWrite(i) = VL_SEL_QWII(rbits, rwp, actualBitPos, actualWidth) & VL_MASK_Q(actualWidth);
+    const QData mask = VL_MASK_Q(lbits);
+    for (int i = 0; i < size; ++i) {
+        q.atWrite(i) = VL_SEL_QWII(rbits, rwp, rbits - (i + 1) * lbits, lbits) & mask;
     }
 }
 
 template <std::size_t N_Words>
 inline void VL_UNPACK_RW_W(int lbits, int rbits, VlQueue<VlWide<N_Words>>& q, WDataInP rwp) {
-    const int size = (rbits + lbits - 1) / lbits;
+    // Whole elements from the MSBs; remaining LSBs are not unpacked (IEEE 1800-2023 11.4.14.3)
+    const int size = rbits / lbits;
     q.renew(size);
-    for (size_t i = 0; i < size; ++i) {
-        // Extract from MSB to LSB: MSB goes to index 0
-        const int bitPos = rbits - (i + 1) * lbits;
-        const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
-        const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
-        VL_SEL_WWII(actualWidth, rbits, q.atWrite(i), rwp, actualBitPos, actualWidth);
-        // VL_SEL_WWII may copy whole words: clean the bits above the selection
-        q.atWrite(i)[VL_WORDS_I(actualWidth) - 1] &= VL_MASK_E(actualWidth);
+    for (int i = 0; i < size; ++i) {
+        VL_SEL_WWII(lbits, rbits, q.atWrite(i), rwp, rbits - (i + 1) * lbits, lbits);
+        q.atWrite(i)[VL_WORDS_I(lbits) - 1] &= VL_MASK_E(lbits);  // Clean it
     }
 }
 
