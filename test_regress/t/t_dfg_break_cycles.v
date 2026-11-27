@@ -45,31 +45,31 @@ module t (
   // Fill coverage
   //////////////////////////////////////////////////////////////////////////
 
-  `signal(CONCAT_RHS, 2);  // UNOPTFLAT
+  `signal(CONCAT_RHS, 2);
   assign CONCAT_RHS[0] = rand_a[0];
   assign CONCAT_RHS[1] = CONCAT_RHS[0];
 
-  `signal(CONCAT_LHS, 2);  // UNOPTFLAT
+  `signal(CONCAT_LHS, 2);
   assign CONCAT_LHS[0] = CONCAT_LHS[1];
   assign CONCAT_LHS[1] = rand_a[1];
 
-  `signal(CONCAT_MID, 3);  // UNOPTFLAT
+  `signal(CONCAT_MID, 3);
   assign CONCAT_MID[0] = |CONCAT_MID[2:1];
   assign CONCAT_MID[2:1] = {rand_a[2], ~rand_a[2]};
 
-  `signal(SEL, 3);  // UNOPTFLAT
+  `signal(SEL, 3);
   assign SEL[0] = rand_a[4];
   assign SEL[1] = SEL[0];
   assign SEL[2] = SEL[1];
 
-  `signal(ZX, 8);  // UNOPTFLAT
+  `signal(ZX, 8);
   assign ZX[0] = rand_a[3];
   assign ZX[3:1] = 3'(ZX[0]);
   assign ZX[4] = ZX[1];
   assign ZX[6:5] = ZX[2:1];
   assign ZX[7] = ZX[3];
 
-  `signal(SX_0, 5);  // UNOPTFLAT
+  `signal(SX_0, 5);
   assign SX_0[0] = rand_a[3];
   assign SX_0[3:1] = 3'(signed'(SX_0[0]));
   `signal(SX_1, 5);  // UNOPTFLAT
@@ -370,7 +370,7 @@ module t (
     always_0[0] = rand_a[0];
   end
   assign always_0[1] = ~always_0[0];
-  `signal(ALWAYS_0, 4);  // UNOPTFLAT
+  `signal(ALWAYS_0, 4);
   assign ALWAYS_0 = always_0;
   // verilator lint_on ALWCOMBORDER
 
@@ -511,7 +511,7 @@ module t (
   // Match masked
   //////////////////////////////////////////////////////////////////////////
 
-  logic [95:0] match_masked;  // UNOPTFLAT
+  logic [95:0] match_masked;
   always_comb begin
     casez (rand_a[31:0])
       32'b????????_????????_????????_???????1: match_masked[31:0] = 32'd00;
