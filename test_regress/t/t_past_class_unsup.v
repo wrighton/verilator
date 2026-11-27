@@ -19,5 +19,15 @@ module t (
     function int sampledv();
       return $sampled(v);  // Unsup
     endfunction
+    // Explicitly clocked, and never called
+    function int pastclk();
+      return $past(v, 1,, @(posedge clk));  // Unsup
+    endfunction
+    function bit roseclk();
+      return $rose(v, @(posedge clk));  // Unsup
+    endfunction
+    function bit stableclk();
+      return $stable(v, @(posedge clk));  // Unsup
+    endfunction
   endclass
 endmodule
