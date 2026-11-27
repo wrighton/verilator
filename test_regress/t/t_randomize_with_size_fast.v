@@ -21,6 +21,8 @@ endclass
 class Outer;
   rand Sized sized;
   rand bit [3:0] len;
+  bit [3:0] lo = 4'd3;
+  bit [3:0] hi = 4'd6;
   constraint c_len {len < 4'd8;}
   function new();
     sized = new;
@@ -41,6 +43,10 @@ module t;
       randomize_result = o.randomize() with {len > 4'd2;};
       `checkd(randomize_result, 1);
       `checkd(o.len > 4'd2 && o.len < 4'd8, 1'b1);
+      // Bounds read from state, which the solve after the size solve reads again
+      randomize_result = o.randomize() with {len inside {[lo : hi]};};
+      `checkd(randomize_result, 1);
+      `checkd(o.len >= 4'd3 && o.len <= 4'd6, 1'b1);
     end
     $write("*-* All Finished *-*\n");
     $finish;
