@@ -60,7 +60,9 @@ module t (
       ->e;
       `checkh(inc, 2);
       `checkh(dec, -2);
-      `checkh(passsInc, 6);
+      // Three passes of each assertion with a pass action, and of the cover, whose pass
+      // statement runs without coverage too
+      `checkh(passsInc, 9);
       `checkh(passsDec, -2);
       $write("*-* All Finished *-*\n");
       $finish;
