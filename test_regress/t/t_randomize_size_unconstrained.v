@@ -24,12 +24,15 @@ class Cls;
   rand bit [6:0] s[];
   rand bit [6:0] r[$];
   rand bit [6:0] g[$];
+  rand bit [6:0] g2[$];
   rand int m;
   rand bit x;
   rand int n;
   int mode;
   int none[];
   int two[] = '{1, 2};
+  int amap[int];
+  int fixed[2] = '{3, 4};
   // Under state conditions
   constraint c_state {
     if (mode == 1) q.size() == 4;
@@ -62,6 +65,14 @@ class Cls;
   constraint c_foreach {
     foreach (none[i]) g.size() == 2;
     foreach (two[i]) if (mode == 5) g.size() == 1;
+  }
+  // In 'foreach'es over an associative and a fixed-size array, and under a condition on a loop
+  // variable, so taken as holding
+  constraint c_foreach_kinds {
+    foreach (amap[k]) g2.size() != amap[k];
+    foreach (fixed[i]) g2.size() != fixed[i];
+    foreach (two[i]) if (two[i] == 9) g2.size() == 1;
+    g2.size() <= 2;
   }
   // Under a condition calling a function with a random argument, so may be in force
   constraint c_call_rand {
@@ -136,6 +147,7 @@ module t;
       if (c.r.size() < 1 || c.r.size() > 4) `stop;
       r_sizes[c.r.size()] = 1;
       if (c.h.size() > 3) `stop;
+      if (c.g2.size() > 2) `stop;
       if (c.x) begin
         dsize = 3;
         ones++;
