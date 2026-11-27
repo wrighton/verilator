@@ -4589,6 +4589,35 @@ void Verilated::sizeMismatchError() VL_MT_SAFE {
     VL_UNREACHABLE;
 }
 
+// Describe how a slice of sliceSize elements and the srcSize elements of an array or a stream
+// assigned to it differ
+static std::string vl_slice_size_msg(size_t sliceSize, size_t srcSize, bool stream) {
+    return "size "s + std::to_string(sliceSize)
+           + (stream ? " is smaller than assigned stream size "
+                     : " does not match assigned array size ")
+           + std::to_string(srcSize);
+}
+
+void Verilated::sliceAssignIgnoredWarning(int64_t lsb, int64_t msb, size_t size, size_t sliceSize,
+                                          size_t srcSize, bool stream) VL_MT_SAFE {
+    // Slowpath - Called only when a slice outside a queue does not fit what is assigned
+    const std::string msg
+        = "Write ignored to slice ["s + std::to_string(lsb) + ":" + std::to_string(msb)
+          + "] outside a queue of size " + std::to_string(size) + ": slice "
+          + vl_slice_size_msg(sliceSize, srcSize, stream) + " (IEEE 1800-2023 7.10.1)";
+    VL_WARN_MT("", 0, "", msg.c_str());
+}
+
+void Verilated::sliceSizeMismatchError(size_t sliceSize, size_t srcSize, bool stream) VL_MT_SAFE {
+    // Slowpath - Called only when a slice does not fit what is assigned. The message is a
+    // temporary, as a local would be destroyed at the closing brace, never reached.
+    VL_FATAL_MT("unknown", 0, "",
+                ("Slice "s + vl_slice_size_msg(sliceSize, srcSize, stream)
+                 + (stream ? " (IEEE 1800-2023 11.4.14)" : " (IEEE 1800-2023 7.6)"))
+                    .c_str());
+    VL_UNREACHABLE;
+}
+
 void Verilated::stackCheck(QData needSize) VL_MT_UNSAFE {
     // Slowpath - Called only when constructing
 #ifdef _VL_HAVE_GETRLIMIT

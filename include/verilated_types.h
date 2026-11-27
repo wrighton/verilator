@@ -1692,36 +1692,85 @@ public:
     VlQueue<T_Value> slicePlusPad(int32_t lsb, int32_t width) const {
         return slicePadCount(lsb, width);
     }
-    // Assign src elements to q[lsb:msb]
-    void sliceAssign(int32_t lsb, int32_t msb, const VlQueue& src) {
-        const int32_t sz = static_cast<int32_t>(m_deque.size());
-        const int32_t srcSz = static_cast<int32_t>(src.m_deque.size());
-        if (VL_UNLIKELY(sz <= 0 || srcSz <= 0)) return;
-        if (VL_UNLIKELY(lsb < 0)) lsb = 0;
-        if (VL_UNLIKELY(msb >= sz)) msb = sz - 1;
-        const int32_t count = std::min(msb - lsb + 1, srcSz);
-        if (VL_UNLIKELY(count <= 0)) return;
-        std::copy_n(src.m_deque.begin(), count, m_deque.begin() + lsb);
+    // Whether src can be assigned to a slice of count elements: an array src must have as many
+    // elements (IEEE 1800-2023 7.6), a bit-stream src (stream) no more (IEEE 1800-2023 11.4.14)
+    static bool sliceAssignFits(int64_t count, const VlQueue& src, bool stream) {
+        const int64_t srcCount = static_cast<int64_t>(src.m_deque.size());
+        return stream ? srcCount <= count : srcCount == count;
     }
-    void sliceAssignFrontBack(int32_t lsb, int32_t msb, const VlQueue& src) {
-        sliceAssign(lsb, backIndex(msb), src);
+    // Assign elements [first, last) of src, past its end filled with zeros as a stream is
+    // (IEEE 1800-2023 11.4.14), to the elements of the queue from index 'to'
+    void sliceAssignElements(int64_t to, const VlQueue& src, int64_t first, int64_t last) {
+        if (first >= last) return;  // Nothing to assign, and 'to' may be past the end
+        const int64_t copyLast = std::max(first, std::min<int64_t>(last, src.m_deque.size()));
+        const auto toIt = m_deque.begin() + to;
+        if (first < copyLast) {
+            std::copy(src.m_deque.begin() + first, src.m_deque.begin() + copyLast, toIt);
+        }
+        std::fill(toIt + (copyLast - first), toIt + (last - first), T_Value{});
     }
-    void sliceAssignBackBack(int32_t lsb, int32_t msb, const VlQueue& src) {
-        sliceAssign(backIndex(lsb), backIndex(msb), src);
+    // Assign src elements to q[lsb:msb]. A slice ending at $+1 of the size of src writes its
+    // elements and appends the last, as a write at $+1 does (IEEE 1800-2023 7.10.1). Else the
+    // bounds are limited to the queue, as a queue slice's are (IEEE 1800-2023 7.10.1); if src
+    // then does not fit, the write is ignored with a warning if a bound is outside the queue,
+    // as a write at an invalid index is (IEEE 1800-2023 7.10.1), else is an error
+    // (IEEE 1800-2023 7.6).
+    void sliceAssignRange(int64_t lsb, int64_t msb, const VlQueue& src, bool stream) {
+        const int64_t last = lastIndex();
+        const int64_t srcCount = static_cast<int64_t>(src.m_deque.size());
+        if (VL_LIKELY(lsb >= 0 && msb <= last && msb - lsb + 1 == srcCount)) {
+            // Inside the queue, of the size of src
+            if (srcCount) std::copy(src.m_deque.begin(), src.m_deque.end(), m_deque.begin() + lsb);
+            return;
+        }
+        if (srcCount && lsb >= 0 && msb == last + 1 && msb - lsb + 1 == srcCount) {
+            // Copied first and backward, as src may be this queue
+            const T_Value appended = src.m_deque.back();
+            std::copy_backward(src.m_deque.begin(), src.m_deque.end() - 1, m_deque.end());
+            push_back(appended);
+            return;
+        }
+        const int64_t lo = std::max<int64_t>(lsb, 0);
+        const int64_t count = std::max<int64_t>(std::min(msb, last) - lo + 1, 0);
+        if (VL_UNLIKELY(!sliceAssignFits(count, src, stream))) {
+            if (lsb < 0 || lsb > last || msb > last) {
+                Verilated::sliceAssignIgnoredWarning(lsb, msb, m_deque.size(), count,
+                                                     src.m_deque.size(), stream);
+                return;
+            }
+            Verilated::sliceSizeMismatchError(count, src.m_deque.size(), stream);
+        }
+        sliceAssignElements(lo, src, 0, count);
+    }
+    void sliceAssign(int32_t lsb, int32_t msb, const VlQueue& src, bool stream) {
+        sliceAssignRange(lsb, msb, src, stream);
+    }
+    void sliceAssignFrontBack(int32_t lsb, int32_t msb, const VlQueue& src, bool stream) {
+        sliceAssignRange(lsb, static_cast<int64_t>(lastIndex()) - msb, src, stream);
+    }
+    void sliceAssignBackBack(int32_t lsb, int32_t msb, const VlQueue& src, bool stream) {
+        sliceAssignRange(static_cast<int64_t>(lastIndex()) - lsb,
+                         static_cast<int64_t>(lastIndex()) - msb, src, stream);
     }
     // Assign src elements to q[lsb+:width]
-    void sliceAssignPlus(int32_t lsb, int32_t width, const VlQueue& src) {
-        sliceAssign(lsb, plusMsb(lsb, width), src);
+    void sliceAssignPlus(int32_t lsb, int32_t width, const VlQueue& src, bool stream) {
+        sliceAssignRange(lsb, static_cast<int64_t>(lsb) + width - 1, src, stream);
     }
-    // Assign src elements to q[lsb+:width], skipping an index outside the array, as writing a
-    // dynamic array slice does (IEEE 1800-2023 7.4.5)
-    void sliceAssignPlusPad(int32_t lsb, int32_t width, const VlQueue& src) {
-        const int64_t sz = static_cast<int64_t>(m_deque.size());
-        const int64_t n = std::min<int64_t>(width, src.m_deque.size());
-        for (int64_t i = std::max<int64_t>(0, -static_cast<int64_t>(lsb)); i < n && lsb + i < sz;
-             ++i) {
-            m_deque[lsb + i] = src.m_deque[i];
+    // Assign src elements to q[lsb+:width], a slice of width elements, skipping an index outside
+    // the array, as writing a dynamic array slice does (IEEE 1800-2023 7.4.5)
+    void sliceAssignPlusPad(int32_t lsb, int32_t width, const VlQueue& src, bool stream) {
+        if (VL_LIKELY(lsb >= 0 && static_cast<int64_t>(lsb) + width <= lastIndex() + 1
+                      && static_cast<size_t>(width) == src.m_deque.size())) {
+            // Inside the array, of the size of src
+            std::copy(src.m_deque.begin(), src.m_deque.end(), m_deque.begin() + lsb);
+            return;
         }
+        if (VL_UNLIKELY(!sliceAssignFits(width, src, stream))) {
+            Verilated::sliceSizeMismatchError(width, src.m_deque.size(), stream);
+        }
+        const int64_t first = std::max<int64_t>(0, -static_cast<int64_t>(lsb));
+        const int64_t last = std::min<int64_t>(width, static_cast<int64_t>(m_deque.size()) - lsb);
+        if (first < last) sliceAssignElements(lsb + first, src, first, last);
     }
 
     // For save/restore
