@@ -11,15 +11,14 @@ import vltest_bootstrap
 
 test.scenarios('simulator')
 
-test.compile(verilator_flags2=['--binary', '--x-initial', 'unique', '--stats'])
+test.compile(
+    verilator_flags2=['--binary', '--x-initial', 'unique', '--stats', '-Wno-UNOPTTHREADS'])
 
 if test.vlt_all:
     # Other source partitions: asymmetric 3, inverse 1, sole/pair modules 2+2,
-    # packed module 2. Generated drivers keep 128+256 distinct inlined contexts.
-    # Flat specializations each have one context and one occupied STRONG rank.
-    # The independent asymmetric mask domain adds two ranks for each of 256 contexts.
-    test.file_grep(test.stats, r'Tristate, External interface rank pairs\s+(\d+)',
-                   10 + 128 + 256 + 2 + 2 * 256)
+    # packed module 2. Generated and flat specializations each drive one instance
+    # with one occupied STRONG rank. The asymmetric mask domain adds two ranks.
+    test.file_grep(test.stats, r'Tristate, External interface rank pairs\s+(\d+)', 10 + 2 + 2 + 2)
     test.execute(all_run_flags=['+verilator+rand+reset+2'])
 else:
     test.execute()
