@@ -32,13 +32,34 @@ class Phased;
   constraint rel_c {foreach (b[i]) b[i] > a[i];}
 endclass
 
+// Its randc variable keeps UniGen2 from sampling, so each call spreads its solution
+class Spread;
+  rand bit [7:0] a;
+  randc bit [3:0] r;
+  constraint c {
+    a > 8'd10;
+    r != 4'd15;
+  }
+endclass
+
+// Sampled by UniGen2 from its second call on
+class Sampled;
+  rand bit [7:0] v[4];
+  constraint c {foreach (v[i]) v[i] > 8'd10;}
+endclass
+
 module t;
   initial begin
     automatic Packet p = new;
     automatic Phased ph = new;
+    automatic Spread wd = new;
+    automatic Sampled sm = new;
     automatic int npass = 0;
     automatic int rc;
-    for (int i = 0; i < 4; ++i) begin
+    automatic int calls = 4;
+    bit seen[bit [7:0]];  // Values of wd.a after the first call
+    void'($value$plusargs("calls=%d", calls));
+    for (int i = 0; i < calls; ++i) begin
       if ($test$plusargs("phased")) begin
         ph.b = '{4'd0, 4'd0};
         rc = ph.randomize();
@@ -52,6 +73,36 @@ module t;
         end else begin
           `checkd(ph.b[0], 4'd0);
           `checkd(ph.b[1], 4'd0);
+        end
+        continue;
+      end
+      if ($test$plusargs("sampled")) begin
+        rc = sm.randomize();
+        if (rc != 0) begin
+          npass++;
+          foreach (sm.v[k]) begin
+            if (sm.v[k] <= 8'd10) begin
+              $write("%%Error: %s:%0d:  v[%0d]=%0d breaks the constraint\n", `__FILE__,
+                     `__LINE__, k, sm.v[k]);
+              `stop;
+            end
+          end
+        end
+        continue;
+      end
+      if ($test$plusargs("wide")) begin
+        wd.a = 8'd5;
+        rc = wd.randomize();
+        if (rc != 0) begin
+          npass++;
+          if (wd.a <= 8'd10) begin
+            $write("%%Error: %s:%0d:  a=%0d breaks the constraint\n", `__FILE__, `__LINE__,
+                   wd.a);
+            `stop;
+          end
+          if (i != 0) seen[wd.a] = 1'b1;
+        end else begin
+          `checkd(wd.a, 8'd5);
         end
         continue;
       end
@@ -71,7 +122,14 @@ module t;
         `checkd(p.b, 8'd250);
       end
     end
+    // A copy spreads afresh, whatever its original's pause
+    if ($test$plusargs("copy")) begin
+      automatic Spread wc = new wd;
+      rc = wc.randomize();
+      if (rc != 0) npass++;
+    end
     $write("NPASS=%0d\n", npass);
+    $write("DISTINCT=%0d\n", seen.num());
     $write("*-* All Finished *-*\n");
     $finish;
   end
