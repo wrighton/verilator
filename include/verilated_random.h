@@ -642,6 +642,10 @@ class VlRandomizer VL_NOT_FINAL {
     void reportUnsatSetup(VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
     void reportUnsatCore(VlSolverSession& sess);
     void emitRandcExclusions(std::ostream& os) const;  // Emit randc exclusion constraints
+    // Variables and elements of arrays whose values the solver sampler draws, see checkFree
+    using FreeElements = std::vector<std::pair<const VlRandomVar*, int>>;
+    FreeElements freeElements() const;
+    VlSolverStatus checkFree(VlRNG& rngr, VlSolverSession& sess, const FreeElements& elements);
     void recordRandcValues();  // Record solved randc values for future exclusion
     size_t hashConstraints(const std::vector<std::string>& extras, bool randcOnly = false) const;
     bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly, bool sizeSolve = false);
