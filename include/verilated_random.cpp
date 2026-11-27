@@ -2688,15 +2688,65 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         if (fixedp && fixedp->count(var.first)) continue;
         // Nor one with rand_mode off, which keeps its value (IEEE 1800-2023 18.8)
         if (isFrozenVar(var.first, *var.second)) continue;
-        // The solve of the array sizes keeps only the sizes: the elements it also holds are
-        // those of the old sizes, which the final solve picks again
-        if (m_sizeSolve && !m_sizeVars.count(var.first)) continue;
+        // The solve of the array sizes keeps only the sizes, and spreads no element: those it
+        // holds are of the old sizes, which the final solve picks again. It spreads the other
+        // variables, though not kept, so a size equal to one takes its range (fastTargets).
+        if (m_sizeSolve && var.second->dimension()) continue;
         const int width = var.second->width();
         for (int j = 0; j < var.second->totalWidth() / width; ++j) {
             terms.push_back({var.second.get(), j, 0, width, static_cast<int>(terms.size())});
         }
     }
     if (spreadTerms(rngr, sess, std::move(terms), uniqueExprsp)) applyModel(sess);
+}
+
+// Into targetsr, each scalar's values by its range constraints, as nextFast reads them, where
+// they narrow it: those of its whole width, but soft ones, which may be dropped, and dist
+// ones, whose weights a uniform value would not follow. Variables with rand_mode off are not
+// spread anyway.
+void VlRandomizer::fastTargets(std::unordered_map<const void*, FastTarget>& targetsr) const {
+    for (const FastConstraint& constraint : m_fastConstraints) {
+        if (constraint.isSoft || constraint.isDist || constraint.viewLsb
+            || constraint.viewWidth != constraint.width) {
+            continue;
+        }
+        const auto it = targetsr.find(constraint.datap);
+        if (it == targetsr.end()) {
+            targetsr.emplace(constraint.datap,
+                             FastTarget{fastUnion(constraint.ranges), constraint.width,
+                                        constraint.isSigned, 0});
+        } else if (it->second.isSigned == constraint.isSigned) {
+            // The views of the whole of one variable have its signedness (see fastDomains)
+            it->second.ranges = fastIntersect(it->second.ranges, fastUnion(constraint.ranges));
+        }
+    }
+    for (auto it = targetsr.begin(); it != targetsr.end();) {
+        FastTarget& target = it->second;
+        bool narrows = !target.ranges.empty();
+        for (const FastRange& range : target.ranges) {
+            const QData size = range.hi - range.lo + 1;  // 0 for all 2^64 values
+            narrows = narrows && size && target.count + size > target.count;
+            target.count += size;
+        }
+        if (target.width < 64) narrows = narrows && target.count < (QData{1} << target.width);
+        it = narrows ? std::next(it) : targetsr.erase(it);
+    }
+}
+
+// A uniformly random value of target's ranges, decoded from their ordered coordinates: the
+// ranges, from fastUnion and fastIntersect, are sorted and disjoint, so a uniform rank among
+// their values names one value
+QData VlRandomizer::fastTargetValue(VlRNG& rngr, const FastTarget& target) {
+    QData pick = vl_fastBelow(rngr, target.count);
+    QData value = 0;
+    for (const FastRange& range : target.ranges) {
+        if (pick <= range.hi - range.lo) {
+            value = range.lo + pick;
+            break;
+        }
+        pick -= range.hi - range.lo + 1;
+    }
+    return target.isSigned ? value ^ (QData{1} << (target.width - 1)) : value;
 }
 
 bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<PinTerm> terms,
@@ -2738,18 +2788,31 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
     };
     bool settled = true;  // The last check was satisfied, so its model satisfies keep
     std::vector<bool> dropped;
+    // A whole scalar is tied first to a value its range constraints allow, if they narrow it
+    std::unordered_map<const void*, FastTarget> targets;
+    fastTargets(targets);
     while (!terms.empty() && checksLeft > 0) {
         for (size_t k = 0; k < terms.size(); ++k) {
+            PinTerm& term = terms[k];
             os << "(declare-fun __Va" << lits + k << " () Bool)\n";
             os << "(assert (= __Va" << lits + k << " (=";
-            emitTerm(terms[k]);
+            emitTerm(term);
             os << " #b";
-            IData bits = 0;
-            for (int b = 0; b < terms[k].width; ++b) {
-                if (!(b & VL_SIZEBITS_I)) bits = VL_RANDOM_RNG_I(rngr);
-                os << (VL_BITISSET_I(bits, b & VL_SIZEBITS_I) ? '1' : '0');
+            const auto targetIt = term.lsb || term.varp->dimension()
+                                      ? targets.end()
+                                      : targets.find(term.varp->datap(0));
+            if (targetIt != targets.end() && targetIt->second.width == term.width) {
+                const QData value = fastTargetValue(rngr, targetIt->second);
+                for (int b = term.width - 1; b >= 0; --b) os << ((value >> b) & 1 ? '1' : '0');
+                term.value0 = (value >> (term.width - 1)) & 1;
+            } else {
+                IData bits = 0;
+                for (int b = 0; b < term.width; ++b) {
+                    if (!(b & VL_SIZEBITS_I)) bits = VL_RANDOM_RNG_I(rngr);
+                    os << (VL_BITISSET_I(bits, b & VL_SIZEBITS_I) ? '1' : '0');
+                }
+                term.value0 = VL_BITISSET_I(bits, (term.width - 1) & VL_SIZEBITS_I) ? 1 : 0;
             }
-            terms[k].value0 = VL_BITISSET_I(bits, (terms[k].width - 1) & VL_SIZEBITS_I) ? 1 : 0;
             os << ")))\n";
         }
         std::vector<int> slotIds;
@@ -4296,16 +4359,19 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
     // Spread a layer of few terms, its own variables and the sizes of its sized arrays, as the
     // final phase spreads its variables, rather than leave its values to the solver. A tie
     // that conflicts is split down to bits, so a range that is not a power of two still leans
-    // to the solver's choice (a residual). A larger layer keeps one random parity over its
-    // bits: spreading it would cost a check or more per term, many times the solve itself on a
-    // slow solver, and the solver's choice within the parity remains (a residual too). The
-    // values are then read again, with the elements up to the sizes.
+    // to the solver's choice (a residual), unless the variable's range constraints give its
+    // first tie (fastTargets). A larger layer keeps one random parity over its bits:
+    // spreading it would cost a check or more per term, many times the solve itself on a slow
+    // solver, and the solver's choice within the parity remains (a residual too). The values
+    // are then read again, with the elements up to the sizes.
     if (!solverSamples()) {
         std::vector<PinTerm> spread;
         // A layer can hold an array and some of its elements by name: each element is spread
         // once, as first written
         std::unordered_set<std::string> spreadTexts;
         const auto add = [&](const VlRandomVar* varp) {
+            // Nor one with rand_mode off, which keeps its value (IEEE 1800-2023 18.8)
+            if (isFrozenVar(varp->name(), *varp)) return;
             const int width = varp->width();
             for (int j = 0; j < varp->totalWidth() / width; ++j) {
                 std::ostringstream text;
