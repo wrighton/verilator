@@ -36,9 +36,45 @@ module t (
   assert property (@(posedge clk) o.get());
   a_seq :
   cover property (@(posedge clk) s_member);
+  // Bad: in the disable condition
+  a_dis :
+  assert property (@(posedge clk) disable iff (o.x) 1'b1);
+  // Bad: in a property, where it is instanced
+  property p_member;
+    @(posedge clk) o.x;
+  endproperty
+  a_prop :
+  assert property (p_member);
+  // Bad: in a property and a sequence instanced in assertions, also when unused wrappers
+  // instance them
+  property p_leaf;
+    @(posedge clk) o.x;
+  endproperty
+  property p_wrapper;
+    p_leaf;
+  endproperty
+  a_leaf :
+  assert property (p_leaf);
+  sequence s_leaf;
+    o.x;
+  endsequence
+  property p_swrapper;
+    @(posedge clk) s_leaf;
+  endproperty
+  a_sleaf :
+  assert property (@(posedge clk) s_leaf);
+  // OK: a property and a sequence never instanced are not part of an assertion
+  property p_unused;
+    @(posedge clk) o.x;
+  endproperty
+  sequence s_unused;
+    o.x ##1 1'b1;
+  endsequence
   // OK: static property and method, and parameter, through a handle
   a_sx :
   assert property (@(posedge clk) o.sx && o.sget() && o.P);
+  a_dis_sx :
+  assert property (@(posedge clk) disable iff (o.sx) 1'b1);
   // OK: a subroutine body is not part of the assertion expression, also when
   // it is declared after the assertion
   a_func :

@@ -21,6 +21,7 @@
 //   Sample a selection of a variable, such as an array element or a queue size, by evaluating
 //   it at sampling time, if it reads only sampled variables and the variable is not otherwise
 //   read.
+//   Sample a class property read through a handle by evaluating it at sampling time.
 //   Capture whole-signal force reads by value, before sampling their children.
 //   Make a process computing a value marked to follow the time read a new variable holding the
 //   time, so it is computed at each evaluation.
@@ -68,6 +69,8 @@ class SampledVisitor final : public VNVisitor {
     AstCFunc* const m_sampleFuncp;  // The 'sample' eval function assigning the sampled values
     V3SharedTmps m_sampledTmps{"__Vsampled", VVarType::MODULETEMP};  // Sampled variables
     V3SharedTmps m_forceTmps{"__VsampledForce", VVarType::MODULETEMP};  // Sampled force values
+    V3SharedTmps m_defaultTmps{"__VsampledDefault", VVarType::MODULETEMP};  // Never written
+    AstVarScope* m_sampledOncep = nullptr;  // Set by sampling, so after time 0, if needed
     // Keys remain in the tree as the sampled variables' value expressions.
     std::unordered_map<VNRef<AstNode>, AstVarScope*> m_forceSamples;
     // Ranges of wide variables that sampled expressions only read with constant selects
@@ -76,6 +79,8 @@ class SampledVisitor final : public VNVisitor {
     // Keys remain in the tree as the sampled variables' value expressions.
     std::unordered_map<VNRef<AstNode>, AstVarScope*> m_selectionSamples;
     VDouble0 m_statSelections;  // Selections sampled instead of their whole variable
+    // Keys remain in the tree as the sampled variables' value expressions.
+    std::unordered_map<VNRef<AstNode>, AstVarScope*> m_memberSamples;
 
     // STATE - for current visit position (use VL_RESTORER)
     AstScope* m_scopep = nullptr;  // Current scope
@@ -276,6 +281,65 @@ class SampledVisitor final : public VNVisitor {
         return true;
     }
 
+    // Condition that handle fromp is not null, and condp
+    static AstNodeExpr* newNotNullAndp(AstNodeExpr* fromp, AstNodeExpr* condp) {
+        FileLine* const flp = fromp->fileline();
+        AstNodeExpr* const notNullp
+            = new AstNeq{flp, fromp->cloneTreePure(false), new AstConst{flp, AstConst::Null{}}};
+        notNullp->dtypeSetBit();
+        AstNodeExpr* const andp = new AstLogAnd{flp, notNullp, condp};
+        andp->dtypeSetBit();
+        return andp;
+    }
+    // The default value of type dtypep
+    AstNodeExpr* newDefaultp(FileLine* flp, AstNodeDType* dtypep) {
+        const AstNodeDType* const skipp = dtypep->skipRefp();
+        if (skipp->isIntegralOrPacked() || skipp->isDouble()) {
+            AstConst* const constp = new AstConst{flp, AstConst::DTyped{}, dtypep};
+            if (dtypep->isFourstate()) constp->num().setAllBitsX();
+            return constp;
+        }
+        // A temporary never written has it
+        return new AstVarRef{flp, m_defaultTmps.make(flp, m_scopep, dtypep), VAccess::READ};
+    }
+    // Whether sampling happened before, so after time 0
+    AstVarRef* newSampledOncep(FileLine* flp) {
+        if (!m_sampledOncep) {
+            AstScope* const scopep = v3Global.rootp()->topScopep()->scopep();
+            m_sampledOncep = m_sampledTmps.make(flp, scopep, 1, "once");
+        }
+        return new AstVarRef{flp, m_sampledOncep, VAccess::READ};
+    }
+
+    // Replace a class property read through a chain of member selects by a variable assigned
+    // its value at sampling time, where the current values of the handles are their sampled
+    // values. As a class property is not a static variable, at time 0 it is the default value
+    // of its type (IEEE 1800-2023 16.5.1), as also while a handle is null.
+    void sampleMember(AstMemberRef* nodep) {
+        FileLine* const flp = nodep->fileline();
+        VNRelinker relinker;
+        nodep->unlinkFrBack(&relinker);
+        const auto pair = m_memberSamples.emplace(*nodep, nullptr);
+        AstVarScope*& vscp = pair.first->second;
+        if (pair.second) {
+            vscp = m_sampledTmps.make(flp, m_scopep, nodep->dtypep(), nodep->varp()->name());
+            vscp->varp()->sampled(true);
+            AstNodeExpr* condp = newSampledOncep(flp);
+            for (AstMemberRef* selp = nodep; selp; selp = VN_CAST(selp->fromp(), MemberRef)) {
+                condp = newNotNullAndp(selp->fromp(), condp);
+            }
+            AstNodeExpr* const defaultp = newDefaultp(flp, nodep->dtypep());
+            m_sampleFuncp->addStmtsp(new AstIf{
+                flp, condp, new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, nodep},
+                new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, defaultp}});
+        } else {
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        }
+        AstVarRef* const newp = new AstVarRef{flp, vscp, VAccess::READ};
+        newp->user1SetOnce();  // Don't sample this one
+        relinker.relink(newp);
+    }
+
     // VISITORS
     void visit(AstNodeSel* nodep) override {
         if (!sampleSelection(nodep)) iterateChildren(nodep);
@@ -354,6 +418,10 @@ class SampledVisitor final : public VNVisitor {
         nodep->addStmtsp(new AstIf{flp, refp});
     }
     void visit(AstSampled* nodep) override {
+        // A class property read through a handle (V3Assert)
+        if (AstMemberRef* const memberRefp = VN_CAST(nodep->exprp(), MemberRef)) {
+            sampleMember(memberRefp);
+        }
         VL_RESTORER(m_inSampled);
         // A value following the time reads the current value of the temps it reads
         m_inSampled = !nodep->timed();
@@ -417,6 +485,12 @@ public:
         : m_sampleFuncp{netlistp->evalFuncp(VEval::SAMPLE)} {
         findRanges(netlistp);
         iterate(netlistp);
+        if (m_sampledOncep) {
+            FileLine* const flp = m_sampledOncep->fileline();
+            m_sampleFuncp->addStmtsp(
+                new AstAssign{flp, new AstVarRef{flp, m_sampledOncep, VAccess::WRITE},
+                              new AstConst{flp, AstConst::BitTrue{}}});
+        }
         V3Sched::util::splitCheck(m_sampleFuncp);
     }
     ~SampledVisitor() override {
