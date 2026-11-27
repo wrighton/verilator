@@ -362,43 +362,15 @@ public:
 //######################################################################
 // Read a packed output stream back in the child's bit order after changing it to an input.
 class TristateStreamReadVisitor final : public VNVisitor {
-    // STATE
-    AstNodeModule* const m_modp;  // Module receiving readback temporaries
-    int& m_unique;  // Module-local temporary numbering
-
     // VISITORS
     void visit(AstNodeStream* nodep) override {
         iterateChildren(nodep);
         if (!nodep->lhsp()->dtypep()->skipRefp()->isIntegralOrPacked()) return;
         AstNodeExpr* const fromp = V3Const::constifyEdit(nodep->lhsp()->unlinkFrBack());
         if (VN_IS(nodep, StreamL)) {
-            const int slice
-                = std::min<uint32_t>(VN_AS(nodep->rhsp(), Const)->toUInt(), fromp->width());
-            const int remainder = fromp->width() % slice;
+            // Reading back packs the target again, the inverse of the unpack into it
+            // (IEEE 1800-2023 11.4.14.2, 11.4.14.3)
             nodep->lhsp(fromp);
-            if (remainder) {
-                // Unpacking leaves the short slice at the LSB. Read it first when
-                // reconstructing the child's stream (IEEE 1800-2023 11.4.14.3).
-                // Evaluate the operand once so nested streams do not duplicate readback trees.
-                AstVar* const readp
-                    = new AstVar{nodep->fileline(), VVarType::MODULETEMP,
-                                 "__VtriStreamRead" + cvtToStr(m_unique++), fromp->dtypep()};
-                m_modp->addStmtsp(readp);
-                m_modp->addStmtsp(new AstAlways{new AstAssignW{
-                    nodep->fileline(), new AstVarRef{nodep->fileline(), readp, VAccess::WRITE},
-                    fromp->unlinkFrBack()}});
-                AstNodeExpr* const shortp = new AstSel{
-                    nodep->fileline(), new AstVarRef{nodep->fileline(), readp, VAccess::READ}, 0,
-                    remainder};
-                AstNodeExpr* const fullp = new AstSel{
-                    nodep->fileline(), new AstVarRef{nodep->fileline(), readp, VAccess::READ},
-                    remainder, readp->width() - remainder};
-                nodep->lhsp(fullp);
-                nodep->dtypeFrom(fullp);
-                VNRelinker relinker;
-                nodep->unlinkFrBack(&relinker);
-                relinker.relink(new AstConcat{nodep->fileline(), shortp, nodep});
-            }
         } else {
             nodep->replaceWith(fromp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -407,14 +379,12 @@ class TristateStreamReadVisitor final : public VNVisitor {
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
     // CONSTRUCTORS
-    TristateStreamReadVisitor(AstNodeModule* const modp, int& unique)
-        : m_modp{modp}
-        , m_unique{unique} {}
+    TristateStreamReadVisitor() = default;
 
 public:
     // METHODS
-    static void apply(AstNodeExpr* const nodep, AstNodeModule* const modp, int& unique) {
-        TristateStreamReadVisitor visitor{modp, unique};
+    static void apply(AstNodeExpr* const nodep) {
+        TristateStreamReadVisitor visitor;
         visitor.iterateAndNextNull(nodep);
     }
 };
@@ -1071,14 +1041,19 @@ class TristateVisitor final : public TristateBaseVisitor {
                 const int width = streamp->width();
                 const int slice
                     = std::min<uint32_t>(VN_AS(streamp->rhsp(), Const)->toUInt(), width);
+                // Bit of the target taking each bit of the stream: the target packs, slicing
+                // from its right, into the stream (IEEE 1800-2023 11.4.14.2, 11.4.14.3)
+                std::vector<int> targetBits(width);
+                for (int bit = 0; bit < width; ++bit) {
+                    const int start = (bit / slice) * slice;
+                    const int bits = std::min(slice, width - start);
+                    targetBits[width - start - bits + (bit - start)] = bit;
+                }
                 AuxAstVar reordered;
                 reordered.pullp = source.pullp;
                 for (auto it = source.bitPulls.lower_bound(sourceOffset);
                      it != source.bitPulls.end() && it->first < sourceOffset + width; ++it) {
-                    const int bit = it->first - sourceOffset;
-                    const int start = (bit / slice) * slice;
-                    const int bits = std::min(slice, width - start);
-                    reordered.bitPulls.emplace(width - start - bits + (bit - start), it->second);
+                    reordered.bitPulls.emplace(targetBits[it->first - sourceOffset], it->second);
                 }
                 propagatePulls(streamp->lhsp(), reordered);
             }
@@ -2410,8 +2385,12 @@ class TristateVisitor final : public TristateBaseVisitor {
                 AstNodeExpr* enp = getEnp(sourcep);
                 sourcep->user1p(nullptr);
                 if (VN_IS(nodep, StreamL)) {
-                    enp = new AstStreamL{nodep->fileline(), enp,
-                                         nodep->rhsp()->cloneTreePure(false)};
+                    AstStreamL* const streamp = new AstStreamL{
+                        nodep->fileline(), enp, nodep->rhsp()->cloneTreePure(false)};
+                    streamp->dtypeFrom(nodep);
+                    // As the data, unpacked into a target by the inverse of the packing
+                    // (IEEE 1800-2023 11.4.14.3)
+                    enp = m_alhs ? V3Const::unpackStreamL(streamp) : streamp;
                 }
                 targetp->user1p(enp);
                 m_tgraph.didProcess(nodep);
@@ -3253,8 +3232,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             // Existing pin becomes an input, and we mark each resulting signal as tristate
             const TristatePinVisitor visitor{nodep->exprp(), m_tgraph, false};
             if (nodep->modVarp()->declDirection().isOutput()) {
-                TristateStreamReadVisitor::apply(VN_AS(nodep->exprp(), NodeExpr), m_modp,
-                                                 m_unique);
+                TristateStreamReadVisitor::apply(VN_AS(nodep->exprp(), NodeExpr));
             }
             const AstNode* const inAssignp = V3Inst::pinReconnectSimple(
                 nodep, m_cellp, true);  // Note may change nodep->exprp()
