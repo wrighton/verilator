@@ -42,6 +42,7 @@ module t;
     automatic Ones o = new;
     automatic Below b = new;
     automatic Most m = new;
+    automatic Below bits = new;
     automatic int seen[int];
     automatic int ok;
     automatic int ones = 0;
@@ -74,6 +75,17 @@ module t;
     `checkd(seen.num() > 150, 1'b1);
     // Of 24000 bits, near half are set (46% for values below 200)
     `checkd(ones > 9000 && ones < 14000, 1'b1);
+    // At this seed the single bits of many elements conflict one by one while one of a few
+    // others fits its pin, which takes them one by one only for a few
+    bits.srandom(14);
+    seen.delete();
+    ok = bits.randomize();
+    `checkd(ok, 1);
+    foreach (bits.d[i]) begin
+      `checkd(bits.d[i] < 8'd10, 1'b1);
+      seen[int'(bits.d[i])] = 1;
+    end
+    `checkd(seen.num(), 10);
     $write("*-* All Finished *-*\n");
     $finish;
   end

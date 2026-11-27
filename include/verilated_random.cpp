@@ -1975,13 +1975,12 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
             }
         }
         if (othersFit) {
-            // They go one by one, and whole elements from now on, up to a few: sampling them
-            // again would spend the satisfied checks a large array needs
-            conflicts.first = single ? 0 : std::numeric_limits<int>::min();
-            if (!single) {
-                oneByOneLeft[slotOf(pickTerm)] = std::min<int>(checksLeftr / diversitySlotShare,
-                                                               members.size() / diversitySlotFew);
-            }
+            // They go one by one from now on, up to a few, as single bits of many elements
+            // can conflict one by one while a sample fits: sampling them again would spend
+            // the satisfied checks a large array needs
+            conflicts.first = std::numeric_limits<int>::min();
+            oneByOneLeft[slotOf(pickTerm)] = std::min<int>(checksLeftr / diversitySlotShare,
+                                                           members.size() / diversitySlotFew);
             continue;
         }
         for (const size_t k : members) {

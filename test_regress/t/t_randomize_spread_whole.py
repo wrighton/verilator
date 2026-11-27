@@ -39,8 +39,11 @@ calls = [n for n in calls if n]
 # by one (16 checks with z3 4.13 to 5.4), rather than dropping every element and spreading
 # all of them again part by part (25 checks). Below: still dropped for all (43 to 47 checks),
 # where going one by one would take hundreds. Most: dropped for all once too many conflict
-# one by one (61 checks), rather than spending every check one by one (513).
-if len(calls) != 6 or calls[1] > 20 or calls[3] > 100 or calls[5] > 200:
+# one by one (61 checks), rather than spending every check one by one (513). The last
+# Below, at a seed where the single bits of many elements conflict one by one while a
+# sample of the others fits, takes them one by one only for a few (52 checks, 43 to 54 over
+# 64 seeds), rather than until the satisfied checks run out (351).
+if len(calls) != 8 or calls[1] > 20 or calls[3] > 100 or calls[5] > 200 or calls[7] > 70:
     test.error("Spreading checks per solve: " + str(calls))
 
 test.passes()
