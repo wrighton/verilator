@@ -48,10 +48,7 @@ module t;
       end
       `checkd(expected, 19);
       `checkd(both, 5);
-      // Known limit: the operands of the 'and' end in their own threads, so an attempt
-      // failing in both fails twice, and attempts failing on one tick fail once: 22 failures,
-      // where 19 attempts fail
-      `checkd(fails, 22);
+      `checkd(fails, expected);
       $write("*-* All Finished *-*\n");
       $finish;
     end

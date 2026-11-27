@@ -2577,6 +2577,15 @@ public:
                                 wantBoolLeaf);
         }
         if (AstSAnd* const andp = VN_CAST(nodep, SAnd)) {
+            // Operands of fixed lengths match together once per attempt, at the later end, and
+            // fail on the first failed check of either (IEEE 1800-2023 16.9.5): one sequence of
+            // their checks conjoined per tick, as for 'intersect'
+            if (fixedLength(andp->lhsp()) >= 0 && fixedLength(andp->rhsp()) >= 0) {
+                if (AstNodeExpr* const conjp
+                    = conjoinFixedSeqs(andp->lhsp(), andp->rhsp(), andp->fileline())) {
+                    return buildFromLoweringTree(conjp, entryVtxp, isTopLevelStep);
+                }
+            }
             return buildAndCombiner(andp->lhsp(), andp->rhsp(), entryVtxp, andp->fileline());
         }
         if (AstSIntersect* const intp = VN_CAST(nodep, SIntersect)) {
@@ -5073,6 +5082,17 @@ class AssertNfaVisitor final : public VNVisitor {
         return propp;
     }
 
+    // Cut a bounded repetition range ending a sequence to its minimum count, where only the
+    // first match of an attempt counts: a longer match implies the shortest one
+    void cutTrailingRange(AstNodeExpr* nodep) {
+        while (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) nodep = sexprp->exprp();
+        AstSConsRep* const repp = VN_CAST(nodep, SConsRep);
+        const AstConst* const countp = repp ? VN_CAST(repp->countp(), Const) : nullptr;
+        if (countp && repp->maxCountp() && countp->toUInt() > 0) {
+            pushDeletep(repp->maxCountp()->unlinkFrBack());
+        }
+    }
+
     // True if an evaluation attempt of a property has at most one thread at a time
     static bool oneThreadPerAttempt(const AstNodeExpr* nodep, bool top) {
         // Only a top-level synchronous abort keeps each live thread one whole attempt
@@ -5160,6 +5180,18 @@ class AssertNfaVisitor final : public VNVisitor {
         }
 
         FileLine* const flp = assertp->fileline();
+
+        // A property passes, or is covered, on the first match of an attempt (IEEE 1800-2023
+        // 16.12.2, 16.14.3). A sequence 'and' first matches at the later of its operands' first
+        // matches (16.9.5), so an operand ending in a repetition range keeps its shortest count
+        if (!parts.hasImplication && !isCoverSeq) {
+            AstNodeExpr* lastp = seqBodyp;
+            while (AstSExpr* const sexprp = VN_CAST(lastp, SExpr)) lastp = sexprp->exprp();
+            if (AstSAnd* const andp = VN_CAST(lastp, SAnd)) {
+                cutTrailingRange(andp->lhsp());
+                cutTrailingRange(andp->rhsp());
+            }
+        }
 
         SvaGraph graph;
         // A vacuous success fails a negated assertion (IEEE 1800-2023 16.12.3); a cover has no
