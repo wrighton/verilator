@@ -111,7 +111,7 @@ function automatic logic [7:0] getStruct(logic [3:0] d);
       '{result: "9", index: 7},
       '{result: "0", index: 8}
   };
-  return DIGITS[4'(DIGITS[d].index)].result;
+  return DIGITS[4'(unsigned'(DIGITS[d].index))].result;
 endfunction
 
 function automatic logic [7:0] getType(logic [3:0] d);

@@ -133,4 +133,29 @@ module t;
     `checkh(nv, 8'b1000_0110);
   end
   // verilator lint_on WIDTH
+
+  // A negative signed index selects no element, also one no wider than an index of the array
+  // verilator lint_off WIDTH
+  int sarr[8] = '{40, 41, 42, 43, 44, 45, 46, 47};
+  int s10[10] = '{50, 51, 52, 53, 54, 55, 56, 57, 58, 59};
+  int swr[4];
+  longint nine = 9;
+  always @(posedge clk) begin
+    automatic int k = idx & 3;
+    automatic bit signed [1:0] s2 = 2'(k - 2);
+    automatic bit signed [2:0] s3 = 3'(k - 2);
+    automatic bit signed [30:0] s31 = 31'(k - 2);
+    `checkh(sarr[s2], k >= 2 ? 38 + k : 0);
+    `checkh(sarr[s3], k >= 2 ? 38 + k : 0);
+    `checkh(sarr[s31], k >= 2 ? 38 + k : 0);
+    // A size cast keeps the sign, so 4'(nine) is 4'sb1001, -7 (IEEE 1800-2023 6.24.1)
+    `checkh(s10[4'(nine)], 0);
+    `checkh(s10[4'(unsigned'(nine))], 59);
+    swr[s2] = 1;
+    swr[s3] = 2;
+    swr[s31] = 3;
+    `checkh(swr[2], 0);
+    `checkh(swr[3], 0);
+  end
+  // verilator lint_on WIDTH
 endmodule

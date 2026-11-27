@@ -32,5 +32,14 @@ module t (  /*AUTOARG*/
   wire [7:0] wrap_index = negl[32'hffff_ffff];  // must be an error here
   wire [7:0] u32_index = negl[u32];  // no width warning, as for any 32-bit index
   wire [7:0] u40_index = negl[u40];  // width warning on the 40-bit index
+  wire signed [1:0] s2 = 0;
+  wire [7:0] s2_index = lsb0[s2];  // no width warning, though it is extended to 3 bits
+  wire [7:0] cast_index = lsb0[3'(s2)];  // width warning on the 3-bit index, once
+  function automatic logic [7:0] pick(logic [1:0] d);
+    // A signed index, extended once, also when the function is visited again
+    localparam logic [7:0] LUT[4] = '{8'd1, 8'd2, 8'd3, 8'd4};
+    return LUT[2'(signed'(d))];
+  endfunction
+  wire [7:0] pick_index = pick(2'd1);
 
 endmodule

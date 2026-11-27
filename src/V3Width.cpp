@@ -1635,7 +1635,12 @@ class WidthVisitor final : public VNVisitor {
             const int indexWidth
                 = nodep->bitp()->width()
                   - (fromlsb < 0 && !nodep->bitp()->isSigned() && nodep->bitp()->width() > 32);
-            if (widthBad(nodep->bitp(), selwidthDTypep) && indexWidth != 32) {
+            // A signed index extended below by one more bit was reported before that, and its
+            // extension, marked with WIDTHTRUNC off, is not reported again
+            const bool extendedSigned
+                = nodep->bitp()->isSigned() && nodep->bitp()->width() == selwidth + 1
+                  && nodep->bitp()->fileline()->warnIsOff(V3ErrorCode::WIDTHTRUNC);
+            if (widthBad(nodep->bitp(), selwidthDTypep) && indexWidth != 32 && !extendedSigned) {
                 nodep->v3widthWarn(selwidth, indexWidth,
                                    "Bit extraction of array["
                                        << frommsb << ":" << fromlsb << "] requires " << selwidth
@@ -1673,10 +1678,20 @@ class WidthVisitor final : public VNVisitor {
                     }
                 }
                 // Never truncate the index, so V3Unknown's bounds check sees its whole value
-                // (IEEE 1800-2023 7.4.6)
-                if (nodep->bitp()->width() < selwidth) {
-                    widthCheckSized(nodep, "Extract Range", nodep->bitp(), selwidthDTypep,
-                                    EXTEND_EXP, false /*NOWARN*/);
+                // (IEEE 1800-2023 7.4.6). A signed index is extended by one more bit, so a
+                // negative value stays out of range.
+                const int extendWidth = nodep->bitp()->isSigned() ? selwidth + 1 : selwidth;
+                if (nodep->bitp()->width() < extendWidth) {
+                    AstNodeDType* const indexDTypep = nodep->findBitOrLogicDType(
+                        extendWidth, extendWidth, nodep->bitp()->dtypep()->numeric(),
+                        nodep->bitp()->isFourstateOrNoDtype());
+                    widthCheckSized(nodep, "Extract Range", nodep->bitp(), indexDTypep, EXTEND_EXP,
+                                    false /*NOWARN*/);
+                    if (extendWidth > selwidth) {
+                        FileLine* const flp = new FileLine{nodep->bitp()->fileline()};
+                        flp->warnOff(V3ErrorCode::WIDTHTRUNC, true);
+                        nodep->bitp()->fileline(flp);
+                    }
                 }
             }
         }

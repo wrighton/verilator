@@ -34,4 +34,8 @@
       |                              ^
                      ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
                      ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Warning-WIDTHTRUNC: t/t_select_bad_range3.v:37:31: Bit extraction of array[3:0] requires 2 bit index, not 3 bits.
+                                                  : ... note: In instance 't'
+   37 |   wire [7:0] cast_index = lsb0[3'(s2)];   
+      |                               ^
 %Error: Exiting due to
