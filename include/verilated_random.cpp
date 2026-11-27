@@ -1607,7 +1607,26 @@ bool VlRandomizer::report_unsat() {
     return true;
 }
 
-void VlRandomizer::reportUnsatSetup(VlSolverSession& sess,
+bool VlRandomizer::report_retry_failure() {
+    VlSolverSession& sess = s_solverSession;
+    const VerilatedLockGuard lock{sess.m_mutex};
+    std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    uniqueExprs.insert(uniqueExprs.end(), m_sizeExclusions.begin(), m_sizeExclusions.end());
+    // Like a solve, in a transaction, so the next solve starts afresh
+    bool reported = false;
+    {
+        VlSolverTxn txn{sess};
+        if (txn.ok()) reported = reportUnsatSetup(sess, uniqueExprs);
+    }
+    if (!reported && Verilated::threadContextp()->warnUnsatConstr()) {
+        VL_WARN_MT("", 0, "",
+                   "UNSATCONSTR: randomize() failed after trying sizes whose unsatisfied "
+                   "constraints were not reported.");
+    }
+    return true;
+}
+
+bool VlRandomizer::reportUnsatSetup(VlSolverSession& sess,
                                     const std::vector<std::string>& uniqueExprs)
     VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
@@ -1617,7 +1636,9 @@ void VlRandomizer::reportUnsatSetup(VlSolverSession& sess,
     emitDeclares(os, false);
     emitAsserts(os, uniqueExprs, true);
     os << "(check-sat)\n";
-    if (sess.readStatus() == VlSolverStatus::UNSAT) reportUnsatCore(sess);
+    if (sess.readStatus() != VlSolverStatus::UNSAT) return false;
+    reportUnsatCore(sess);
+    return true;
 }
 
 void VlRandomizer::reportUnsatCore(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {

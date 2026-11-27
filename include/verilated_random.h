@@ -315,7 +315,7 @@ class VlRandomizer VL_NOT_FINAL {
     void relaxSoftConstraints(VlSolverSession& sess);
     // Indices of the "__Va<N>" literals named by (get-unsat-assumptions).
     std::vector<int> readUnsatAssumptions(VlSolverSession& sess);
-    void reportUnsatSetup(VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
+    bool reportUnsatSetup(VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
     void reportUnsatCore(VlSolverSession& sess);
     void emitRandcExclusions(std::ostream& os) const;  // Emit randc exclusion constraints
     void recordRandcValues();  // Record solved randc values for future exclusion
@@ -987,6 +987,10 @@ public:
     /// Report why the constraints set up now, with the sizes excluded, are unsatisfied, as an
     /// unsatisfied solve does when not quiet. Returns true.
     bool report_unsat();
+    /// Report why a call failed for another reason after tries of other sizes, whose
+    /// unsatisfied constraints were not reported: the constraints set up now if they are
+    /// unsatisfied, else that it failed. Returns true.
+    bool report_retry_failure();
     /// Whether the last solve failed as its constraints are unsatisfied
     bool unsat() const { return m_unsat; }
     void clearAll();  // Clear both constraints and variables
