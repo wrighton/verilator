@@ -1857,7 +1857,7 @@ inline void VL_STREAMR_RQI(int lbits, VlQueue<T>& q, QData ld, IData rd_log2) VL
 }
 
 template <typename T>
-inline IData VL_STREAMR_IRI(int lbits, VlQueue<T>& q, IData rd_log2) VL_PURE {
+inline IData VL_STREAMR_IRI(int lbits, const VlQueue<T>& q, IData rd_log2) VL_PURE {
     IData value = 0;  // Starts at 0. Out-of-range bits will remain 0.
     const size_t len = q.size();
 
@@ -1880,7 +1880,7 @@ inline IData VL_STREAMR_IRI(int lbits, VlQueue<T>& q, IData rd_log2) VL_PURE {
 }
 
 template <typename T>
-inline IData VL_STREAMR_QRI(int lbits, VlQueue<T>& q, IData rd_log2) VL_PURE {
+inline IData VL_STREAMR_QRI(int lbits, const VlQueue<T>& q, IData rd_log2) VL_PURE {
     QData value = 0;
     const size_t len = q.size();
 
@@ -1968,8 +1968,9 @@ inline VlQueue<T> VL_STREAMR_RRI(int lbits, const VlQueue<T> q, IData rd) VL_MT_
     return q;
 }
 
-inline VlQueue<std::string> VL_STREAMR_NRI(int lbits, const VlQueue<std::string>& q,
-                                           IData rd) VL_MT_SAFE {
+template <std::size_t N_MaxSize>
+inline VlQueue<std::string, N_MaxSize>
+VL_STREAMR_NRI(int lbits, const VlQueue<std::string, N_MaxSize>& q, IData rd) VL_MT_SAFE {
     return q;
 }
 
@@ -4009,6 +4010,13 @@ extern IData VL_DIST_UNIFORM(IData& seedr, IData ustart, IData uend) VL_MT_SAFE;
 
 extern std::string VL_CVT_PACK_STR_NW(int lwords, const WDataInP lwp) VL_PURE;
 extern std::string VL_CVT_PACK_STR_ND(const VlQueue<std::string>& q) VL_PURE;
+// A bounded queue of strings
+template <std::size_t N_MaxSize>
+inline std::string VL_CVT_PACK_STR_ND(const VlQueue<std::string, N_MaxSize>& q) VL_PURE {
+    std::string result;
+    for (const std::string& str : q) result += str;
+    return result;
+}
 inline std::string VL_CVT_PACK_STR_NQ(QData lhs) VL_PURE {
     VlWide<VL_WQ_WORDS_E> lw;
     VL_SET_WQ(lw, lhs);
