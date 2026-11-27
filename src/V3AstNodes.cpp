@@ -3345,6 +3345,7 @@ void AstNodeFTaskRef::dump(std::ostream& str) const {
     if (containsGenBlock()) str << " [GENBLK]";
     if (pli()) str << " [PLI]";
     if (superReference()) str << " [SUPERREF]";
+    if (inAssertAction()) str << " [ASSERTACTION]";
     str << " -> ";
     if (dotted() != "") str << ".=" << dotted() << " ";
     if (inlinedDots() != "") str << " inline.=" << inlinedDots() << " - ";
@@ -3358,6 +3359,7 @@ void AstNodeFTaskRef::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, containsGenBlock);
     dumpJsonBoolFuncIf(str, pli);
     dumpJsonBoolFuncIf(str, superReference);
+    dumpJsonBoolFuncIf(str, inAssertAction);
     dumpJsonStrFunc(str, dotted);
     dumpJsonStrFunc(str, inlinedDots);
     dumpJsonGen(str);
@@ -3595,10 +3597,12 @@ bool AstNodeUniop::isPure() {
 void AstNodeVarRef::dump(std::ostream& str) const {
     Super::dump(str);
     if (classOrPackagep()) str << " pkg=" << nodeAddr(classOrPackagep());
+    if (inAssertAction()) str << " [ASSERTACTION]";
     str << " " << access().arrow() << " ";
 }
 void AstNodeVarRef::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "access", access().ascii());
+    dumpJsonBoolFuncIf(str, inAssertAction);
     dumpJsonGen(str);
 }
 const char* AstNot::widthMismatch() const VL_MT_STABLE {

@@ -774,6 +774,11 @@ class TaskVisitor final : public VNVisitor {
             }
         }
         UASSERT_OBJ(!refp->argsp(), refp, "Arg wasn't removed by above loop");
+        // A call in an assertion action block: so are the references of its body
+        if (refp->inAssertAction()) {
+            beginp->foreachAndNext([](AstNodeVarRef* nodep) { nodep->inAssertAction(true); });
+            beginp->foreachAndNext([](AstNodeFTaskRef* nodep) { nodep->inAssertAction(true); });
+        }
         // Create function output variables
         if (fvarp) {
             fvarp->user2p(outvscp);

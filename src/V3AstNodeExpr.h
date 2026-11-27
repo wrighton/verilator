@@ -299,6 +299,7 @@ private:
     bool m_containsGenBlock = false;  // Contains gen block reference
     bool m_pli = false;  // Pli system call ($name)
     bool m_superReference = false;  // Called with super reference
+    bool m_inAssertAction = false;  // In the action block of an immediate assertion
     VIsCached m_purity;  // Pure state
 
 protected:
@@ -329,6 +330,8 @@ public:
     void pli(bool flag) { m_pli = flag; }
     bool superReference() const { return m_superReference; }
     void superReference(bool flag) { m_superReference = flag; }
+    bool inAssertAction() const { return m_inAssertAction; }
+    void inAssertAction(bool flag) { m_inAssertAction = flag; }
     bool isPure() override;
     bool isUnlikely() const override { return m_taskp && m_taskp->isUnlikely(); }
     bool sameNode(const AstNode* samep) const override {
@@ -548,6 +551,7 @@ class AstNodeVarRef VL_NOT_FINAL : public AstNodeExpr {
     ASTGEN_MEMBERS_AstNodeVarRef;  // Gen pointers before other members for performance
 private:
     VAccess m_access;  // Left hand side assignment
+    bool m_inAssertAction = false;  // In the action block of an immediate assertion
     VSelfPointerText m_selfPointer
         = VSelfPointerText{VSelfPointerText::Empty()};  // Output code object
                                                         // pointer (e.g.: 'this')
@@ -565,6 +569,8 @@ public:
     int instrCount() const override { return widthInstrs(); }
     VAccess access() const { return m_access; }
     void access(const VAccess& flag) { m_access = flag; }  // Avoid using this; Set in constructor
+    bool inAssertAction() const { return m_inAssertAction; }
+    void inAssertAction(bool flag) { m_inAssertAction = flag; }
     AstVar* varp() const VL_MT_STABLE { return m_varp; }  // [After Link] Pointer to variable
     void varp(AstVar* varp) {
         m_varp = varp;

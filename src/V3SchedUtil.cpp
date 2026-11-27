@@ -285,22 +285,33 @@ computeImplicitSensitivities(const AstNodeProcedure* procp, const SoleWriterMap&
     //      if (sometimes) foo = 1
     //      foo = foo + 1
     // TODO: Do this properly with liveness analysis (i.e.: if live, it's an implicit sensitivity)
+    const AstAlways* const alwaysp = VN_CAST(procp, Always);
+    const bool userComb = alwaysp && alwaysp->userComb();
     std::unordered_set<const AstVarScope*> implicitSensitivities;
     std::unordered_set<const AstVarScope*> assigned;
+    // "Expressions used in assertion action blocks do not contribute to the implicit sensitivity
+    // list of an always_comb" (IEEE 1800-2023 9.2.2.2.1). Variables read only there:
+    std::unordered_set<const AstVarScope*> actionReads;
     procp->foreach([&](const AstVarRef* refp) {
         const AstVarScope* const vscp = refp->varScopep();
         if (refp->access().isWriteOrRW() && !refp->varp()->ignoreSchedWrite()) {
             assigned.emplace(vscp);
         }
         if (refp->access().isReadOrRW() && !assigned.count(vscp)) {
-            implicitSensitivities.emplace(vscp);
+            if (userComb && refp->inAssertAction()) {
+                actionReads.emplace(vscp);
+            } else {
+                implicitSensitivities.emplace(vscp);
+            }
         }
     });
+    for (const AstVarScope* const vscp : actionReads) {
+        if (!implicitSensitivities.count(vscp)) ++excludedr;
+    }
     // A user's always_comb is not sensitive to what it writes (IEEE 1800-2023 9.2.2.2.1), so does
     // not wake itself. Only the whole variables it alone writes are excluded, as another process
     // may drive other parts (IEEE 1800-2023 9.2.2.2). A task's writes count, being inlined.
-    const AstAlways* const alwaysp = VN_CAST(procp, Always);
-    if (alwaysp && alwaysp->userComb()) {
+    if (userComb) {
         for (const AstVarScope* const vscp : assigned) {
             const auto it = soleWriters.find(vscp);
             if (it != soleWriters.end() && it->second == procp
