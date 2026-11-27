@@ -98,8 +98,8 @@ uint64_t V3Unknown::staticMax(const AstNodeExpr* exprp) {
     } else if (const AstShiftL* const shiftp = VN_CAST(exprp, ShiftL)) {
         const uint64_t lhs = V3Unknown::staticMax(shiftp->lhsp());
         const uint64_t shift = V3Unknown::staticMax(shiftp->rhsp());
-        return bounded(shift < VL_QUADSIZE ? lhs << shift : 0,
-                       shift >= VL_QUADSIZE || lhs > (widthMax >> shift));
+        if (shift >= VL_QUADSIZE) return bounded(0, true);
+        return bounded(lhs << shift, lhs > (widthMax >> shift));
     }
     return widthMax;
 }
@@ -515,8 +515,11 @@ class UnknownVisitor final : public VNVisitor {
 
     // Return dynamic array or queue element index 'indexp', which is signed and narrower, or
     // wider, than 32 bits, converted to the runtime's 32-bit signed index, which selects no
-    // element when negative or past the end
-    AstNodeExpr* newDynIndexp(AstNodeExpr* indexp) {
+    // element when negative or past the end. With 'saturate', for a slice position, also an
+    // unsigned 32-bit one, one that does not fit becomes the most negative or most positive index
+    // instead, so a queue slice bound past either end is limited to the queue (IEEE 1800-2023
+    // 7.10.1), and every position of a padded slice stays outside the array.
+    AstNodeExpr* newDynIndexp(AstNodeExpr* indexp, bool saturate = false) {
         FileLine* const flp = indexp->fileline();
         const int width = indexp->width();
         if (width < VL_IDATASIZE) return new AstExtendS{flp, indexp, VL_IDATASIZE};
@@ -532,12 +535,28 @@ class UnknownVisitor final : public VNVisitor {
                                         : newExprStmtTemp(indexp);
         const int highWidth = width - (VL_IDATASIZE - 1);
         AstNodeExpr* const highp = new AstSel{flp, indexp, VL_IDATASIZE - 1, highWidth};
+        AstNodeExpr* const lowp = new AstSel{flp, valuep, 0, VL_IDATASIZE};
+        if (saturate && !indexp->isSigned()) {
+            // An unsigned position fits only if bits 31 and above are all clear
+            AstNodeExpr* const fitsp
+                = new AstEq{flp, highp, new AstConst{flp, AstConst::WidthedValue{}, highWidth, 0}};
+            return new AstCond{flp, fitsp, lowp, newMaxDynIndexp(flp)};
+        }
         // All equal, i.e. all clear or all set, if adding one leaves at most one
         AstNodeExpr* const fitsp = new AstLt{
             flp, new AstAdd{flp, highp, new AstConst{flp, AstConst::WidthedValue{}, highWidth, 1}},
             new AstConst{flp, AstConst::WidthedValue{}, highWidth, 2}};
-        AstNodeExpr* const lowp = new AstSel{flp, valuep, 0, VL_IDATASIZE};
-        return new AstCond{flp, fitsp, lowp, newInvalidDynIndexp(flp)};
+        AstNodeExpr* elsep = newInvalidDynIndexp(flp);
+        if (saturate) {
+            AstNodeExpr* const signp = new AstSel{flp, valuep->cloneTreePure(false), width - 1, 1};
+            elsep = new AstCond{flp, signp, elsep, newMaxDynIndexp(flp)};
+        }
+        return new AstCond{flp, fitsp, lowp, elsep};
+    }
+    // The most positive index, past the end, also as a first position of a slice
+    static AstConst* newMaxDynIndexp(FileLine* flp) {
+        return new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE,
+                            (1U << (VL_IDATASIZE - 1)) - 1};
     }
     // The most negative index, which selects no element, also as an offset from the back
     static AstConst* newInvalidDynIndexp(FileLine* flp) {
@@ -1350,30 +1369,82 @@ class UnknownVisitor final : public VNVisitor {
             }
         }
     }
-    void visit(AstCMethodHard* nodep) override {
+    // Number of leading arguments of 'nodep' that index a dynamic array or queue: the index of
+    // an element, or the positions of a slice
+    static int dynIndexArgs(const AstCMethodHard* nodep) {
         // An associative array element is also selected with these methods, by its key
-        const bool dynElement = nodep->method().isDynElementAccess()
-                                && (VN_IS(nodep->fromp()->dtypep()->skipRefp(), DynArrayDType)
-                                    || VN_IS(nodep->fromp()->dtypep()->skipRefp(), QueueDType));
+        const AstNodeDType* const fromDtypep = nodep->fromp()->dtypep()->skipRefp();
+        if (!VN_IS(fromDtypep, DynArrayDType) && !VN_IS(fromDtypep, QueueDType)) return 0;
+        if (nodep->method().isDynElementAccess()) return 1;
+        switch (nodep->method()) {
+        case VCMethod::DYN_SLICE:
+        case VCMethod::DYN_SLICE_BACK_BACK:
+        case VCMethod::DYN_SLICE_FRONT_BACK:
+        case VCMethod::DYN_SLICE_ASSIGN:
+        case VCMethod::DYN_SLICE_ASSIGN_BACK_BACK:
+        case VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK: return 2;
+        case VCMethod::DYN_SLICE_PLUS:
+        case VCMethod::DYN_SLICE_PLUS_PAD:
+        case VCMethod::DYN_SLICE_ASSIGN_PLUS:
+        case VCMethod::DYN_SLICE_ASSIGN_PLUS_PAD: return 1;  // Then the constant width
+        default: return 0;
+        }
+    }
+    // Whether X or Z in argument 'n' of slice method 'method' becomes the most positive index,
+    // rather than the most negative one, so the slice selects no element (IEEE 1800-2023
+    // 7.10.1): a first position, or a last position counted from the back
+    static bool sliceArgHigh(VCMethod method, int n) {
+        switch (method) {
+        case VCMethod::DYN_SLICE:
+        case VCMethod::DYN_SLICE_ASSIGN: return n == 0;
+        case VCMethod::DYN_SLICE_FRONT_BACK:
+        case VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK: return true;
+        case VCMethod::DYN_SLICE_BACK_BACK:
+        case VCMethod::DYN_SLICE_ASSIGN_BACK_BACK: return n == 1;
+        default: return false;
+        }
+    }
+    static AstNodeExpr* indexArgp(AstCMethodHard* nodep, int n) {
+        AstNodeExpr* pinp = nodep->pinsp();
+        for (; n > 0; --n) pinp = VN_AS(pinp->nextp(), NodeExpr);
+        return pinp;
+    }
+    void visit(AstCMethodHard* nodep) override {
+        const int indexes = dynIndexArgs(nodep);
+        const bool slice = !nodep->method().isDynElementAccess();
         // An index with X or Z bits selects no element: a read gives the default value and a
-        // write is ignored (IEEE 1800-2023 7.4.6)
-        if (AstConst* const constp = dynElement ? VN_CAST(nodep->pinsp(), Const) : nullptr) {
-            if (constp->num().isFourState()) {
-                constp->replaceWith(newInvalidDynIndexp(constp->fileline()));
-                VL_DO_DANGLING(pushDeletep(constp), constp);
+        // write is ignored (IEEE 1800-2023 7.4.6); so does a slice with such a position
+        // Indexes replaced as unknown, which need no conversion
+        std::array<bool, 2> unknown{};
+        for (int n = 0; n < indexes; ++n) {
+            if (AstConst* const constp = VN_CAST(indexArgp(nodep, n), Const)) {
+                if (constp->num().isFourState()) {
+                    unknown[n] = true;
+                    FileLine* const flp = constp->fileline();
+                    constp->replaceWith(slice && sliceArgHigh(nodep->method(), n)
+                                            ? newMaxDynIndexp(flp)
+                                            : newInvalidDynIndexp(flp));
+                    VL_DO_DANGLING(pushDeletep(constp), constp);
+                }
             }
         }
         iterateChildren(nodep);
-        if (!dynElement) return;
-        AstNodeExpr* const indexp = nodep->pinsp();
-        // A narrower unsigned index is zero extended by the C++ conversion
-        if (indexp->width() < VL_IDATASIZE ? !indexp->isSigned()
-                                           : indexp->width() == VL_IDATASIZE) {
-            return;
+        for (int n = 0; n < indexes; ++n) {
+            if (unknown[n]) continue;
+            AstNodeExpr* const indexp = indexArgp(nodep, n);
+            // A narrower unsigned index is zero extended by the C++ conversion. A 32-bit
+            // unsigned one past the int range wraps to negative, which as an element index or
+            // offset from the back selects no element, as it should, but a slice position
+            // saturates.
+            if (indexp->width() < VL_IDATASIZE
+                    ? !indexp->isSigned()
+                    : indexp->width() == VL_IDATASIZE && (indexp->isSigned() || !slice)) {
+                continue;
+            }
+            VNRelinker relinkHandle;
+            indexp->unlinkFrBack(&relinkHandle);
+            relinkHandle.relink(newDynIndexp(indexp, slice));
         }
-        VNRelinker relinkHandle;
-        indexp->unlinkFrBack(&relinkHandle);
-        relinkHandle.relink(newDynIndexp(indexp));
     }
     // An associative array element whose index has X or Z bits, which is invalid: a read gives
     // the default value, and a write is ignored, through a temporary (IEEE 1800-2023 7.8.6)
