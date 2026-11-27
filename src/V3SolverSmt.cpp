@@ -12582,6 +12582,12 @@ public:
             holderp->declsp(), localGenp, true, &m_fastDistGens, &m_uniqueNames);
         // For the solve after a size solve, which starts from a copy of the class's generator
         AstNodeStmt* fastCopyp = fastStmtsp ? fastStmtsp->cloneTree(true) : nullptr;
+        // Its blocks renamed, so the locals they hold, flattened into the function, are not
+        // declared twice
+        if (fastCopyp) {
+            fastCopyp->foreachAndNext(
+                [&](AstBegin* blockp) { blockp->name(m_uniqueNames.get(blockp->name())); });
+        }
         randomizeFuncp->addStmtsp(fastStmtsp);
         // Dist bucket draws go into the function, ahead of the constraints reading them
         lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
