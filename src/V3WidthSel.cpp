@@ -163,7 +163,20 @@ class WidthSelVisitor final : public VNVisitor {
             return new AstConst{lhsp->fileline(), num};
         }
         // Unsized, as a literal; a signed constant sign extends a narrower signed lhs
-        V3Number offset{lhsp, 32, static_cast<uint32_t>(std::abs(rhs))};
+        if (signedRhs && rhs == std::numeric_limits<int32_t>::min()) {
+            // The most negative int has no signed magnitude, so subtract it, sign extended to a
+            // wider lhs
+            V3Number bound{lhsp, 32, static_cast<uint32_t>(rhs)};
+            bound.width(32, false);
+            bound.isSigned(true);
+            AstNodeExpr* const newp
+                = new AstSub{lhsp->fileline(), lhsp, new AstConst{lhsp->fileline(), bound}};
+            newp->dtypeFrom(lhsp);
+            return newp;
+        }
+        // Negated in 64 bits, as a low bound may be the most negative int
+        V3Number offset{lhsp, 32,
+                        static_cast<uint32_t>(rhs < 0 ? -static_cast<int64_t>(rhs) : rhs)};
         offset.width(32, false);
         offset.isSigned(signedRhs);
         AstConst* const offsetp = new AstConst{lhsp->fileline(), offset};
