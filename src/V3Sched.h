@@ -24,6 +24,7 @@
 
 #include <array>
 #include <functional>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -91,27 +92,99 @@ using LogicAccessFunc = std::function<void(AstVarScope* vscp, VAccess access)>;
 // callee (see isLogicCallee), on its accesses of non-local variables. Of a static class
 // method, only its reads are accesses of the caller.
 void foreachLogicAccess(AstNode* nodep, const LogicAccessFunc& f);
-// A variable access of logic, and whether in an assertion action block
-using LogicActionAccessFunc
-    = std::function<void(AstVarScope* vscp, VAccess access, bool inAction)>;
-// As foreachLogicAccess, also telling whether an access is in an assertion action block
-void foreachLogicActionAccess(AstNode* nodep, const LogicActionAccessFunc& f);
+// A variable access of logic, by the reference
+using LogicRefFunc = std::function<void(const AstVarRef* refp, VAccess access)>;
+// As foreachLogicAccess, calling 'f' with the reference
+void foreachLogicRef(AstNode* nodep, const LogicRefFunc& f);
+// A variable access of logic, by the reference, and whether in an assertion action block
+using LogicActionRefFunc
+    = std::function<void(const AstVarRef* refp, VAccess access, bool inAction)>;
+// As foreachLogicRef, also telling whether an access is in an assertion action block
+void foreachLogicActionRef(AstNode* nodep, const LogicActionRefFunc& f);
 // Call 'f' on each access of a non-local variable in the function 'callp' calls, if a logic
 // callee, and in the logic callees it calls, as foreachLogicAccess
 void foreachCallAccess(const AstCCall* callp, const LogicAccessFunc& f);
+// Bits [first, second) of a variable
+using BitRange = std::pair<int, int>;
+// Variables, each with the bits of it read
+using ReadRangesList = std::vector<std::pair<AstVarScope*, std::vector<BitRange>>>;
+// The bits of its variable a reference may access: those of the selects of elements of an
+// unpacked array and of packed selects of it, if any, with the bits of the elements of an
+// unpacked array in order. '*exactp' is set to whether it accesses all those bits, as at
+// constant positions.
+BitRange accessedBits(const AstVarRef* refp, bool* exactp = nullptr);
+// The number of sensitivities changeSenTree makes of the bits 'ranges' of a variable, counted
+// only up to just over 'limit'
+size_t bitsSenItemCount(const AstVarScope* vscp, const std::vector<BitRange>& ranges,
+                        size_t limit);
+// Disjoint bit ranges of a variable, in order
+class BitRanges final {
+    std::map<int, int> m_ranges;  // Disjoint, not adjacent ranges, by first bit
+
+public:
+    std::vector<BitRange> ranges() const { return {m_ranges.begin(), m_ranges.end()}; }
+    bool empty() const { return m_ranges.empty(); }
+    void add(BitRange range) {
+        auto it = m_ranges.upper_bound(range.first);
+        if (it != m_ranges.begin() && std::prev(it)->second >= range.first) {
+            --it;
+            range = {it->first, std::max(it->second, range.second)};
+            it = m_ranges.erase(it);
+        }
+        while (it != m_ranges.end() && it->first <= range.second) {
+            range.second = std::max(range.second, it->second);
+            it = m_ranges.erase(it);
+        }
+        m_ranges.emplace(range);
+    }
+    bool covers(const BitRange& range) const {
+        const auto it = m_ranges.upper_bound(range.first);
+        return it != m_ranges.begin() && std::prev(it)->second >= range.second;
+    }
+    // The parts of 'range' not covered
+    std::vector<BitRange> uncovered(const BitRange& range) const {
+        std::vector<BitRange> result;
+        int lo = range.first;
+        auto it = m_ranges.upper_bound(lo);
+        if (it != m_ranges.begin()) --it;
+        for (; it != m_ranges.end() && it->first < range.second; ++it) {
+            if (it->first > lo) result.emplace_back(lo, it->first);
+            lo = std::max(lo, it->second);
+        }
+        if (lo < range.second) result.emplace_back(lo, range.second);
+        return result;
+    }
+    bool intersects(const BitRanges& other) const {
+        auto it = m_ranges.begin();
+        auto oit = other.m_ranges.begin();
+        while (it != m_ranges.end() && oit != other.m_ranges.end()) {
+            if (it->first < oit->second && oit->first < it->second) return true;
+            if (it->second <= oit->second) {
+                ++it;
+            } else {
+                ++oit;
+            }
+        }
+        return false;
+    }
+};
 // The sensitivity tree, from 'finder', of a hybrid process run by a change of any of 'vscps',
-// in the order 'procp' reads them
+// in the order 'procp' reads them, or of the bits 'triggers' lists
 AstSenTree* changeSenTree(SenTreeFinder& finder, AstNodeProcedure* procp,
-                          const std::unordered_set<const AstVarScope*>& vscps);
+                          const std::unordered_set<const AstVarScope*>& vscps,
+                          const ReadRangesList& triggers);
 
 // The only process writing each variable, or nullptr if it has other writers
 using SoleWriterMap = std::unordered_map<const AstVarScope*, const AstNodeProcedure*>;
 SoleWriterMap computeSoleWriters(AstNetlist* netlistp);
 // Compute the implicit sensitivities of the given combinational process. 'excludedr' counts
-// the variables excluded as written by a user's always_comb.
+// the variables excluded as written by a user's always_comb. A variable the process writes bits
+// of, but of which it reads only bits it does not write, would be a combinational cycle through
+// the process itself that is not one: it goes in 'triggersr' instead, with the bits read, and
+// the process is to be run by changes of those bits.
 std::unordered_set<const AstVarScope*>
 computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleWriters,
-                             size_t& excludedr);
+                             size_t& excludedr, ReadRangesList& triggersr);
 // Whether the node accesses state of the runtime that processes share, other than variables:
 // output streams and files ($display, $fopen, $fgets, ...), the time format ($timeformat, and
 // '%t' formatting reading it), random number generators, the command line arguments (C code
