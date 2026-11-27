@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_property_and_not_implication_unsup.v:15:41: Unsupported: property 'and' with a 'not' of a sequence with a cycle delay, other than of an implication of a boolean antecedent and a fixed-length sequence with a boolean operand (IEEE 1800-2023 16.12.3).
+                                                                  : ... note: In instance 't'
+   15 |   assert property (@(posedge clk) c and not (a ##1 b));
+      |                                         ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_and_not_implication_unsup.v:16:35: Unsupported: property 'and' with a 'not' of a sequence with a cycle delay, other than of an implication of a boolean antecedent and a fixed-length sequence with a boolean operand (IEEE 1800-2023 16.12.3).
+                                                                  : ... note: In instance 't'
+   16 |   assert property (@(posedge clk) not (a ##1 b) and c);
+      |                                   ^~~
+%Error: Exiting due to
