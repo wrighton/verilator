@@ -3020,20 +3020,21 @@ inline WDataOutP VL_SEL_WWII(int obits, int lbits, WDataOutP owp, WDataInP const
     return owp;
 }
 
-// Return a converted copy of a queue; N_MaxSize is as in VlQueue, for a bounded result
-template <size_t N_MaxSize = 0, typename T, size_t N_FromMaxSize>
-inline VlQueue<T, N_MaxSize> VL_CLONE_Q(const VlQueue<T, N_FromMaxSize>& from, int lbits,
-                                        int srcElementBits, int dstElementBits) {
-    VlQueue<T, N_MaxSize> ret;
+// Return a converted copy of a queue, of type T_Ret, whose elements and bound may differ from the
+// source's
+template <typename T_Ret, typename T_From>
+inline T_Ret VL_CLONE_Q(const T_From& from, uint32_t lbits, int srcElementBits,
+                        int dstElementBits) {
+    T_Ret ret;
     VL_COPY_Q(ret, from, lbits, srcElementBits, dstElementBits);
     return ret;
 }
 
-// Return a converted copy of a queue, reversed; N_MaxSize as for VL_CLONE_Q
-template <size_t N_MaxSize = 0, typename T, size_t N_FromMaxSize>
-inline VlQueue<T, N_MaxSize> VL_REVCLONE_Q(const VlQueue<T, N_FromMaxSize>& from, int lbits,
-                                           int srcElementBits, int dstElementBits) {
-    VlQueue<T, N_MaxSize> ret;
+// As VL_CLONE_Q, reversed
+template <typename T_Ret, typename T_From>
+inline T_Ret VL_REVCLONE_Q(const T_From& from, uint32_t lbits, int srcElementBits,
+                           int dstElementBits) {
+    T_Ret ret;
     VL_REVCOPY_Q(ret, from, lbits, srcElementBits, dstElementBits);
     return ret;
 }
@@ -3116,8 +3117,8 @@ inline void VL_ZERO_INIT_QUEUE_ELEM(VlWide<N_Words>& elem) {
 // These overloads work for both VlQueue<CData> (and similar) as well
 // as VlQueue<VlWide<N>>, including queues with different element types.
 template <typename T>
-inline void VL_COPY_Q(VlQueue<T>& q, const VlQueue<T>& from, int /*lbits*/, int srcElementBits,
-                      int dstElementBits) {
+inline void VL_COPY_Q(VlQueue<T>& q, const VlQueue<T>& from, uint32_t /*lbits*/,
+                      int srcElementBits, int dstElementBits) {
     if (srcElementBits == dstElementBits) {
         // Simple case: same element bit width, direct copy of each element
         if (VL_UNLIKELY(&q == &from)) return;  // Skip self-assignment when it's truly a no-op
@@ -3125,7 +3126,7 @@ inline void VL_COPY_Q(VlQueue<T>& q, const VlQueue<T>& from, int /*lbits*/, int 
     } else {
         // Different element bit widths: use streaming conversion
         VlQueue<T> srcCopy = from;
-        const size_t srcTotalBits = from.size() * srcElementBits;
+        const size_t srcTotalBits = static_cast<size_t>(from.size()) * srcElementBits;
         const size_t dstSize = (srcTotalBits + dstElementBits - 1) / dstElementBits;
         q.renew(dstSize);
         for (size_t i = 0; i < dstSize; ++i) { VL_ZERO_INIT_QUEUE_ELEM(q.atWrite(i)); }
@@ -3140,9 +3141,9 @@ inline void VL_COPY_Q(VlQueue<T>& q, const VlQueue<T>& from, int /*lbits*/, int 
 // differently typed queues cannot alias.
 template <typename T_Dst, typename T_Src>
 inline typename std::enable_if<!std::is_same<T_Dst, T_Src>::value>::type
-VL_COPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int /*lbits*/, int srcElementBits,
+VL_COPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t /*lbits*/, int srcElementBits,
           int dstElementBits) {
-    const size_t srcTotalBits = from.size() * srcElementBits;
+    const size_t srcTotalBits = static_cast<size_t>(from.size()) * srcElementBits;
     const size_t dstSize = (srcTotalBits + dstElementBits - 1) / dstElementBits;
     q.renew(dstSize);
     for (size_t i = 0; i < dstSize; ++i) { VL_ZERO_INIT_QUEUE_ELEM(q.atWrite(i)); }
@@ -3155,9 +3156,9 @@ VL_COPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int /*lbits*/, int srcE
 // This works for both VlQueue<CData> (and similar) as well as VlQueue<VlWide<N>>,
 // including queues with different element types.
 template <typename T_Dst, typename T_Src>
-inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int lbits,
+inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t lbits,
                          int srcElementBits, int dstElementBits) {
-    const size_t srcTotalBits = from.size() * srcElementBits;
+    const size_t srcTotalBits = static_cast<size_t>(from.size()) * srcElementBits;
     const size_t dstSize = (srcTotalBits + dstElementBits - 1) / dstElementBits;
 
     // Always make a copy to handle the case where q and from are the same queue
@@ -3167,16 +3168,21 @@ inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int lbit
     q.renew(dstSize);
     for (size_t i = 0; i < dstSize; ++i) VL_ZERO_INIT_QUEUE_ELEM(q.atWrite(i));
 
-    if (lbits == 1) {
+    if (lbits >= srcTotalBits) {
+        // One block, as wide as the stream or wider: nothing to reorder
+        for (size_t i = 0; i < srcTotalBits; ++i) {
+            VL_SET_QUEUE_BIT(q, dstElementBits, i, VL_GET_QUEUE_BIT(srcCopy, srcElementBits, i));
+        }
+    } else if (lbits == 1) {
         // Simple bit reversal: write directly to destination
-        for (int i = srcTotalBits - 1; i >= 0; --i) {
-            VL_SET_QUEUE_BIT(q, dstElementBits, srcTotalBits - 1 - i,
-                             VL_GET_QUEUE_BIT(srcCopy, srcElementBits, i));
+        for (size_t i = 0; i < srcTotalBits; ++i) {
+            VL_SET_QUEUE_BIT(q, dstElementBits, i,
+                             VL_GET_QUEUE_BIT(srcCopy, srcElementBits, srcTotalBits - 1 - i));
         }
     } else {
         // Generalized block-reversal for lbits > 1:
         // 1. Reverse all bits using 1-bit blocks
-        // 2. Split into lbits-sized blocks and pad incomplete blocks on the left
+        // 2. Split into lbits-sized blocks, the last one short
         // 3. Reverse each lbits-sized block using 1-bit blocks
         const size_t numCompleteBlocks = srcTotalBits / lbits;
         const size_t remainderBits = srcTotalBits % lbits;
@@ -3186,14 +3192,14 @@ inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int lbit
 
         for (size_t block = 0; block < srcBlocks; ++block) {
             const size_t blockStart = block * lbits;
-            const int bitsToProcess = VL_LIKELY(block < numCompleteBlocks) ? lbits : remainderBits;
-            for (int bit = bitsToProcess - 1; bit >= 0; --bit) {
+            const size_t bitsToProcess
+                = VL_LIKELY(block < numCompleteBlocks) ? lbits : remainderBits;
+            for (size_t bit = bitsToProcess; bit-- > 0;) {
                 const size_t reversedBitIndex = blockStart + bit;
                 const size_t originalBitIndex = srcTotalBits - 1 - reversedBitIndex;
                 VL_SET_QUEUE_BIT(q, dstElementBits, dstBitIndex++,
                                  VL_GET_QUEUE_BIT(srcCopy, srcElementBits, originalBitIndex));
             }
-            dstBitIndex += lbits - bitsToProcess;
         }
     }
 }
@@ -3201,8 +3207,8 @@ inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int lbit
 // Convert a queue into a queue, either of them bounded
 template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
 inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
-VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
-          int srcElementBits, int dstElementBits) {
+VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+          uint32_t lbits, int srcElementBits, int dstElementBits) {
     // Convert unbounded copies, then assign, which discards elements beyond the destination's
     // bound with a warning (IEEE 1800-2023 7.10.5)
     VlQueue<T_Src> src;
@@ -3215,8 +3221,8 @@ VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& f
 // Convert a queue into a queue, reversed, either of them bounded
 template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
 inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
-VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
-             int srcElementBits, int dstElementBits) {
+VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+             uint32_t lbits, int srcElementBits, int dstElementBits) {
     // As VL_COPY_Q above
     VlQueue<T_Src> src;
     src = from;
@@ -3227,7 +3233,7 @@ VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>
 
 // Overloads for VlUnpacked source -> VlQueue destination
 template <typename T, std::size_t N_Depth>
-inline void VL_COPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int lbits,
+inline void VL_COPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, uint32_t lbits,
                       int srcElementBits, int dstElementBits) {
     VlQueue<T> srcQ;
     srcQ.renew(N_Depth);
@@ -3236,7 +3242,7 @@ inline void VL_COPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int lbi
 }
 
 template <typename T, std::size_t N_Depth>
-inline void VL_REVCOPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int lbits,
+inline void VL_REVCOPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, uint32_t lbits,
                          int srcElementBits, int dstElementBits) {
     VlQueue<T> srcQ;
     srcQ.renew(N_Depth);
@@ -3247,7 +3253,7 @@ inline void VL_REVCOPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int 
 // Overloads for VlQueue source -> fixed-size VlUnpacked destination
 template <typename T_Dst, std::size_t N_Depth, typename T_Src, size_t N_SrcMaxSize>
 inline void VL_COPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
-                      int lbits, int srcElementBits, int dstElementBits) {
+                      uint32_t lbits, int srcElementBits, int dstElementBits) {
     VlQueue<T_Dst> dstQ;
     VL_COPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
     // Elements past a shorter stream read as zero (IEEE 1800-2023 11.4.14)
@@ -3256,7 +3262,7 @@ inline void VL_COPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcM
 
 template <typename T_Dst, std::size_t N_Depth, typename T_Src, size_t N_SrcMaxSize>
 inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
-                         int lbits, int srcElementBits, int dstElementBits) {
+                         uint32_t lbits, int srcElementBits, int dstElementBits) {
     VlQueue<T_Dst> dstQ;
     VL_REVCOPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
     for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
