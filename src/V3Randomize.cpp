@@ -3595,6 +3595,23 @@ class RandomizeVisitor final : public VNVisitor {
         } else {
             UASSERT_OBJ(receiverp, ftaskRefp, "Should have receiver");
             UASSERT_OBJ(!appendStmtp, ftaskRefp, "Append path requires arg-form rand_mode");
+            // A $strobe or $monitor in a class displays from a static process, which has no
+            // object to read the mode of (V3Assert reports the other non-static reads)
+            const AstDisplay* const displayp = VN_CAST(m_stmtp, Display);
+            const AstVarRef* const modeRefp = VN_CAST(lhsp, VarRef);
+            if (displayp && VN_IS(m_modp, Class) && modeRefp
+                && !modeRefp->varp()->lifetime().isStatic()
+                && (displayp->displayType() == VDisplayType::DT_STROBE
+                    || displayp->displayType() == VDisplayType::DT_MONITOR)) {
+                ftaskRefp->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: " << displayp->verilogKwd()
+                                                  << " of non-static class method call "
+                                                  << ftaskRefp->prettyNameQ() << ".");
+                VL_DO_DANGLING(lhsp->deleteTree(), lhsp);
+                ftaskRefp->replaceWith(new AstConst{fl, 0});
+                VL_DO_DANGLING(pushDeletep(ftaskRefp), ftaskRefp);
+                return;
+            }
             const RandomizeMode rmode = {.asUQuad = receiverp->user1()};
             UASSERT_OBJ(rmode.usesMode, ftaskRefp, "Failed to set usesMode");
             AstDynArraySel* const setp
