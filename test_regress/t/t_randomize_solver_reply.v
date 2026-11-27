@@ -53,11 +53,12 @@ class Unsat;
 endclass
 
 // Diversity pin round replies: the soft constraint keeps this off the UniGen2 sampler,
-// and any random target bit differing from the fixed value is a conflicting assumption
+// and any random target bit differing from the fixed upper bits is a conflicting
+// assumption, while the lower bits stay free, so the variable is not one the constraints fix
 class Pinned;
   rand bit [6:0] v;
   constraint pc {
-    v == 7'h55;
+    v[6:3] == 4'ha;
     soft v[0] == 1'b1;
   }
 endclass
@@ -81,7 +82,7 @@ module t;
       rc = pn.randomize();
       if (rc != 0) npass++;
       // A pin round that gives up keeps the base solution
-      `checkd(pn.v, 7'h55);
+      `checkd(pn.v[6:3], 4'ha);
     end
     $write("NPASS=%0d\n", npass);
   endtask

@@ -1063,8 +1063,8 @@ static void emitSolverSeed(std::ostream& os, VlRNG& rngr) {
     os << "(set-option :random-seed " << (VL_RANDOM_RNG_I(rngr) & 0x7fffffffU) << ")\n";
 }
 
-// The runtime's own symbols (these, the __Va<N> and __Vd<N> literals and the __Vcons<N>
-// labels) use the __V prefix Verilator reserves, so no random variable shares them
+// The runtime's own symbols (these, the __Va<N>, __Vd<N> and __Vf<N> literals and the
+// __Vcons<N> labels) use the __V prefix Verilator reserves, so no random variable shares them
 void VlRandomizer::emitDefines(std::ostream& os) const {
     os << "(define-fun __Vbv ((b Bool)) (_ BitVec 1) (ite b #b1 #b0))\n";
     os << "(define-fun __Vbool ((v (_ BitVec 1))) Bool (= #b1 v))\n";
@@ -1486,7 +1486,10 @@ void VlRandomizer::solveDiversityPins(VlRNG& rngr, VlSolverSession& sess)
     // Tie each free bit to a random target via an assumption literal;
     // drop one conflicting literal per round until compatible
     int npins = 0;
+    std::vector<int> firstPins;  // Of each variable, its first literal, then the end
+    firstPins.reserve(m_vars.size() + 1);
     for (const auto& var : m_vars) {
+        firstPins.push_back(npins);
         const int w = var.second->totalWidth();
         for (int b = 0; b < w; ++b) {
             const bool target = (VL_RANDOM_RNG_I(rngr) & 1);
@@ -1497,14 +1500,22 @@ void VlRandomizer::solveDiversityPins(VlRNG& rngr, VlSolverSession& sess)
             ++npins;
         }
     }
+    firstPins.push_back(npins);
     std::vector<bool> dropped(npins, false);
+    // The bits of a variable the constraints fix that conflict with their pins would be
+    // dropped one per round, each round naming all the pins, quadratically many in all, while
+    // its other pins hold anyway, so all of them are dropped. After the first conflict, one
+    // check for each block of about the square root of the variables finds whether the
+    // constraints fix them all, as they cannot take other values than in the base solution.
+    size_t blockVars = 1;
+    while (blockVars * blockVars < m_vars.size()) ++blockVars;
     for (int round = 0; round <= npins; ++round) {
         os << "(check-sat-assuming (";
         for (int k = 0; k < npins; ++k) {
             if (!dropped[k]) os << " __Va" << k;
         }
         os << "))\n";
-        const VlSolverStatus status = sess.readStatus();
+        VlSolverStatus status = sess.readStatus();
         if (status == VlSolverStatus::SAT) {
             applyModel(sess);
             return;
@@ -1523,6 +1534,26 @@ void VlRandomizer::solveDiversityPins(VlRNG& rngr, VlSolverSession& sess)
             }
         }
         if (!droppedOne) return;
+        if (round) continue;
+        auto varIt = m_vars.cbegin();
+        for (size_t begin = 0, block = 0; begin < m_vars.size(); begin += blockVars, ++block) {
+            const size_t end = std::min(begin + blockVars, m_vars.size());
+            os << "(declare-fun __Vf" << block << " () Bool)\n";
+            os << "(assert (= __Vf" << block << " (or false";
+            for (size_t varIdx = begin; varIdx < end; ++varIdx, ++varIt) {
+                os << " (not (= " << varIt->first << ' ';
+                varIt->second->emitConcreteValue(os);
+                os << "))";
+            }
+            os << ")))\n";
+            os << "(check-sat-assuming (__Vf" << block << "))\n";
+            status = sess.readStatus();
+            if (status == VlSolverStatus::UNSAT) {
+                for (int k = firstPins[begin]; k < firstPins[end]; ++k) dropped[k] = true;
+            } else if (status != VlSolverStatus::SAT) {
+                return;
+            }
+        }
     }
 }
 
