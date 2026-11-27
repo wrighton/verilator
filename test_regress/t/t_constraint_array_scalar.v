@@ -93,11 +93,46 @@ class Both;
   }
 endclass
 
+// Elements at an index the solver gives: q[$] of a queue whose size is solved, and at a random
+// offset from it
+class Last;
+  bit [15:0] tbl[];
+  rand bit [7:0] idx[$];
+  rand bit [15:0] y[$];
+  rand bit [7:0] k;
+  int n;
+  constraint c {
+    idx.size() == n;
+    y.size() == n;
+    idx[$] < n;
+    idx[$] > 0;
+    idx[$] != idx[$-1];
+    k < 3;
+    y[$-k] == 16'd10;
+    foreach (idx[i]) {
+      32'(idx[i]) < n;
+      y[i] == tbl[idx[i]];
+    }
+  }
+endclass
+
+// At the index of an element selected by a known index too: only a size of two or more has a
+// last element other than the first
+class Ordered;
+  rand byte unsigned q[$];
+  constraint c {
+    q.size() inside {[1 : 4]};
+    q[$] > q[0];
+  }
+endclass
+
 module t;
   initial begin
     Table tb;
     Mixed m;
     Holder hd;
+    Last la;
+    Ordered od;
     Both b;
     int ok;
     bit seen[int];
@@ -158,6 +193,34 @@ module t;
     `checkd(ok, 1);
     `checkd(16'(b.whole[0]) + 16'(b.whole[1]) + 16'(b.whole[2]), 30);
     `checkd(b.elems[1], 2);
+
+    la = new;
+    la.n = 16;
+    la.tbl = new[la.n];
+    foreach (la.tbl[i]) la.tbl[i] = 16'(i * 3 + 1);
+    seen.delete();
+    repeat (4) begin
+      ok = la.randomize();
+      `checkd(ok, 1);
+      `checkd(la.idx.size(), la.n);
+      `checkd(la.idx[la.n - 1] < la.n && la.idx[la.n - 1] > 0, 1);
+      `checkd(la.idx[la.n - 1] != la.idx[la.n - 2], 1);
+      `checkd(la.k < 3, 1);
+      `checkd(la.y[la.n - 1 - la.k], 10);
+      foreach (la.idx[i]) begin
+        `checkd(la.y[i], la.tbl[la.idx[i]]);
+        seen[la.idx[i]] = 1;
+      end
+    end
+    `checkd(seen.num() >= la.n / 4, 1);
+
+    od = new;
+    repeat (8) begin
+      ok = od.randomize();
+      `checkd(ok, 1);
+      `checkd(od.q.size() >= 2 && od.q.size() <= 4, 1);
+      `checkd(od.q[od.q.size() - 1] > od.q[0], 1);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

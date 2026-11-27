@@ -302,7 +302,22 @@ class VlRandomizer VL_NOT_FINAL {
     // by name, with their widths: declared, so a guard of the select keeps its meaning (an
     // array whose size is solved has the elements of its size only after the size phase), but
     // never read back
-    std::map<std::string, int> m_ghostElems;
+    struct GhostElem final {
+        int m_width;  // Width of the array's elements
+        std::string m_array;  // Name of the array
+        IData m_index;  // Index of the element
+    };
+    std::map<std::string, GhostElem> m_ghostElems;
+    // Terms of elements a constraint selects from a scalar array at an index the solver gives
+    // (q[$] of a queue whose size is solved, or with a random offset), in order: each defined,
+    // see emitDeclares, as the element terms of its index, the earlier ones' if at theirs, or
+    // a constant of its own
+    struct ChainElem final {
+        std::string m_name;  // Its constant
+        std::string m_array;  // Name of the array
+        std::string m_index;  // SMT term of its index, in the 32-bit index sort
+    };
+    std::vector<ChainElem> m_chainElems;
     // Each scalar array element's constant, by name, as last declared, see emitDeclares
     mutable std::unordered_map<std::string,
                                std::pair<const VlRandomVar*, std::shared_ptr<const ArrayInfo>>>
@@ -562,6 +577,7 @@ class VlRandomizer VL_NOT_FINAL {
     static std::string aliasExpr(const std::string& name, const std::string& otherName);
     void emitDefines(std::ostream& os) const;
     void emitDeclares(std::ostream& os, bool pinCurrent) const;
+    void emitChainDefines(std::ostream& os) const;
     void emitAsserts(std::ostream& os, const std::vector<std::string>& extras, bool named) const;
     // A flat solve's logic, variables and constraints, and randc exclusions
     void emitFlat(std::ostream& os, const std::vector<std::string>& uniqueExprs) const;
@@ -1391,6 +1407,8 @@ public:
     // The term of element 'index' of scalar array 'name' in a constraint: the element's
     // constant, or, for an index the array has no element at, a constant of its own
     const std::string& elemTerm(const std::string& name, IData index);
+    // The term of the element of scalar array 'name' at index term 'index' the solver gives
+    const std::string& elemChain(const std::string& name, const std::string& index);
     // Declare array 'name' element by element, see elemTerm
     void markScalar(const std::string& name) {
         const auto it = m_vars.find(name);
