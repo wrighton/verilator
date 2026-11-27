@@ -5775,6 +5775,42 @@ public:
                                  assertp->userType());
     }
 
+    // Return failp run once for each thread pending in the strong vertices at end of
+    // simulation, where each thread is one attempt (LowerCtx::exactCounts) and the states count
+    // them, or nullptr if a delay ring holds some, as their slots cannot tell attempts apart
+    AstNodeStmt* newPendingThreadsFailp(const LowerCtx& c,
+                                        const std::vector<SvaStateVertex*>& vtxps,
+                                        AstNodeStmt* failp) {
+        FileLine* const flp = c.flp;
+        for (size_t i = 0; i < vtxps.size(); ++i) {
+            if (!vtxps[i]->datap()->stateVarp || !vtxps[i]->datap()->stateCounts) return nullptr;
+        }
+        AstNodeExpr* countp = nullptr;
+        for (size_t i = 0; i < vtxps.size(); ++i) {
+            countp = addCountp(flp, countp,
+                               new AstVarRef{flp, vtxps[i]->datap()->stateVarp, VAccess::READ});
+        }
+        // for (remaining = count; remaining != 0; --remaining) failp;
+        AstVar* const remainingp
+            = new AstVar{flp, VVarType::MODULETEMP, m_names.get("eos"), m_u32DTypep};
+        remainingp->lifetime(VLifetime::STATIC_EXPLICIT);
+        m_modp->addStmtsp(remainingp);
+        AstNodeStmt* const stmtsp
+            = new AstAssign{flp, new AstVarRef{flp, remainingp, VAccess::WRITE}, countp};
+        AstLoop* const loopp = new AstLoop{flp};
+        loopp->addStmtsp(
+            new AstLoopTest{flp, loopp,
+                            new AstNeq{flp, new AstVarRef{flp, remainingp, VAccess::READ},
+                                       new AstConst{flp, AstConst::WidthedValue{}, 32, 0}}});
+        loopp->addStmtsp(failp);
+        loopp->addStmtsp(
+            new AstAssign{flp, new AstVarRef{flp, remainingp, VAccess::WRITE},
+                          new AstSub{flp, new AstVarRef{flp, remainingp, VAccess::READ},
+                                     new AstConst{flp, AstConst::WidthedValue{}, 32, 1}}});
+        stmtsp->addNext(loopp);
+        return stmtsp;
+    }
+
     // Return failp run once for each attempt pending in the strong vertices at end of
     // simulation, or nullptr if their threads cannot tell the attempts apart. A thread at a
     // fixed offset from the attempt start belongs to the attempt that started that many ticks
@@ -5787,7 +5823,9 @@ public:
         int maxAge = 0;
         for (size_t i = 0; i < vtxps.size(); ++i) {
             const int offset = offsets[vtxps[i]->color()];
-            if (offset < 0) return nullptr;
+            if (offset < 0) {
+                return c.exactCounts ? newPendingThreadsFailp(c, vtxps, failp) : nullptr;
+            }
             maxAge = std::max(maxAge, offset);
         }
         FileLine* const flp = c.flp;
@@ -8371,7 +8409,25 @@ class AssertNfaVisitor final : public VNVisitor {
         if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
             return !repp->maxCountp() && !repp->unbounded();
         }
-        // A boolean
+        // An until of booleans keeps one thread of the attempt waiting (IEEE 1800-2023 16.12.12)
+        if (const AstUntil* const untilp = VN_CAST(nodep, Until)) {
+            return isBoolean(untilp->lhsp()) && isBoolean(untilp->rhsp());
+        }
+        // A boolean antecedent starts at most one thread of the attempt
+        if (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            return !implp->isFollowedBy() && isBoolean(implp->lhsp())
+                   && oneThreadPerAttempt(implp->rhsp(), false);
+        }
+        return isBoolean(nodep);
+    }
+    // An until, after any implications
+    static bool isUntilConsequent(const AstNodeExpr* nodep) {
+        if (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            return isUntilConsequent(implp->rhsp());
+        }
+        return VN_IS(nodep, Until);
+    }
+    static bool isBoolean(const AstNodeExpr* nodep) {
         return !nodep->exists([](const AstNodeExpr* exprp) { return exprp->isMultiCycleSva(); });
     }
 
@@ -8746,8 +8802,13 @@ class AssertNfaVisitor final : public VNVisitor {
             = assertAssertp && assertAssertp->passsp() && !parts.hasImplication && negated;
         const bool replayThreads = replayFails || replayPasses;
         // Counting threads counts the failed attempts when each attempt has one thread
+        // The wait state of an until holds the threads of several attempts, so they are counted,
+        // also after an antecedent starting at most one thread of the attempt, a boolean
+        const bool countsConsequent = !parts.hasImplication
+                                      || (isUntilConsequent(seqBodyp) && !parts.isFollowedBy
+                                          && isBoolean(parts.triggerExprp));
         const bool exactCounts
-            = replayFails && !parts.hasImplication && oneThreadPerAttempt(seqBodyp, true);
+            = replayFails && countsConsequent && oneThreadPerAttempt(seqBodyp, true);
         // A match and a vacuous success of its operand on one tick both fail a negated property
         const bool replaySuccesses = assertAssertp && assertAssertp->failsp() && negated;
         const auto signals

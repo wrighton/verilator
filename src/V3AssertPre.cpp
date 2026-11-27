@@ -1237,6 +1237,13 @@ private:
         deletep->dtypep(refp->findVoidDType());
         return new AstStmtExpr{flp, deletep};
     }
+    static AstStmtExpr* getProcessAssocArrayClear(AstVarRef* const refp) {
+        // Constructs refp.delete() statement
+        FileLine* const flp = refp->fileline();
+        AstCMethodHard* const clearp = new AstCMethodHard{flp, refp, VCMethod::ASSOC_CLEAR};
+        clearp->dtypep(refp->findVoidDType());
+        return new AstStmtExpr{flp, clearp};
+    }
     static AstNodeExpr* getProcessAssocArraySize(AstVarRef* const refp) {
         // Constructs refp.size() statement
         AstCMethodHard* const sizep
@@ -1244,6 +1251,45 @@ private:
         sizep->dtypep(refp->findBasicDType(VBasicDTypeKwd::UINT32));
         return sizep;
     }
+    // With a disable iff, a count of the times its condition turned true, which cancels the
+    // attempts of a strong property started before (IEEE 1800-2023 16.12.1): cancelp then runs,
+    // and an attempt stops once the count differs from the one it started with. A $sampled in
+    // the condition is reported as unsupported.
+    AstVar* newDisableCountp(FileLine* flp, AstNodeStmt* cancelp) {
+        if (!m_disablep || m_disablep->exists([](const AstSampled*) { return true; })) {
+            VL_DO_DANGLING(cancelp->deleteTree(), cancelp);
+            return nullptr;
+        }
+        AstVar* const countp = new AstVar{flp, VVarType::MODULETEMP, m_disableCntNames.get(""),
+                                          m_modp->findBasicDType(VBasicDTypeKwd::UINT32)};
+        countp->lifetime(VLifetime::STATIC_EXPLICIT);
+        m_modp->addStmtsp(countp);
+        AstNodeStmt* const stmtsp = new AstAssign{
+            flp, new AstVarRef{flp, countp, VAccess::WRITE},
+            new AstAdd{flp, new AstVarRef{flp, countp, VAccess::READ}, new AstConst{flp, 1}}};
+        stmtsp->addNext(cancelp);
+        countp->addNextHere(
+            new AstAlways{flp, VAlwaysKwd::ALWAYS,
+                          new AstSenTree{flp, new AstSenItem{flp, VEdgeType::ET_POSEDGE,
+                                                             m_disablep->cloneTreePure(false)}},
+                          stmtsp});
+        return countp;
+    }
+    // The count an attempt starts with, and whether it is still the count
+    static AstVar* newStartCountp(FileLine* flp, AstBegin* bodyp, AstVar* countp) {
+        AstVar* const startp
+            = new AstVar{flp, VVarType::BLOCKTEMP, "__VstartCnt", countp->dtypep()};
+        startp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        bodyp->addDeclsp(startp);
+        bodyp->prependStmtsp(new AstAssign{flp, new AstVarRef{flp, startp, VAccess::WRITE},
+                                           new AstVarRef{flp, countp, VAccess::READ}});
+        return startp;
+    }
+    static AstNodeExpr* newNotCancelledp(FileLine* flp, AstVar* startp, AstVar* countp) {
+        return new AstEq{flp, new AstVarRef{flp, startp, VAccess::READ},
+                         new AstVarRef{flp, countp, VAccess::READ}};
+    }
+
     void visit(AstSEventually* nodep) override {
         // Tracking of active attempts uses std::process
         if (!v3Global.rootp()->stdPackageProcessp()) {
@@ -1289,8 +1335,20 @@ private:
         AstBegin* const bodyp = new AstBegin{flp, m_blockNames.get(""), nullptr, true};
         bodyp->addStmtsp(incrementp);
         bodyp->addStmtsp(loopp);
-        bodyp->addStmtsp(clausep);
-        bodyp->addStmtsp(deletep);
+        // A disable iff cancels the attempts started before it, also at end of simulation
+        if (AstVar* const countp = newDisableCountp(
+                flp, getProcessAssocArrayClear(new AstVarRef{flp, activep, VAccess::WRITE}))) {
+            AstVar* const startp = newStartCountp(flp, bodyp, countp);
+            AstLoopTest* const testp = VN_AS(loopp->stmtsp(), LoopTest);
+            testp->condp(new AstLogAnd{flp, testp->condp()->unlinkFrBack(),
+                                       newNotCancelledp(flp, startp, countp)});
+            AstIf* const ifp = new AstIf{flp, newNotCancelledp(flp, startp, countp), clausep};
+            ifp->addThensp(deletep);
+            bodyp->addStmtsp(ifp);
+        } else {
+            bodyp->addStmtsp(clausep);
+            bodyp->addStmtsp(deletep);
+        }
 
         // Validate assertion condition for each active assert
         AstVar* const activeCountp = new AstVar{flp, VVarType::BLOCKTEMP, "__VassertCount",
@@ -1807,6 +1865,15 @@ private:
                               new AstAdd{flp, new AstVarRef{flp, activep, VAccess::READ},
                                          new AstConst{flp, 1}}});
             bodyp->addStmtsp(loopp);
+            // A disable iff cancels the attempts started before it, also at end of simulation
+            if (AstVar* const countp = newDisableCountp(
+                    flp, new AstAssign{flp, new AstVarRef{flp, activep, VAccess::WRITE},
+                                       new AstConst{flp, 0}})) {
+                AstVar* const startp = newStartCountp(flp, bodyp, countp);
+                AstLoopTest* const testp = VN_AS(loopp->stmtsp(), LoopTest);
+                testp->condp(new AstLogAnd{flp, testp->condp()->unlinkFrBack(),
+                                           newNotCancelledp(flp, startp, countp)});
+            }
 
             // Validate assertion condition for each active assert
             AstVar* const activeCountp = new AstVar{flp, VVarType::BLOCKTEMP, "__VassertCount",
