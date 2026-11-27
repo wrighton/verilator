@@ -408,6 +408,37 @@ module t;
       `checkh(got, 12'h456);
     end
 
+    // A left stream target takes the bits it needs from the left of a wider source, and then
+    // reorders them (IEEE 1800-2023 11.4.14.3)
+    begin
+      automatic logic [11:0] s12 = 12'habc;
+      automatic logic [23:0] s24 = 24'h112233;
+      automatic logic [7:0] b8, u0, u1;
+      automatic logic [7:0] ub[2];
+      automatic logic [7:0] q8[$];
+      automatic struct {
+        logic [3:0] a;
+        logic [3:0] b;
+      } st;
+      // verilator lint_off WIDTHTRUNC
+      {<<8{b8}} = s12;
+      `checkh(b8, 8'hab);
+      {<<4{b8}} = s12;
+      `checkh(b8, 8'hba);
+      {<<8{u0, u1}} = s24;
+      `checkh(u0, 8'h22);
+      `checkh(u1, 8'h11);
+      {<<8{ub}} = s24;
+      `checkh(ub[0], 8'h22);
+      `checkh(ub[1], 8'h11);
+      {<<8{q8}} = s12;
+      `checkp(q8, "'{'hab}");
+      {<<4{st}} = s12;
+      `checkh(st.a, 4'hb);
+      `checkh(st.b, 4'ha);
+      // verilator lint_on WIDTHTRUNC
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end

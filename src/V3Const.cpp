@@ -2812,8 +2812,23 @@ class ConstVisitor final : public VNVisitor {
                 return true;
             }
             if (lowerAsFixedAggregate(srcDTypep)) srcp = packFixedAggregate(srcp);
-            const int sWidth = srcp->width();
             const int dWidth = dstp->width();
+            if (srcp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+                // The bits needed are consumed from the left of the source, and then reordered
+                // (IEEE 1800-2023 11.4.14.3)
+                int neededWidth = dWidth;
+                if (VN_IS(dstDTypep, UnpackArrayDType)) {
+                    neededWidth = dWidth * dstDTypep->arrayUnpackedElements();
+                } else if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)) {
+                    const int elementWidth = dstDTypep->subDTypep()->width();
+                    neededWidth = srcp->width() / elementWidth * elementWidth;
+                }
+                if (neededWidth > 0 && neededWidth < srcp->width()) {
+                    srcp = new AstSel{srcp->fileline(), srcp, srcp->width() - neededWidth,
+                                      neededWidth};
+                }
+            }
+            const int sWidth = srcp->width();
             // Connect the rhs to the stream operator and update its width
             VN_AS(streamp, StreamL)->lhsp(srcp);
             if (VN_IS(srcDTypep, DynArrayDType) || VN_IS(srcDTypep, QueueDType)

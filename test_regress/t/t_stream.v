@@ -60,12 +60,12 @@ module t (
 
     // Stream operator: <<
     // Location: lhs of assignment
-    // RHS is *wider* than LHS
+    // RHS is *wider* than LHS: its leftmost bits are consumed, and then reordered
     /* verilator lint_off WIDTH */
-    { << {dout}} = 5'b00001; if (dout != 4'b1000) $stop;
-    { << 2 {dout}} = 5'b00001; if (dout != 4'b0100) $stop;
-    { << 3 {dout}} = 5'b00001; if (dout != 4'b0010) $stop;
-    { << 4 {dout}} = 5'b00001; if (dout != 4'b0001) $stop;
+    { << {dout}} = 5'b11010; if (dout != 4'b1011) $stop;
+    { << 2 {dout}} = 5'b11010; if (dout != 4'b0111) $stop;
+    { << 3 {dout}} = 5'b11010; if (dout != 4'b1011) $stop;
+    { << 4 {dout}} = 5'b11010; if (dout != 4'b1101) $stop;
     { << 5 {dout}} = 5'b01101; if (dout != 4'b0110) $stop;
     /* verilator lint_on WIDTH */
 
