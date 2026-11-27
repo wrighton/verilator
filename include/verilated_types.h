@@ -874,11 +874,14 @@ public:
         for (int32_t i = lsb; i <= msb; ++i) out.push_back(m_deque[i]);
         return out;
     }
-    VlQueue sliceFrontBack(int32_t lsb, int32_t msb) const {
-        return slice(lsb, lastIndex() - msb);
+    // Index 'offset' from the back, saturated so a large negative offset stays past the end
+    int32_t backIndex(int32_t offset) const {
+        return static_cast<int32_t>(std::min<int64_t>(static_cast<int64_t>(lastIndex()) - offset,
+                                                      std::numeric_limits<int32_t>::max()));
     }
+    VlQueue sliceFrontBack(int32_t lsb, int32_t msb) const { return slice(lsb, backIndex(msb)); }
     VlQueue sliceBackBack(int32_t lsb, int32_t msb) const {
-        return slice(lastIndex() - lsb, lastIndex() - msb);
+        return slice(backIndex(lsb), backIndex(msb));
     }
     // Last index of q[lsb+:width] within the queue, computed without overflow
     int32_t plusMsb(int32_t lsb, int32_t width) const {
@@ -931,10 +934,10 @@ public:
         std::copy_n(src.m_deque.begin(), count, m_deque.begin() + lsb);
     }
     void sliceAssignFrontBack(int32_t lsb, int32_t msb, const VlQueue& src) {
-        sliceAssign(lsb, lastIndex() - msb, src);
+        sliceAssign(lsb, backIndex(msb), src);
     }
     void sliceAssignBackBack(int32_t lsb, int32_t msb, const VlQueue& src) {
-        sliceAssign(lastIndex() - lsb, lastIndex() - msb, src);
+        sliceAssign(backIndex(lsb), backIndex(msb), src);
     }
     // Assign src elements to q[lsb+:width]
     void sliceAssignPlus(int32_t lsb, int32_t width, const VlQueue& src) {
