@@ -1068,12 +1068,14 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(DYN_SLICE_ASSIGN_BACK_BACK,         "sliceAssignBackBack",    false,  CLEAN,  false,      "rrrr", "") \
     macro(DYN_SLICE_ASSIGN_FRONT_BACK,        "sliceAssignFrontBack",   false,  CLEAN,  false,      "rrrr", "") \
     macro(DYN_SLICE_ASSIGN_PLUS,              "sliceAssignPlus",        false,  CLEAN,  false,      "rrrr", "") \
+    macro(DYN_SLICE_ASSIGN_PLUS_BACK,         "sliceAssignPlusBack",    false,  CLEAN,  false,      "rrrr", "") \
     macro(DYN_SLICE_ASSIGN_PLUS_PAD,          "sliceAssignPlusPad",     false,  CLEAN,  false,      "rrrr", "") \
     macro(DYN_SLICE_BACK_BACK,                "sliceBackBack",          PURE,   CLEAN,  false,      "rr", "") \
     macro(DYN_SLICE_FRONT_BACK,               "sliceFrontBack",         PURE,   CLEAN,  false,      "rr", "") \
     macro(DYN_SLICE_PAD_BACK_BACK,            "slicePadBackBack",       PURE,   CLEAN,  false,      "rr", "") \
     macro(DYN_SLICE_PAD_FRONT_BACK,           "slicePadFrontBack",      PURE,   CLEAN,  false,      "rr", "") \
     macro(DYN_SLICE_PLUS,                     "slicePlus",              PURE,   CLEAN,  false,      "rr", "") \
+    macro(DYN_SLICE_PLUS_BACK,                "slicePlusBack",          PURE,   CLEAN,  false,      "rr", "") \
     macro(DYN_SLICE_PLUS_PAD,                 "slicePlusPad",           PURE,   CLEAN,  false,      "rr", "") \
     macro(EVENT_CLEAR_FIRED,                  "clearFired",             false,  CLEAN,  false,      "", "") \
     macro(EVENT_CLEAR_TRIGGERED,              "clearTriggered",         false,  CLEAN,  false,      "", "") \
