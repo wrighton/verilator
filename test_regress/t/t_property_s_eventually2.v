@@ -27,12 +27,49 @@ module t;
   assert property (@(negedge clk) cyc > 0 until cyc > 0)
     ++passed_until;
 
+  // An implication whose antecedent does not hold passes vacuously, running its pass action
+  // (IEEE 1800-2023 16.12.7, 16.14.1)
+  bit [30:0] lfsr = 31'h1234_5679;
+  always @(negedge clk) lfsr <= {lfsr[29:0], lfsr[30] ^ lfsr[27]};
+  wire a = lfsr[3] & lfsr[8];
+  wire b = lfsr[5] & lfsr[11] & lfsr[17];
+  int imp_n = 0;
+  // Attempts still waiting for b at the end fail
+  assert property (@(negedge clk) a |-> s_eventually b) ++imp_n;
+  else;
+  bit ah[MAX], bh[MAX];
+  int ticks = 0;
+  always @(negedge clk) begin
+    ah[ticks] = a;
+    bh[ticks] = b;
+    ++ticks;
+  end
+  // Passes of the attempts of ticks before n
+  function automatic int expPasses(int n);
+    int count = 0;
+    for (int s = 0; s < n; ++s) begin
+      if (!ah[s]) begin
+        ++count;
+      end
+      else begin
+        for (int t = s; t < n; ++t) begin
+          if (bh[t]) begin
+            ++count;
+            break;
+          end
+        end
+      end
+    end
+    return count;
+  endfunction
+
   always @(posedge clk) begin
     ++cyc;
     if (cyc == MAX) begin
       $display("%d", passed);
       if (passed != 999) $stop;
       if (passed_until != 999) $stop;  // Same as 'passed': each attempt passes on its first edge
+      if (imp_n != expPasses(ticks)) $stop;
       $write("*-* All Finished *-*\n");
       $finish;
     end
