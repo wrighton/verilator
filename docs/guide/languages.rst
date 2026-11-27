@@ -122,6 +122,12 @@ With :vlopt:`--timing`, all timing controls are supported:
 
 as well as all flavors of ``fork``.
 
+The processes that a ``fork..join_none`` forks start in the region the
+forking procedure runs in, before the nonblocking assignment updates of the
+time step (IEEE 1800-2023 9.3.2), except when the forking procedure is
+combinational (``always @*``, ``always_comb``). These start after the
+nonblocking assignment updates.
+
 Compiling a Verilated design that uses these features requires a compiler
 with C++20 coroutine support, e.g. Clang 5, GCC 10, or newer.
 
