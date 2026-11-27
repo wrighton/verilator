@@ -6780,8 +6780,7 @@ property_declaration<propertyp>:  // ==IEEE: property_declaration
                           $$->addDeclsp($2);
                           $$->specp($4);
                           GRAMMARP->endLabel($<fl>6, $$, $6);
-                          GRAMMARP->m_insideProperty = false;
-                          GRAMMARP->m_typedPropertyPort = false; }
+                          GRAMMARP->m_insideProperty = false; }
         |       property_declarationFront property_port_listE ';' assertion_variable_declarationList
                         property_declarationBody yENDPROPERTY endLabelE
                         { $$ = $1;
@@ -6789,21 +6788,23 @@ property_declaration<propertyp>:  // ==IEEE: property_declaration
                           $$->addDeclsp($4);
                           $$->specp($5);
                           GRAMMARP->endLabel($<fl>7, $$, $7);
-                          GRAMMARP->m_insideProperty = false;
-                          GRAMMARP->m_typedPropertyPort = false; }
+                          GRAMMARP->m_insideProperty = false; }
         ;
 
 property_declarationFront<propertyp>:  // IEEE: part of property_declaration
                 yPROPERTY idAny/*property_identifier*/
                         { $$ = new AstProperty{$<fl>2, *$2};
-                          GRAMMARP->m_insideProperty = true;
-                          GRAMMARP->m_typedPropertyPort = false; }
+                          GRAMMARP->m_insideProperty = true; }
         ;
 
 property_port_listE<nodep>:  // IEEE: [ ( [ property_port_list ] ) ]
                 /* empty */                             { $$ = nullptr; }
         |       '(' ')'                                 { $$ = nullptr; }
-        |       '(' property_port_list ')'              { $$ = $2; }
+        |       '('
+        /*mid*/         { GRAMMARP->setPortInheritDType(nullptr); }
+        /*cont*/    property_port_list ')'
+                        { $$ = $3;
+                          GRAMMARP->setPortInheritDType(nullptr); }
         ;
 
 property_port_list<nodep>:  // ==IEEE: property_port_list
@@ -6823,16 +6824,16 @@ property_port_item<nodep>:  // IEEE: property_port_item/sequence_port_item
 
 property_port_itemFront:  // IEEE: part of property_port_item/sequence_port_item
                 property_port_itemDirE property_formal_typeNoDt
-                        { VARDTYPE($2); }
+                        { VARDTYPE($2); GRAMMARP->setPortInheritDType(nullptr); }
         //                      // data_type_or_implicit
         |       property_port_itemDirE data_type
-                        { VARDTYPE($2); GRAMMARP->m_typedPropertyPort = true; }
+                        { VARDTYPE(GRAMMARP->portDType($2)); }
         |       property_port_itemDirE yVAR data_type
-                        { VARDTYPE($3); GRAMMARP->m_typedPropertyPort = true; }
+                        { VARDTYPE(GRAMMARP->portDType($3)); }
         |       property_port_itemDirE yVAR implicit_typeE
-                        { VARDTYPE($3); }
+                        { VARDTYPE($3); GRAMMARP->setPortInheritDType(nullptr); }
         |       property_port_itemDirE implicit_typeE
-                        { VARDTYPE($2); }
+                        { VARDTYPE(GRAMMARP->portDType($2)); }
         ;
 
 property_port_itemAssignment<varp>:  // IEEE: part of property_port_item/sequence_port_item
@@ -6879,7 +6880,6 @@ sequence_declaration<sequencep>:  // ==IEEE: sequence_declaration
                           $$->exprp($4);
                           GRAMMARP->endLabel($<fl>6, $$, $6);
                           GRAMMARP->m_insideProperty = false;
-                          GRAMMARP->m_typedPropertyPort = false;
                           // Sequence declarations are allowed; they are inlined by V3AssertPre.
                           // Sequences in unsupported contexts are reported by assertPreAll
                           // after inlining.
@@ -6891,15 +6891,13 @@ sequence_declaration<sequencep>:  // ==IEEE: sequence_declaration
                           $$->addDeclsp($4);
                           $$->exprp($5);
                           GRAMMARP->endLabel($<fl>7, $$, $7);
-                          GRAMMARP->m_insideProperty = false;
-                          GRAMMARP->m_typedPropertyPort = false; }
+                          GRAMMARP->m_insideProperty = false; }
         ;
 
 sequence_declarationFront<sequencep>:  // IEEE: part of sequence_declaration
                 ySEQUENCE idAny/*new_sequence*/
                         { $$ = new AstSequence{$<fl>2, *$2};
-                          GRAMMARP->m_insideProperty = true;
-                          GRAMMARP->m_typedPropertyPort = false; }
+                          GRAMMARP->m_insideProperty = true; }
         ;
 
 sequence_port_listE<nodep>:  // IEEE: [ ( [ sequence_port_list ] ) ]
@@ -6915,7 +6913,7 @@ sequence_port_listE<nodep>:  // IEEE: [ ( [ sequence_port_list ] ) ]
 property_formal_typeNoDt<nodeDTypep>:  // IEEE: property_formal_type (w/o implicit)
                 sequence_formal_typeNoDt                { $$ = $1; }
         |       yPROPERTY
-                        { $$ = nullptr; GRAMMARP->m_typedPropertyPort = false;
+                        { $$ = nullptr;
                           BBUNSUP($1, "Unsupported: property argument data type"); }
         ;
 
@@ -6923,12 +6921,12 @@ sequence_formal_typeNoDt<nodeDTypep>:  // ==IEEE: sequence_formal_type (w/o data
                         // IEEE: data_type_or_implicit
                         // implicit expanded where used
                 ySEQUENCE
-                        { $$ = nullptr; GRAMMARP->m_typedPropertyPort = false;
+                        { $$ = nullptr;
                           BBUNSUP($1, "Unsupported: sequence argument data type"); }
                         // IEEE-2009: yEVENT
                         // already part of data_type.  Removed in 1800-2012.
         |       yUNTYPED
-                        { $$ = nullptr; GRAMMARP->m_typedPropertyPort = false; }
+                        { $$ = nullptr; }
         ;
 
 sequence_declarationBodyExpr<nodeExprp>:  // IEEE: part of sequence_declaration
@@ -8038,9 +8036,11 @@ checker_port_listE<nodep>:  // IEEE: [ ( [ checker_port_list ] ) ]
                 /* empty */                             { $$ = nullptr; }
         |       '(' ')'                                 { $$ = nullptr; }
         |       '('
-        /*mid*/         { VARRESET_LIST(PORT); GRAMMARP->m_pinAnsi = true; }
+        /*mid*/         { VARRESET_LIST(PORT); GRAMMARP->m_pinAnsi = true;
+                          GRAMMARP->setPortInheritDType(nullptr); }
         /*cont*/    checker_port_list ')'
-                        { $$ = $3; }
+                        { $$ = $3;
+                          GRAMMARP->setPortInheritDType(nullptr); }
         ;
 
 checker_port_list<nodep>:  // ==IEEE: checker_port_list
@@ -8054,20 +8054,21 @@ checker_port_item<nodep>:  // IEEE: checker_port_item
 
 checker_port_itemFront:  // IEEE: part of checker_port_item
                 checker_port_directionE property_formal_typeNoDt
-                        { VARDTYPE($2); }
+                        { VARDTYPE($2); GRAMMARP->setPortInheritDType(nullptr); }
         //                      // data_type_or_implicit
         |       checker_port_directionE data_type
-                        { VARDTYPE($2); GRAMMARP->m_typedPropertyPort = true; }
+                        { VARDTYPE(GRAMMARP->portDType($2)); }
         |       checker_port_directionE yVAR data_type
-                        { VARDTYPE($3); GRAMMARP->m_typedPropertyPort = true; }
+                        { VARDTYPE(GRAMMARP->portDType($3)); }
         |       checker_port_directionE yVAR implicit_typeE
-                        { VARDTYPE($3); }
+                        { VARDTYPE($3); GRAMMARP->setPortInheritDType(nullptr); }
         |       checker_port_directionE implicit_typeE
-                        { VARDTYPE($2); }
+                        { VARDTYPE(GRAMMARP->portDType($2)); }
         ;
 
 checker_port_directionE:  // IEEE: [ checker_port_direction ]
-                /* empty */                             { VARIO(INPUT); }
+        //                      // The direction of the previous port, input for the first (IEEE 1800-2023 17.2)
+                /* empty */                             { VARIOANSI(); }
         |       yINPUT                                  { VARIO(INPUT); }
         |       yOUTPUT                                 { VARIO(OUTPUT); }
         ;
