@@ -11,7 +11,7 @@ module t (input clk);
   // in the range would admit a different offset set. IEEE 1800-2023
   // 16.9.10 is not well-defined under variable-length operands for our
   // fixed-length desugar, so reject with UNSUPPORTED.
-  assert property (@(posedge clk)
+  cover sequence (@(posedge clk)
       (a ##[1:3] b) within (c ##5 d));
 
 endmodule

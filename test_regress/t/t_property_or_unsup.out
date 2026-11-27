@@ -11,10 +11,10 @@
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:18:65: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
    18 |   assert property (@(posedge clk) a |-> ##[1:2] (##1 ((b ##1 c) or (c ##1 b))));
       |                                                                 ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:19:45: Unsupported: 'within' with an inner sequence shorter than the outer sequence in an asserted property (IEEE 1800-2023 16.9.10)
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:19:59: Unsupported: 'within' with an inner sequence shorter than the outer sequence in an asserted property (IEEE 1800-2023 16.9.10)
                                                  : ... note: In instance 't'
-   19 |   assert property (@(posedge clk) (a ##1 b) within (c ##2 c));
-      |                                             ^~~~~~
+   19 |   assert property (@(posedge clk) a throughout ((a ##1 b) within (c ##2 c)));
+      |                                                           ^~~~~~
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:21:51: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
    21 |   assert property (@(posedge clk) a |-> ((b[->1]) or (##2 c) or (##3 a) or (##4 b) or (##5 c))
       |                                                   ^~

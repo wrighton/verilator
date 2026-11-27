@@ -11,9 +11,10 @@ import vltest_bootstrap
 
 test.scenarios('vlt')
 
-SIZE_SMALL = 100
-SIZE_LARGE = SIZE_SMALL * 4
-MAX_RATIO = 6  # Linear growth gives 4, quadratic 16
+# Above the latency the per-attempt lowering takes, so the NFA lowers both sizes
+SIZE_SMALL = 260
+SIZE_LARGE = SIZE_SMALL * 2
+MAX_RATIO = 3  # Linear growth gives 2, quadratic 4
 
 
 def cloned_nodes(n):
