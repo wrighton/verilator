@@ -515,17 +515,18 @@ class LinkParseVisitor final : public VNVisitor {
                     nodep->lifetime(VLifetime::STATIC_IMPLICIT);
                 }
             }
-        } else if (m_ftaskp && !nodep->isFuncReturn()) {  // Return variables are created automatic
+        } else if (m_ftaskp) {
             if (m_ftaskp->lifetime().isStatic() && (nodep->isRef() || nodep->isConstRef())) {
                 nodep->v3error(
                     "It is illegal to use argument passing by reference for subroutines with "
                     "a lifetime of static (IEEE 1800-2023 13.5.2)");
             }
             // Variables of a static task whose values can be used after it returns need to be
-            // static, as IEEE 1800-2023 6.21 makes them
+            // static, as IEEE 1800-2023 6.21 makes them, also a function's result variable
+            // (IEEE 1800-2023 13.4.1)
             if (m_ftaskp->lifetime().isStatic() && m_outlivesCall) {
                 nodep->lifetime(VLifetime::STATIC_IMPLICIT);
-            } else {
+            } else if (!nodep->isFuncReturn()) {  // Return variables are created automatic
                 nodep->lifetime(VLifetime::AUTOMATIC_IMPLICIT);
             }
         } else if (nodep->lifetime().isNone()) {
