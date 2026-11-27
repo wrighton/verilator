@@ -1530,6 +1530,10 @@ public:
     [[noreturn]] static void scTimePrecisionError(int sc_prec, int vl_prec) VL_MT_SAFE;
     [[noreturn]] static void scTraceBeforeElaborationError() VL_MT_SAFE;
     [[noreturn]] static void sizeMismatchError() VL_MT_SAFE;
+    static void sliceAssignIgnoredWarning(int64_t lsb, int64_t msb, size_t size, size_t sliceSize,
+                                          size_t srcSize, bool stream) VL_MT_SAFE;
+    [[noreturn]] static void sliceSizeMismatchError(size_t sliceSize, size_t srcSize,
+                                                    bool stream) VL_MT_SAFE;
     static void stackCheck(QData needSize) VL_MT_UNSAFE;
 
     // Internal: Load a VPI shared library (+verilator+vpi+<lib>[:<bootstrap>])
