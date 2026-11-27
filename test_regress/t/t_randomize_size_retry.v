@@ -37,6 +37,19 @@ class Idx;
   }
 endclass
 
+// Sized only by the constraints of randomize() with
+class Bare;
+  rand bit [7:0] q[$];
+  static int calls = 0;
+  static function int counted();
+    ++calls;
+    return 0;
+  endfunction
+  static function int one();
+    return 1;
+  endfunction
+endclass
+
 // Elements not selected by a foreach constrain the size solve as before
 class Fixed;
   rand bit [7:0] q[$];
@@ -149,6 +162,7 @@ module t;
     automatic SizeOf sizeof_q = new;
     automatic Conj conj = new;
     automatic Back back = new;
+    automatic Bare bare = new;
     int ok;
     for (int k = 0; k < 40; ++k) begin
       ok = sum.randomize();
@@ -193,6 +207,62 @@ module t;
       `checkh(ok, 1);
       if (back.q.size() < 1 || back.q.size() > 5) `stop;
     end
+    // Also in randomize() with
+    for (int k = 0; k < 20; ++k) begin
+      ok = idx.randomize() with { q.size() > 0; };
+      `checkh(ok, 1);
+      if (idx.q.size() < 1 || idx.q.size() > 3) `stop;
+      idx.q.delete();
+      ok = bare.randomize() with {
+        q.size() inside {[1 : 5]};
+        foreach (q[i]) if (i == 3) {
+          q[i] > 10;
+          q[i] < 5;
+        }
+      };
+      `checkh(ok, 1);
+      if (bare.q.size() < 1 || bare.q.size() > 3) `stop;
+      bare.q.delete();
+    end
+    // Not satisfiable, so leaves the queue
+    bare.q = '{1, 2};
+    ok = bare.randomize() with {
+      q.size() inside {[1 : 4]};
+      foreach (q[i]) {
+        q[i] > 10;
+        q[i] < 5;
+      }
+    };
+    `checkh(ok, 0);
+    `checkh(bare.q.size(), 2);
+    `checkh(bare.q[1], 2);
+    // A pure function the with-block calls does not keep it from being retried
+    for (int k = 0; k < 20; ++k) begin
+      ok = bare.randomize() with {
+        q.size() inside {[Bare::one() : 5]};
+        foreach (q[i]) if (i == 3) {
+          q[i] > 10;
+          q[i] < 5;
+        }
+      };
+      `checkh(ok, 1);
+      if (bare.q.size() < 1 || bare.q.size() > 3) `stop;
+      bare.q.delete();
+    end
+    // A function counting its calls, which the with-block calls, is not called again for
+    // retries
+    for (int k = 0; k < 20; ++k) begin
+      void'(bare.randomize() with {
+        q.size() inside {[1 : 16]};
+        foreach (q[i]) if (i == 3) {
+          q[i] > 10;
+          q[i] < 5;
+        }
+        q.size() > Bare::counted();
+      });
+      bare.q.delete();
+    end
+    if (Bare::calls > 40) `stop;
     for (int k = 0; k < 20; ++k) begin
       ok = pure_fn.randomize();
       `checkh(ok, 1);

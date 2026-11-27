@@ -12434,6 +12434,83 @@ class SolverSmtLowering final : public V3SolverLowering {
         randomizep->addStmtsp(newGenTextCallp(genp, ".quiet_unsat(false)"));
         randomizep->addStmtsp(newGenTextCallp(genp, ".clear_size_exclusions()"));
     }
+    // As addSizeRetries, for randomize() with, whose setup, from setupFirstp through the solve
+    // of the elements (the last statement), runs again in a loop: it copies genp from
+    // stateGenp, so the exclusions and the quiet flag are kept there between tries
+    void addInlineSizeRetries(AstFunc* const randomizep, AstVar* const genp,
+                              AstVar* const stateGenp, AstVar* const sizeOkVarp,
+                              AstVar* const finalOkVarp, AstNodeStmt* const undop,
+                              AstNodeStmt* const setupFirstp, AstNodeStmt* const sizeSolvep) {
+        FileLine* const fl = randomizep->fileline();
+        AstVar* const retryVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vsize_retry",
+                                             randomizep->findBasicDType(VBasicDTypeKwd::INT)};
+        retryVarp->funcLocal(true);
+        randomizep->addDeclsp(retryVarp);
+        const auto retryRefp
+            = [&](VAccess access) { return new AstVarRef{fl, retryVarp, access}; };
+        const auto retriesp = [&]() { return new AstConst{fl, s_sizeRetries}; };
+        const auto okRefp = [&](AstVar* varp) { return new AstVarRef{fl, varp, VAccess::READ}; };
+        AstNodeStmt* const finalSolvep = lastStmtp(randomizep);
+        setupFirstp->addHereThisAsNext(
+            new AstAssign{fl, retryRefp(VAccess::WRITE), new AstConst{fl, 0}});
+        AstLoop* const loopp = new AstLoop{fl};
+        setupFirstp->addHereThisAsNext(loopp);
+        // A try between the first and the last does not report, the others do
+        loopp->addStmtsp(newGenTextCallp(
+            stateGenp, ".quiet_unsat(",
+            new AstLogAnd{fl, new AstLtS{fl, new AstConst{fl, 0}, retryRefp(VAccess::READ)},
+                          new AstLtS{fl, retryRefp(VAccess::READ), retriesp()}}));
+        loopp->addStmtsp(setupFirstp->unlinkFrBackWithNext());
+        // Out of sizes: the setup, with the sizes excluded, stays to report why
+        sizeSolvep->addNextHere(new AstLoopTest{fl, loopp, okRefp(sizeOkVarp)});
+        // The solve of the elements reports unless more tries follow
+        finalSolvep->addHereThisAsNext(newGenTextCallp(
+            genp, ".quiet_unsat(", new AstLtS{fl, retryRefp(VAccess::READ), retriesp()}));
+        // Not after another failure, as reading a member of a null handle
+        loopp->addStmtsp(
+            new AstLoopTest{fl, loopp,
+                            new AstLogAnd{fl,
+                                          new AstLogAnd{fl, new AstLogNot{fl, okRefp(finalOkVarp)},
+                                                        newGenTextExprp(genp, ".unsat()")},
+                                          new AstLtS{fl, retryRefp(VAccess::READ), retriesp()}}});
+        loopp->addStmtsp(
+            new AstAssign{fl, retryRefp(VAccess::WRITE),
+                          new AstAdd{fl, retryRefp(VAccess::READ), new AstConst{fl, 1}}});
+        loopp->addStmtsp(newGenTextCallp(genp, ".exclude_sizes()"));
+        if (stateGenp != genp) {
+            AstCExpr* const carryp = newGenTextExprp(genp, ".carry_size_exclusions(");
+            carryp->add(new AstVarRef{fl, VN_CAST(stateGenp->user2p(), NodeModule), stateGenp,
+                                      VAccess::READWRITE});
+            carryp->add(")");
+            loopp->addStmtsp(new AstStmtExpr{fl, carryp});
+        }
+        loopp->addStmtsp(undop->cloneTree(true));
+        // A size solve the exclusions left unsatisfied was quiet
+        randomizep->addStmtsp(new AstIf{
+            fl,
+            new AstLogAnd{
+                fl,
+                new AstLogAnd{fl,
+                              new AstLogAnd{fl, new AstLogNot{fl, okRefp(sizeOkVarp)},
+                                            newGenTextExprp(genp, ".unsat()")},
+                              new AstLtS{fl, new AstConst{fl, 0}, retryRefp(VAccess::READ)}},
+                new AstLtS{fl, retryRefp(VAccess::READ), retriesp()}},
+            newGenTextCallp(genp, ".report_unsat()")});
+        // A last try failing for another reason, after quiet tries, reports the failure too
+        randomizep->addStmtsp(new AstIf{
+            fl,
+            new AstLogAnd{
+                fl, new AstLogAnd{fl, new AstLogNot{fl, okRefp(finalOkVarp)}, okRefp(sizeOkVarp)},
+                new AstLogAnd{fl, new AstLtS{fl, new AstConst{fl, 0}, retryRefp(VAccess::READ)},
+                              new AstLogNot{fl, newGenTextExprp(genp, ".unsat()")}}},
+            newGenTextCallp(genp, ".report_retry_failure()")});
+        randomizep->addStmtsp(newGenTextCallp(genp, ".quiet_unsat(false)"));
+        randomizep->addStmtsp(newGenTextCallp(genp, ".clear_size_exclusions()"));
+        if (stateGenp != genp) {
+            randomizep->addStmtsp(newGenTextCallp(stateGenp, ".quiet_unsat(false)"));
+            randomizep->addStmtsp(newGenTextCallp(stateGenp, ".clear_size_exclusions()"));
+        }
+    }
     AstVar* addSizeSolvep(AstFunc* const randomizep, AstVar* const genp) {
         FileLine* const fl = randomizep->fileline();
         AstVar* const sizeOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vsize_ok",
@@ -13009,10 +13086,13 @@ public:
             = randomizeFuncp->stmtsp() ? randomizeFuncp->stmtsp()->lastp() : nullptr;
         // At least the call of the pre-randomize phase
         UASSERT_OBJ(solveAfterp, nodep, "No statement before the solve");
-        // Add constraints clearing code
+        // Add constraints clearing code. A retry of the size solve runs the setup again, so it
+        // starts without the constraints of an earlier try.
         if (classGenp) {
             randomizeFuncp->addStmtsp(
                 implementConstraintsClear(randomizeFuncp->fileline(), classGenp));
+        } else {
+            randomizeFuncp->addStmtsp(implementConstraintsClear(nodep->fileline(), localGenp));
         }
 
         randomizeFuncp->addDeclsp(localGenp);
@@ -13188,6 +13268,9 @@ public:
         // them against post-resize arrays if a size phase is needed below.
         AstBegin* const capturedClonep
             = SmtUtil::newItemsHolderp(nodep->fileline(), cloneWithDistPreambles(capturedTreep));
+        // A function that is not pure the with-block calls would be called again on each retry
+        // of the size solve, so then the sizes are not retried (see impureConstraintCalls)
+        const bool withImpureCalls = hasImpureCalls(capturedClonep);
 
         // Arrays that gain a size var from THIS with-block's own inline .size()==expr
         // constraint (as opposed to a class-level one) and are also referenced by a
@@ -13257,16 +13340,26 @@ public:
                   ? newResizeUndop(randomizeFuncp, sizedArrays, memberArrays, resizeCopiesp)
                   : nullptr;
         if (needsSizePhase) {
+            // Array elements randomized by their own randomize() keep the setup from being
+            // retried (see addInlineSizeRetries)
+            const bool hadElems = elemsp;
+            bool stagedRegs = false;
             priorPhasep
                 = beginStagedPhase(randomizeFuncp, classStaged, &inlineStaged, solveAfterp);
             if (classSetupCallp) {
-                if (AstNodeStmt* const regp = newStagedClassCallp(classStaged, classGenp))
+                if (AstNodeStmt* const regp = newStagedClassCallp(classStaged, classGenp)) {
                     classSetupCallp->addNextHere(regp);
+                    stagedRegs = true;
+                }
             }
-            if (AstNodeStmt* const regp = newStagedRegistrationp(classStaged, localGenp))
+            if (AstNodeStmt* const regp = newStagedRegistrationp(classStaged, localGenp)) {
                 randomizeFuncp->addStmtsp(regp);
-            if (AstNodeStmt* const regp = newStagedRegistrationp(inlineStaged, localGenp))
+                stagedRegs = true;
+            }
+            if (AstNodeStmt* const regp = newStagedRegistrationp(inlineStaged, localGenp)) {
                 randomizeFuncp->addStmtsp(regp);
+                stagedRegs = true;
+            }
             AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
                                                    classp->findBasicDType(VBasicDTypeKwd::BIT)};
             finalOkVarp->funcLocal(true);
@@ -13274,6 +13367,7 @@ public:
 
             // First pass: solve to determine sizes
             AstVar* const sizeOkVarp = addSizeSolvep(randomizeFuncp, localGenp);
+            AstNodeStmt* const sizeSolvep = lastStmtp(randomizeFuncp);
             if (priorPhasep) setStagedPhase(randomizeFuncp, classStaged, classStaged.phasep);
             // Every solved size is checked before any array is resized
             if (checkStmtsp) {
@@ -13479,6 +13573,15 @@ public:
 
             // Final solve: element values with sizes pinned
             randomizeFuncp->addStmtsp(newFinalSolvep(fl, sizeOkVarp, finalOkVarp, localGenp));
+            // A size the elements cannot be solved with is excluded and the sizes solved again,
+            // except where the setup is not one run of statements
+            if (!priorPhasep && !stagedRegs && !hadElems && !randcHistoryp && !withImpureCalls
+                && !impureConstraintCalls(classp) && undoResizep && calls.empty()
+                && classFuncCalls(classp).empty() && exprVisitor.funcCalls().empty()) {
+                addInlineSizeRetries(randomizeFuncp, localGenp, classGenp ? classGenp : localGenp,
+                                     sizeOkVarp, finalOkVarp, undoResizep,
+                                     VN_AS(solveAfterp->nextp(), NodeStmt), sizeSolvep);
+            }
 
             randomizeFuncp->addStmtsp(
                 new AstAssign{fl, new AstVarRef{fl, retVarp, VAccess::WRITE},
