@@ -3330,10 +3330,9 @@ class AssertVisitor final : public VNVisitor {
     AstNodeStmt* newQueuedAction(FileLine* flp, AstNodeStmt* actionsp) {
         // Without timing, assertBody rejects the PExpr
         if (!v3Global.opt.timing().isSetTrue()) return actionsp;
-        // A sequence event control resumes its waiters from the cover action, and without
-        // coverage the cover statement is deleted
+        // A sequence event control resumes its waiters from the cover action
         const AstCover* const coverp = VN_CAST(m_assertp, Cover);
-        if (coverp && (coverp->isSeqEvent() || !v3Global.opt.coverageUser())) return actionsp;
+        if (coverp && coverp->isSeqEvent()) return actionsp;
         if (actionStaysInline(actionsp)) {
             m_inlineAction = true;
             return actionsp;
@@ -3795,11 +3794,8 @@ class AssertVisitor final : public VNVisitor {
     // The action lists of a concurrent assertion that run in a process of their own: a jump that
     // V3LinkJump made to a block outside them cannot leave that process. The loop exit after a
     // $finish in a loop of the procedure only ends that loop, so it is dropped and the $finish
-    // stays; any other such jump is reported as unsupported. A cover deleted without coverage
-    // takes its actions along, so it is left alone.
+    // stays; any other such jump is reported as unsupported.
     void dropOutwardActionJumps(AstNodeCoverOrAssert* nodep) {
-        const AstCover* const coverp = VN_CAST(nodep, Cover);
-        if (coverp && !coverp->isSeqEvent() && !v3Global.opt.coverageUser()) return;
         // Only for concurrent assertions; an AstAssertIntrinsic is always immediate
         UASSERT_OBJ(!nodep->immediate(), nodep, "Immediate assertion");
         AstNode* failsp = nullptr;
@@ -4109,7 +4105,13 @@ class AssertVisitor final : public VNVisitor {
             if (seqEvent) {
                 // Keep the event-fire action, with no coverage bucket
             } else if (!v3Global.opt.coverageUser()) {
-                selfDestruct = true;
+                // Without coverage collection, only the pass statement runs, gated as the pass
+                // action of an assertion is (IEEE 1800-2023 16.14.3); with none, nothing does
+                if (!passsp) selfDestruct = true;
+                if (deferred && passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
+                if (passsp && actionSenTreep && !nodep->nfaLowered() && !passPast) {
+                    passsp = newReactiveAction(nodep, actionSenTreep, passsp);
+                }
             } else {
                 // V3Coverage assigned us a bucket to increment.
                 AstCoverInc* const covincp = VN_AS(coverp->coverincsp(), CoverInc);
