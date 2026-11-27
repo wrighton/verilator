@@ -43,6 +43,10 @@ module t (
     regs4 = '{default: 7'd9};
   end
 
+  int stable_fails = 0;
+  int changed_fails = 0;
+  int formal_fails = 0;
+  int regs4_fails = 0;
   always @(posedge clk) begin
     cyc <= cyc + 1;
     // Each changes on some cycles only
@@ -99,18 +103,15 @@ module t (
   end
 
   // regs changes after cycles 1, 4, 7, ..., so is unstable on cycles 0, 2, 5, 8, 11, 14
-  int stable_fails = 0;
   assert property (@(posedge clk) cyc > 15 || $stable(regs))
   else stable_fails++;
 
-  int changed_fails = 0;
   assert property (@(posedge clk) cyc > 15 || !$changed(regs))
   else changed_fails++;
 
   property p_stable(x);
     @(posedge clk) cyc > 15 || $stable(x);
   endproperty
-  int formal_fails = 0;
   assert property (p_stable(regs))
   else formal_fails++;
 
@@ -118,7 +119,6 @@ module t (
   endclocking
 
   // The unknown default sampled values only affect the first tick
-  int regs4_fails = 0;
   assert property (@(posedge clk) cyc == 0 || $stable(regs4) == (cyc % 3 != 1))
   else regs4_fails++;
 

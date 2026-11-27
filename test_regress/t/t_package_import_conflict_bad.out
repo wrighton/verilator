@@ -14,6 +14,14 @@
         t/t_package_import_conflict_bad.v:77:7: ... Location of declaration
    77 |   int y;
       |       ^
+%Error-USEBEFOREDECL: t/t_package_import_conflict_bad.v:76:11: Reference to signal 'y' before its declaration (IEEE 1800-2023 6.5)
+                                                             : ... Suggest move the declaration before the reference
+   76 |   int a = y;
+      |           ^
+                      t/t_package_import_conflict_bad.v:77:7: ... Location of declaration
+   77 |   int y;
+      |       ^
+                      ... For error description see https://verilator.org/warn/USEBEFOREDECL?v=latest
 %Error: t/t_package_import_conflict_bad.v:69:10: Explicit import of 'p3::y' conflicts with a declaration or import of the same name in the same scope (IEEE 1800-2023 26.3)
    69 |   import p3::y;
       |          ^~

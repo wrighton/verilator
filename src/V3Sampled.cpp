@@ -130,17 +130,13 @@ class SampledVisitor final : public VNVisitor {
     static AstNode* selectionFromp(const AstNode* nodep) {
         if (const AstArraySel* const selp = VN_CAST(nodep, ArraySel)) return selp->fromp();
         if (const AstStructSel* const selp = VN_CAST(nodep, StructSel)) return selp->fromp();
+        // Unlike a fixed-size array, a queue or a dynamic array gives the default for an index
+        // out of bounds
+        if (const AstDynArraySel* const selp = VN_CAST(nodep, DynArraySel)) return selp->fromp();
+        if (const AstQueueSel* const selp = VN_CAST(nodep, QueueSel)) return selp->fromp();
         const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard);
         if (!methodp) return nullptr;
         switch (methodp->method()) {
-        case VCMethod::ARRAY_AT:
-        case VCMethod::ARRAY_AT_BACK: {
-            // Unlike a fixed-size array, a queue or a dynamic array gives the default for an
-            // index out of bounds
-            const AstNodeDType* const dtypep = methodp->fromp()->dtypep()->skipRefp();
-            return VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType) ? methodp->fromp()
-                                                                             : nullptr;
-        }
         case VCMethod::ASSOC_SIZE:
         case VCMethod::DYN_SIZE: return methodp->fromp();
         default: return nullptr;
@@ -281,7 +277,7 @@ class SampledVisitor final : public VNVisitor {
     }
 
     // VISITORS
-    void visit(AstArraySel* nodep) override {
+    void visit(AstNodeSel* nodep) override {
         if (!sampleSelection(nodep)) iterateChildren(nodep);
     }
     void visit(AstStructSel* nodep) override {

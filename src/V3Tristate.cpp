@@ -2632,6 +2632,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             while (const AstSel* const selp = VN_CAST(lhsBasep, Sel)) lhsBasep = selp->fromp();
             if (m_procedurep
                 && (VN_IS(lhsBasep, ArraySel) || VN_IS(lhsBasep, AssocSel)
+                    || VN_IS(lhsBasep, DynArraySel) || VN_IS(lhsBasep, QueueSel)
                     || VN_IS(lhsBasep, WildcardSel) || VN_IS(lhsBasep, CMethodHard)
                     || VN_IS(lhsBasep, StructSel) || VN_IS(lhsBasep, MemberRef))
                 && nodep->rhsp()->exists(writesZ)) {
@@ -3559,9 +3560,15 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstWildcardSel* nodep) override {
         visitDynElement(nodep, nodep->fromp(), nodep->bitp());
     }
+    void visit(AstDynArraySel* nodep) override {
+        visitDynElement(nodep, nodep->fromp(), nodep->bitp());
+    }
+    void visit(AstQueueSel* nodep) override {
+        visitDynElement(nodep, nodep->fromp(), nodep->bitp());
+    }
     void visit(AstCMethodHard* nodep) override {
         // Likewise a constant key of an associative array method
-        if (!nodep->method().isDynElementAccess() && nodep->method() != VCMethod::ASSOC_EXISTS
+        if (nodep->method() != VCMethod::ASSOC_EXISTS
             && nodep->method() != VCMethod::ASSOC_ERASE) {
             iterateChildren(nodep);
             checkUnhandled(nodep);

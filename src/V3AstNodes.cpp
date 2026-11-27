@@ -831,6 +831,11 @@ void AstArg::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, defaulted);
     dumpJsonGen(str);
 }
+const char* AstArraySel::broken() const {
+    BROKEN_RTN(!VN_IS(fromp()->dtypep()->skipRefp(), UnpackArrayDType));
+    BROKEN_RTN(writer() || refPin());  // Only of dynamically sized arrays
+    return nullptr;
+}
 void AstAssert::selfTest() {
     // Assertions differing in name, or in whether V3AssertNfa lowered them, are not the same
     FileLine* const flp = new FileLine{FileLine::commandLineFilename()};
@@ -2253,6 +2258,14 @@ void AstCvtArrayToArray::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, blockSize);
     dumpJsonNumFunc(str, dstElementBits);
     dumpJsonNumFunc(str, srcElementBits);
+    dumpJsonGen(str);
+}
+void AstCvtArrayToPacked::dump(std::ostream& str) const {
+    Super::dump(str);
+    str << " packedWidth=" << packedWidth();
+}
+void AstCvtArrayToPacked::dumpJson(std::ostream& str) const {
+    dumpJsonNumFunc(str, packedWidth);
     dumpJsonGen(str);
 }
 void AstDefParam::dump(std::ostream& str) const {
@@ -3857,19 +3870,9 @@ const AstNodeExpr* AstNodeExpr::getVAccessTargetRecurse() const {
     if (const AstSliceSel* const anodep = VN_CAST(this, SliceSel)) {
         return anodep->fromp()->getVAccessTargetRecurse();
     }
-    if (const AstSliceSel* const anodep = VN_CAST(this, SliceSel)) {
-        return anodep->fromp()->getVAccessTargetRecurse();
-    }
     if (const AstConcat* const anodep = VN_CAST(this, Concat)) {
         // Enough to check only one side, as both must be same otherwise malformed
         return anodep->lhsp()->getVAccessTargetRecurse();
-    }
-    if (const AstCMethodHard* const anodep = VN_CAST(this, CMethodHard)) {
-        if (anodep->method().isDynElementAccess()
-            || anodep->method() == VCMethod::ASSOC_AT_WRITE) {
-            // Used for things like Queue/AssocArray/DynArray
-            return anodep->fromp()->getVAccessTargetRecurse();
-        }
     }
     return nullptr;  // nothing found
 }
@@ -4145,6 +4148,17 @@ void AstNodeReadWriteMem::dump(std::ostream& str) const {
 }
 void AstNodeReadWriteMem::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isHex);
+    dumpJsonGen(str);
+}
+void AstNodeSel::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (writer()) str << (writerPure() ? " [WRITERPURE]" : " [WRITER]");
+    if (refPin()) str << " [REFPIN]";
+}
+void AstNodeSel::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, writer);
+    dumpJsonBoolFuncIf(str, writerPure);
+    dumpJsonBoolFuncIf(str, refPin);
     dumpJsonGen(str);
 }
 AstVar* AstNodeStmt::controlVarp() const {

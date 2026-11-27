@@ -5059,10 +5059,6 @@ class WidthVisitor final : public VNVisitor {
                 exprp = selp->fromp();
             } else if (const AstMemberRef* const refp = VN_CAST(exprp, MemberRef)) {
                 exprp = refp->fromp();
-            } else if (const AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
-                // An element of a dynamic array or queue.
-                if (!methodp->method().isDynElementAccess()) break;
-                exprp = methodp->fromp();
             } else {
                 break;
             }
@@ -5127,9 +5123,6 @@ class WidthVisitor final : public VNVisitor {
                     rootp = selp->fromp();
                 } else if (const AstSliceSel* const selp = VN_CAST(rootp, SliceSel)) {
                     rootp = selp->fromp();
-                } else if (const AstCMethodHard* const callp = VN_CAST(rootp, CMethodHard)) {
-                    if (!callp->method().isDynElementAccess()) break;
-                    rootp = callp->fromp();
                 } else {
                     break;
                 }
@@ -10241,12 +10234,11 @@ class WidthVisitor final : public VNVisitor {
                 return nullptr;
             } else if (VN_IS(nodep, SliceSel)) {
                 return "into a slice of an unpacked array";
-            } else if (const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard)) {
-                // Other than an element access, this is a queue slice
-                if (!methodp->method().isDynElementAccess()) {
-                    return "into a slice of an unpacked array";
-                }
+            } else if (VN_IS(nodep, DynArraySel) || VN_IS(nodep, QueueSel)) {
                 return "through an element of a dynamic array or queue";
+            } else if (VN_IS(nodep, CMethodHard)) {
+                // A queue slice
+                return "into a slice of an unpacked array";
             } else {
                 return "through an element of an associative array";
             }
@@ -10596,25 +10588,19 @@ class WidthVisitor final : public VNVisitor {
                     m_valueConnectedPortps.emplace(nodep->modVarp());
                 }
             }
+            const AstNodeDType* const portDTypep = nodep->modVarp()->dtypep()->skipRefp();
             if (VN_IS(nodep->exprp(), NodeStream) && pinDirection.isInoutOrRef()) {
                 nodep->exprp()->v3error("Streaming concatenation cannot be connected to '"
                                         << pinDirection.prettyName()
                                         << "' port (IEEE 1800-2023 11.4.14)");
             } else if (VN_IS(nodep->exprp(), NodeStream)
-                       && nodep->modVarp()->dtypep()->skipRefp()->isDynamicallySized()) {
-                const AstNodeDType* const portDTypep = nodep->modVarp()->dtypep()->skipRefp();
-                if (VN_IS(portDTypep, AssocArrayDType) || VN_IS(portDTypep, WildcardArrayDType)) {
-                    // Not a bit-stream type (IEEE 1800-2023 6.24.3)
-                    nodep->exprp()->v3error("Streaming concatenation cannot be connected to "
-                                            "associative array port "
-                                            << nodep->modVarp()->prettyNameQ()
-                                            << " (IEEE 1800-2023 11.4.14)");
-                } else {
-                    nodep->exprp()->v3warn(E_UNSUPPORTED,
-                                           "Unsupported: Streaming concatenation connected to "
-                                           "dynamically sized port "
-                                               << nodep->modVarp()->prettyNameQ());
-                }
+                       && (VN_IS(portDTypep, AssocArrayDType)
+                           || VN_IS(portDTypep, WildcardArrayDType))) {
+                // Not a bit-stream type (IEEE 1800-2023 6.24.3)
+                nodep->exprp()->v3error("Streaming concatenation cannot be connected to "
+                                        "associative array port "
+                                        << nodep->modVarp()->prettyNameQ()
+                                        << " (IEEE 1800-2023 11.4.14)");
                 pushDeletep(nodep->exprp()->unlinkFrBack());
                 return;
             }
@@ -11740,40 +11726,31 @@ class WidthVisitor final : public VNVisitor {
         // array, after V3Undriven, as creating an element is not a write that conflicts with
         // other processes. Returns false if no associative array is selected, or the array is
         // read-only.
-        if (AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+        if (VN_IS(exprp, DynArraySel) || VN_IS(exprp, QueueSel)) {
+            // Queue or dynamic array element
+            AstNodeSel* const selp = VN_AS(exprp, NodeSel);
+            const AstQueueSel* const qselp = VN_CAST(selp, QueueSel);
+            const bool atBack = qselp && qselp->fromBack();
+            if (!assocElemAtWriteRecurse(selp->fromp(), underAssocSel, underSel)) return false;
+            if (atBack && underSel) {
+                // The writable form of '$' may append, so is impure, and would be copied
+                selp->v3warn(E_UNSUPPORTED, "Unsupported: Further select of an associative"
+                                            " array element in a queue's '$' element passed"
+                                            " to a const ref argument.");
+                return false;
+            }
+            selp->writer(true, !atBack);
+            return true;
+        } else if (AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
             const bool assocSel = VN_IS(selp, AssocSel) || VN_IS(selp, WildcardSel);
             if (!assocElemAtWriteRecurse(selp->fromp(), underAssocSel || assocSel,
                                          underSel || !assocSel)) {
                 return false;
             }
-            if (assocSel) {
-                AstCMethodHard* const newp
-                    = new AstCMethodHard{selp->fileline(), selp->fromp()->unlinkFrBack(),
-                                         VCMethod::ARRAY_AT_WRITE, selp->bitp()->unlinkFrBack()};
-                newp->dtypeFrom(selp);
-                selp->replaceWith(newp);
-                VL_DO_DANGLING(pushDeletep(selp), selp);
-            }
+            if (assocSel) selp->writer(true, true);
             return true;
         } else if (AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
             return assocElemAtWriteRecurse(selp->fromp(), underAssocSel, true);
-        } else if (AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
-            // Queue or dynamic array element
-            const bool atBack = methodp->method() == VCMethod::ARRAY_AT_BACK;
-            if ((!atBack && methodp->method() != VCMethod::ARRAY_AT)
-                || !assocElemAtWriteRecurse(methodp->fromp(), underAssocSel, underSel)) {
-                return false;
-            }
-            if (atBack && underSel) {
-                // The writable form of '$' may append, so is impure, and would be copied
-                methodp->v3warn(E_UNSUPPORTED, "Unsupported: Further select of an associative"
-                                               " array element in a queue's '$' element passed"
-                                               " to a const ref argument.");
-                return false;
-            }
-            methodp->method(atBack ? VCMethod::DYN_AT_WRITE_APPEND_BACK
-                                   : VCMethod::ARRAY_AT_WRITE);
-            return true;
         }
         const AstVar* varp = nullptr;
         bool readOnlyModport = false;
@@ -16824,8 +16801,7 @@ public:
                   && lhsDTypeSkippedRefp->subDTypep()->skipRefp()->isIntegralOrPacked();
             // A fixed-size unpacked operand streams its packed value into a dynamic target
             if (toDynamic && VN_IS(streamp->dtypep(), StreamDType)) packStreamOperand(streamp);
-            const bool packedToDynamic = toDynamic && !VN_IS(streamp->dtypep(), StreamDType);
-            if ((packedToDynamic || fixedTarget) && !asQueue) {
+            if (fixedTarget && !asQueue) {
                 FileLine* const flp = streamp->fileline();
                 AstNodeExpr* srcp = streamp->unlinkFrBack();
                 if (VN_IS(srcDTypep, UnpackArrayDType) && !lowerAsFixedAggregate(srcDTypep)) {
@@ -16833,22 +16809,8 @@ public:
                     packIfUnpacked(streamp->lhsp());
                     streamp->dtypeFrom(streamp->lhsp());
                 }
-                if (packedToDynamic) {
-                    // Zero-fill on the right to a whole number of elements (IEEE 1800-2023
-                    // 11.4.14)
-                    const int elemWidth = lhsDTypeSkippedRefp->subDTypep()->width();
-                    const int padWidth = (elemWidth - srcp->width() % elemWidth) % elemWidth;
-                    if (padWidth) {
-                        // Finish the stream now, as the concatenation would reject it as its
-                        // operand when iterated
-                        userIterate(srcp, WidthVP{SELF, FINAL, STREAM_USE_ASSIGN}.p());
-                        AstConst* const zerop
-                            = new AstConst{flp, AstConst::WidthedValue{}, padWidth, 0};
-                        srcp = new AstConcat{flp, srcp, zerop};
-                        srcp->didWidth(true);
-                    }
-                } else if (!lowerAsFixedAggregate(lhsDTypeSkippedRefp)
-                           && !VN_IS(srcp->dtypep(), StreamDType) && lwidth > srcp->width()) {
+                if (!lowerAsFixedAggregate(lhsDTypeSkippedRefp)
+                    && !VN_IS(srcp->dtypep(), StreamDType) && lwidth > srcp->width()) {
                     // IEEE 1800-2023 11.4.14: A stream narrower than a fixed-size target is
                     // left-justified, zero-filled on the right, as V3Const does for structures.
                     // Finish the stream now, as the concatenation would reject it as its

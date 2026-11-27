@@ -864,53 +864,76 @@ class TaskVisitor final : public VNVisitor {
         return assp;
     }
 
-    void changeAtWriteRecurse(AstNodeExpr* const exprp) {
-        // Change nested at methods to writable variant
-        if (AstCMethodHard* const cMethodp = VN_CAST(exprp, CMethodHard)) {
-            if (cMethodp->method() == VCMethod::ARRAY_AT) {
-                cMethodp->method(VCMethod::ARRAY_AT_WRITE);
-            }
-            changeAtWriteRecurse(cMethodp->fromp());
+    // Wrap a typeless mailbox message argument with the name of its type
+    void addMailboxMessageType(AstArg* argp, const AstVar* portp) {
+        AstNodeExpr* const pinp = argp->exprp();
+        const AstNodeDType* const dtypep = pinp->dtypep()->skipRefToEnump();
+        // Already a message when a mailbox subclass passes it on
+        if (dtypep->basicp() && dtypep->basicp()->isMailboxMessage()) return;
+        pinp->unlinkFrBack();
+        // Equivalent types have the same name (IEEE 1800-2023 6.22.2). Messages are singular
+        // (checked by V3Width), so the name is the canonical packed type, the enum declaration
+        // or the declared name. Classes with the same name differ in their C++ type, which the
+        // runtime also checks.
+        string typeName = dtypep->prettyDTypeName(false);
+        if (const AstEnumDType* const enump = VN_CAST(dtypep, EnumDType)) {
+            typeName += " #"
+                        + std::to_string(
+                            m_enumNumbers.emplace(enump, m_enumNumbers.size()).first->second);
+        } else if (dtypep->isIntegralOrPacked()) {
+            // V3Unknown made 4-state types 2-state; they still name their 4-state type
+            typeName = string{dtypep->mimicsFourstate() ? "logic" : "bit"}
+                       + (dtypep->isSigned() ? " signed" : "") + "["
+                       + std::to_string(dtypep->width() - 1) + ":0]";
+        }
+        typeName
+            = "\"" + V3OutFormatter::quoteNameControls(VIdProtect::protect(typeName)) + "\", ";
+        AstCExpr* const newp = new AstCExpr{pinp->fileline()};
+        if (portp->isRef()) {
+            newp->add("VlMailboxMessage::ref(" + typeName);
+            newp->add(pinp);
+            newp->add(", \""
+                      + V3OutFormatter::quoteNameControls(
+                          VIdProtect::protect(pinp->fileline()->filename()))
+                      + "\", " + std::to_string(pinp->fileline()->lineno()) + ").lvalue()");
+        } else {
+            newp->add("VlMailboxMessage::val(" + typeName + std::to_string(dtypep->width())
+                      + ", ");
+            newp->add(pinp);
+            newp->add(")");
+        }
+        newp->dtypeFrom(portp);
+        argp->exprp(newp);
+    }
+
+    // Make the selects of elements of queues and dynamic arrays leading to exprp writable,
+    // so a pinned element can be selected from them, as writable selects do not insert
+    static void writerRecurse(AstNodeExpr* exprp) {
+        while (VN_IS(exprp, DynArraySel) || VN_IS(exprp, QueueSel)) {
+            AstNodeSel* const selp = VN_AS(exprp, NodeSel);
+            if (!selp->isLValue()) selp->writer(true, true);
+            exprp = selp->fromp();
         }
     }
 
     // Make an access to an element of a queue, dynamic or associative array, passed to a ref
-    // argument, return a pin, which keeps a removed element alive while the call runs
-    // (IEEE 1800-2023 13.5.2); return whether it does
-    bool pinElement(AstCMethodHard* cMethodp) {
-        if (VN_IS(cMethodp->fromp()->dtypep()->skipRefp(), QueueDType)) {
-            if (cMethodp->method() == VCMethod::DYN_AT_WRITE_APPEND) {
-                cMethodp->method(VCMethod::DYN_AT_WRITE_APPEND_REF);
-                return true;
-            }
-            if (cMethodp->method() == VCMethod::DYN_AT_WRITE_APPEND_BACK) {
-                cMethodp->method(VCMethod::DYN_AT_WRITE_APPEND_BACK_REF);
-                return true;
-            }
+    // argument, access it through a pin, which keeps a removed element alive while the call
+    // runs (IEEE 1800-2023 13.5.2); return whether it does. For a const ref, an associative
+    // array element is not created if missing, unless V3Width made the select create it.
+    static bool pinElement(AstNodeExpr* exprp) {
+        if (!VN_IS(exprp, DynArraySel) && !VN_IS(exprp, QueueSel) && !VN_IS(exprp, AssocSel)
+            && !VN_IS(exprp, WildcardSel)) {
             return false;
         }
-        changeAtWriteRecurse(cMethodp);
-        const AstNodeDType* const fromDtypep = cMethodp->fromp()->dtypep()->skipRefp();
-        if (cMethodp->method() != VCMethod::ARRAY_AT_WRITE
-            || !(VN_IS(fromDtypep, DynArrayDType) || VN_IS(fromDtypep, AssocArrayDType)
-                 || VN_IS(fromDtypep, WildcardArrayDType))) {
-            return false;
+        AstNodeSel* const selp = VN_AS(exprp, NodeSel);
+        if (VN_IS(selp, QueueSel)) {
+            // Also a queue element only read, by a const ref, selected writably to be pinned
+            writerRecurse(selp);
+        } else if (VN_IS(selp, DynArraySel)) {
+            writerRecurse(selp->fromp());
         }
-        cMethodp->method(VCMethod::ARRAY_AT_WRITE_REF);
+        selp->refPin(true);
         return true;
-    }
-
-    // Make an associative array element passed to a ref argument a pin, as pinElement does;
-    // for a const ref, without creating a missing element
-    AstCMethodHard* pinAssocElement(AstNodeSel* selp, bool constRef) {
-        AstCMethodHard* const newp
-            = new AstCMethodHard{selp->fileline(), selp->fromp()->unlinkFrBack(),
-                                 constRef ? VCMethod::ARRAY_AT_REF : VCMethod::ARRAY_AT_WRITE_REF,
-                                 selp->bitp()->unlinkFrBack()};
-        newp->dtypeFrom(selp);
-        selp->replaceWith(newp);
-        VL_DO_DANGLING(pushDeletep(selp), selp);
-        return newp;
     }
 
     void connectPort(const AstNodeFTaskRef* refp, AstVar* portp, AstArg* argp, AstNode* beginp,
@@ -950,9 +973,8 @@ class TaskVisitor final : public VNVisitor {
                 bool refArgOk = false;
                 if (VN_IS(pinp, VarRef) || VN_IS(pinp, MemberRef)) {
                     refArgOk = true;
-                } else if (VN_IS(pinp, AssocSel) || VN_IS(pinp, WildcardSel)) {
+                } else if (pinElement(pinp)) {
                     refArgOk = true;
-                    pinp = pinAssocElement(VN_AS(pinp, NodeSel), portp->isConstRef());
                 } else if (VN_IS(pinp, StructSel) || VN_IS(pinp, ArraySel)) {
                     refArgOk = true;
                     // Selected within an element of a container, e.g. 'q[0].member'
@@ -966,24 +988,14 @@ class TaskVisitor final : public VNVisitor {
                             break;
                         }
                     }
-                    AstCMethodHard* pinnedp = nullptr;
-                    if (AstCMethodHard* const cMethodp = VN_CAST(basep, CMethodHard)) {
-                        if (pinElement(cMethodp)) pinnedp = cMethodp;
-                    } else if (VN_IS(basep, AssocSel) || VN_IS(basep, WildcardSel)) {
-                        pinnedp = pinAssocElement(VN_AS(basep, NodeSel), portp->isConstRef());
-                    }
-                    if (pinnedp) {
+                    if (pinElement(basep)) {
                         VNRelinker relinker;
-                        pinnedp->unlinkFrBack(&relinker);
-                        AstCMethodHard* const elemp = new AstCMethodHard{
-                            pinnedp->fileline(), pinnedp, VCMethod::ARRAY_ELEM_REF};
-                        elemp->dtypeFrom(pinnedp);
+                        basep->unlinkFrBack(&relinker);
+                        AstCMethodHard* const elemp = new AstCMethodHard{basep->fileline(), basep,
+                                                                         VCMethod::ARRAY_ELEM_REF};
+                        elemp->dtypeFrom(basep);
                         relinker.relink(elemp);
                     }
-                } else if (AstCMethodHard* const cMethodp = VN_CAST(pinp, CMethodHard)) {
-                    refArgOk = pinElement(cMethodp)
-                               || (!VN_IS(cMethodp->fromp()->dtypep()->skipRefp(), QueueDType)
-                                   && cMethodp->method() == VCMethod::ARRAY_AT_WRITE);
                 }
                 if (refArgOk) {
                     if (AstVarRef* const varrefp = VN_CAST(pinp, VarRef)) {
@@ -2960,8 +2972,8 @@ class TaskAssocCreateVisitor final : public VNVisitor {
         m_inProcess = false;
         iterateChildren(nodep);
     }
-    void visit(AstCMethodHard* nodep) override {
-        if (!isAssocAtWrite(nodep)) {
+    void visit(AstNodeSel* nodep) override {
+        if (!isAssocWriter(nodep)) {
             iterateChildren(nodep);
             return;
         }
@@ -2969,16 +2981,14 @@ class TaskAssocCreateVisitor final : public VNVisitor {
         // writable, if the array itself is still only read (see V3Width), as written arrays
         // are otherwise found ordinarily. Impure from now on; they were pure only to keep
         // V3LiftExpr from copying an enclosing select, within the call's actual.
-        std::vector<AstCMethodHard*> atWriteps{nodep};
+        std::vector<AstNodeSel*> writerps{nodep};
         AstNodeExpr* exprp = nodep->fromp();
         while (true) {
             if (AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+                if (isAssocWriter(selp)) writerps.push_back(selp);
                 exprp = selp->fromp();
             } else if (AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
                 exprp = selp->fromp();
-            } else if (AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
-                if (isAssocAtWrite(methodp)) atWriteps.push_back(methodp);
-                exprp = methodp->fromp();
             } else {
                 break;
             }
@@ -2987,8 +2997,8 @@ class TaskAssocCreateVisitor final : public VNVisitor {
         AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef);
         if ((refp && refp->access().isReadOnly())
             || (memberRefp && memberRefp->access().isReadOnly())) {
-            for (AstCMethodHard* const atWritep : atWriteps) {
-                atWritep->method(VCMethod::ASSOC_AT_WRITE);
+            for (AstNodeSel* const writerp : writerps) {
+                writerp->writer(true, false);
                 ++m_statCreatingSels;
             }
             if (m_combo) {
@@ -3003,14 +3013,14 @@ class TaskAssocCreateVisitor final : public VNVisitor {
                 ++m_statWrittenRefs;
             }
         }
-        iterateAndNextNull(nodep->pinsp());
+        iterateAndNextNull(nodep->bitp());
     }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
-    static bool isAssocAtWrite(const AstCMethodHard* nodep) {
-        const AstNodeDType* const dtypep = nodep->fromp()->dtypep()->skipRefp();
-        return nodep->method() == VCMethod::ARRAY_AT_WRITE
-               && (VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, WildcardArrayDType));
+    // An associative array select creating its element, made writable by V3Width, also when
+    // pinned for a ref argument
+    static bool isAssocWriter(const AstNodeSel* nodep) {
+        return nodep->writer() && (VN_IS(nodep, AssocSel) || VN_IS(nodep, WildcardSel));
     }
 
 public:

@@ -211,10 +211,6 @@ class UnknownVisitor final : public VNVisitor {
                 exprp = selp->fromp();
             } else if (AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
                 exprp = selp->fromp();
-            } else if (AstCMethodHard* const callp = VN_CAST(exprp, CMethodHard)) {
-                // An element of a queue or dynamic array, by its index
-                if (callp->method().isDynElementAccess()) posp = callp->pinsp();
-                exprp = posp ? callp->fromp() : nullptr;
             } else {
                 exprp = nullptr;
             }
@@ -1369,13 +1365,38 @@ class UnknownVisitor final : public VNVisitor {
             }
         }
     }
-    // Number of leading arguments of 'nodep' that index a dynamic array or queue: the index of
-    // an element, or the positions of a slice
+    void visit(AstDynArraySel* nodep) override { visitDynSel(nodep); }
+    void visit(AstQueueSel* nodep) override { visitDynSel(nodep); }
+    // Element of a dynamic array or queue: convert the index to the runtime's 32-bit index. A
+    // 32-bit unsigned index past the int range wraps to negative, which as an element index or
+    // offset from the back selects no element, as it should.
+    void visitDynSel(AstNodeSel* nodep) {
+        // An index with X or Z bits selects no element: a read gives the default value and a
+        // write is ignored (IEEE 1800-2023 7.4.6)
+        if (AstConst* const constp = VN_CAST(nodep->bitp(), Const)) {
+            if (constp->num().isFourState()) {
+                constp->replaceWith(newInvalidDynIndexp(constp->fileline()));
+                VL_DO_DANGLING(pushDeletep(constp), constp);
+                iterateChildren(nodep);
+                return;
+            }
+        }
+        iterateChildren(nodep);
+        AstNodeExpr* const indexp = nodep->bitp();
+        // A narrower unsigned index is zero extended by the C++ conversion
+        if (indexp->width() < VL_IDATASIZE ? !indexp->isSigned()
+                                           : indexp->width() == VL_IDATASIZE) {
+            return;
+        }
+        VNRelinker relinkHandle;
+        indexp->unlinkFrBack(&relinkHandle);
+        relinkHandle.relink(newDynIndexp(indexp));
+    }
+    // Number of leading arguments of slice 'nodep' that index a dynamic array or queue: its
+    // positions
     static int dynIndexArgs(const AstCMethodHard* nodep) {
-        // An associative array element is also selected with these methods, by its key
         const AstNodeDType* const fromDtypep = nodep->fromp()->dtypep()->skipRefp();
         if (!VN_IS(fromDtypep, DynArrayDType) && !VN_IS(fromDtypep, QueueDType)) return 0;
-        if (nodep->method().isDynElementAccess()) return 1;
         switch (nodep->method()) {
         case VCMethod::DYN_SLICE:
         case VCMethod::DYN_SLICE_BACK_BACK:
@@ -1423,9 +1444,7 @@ class UnknownVisitor final : public VNVisitor {
             return;
         }
         const int indexes = dynIndexArgs(nodep);
-        const bool slice = !nodep->method().isDynElementAccess();
-        // An index with X or Z bits selects no element: a read gives the default value and a
-        // write is ignored (IEEE 1800-2023 7.4.6); so does a slice with such a position
+        // A slice with a position with X or Z bits selects no element (IEEE 1800-2023 7.10.1)
         // Indexes replaced as unknown, which need no conversion
         std::array<bool, 2> unknown{};
         for (int n = 0; n < indexes; ++n) {
@@ -1433,7 +1452,7 @@ class UnknownVisitor final : public VNVisitor {
                 if (constp->num().isFourState()) {
                     unknown[n] = true;
                     FileLine* const flp = constp->fileline();
-                    constp->replaceWith(slice && sliceArgHigh(nodep->method(), n)
+                    constp->replaceWith(sliceArgHigh(nodep->method(), n)
                                             ? newMaxDynIndexp(flp)
                                             : newInvalidDynIndexp(flp));
                     VL_DO_DANGLING(pushDeletep(constp), constp);
@@ -1444,18 +1463,16 @@ class UnknownVisitor final : public VNVisitor {
         for (int n = 0; n < indexes; ++n) {
             if (unknown[n]) continue;
             AstNodeExpr* const indexp = indexArgp(nodep, n);
-            // A narrower unsigned index is zero extended by the C++ conversion. A 32-bit
-            // unsigned one past the int range wraps to negative, which as an element index or
-            // offset from the back selects no element, as it should, but a slice position
-            // saturates.
+            // A narrower unsigned position is zero extended by the C++ conversion. A 32-bit
+            // unsigned one past the int range would wrap to negative, so saturates.
             if (indexp->width() < VL_IDATASIZE
                     ? !indexp->isSigned()
-                    : indexp->width() == VL_IDATASIZE && (indexp->isSigned() || !slice)) {
+                    : indexp->width() == VL_IDATASIZE && indexp->isSigned()) {
                 continue;
             }
             VNRelinker relinkHandle;
             indexp->unlinkFrBack(&relinkHandle);
-            relinkHandle.relink(newDynIndexp(indexp, slice));
+            relinkHandle.relink(newDynIndexp(indexp, true));
         }
     }
     // An associative array element whose index has X or Z bits, which is invalid: a read gives

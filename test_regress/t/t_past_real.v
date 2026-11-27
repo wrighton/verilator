@@ -25,6 +25,17 @@ module t (
   // Only the upper bits change
   logic [3:0] v = 4'h1;
 
+  int past_pass = 0;
+  int past_fail = 0;
+  int changed_fail = 0;
+  int stable_fail = 0;
+  int formal_fail = 0;
+  int local_fail = 0;
+  int local_wrong_fail = 0;
+  int future_fail = 0;
+  int steady_fail = 0;
+  int changing_fail = 0;
+  int vec_steady_fail = 0;
   always @(posedge clk) begin
     cyc <= cyc + 1;
     r <= r + 0.25;
@@ -52,23 +63,18 @@ module t (
     end
   end
 
-  int past_pass = 0;
-  int past_fail = 0;
   assert property (@(posedge clk) $past(r) > 1.0 && $sampled(r) >= $past(r)) past_pass++;
   else past_fail++;
 
-  int changed_fail = 0;
   assert property (@(posedge clk) $changed(r))
   else changed_fail++;
 
-  int stable_fail = 0;
   assert property (@(posedge clk) $stable(s))
   else stable_fail++;
 
   property p_past_above(real x);
     @(posedge clk) $past(x) > 1.0;
   endproperty
-  int formal_fail = 0;
   assert property (p_past_above(r))
   else formal_fail++;
 
@@ -77,7 +83,6 @@ module t (
     real t;
     @(posedge clk) (1, t = r) |=> ##1 (t == r - 0.5);
   endproperty
-  int local_fail = 0;
   assert property (p_real_local)
   else local_fail++;
 
@@ -85,25 +90,20 @@ module t (
     real t;
     @(posedge clk) (1, t = r) |=> ##1 (t == r - 0.25);
   endproperty
-  int local_wrong_fail = 0;
   assert property (p_real_local_wrong)
   else local_wrong_fail++;
 
   // Global clocking future sampled value functions (IEEE 1800-2023 16.9.4)
-  int future_fail = 0;
   assert property (@(posedge clk) $future_gclk(r) == r + 0.25)
   else future_fail++;
 
-  int steady_fail = 0;
   assert property (@(posedge clk) !$steady_gclk(r))
   else steady_fail++;
 
-  int changing_fail = 0;
   assert property (@(posedge clk) $changing_gclk(s))
   else changing_fail++;
 
   // Compares the whole value, not only the least significant bit
-  int vec_steady_fail = 0;
   assert property (@(posedge clk) $steady_gclk(v))
   else vec_steady_fail++;
 
