@@ -91,6 +91,11 @@ using LogicAccessFunc = std::function<void(AstVarScope* vscp, VAccess access)>;
 // callee (see isLogicCallee), on its accesses of non-local variables. Of a static class
 // method, only its reads are accesses of the caller.
 void foreachLogicAccess(AstNode* nodep, const LogicAccessFunc& f);
+// A variable access of logic, and whether in an assertion action block
+using LogicActionAccessFunc
+    = std::function<void(AstVarScope* vscp, VAccess access, bool inAction)>;
+// As foreachLogicAccess, also telling whether an access is in an assertion action block
+void foreachLogicActionAccess(AstNode* nodep, const LogicActionAccessFunc& f);
 // Call 'f' on each access of a non-local variable in the function 'callp' calls, if a logic
 // callee, and in the logic callees it calls, as foreachLogicAccess
 void foreachCallAccess(const AstCCall* callp, const LogicAccessFunc& f);
