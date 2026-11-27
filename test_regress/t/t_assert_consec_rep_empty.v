@@ -26,11 +26,11 @@ module t (
   wire b = crc[4];
   wire c = crc[8];
 
-  int fail_rep[1:6];
-  int fail_ref[1:6];
+  int fail_rep[1:7];
+  int fail_ref[1:7];
 
   initial begin
-    for (int i = 1; i <= 6; ++i) begin
+    for (int i = 1; i <= 7; ++i) begin
       fail_rep[i] = 0;
       fail_ref[i] = 0;
     end
@@ -72,11 +72,17 @@ module t (
   assert property (@(posedge clk) a ##1 c)
   else fail_ref[6] <= fail_ref[6] + 1;
 
+  // Sequences group to the right, so the empty operand is next to ##1, not ##0
+  assert property (@(posedge clk) a ##0 b [* 0] ##1 c)
+  else fail_rep[7] <= fail_rep[7] + 1;
+  assert property (@(posedge clk) a ##0 c)
+  else fail_ref[7] <= fail_ref[7] + 1;
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     crc <= {crc[62:0], crc[63] ^ crc[2] ^ crc[0]};
     if (cyc == 99) begin
-      for (int i = 1; i <= 6; ++i) begin
+      for (int i = 1; i <= 7; ++i) begin
         `checkd(fail_rep[i], fail_ref[i]);
         if (fail_ref[i] == 0) `stop;
       end
