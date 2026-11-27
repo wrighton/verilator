@@ -124,20 +124,32 @@ public:
     };
 
 private:
-    struct Runner final {  // Process running the pending actions of one clock
+    struct KillCheck final {  // Dropping what is pending, if an $assertkill came after it
+        AstVar* armedp;  // Something is pending, and countp holds the count at its evaluation
+        AstVar* countp;  // The $assertkill count at the first evaluation making it pending
+        AstIf* ifp;  // Dropping it, if the count changed
+    };
+    struct Runner final {  // Process running the pending actions
         AstAlwaysReactive* runnerp;  // The process
-        AstAlways* samplerp;  // Process sampling the $assertkill counts at the evaluation
-        // Dropping what is pending if an $assertkill came after the evaluation, by assertion
-        // type and directive
-        std::map<std::pair<int, int>, AstIf*> killIfps;
+        AstIf* bodyp;  // Its statements, run when something is pending
+        const AstSenTree* clockp;  // Clock of the assertions it runs the actions of
+        // By assertion type and directive
+        std::map<std::pair<int, int>, KillCheck> killChecks;
     };
     // Runners by the module or generate block holding them
     std::unordered_map<const AstNode*, std::vector<Runner>> m_runners;
+    size_t m_statRunners = 0;  // Statistic tracking
+    size_t m_statKillChecks = 0;  // Statistic tracking
+    // An $assertkill may run, so pending actions are checked against it
+    const bool m_killChecks = mayKill();
+    static bool mayKill() VL_MT_DISABLED;
 
     Runner& runnerFor(const Site& site, V3UniqueNames& names) VL_MT_DISABLED;
-    AstIf* killIfp(const Site& site, Runner& runner, V3UniqueNames& names) VL_MT_DISABLED;
+    KillCheck& killCheck(const Site& site, Runner& runner, V3UniqueNames& names) VL_MT_DISABLED;
+    static AstNodeExpr* newKillCountp(const Site& site) VL_MT_DISABLED;
 
 public:
+    ~V3AssertReactive() VL_MT_DISABLED;
     // Return what makes actionsp pending at the evaluation, or actionsp if it stays there
     AstNodeStmt* newPending(const Site& site, AstNodeStmt* actionsp,
                             V3UniqueNames& names) VL_MT_DISABLED;
