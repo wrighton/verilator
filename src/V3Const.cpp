@@ -1032,6 +1032,15 @@ class ConstVisitor final : public VNVisitor {
         return dtypep->isStreamableFixedAggregate() && dtypep->containsUnpackedStruct();
     }
 
+    // The leftmost 'width' bits of the items of dynamically sized array 'fromp' (IEEE 1800-2023
+    // 11.4.14.3)
+    static AstNodeExpr* newDynArrayToPackedp(AstNodeExpr* const fromp, int width) {
+        return new AstCvtArrayToPacked{
+            fromp->fileline(), fromp,
+            fromp->findBitOrLogicDType(width, width, VSigning::UNSIGNED,
+                                       fromp->dtypep()->skipRefp()->subDTypep()->isFourstate())};
+    }
+
     AstNodeExpr* packFixedAggregate(AstNodeExpr* const fromp) {
         std::vector<AstNodeExpr*> termps;
         V3Const::collectFixedAggregateTerms(deleter(), fromp, termps, true);
@@ -2813,6 +2822,9 @@ class ConstVisitor final : public VNVisitor {
             }
             if (lowerAsFixedAggregate(srcDTypep)) srcp = packFixedAggregate(srcp);
             const int dWidth = dstp->width();
+            if (VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType)) {
+                srcp = newDynArrayToPackedp(srcp, dstDTypep->widthStream());
+            }
             if (srcp->dtypep()->skipRefp()->isIntegralOrPacked()) {
                 // The bits needed are consumed from the left of the source, and then reordered
                 // (IEEE 1800-2023 11.4.14.3)
@@ -2826,13 +2838,20 @@ class ConstVisitor final : public VNVisitor {
                 if (neededWidth > 0 && neededWidth < srcp->width()) {
                     srcp = new AstSel{srcp->fileline(), srcp, srcp->width() - neededWidth,
                                       neededWidth};
+                } else if (neededWidth > srcp->width()) {
+                    // A narrower source, an error that is warned (IEEE 1800-2023 11.4.14.3), is
+                    // zero-filled on the right to the bits needed before it is reordered, as a
+                    // dynamically sized one is
+                    FileLine* const flp = srcp->fileline();
+                    srcp = new AstConcat{flp, srcp,
+                                         new AstConst{flp, AstConst::WidthedValue{},
+                                                      neededWidth - srcp->width(), 0}};
                 }
             }
             const int sWidth = srcp->width();
             // Connect the rhs to the stream operator and update its width
             VN_AS(streamp, StreamL)->lhsp(srcp);
-            if (VN_IS(srcDTypep, DynArrayDType) || VN_IS(srcDTypep, QueueDType)
-                || VN_IS(srcDTypep, UnpackArrayDType)) {
+            if (!srcp->dtypep()->skipRefp()->isIntegralOrPacked()) {
                 streamp->dtypeSetStream();
             } else {
                 streamp->dtypeSetBitOrLogicUnsized(srcp->width(), srcp->widthMin(),
@@ -2901,12 +2920,7 @@ class ConstVisitor final : public VNVisitor {
             }
             const AstNodeDType* const srcDTypep = srcp->dtypep()->skipRefp();
             if (VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType)) {
-                // The leftmost bits of a dynamically sized source (IEEE 1800-2023 11.4.14.3)
-                const int width = dstDTypep->widthStream();
-                srcp = new AstCvtArrayToPacked{
-                    srcp->fileline(), srcp,
-                    srcp->findBitOrLogicDType(width, width, VSigning::UNSIGNED,
-                                              srcDTypep->subDTypep()->isFourstate())};
+                srcp = newDynArrayToPackedp(srcp, dstDTypep->widthStream());
             }
             const int sWidth = srcp->width();
             const int dWidth = dstp->width();
