@@ -1567,6 +1567,12 @@ public:
     /// the solve of the elements failed with them. Returns true.
     bool exclude_sizes();
     /// Stop excluding sizes, as the call ends. Returns true.
+    // Add the size assignment this randomizer excluded last to 'to', which the setup of the
+    // next try of randomize() with copies this randomizer from. Returns true.
+    bool carry_size_exclusions(VlRandomizer& to) {
+        if (!m_sizeExclusions.empty()) to.m_sizeExclusions.push_back(m_sizeExclusions.back());
+        return true;
+    }
     bool clear_size_exclusions() {
         m_sizeExclusions.clear();
         return true;
