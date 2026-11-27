@@ -555,6 +555,62 @@ module t;
       // verilator lint_on WIDTHTRUNC
     end
 
+    // Unpacking inverts a left stream whose slice size does not divide the width; its short slice
+    // is the rightmost of the stream (IEEE 1800-2023 11.4.14.2)
+    begin
+      automatic logic [7:0] x8 = 8'hb2;
+      automatic logic [9:0] x10 = 10'h2d3;
+      automatic logic [63:0] x64 = 64'h0123_4567_89ab_cdef;
+      automatic logic [7:0] y8;
+      automatic logic [9:0] y10;
+      automatic logic [63:0] y64;
+      automatic logic [31:0] x32, y32;
+      automatic logic [7:0] b8[2];
+      automatic struct {
+        logic [3:0] a;
+        logic [5:0] b;
+      } st;
+      y8 = {<<3{x8}};
+      `checkh(y8, 8'h5a);
+      {<<3{y8}} = 8'h5a;
+      `checkh(y8, x8);
+      {<<3{y8}} = {<<3{x8}};
+      `checkh(y8, x8);
+      {<<3{y8}} = {>>3{x8}};
+      `checkh(y8, 8'ha5);
+      {>>3{y8}} = {>>3{x8}};
+      `checkh(y8, x8);
+      y10 = {<<3{x10}};
+      `checkh(y10, 10'h1a7);
+      {<<3{y10}} = {<<3{x10}};
+      `checkh(y10, x10);
+      {<<3{y10}} = x10;
+      `checkh(y10, 10'h26d);
+      y64 = {<<3{x64}};
+      `checkh(y64, 64'hf7e9_d527_3c8a_7200);
+      {<<3{y64}} = {<<3{x64}};
+      `checkh(y64, x64);
+      {<<3{y64}} = x64;
+      `checkh(y64, 64'hfcde_7741_cba2_9480);
+      {<<4{y10}} = 10'hf6;
+      `checkh(y10, x10);
+      {<<3{b8}} = {<<3{x8, x8}};
+      `checkh(b8[0], x8);
+      `checkh(b8[1], x8);
+      {<<3{st}} = {<<3{x10}};
+      `checkh({st.a, st.b}, x10);
+      // A slice wider than the value is all of it
+      x32 = x64[39:8];
+      y32 = {<<33{x32}};
+      `checkh(y32, x32);
+      {<<33{y32}} = x32;
+      `checkh(y32, x32);
+      y64 = {<<65{x64}};
+      `checkh(y64, x64);
+      {<<65{y64}} = {<<65{x64}};
+      `checkh(y64, x64);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
