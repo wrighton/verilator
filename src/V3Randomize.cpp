@@ -2015,8 +2015,10 @@ class RandomizeVisitor final : public VNVisitor {
             return createArrayForeachLoop(fl, wildDtp, exprp, outputVarp);
         } else {
             AstNodeExpr* valp;
-            AstNodeDType* const dtypep = memberp ? memberp->subDTypep() : exprp->dtypep();
-            if (AstEnumDType* const enumDtp = VN_CAST(dtypep->skipRefToEnump(true), EnumDType)) {
+            // An enum member of a packed struct or union is not restricted to its values
+            // (IEEE 1800-2023 18.4)
+            if (AstEnumDType* const enumDtp
+                = memberp ? nullptr : VN_CAST(exprp->dtypep()->skipRefToEnump(true), EnumDType)) {
                 AstVarRef* const tabRefp = enumValueTabRefp(enumDtp);
                 AstNodeExpr* const randp
                     = newRandValue(fl, randcVarp, exprp->findBasicDType(VBasicDTypeKwd::UINT32));
