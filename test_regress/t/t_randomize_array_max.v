@@ -77,6 +77,30 @@ class Bounded;
   }
 endclass
 
+// Sized only by reading its last element, so nothing bounds the size the solver gives
+class LastElem;
+  rand int q[$];
+  constraint c {q[q.size() - 1] == 5;}
+endclass
+
+class LastByte;
+  rand byte q[$];
+endclass
+
+class LastDyn;
+  rand int d[];
+  constraint c {d[d.size() - 1] == 5;}
+endclass
+
+class LastRead;
+  rand int q[$];
+  rand int x;
+  constraint c {
+    x == q[q.size() - 1];
+    x == 5;
+  }
+endclass
+
 module t;
   initial begin
     automatic Handles handles = new;
@@ -86,6 +110,10 @@ module t;
     automatic Off off = new;
     automatic Inline inl = new;
     automatic Bounded bounded = new;
+    automatic LastElem lastElem = new;
+    automatic LastByte lastByte = new;
+    automatic LastDyn lastDyn = new;
+    automatic LastRead lastRead = new;
     int ok;
     // An oversize fails, leaving the array as it was
     ok = handles.randomize();
@@ -118,6 +146,20 @@ module t;
     };
     `checkh(ok, 0);
     `checkh(inl.w.size(), 3);
+    // An empty array sized only by an element read fails too, without growing
+    ok = lastElem.randomize();
+    `checkh(ok, 0);
+    `checkh(lastElem.q.size(), 0);
+    lastByte.q = '{1, 2};
+    ok = lastByte.randomize() with {q[q.size() - 1] == 5;};
+    `checkh(ok, 0);
+    `checkh(lastByte.q.size(), 2);
+    ok = lastDyn.randomize();
+    `checkh(ok, 0);
+    `checkh(lastDyn.d.size(), 0);
+    ok = lastRead.randomize();
+    `checkh(ok, 0);
+    `checkh(lastRead.q.size(), 0);
     // A bounded one is given, unless +verilator+rand+array+max+2 lowers the limit below it
     bounded.b = '{1, 2, 3};
     ok = bounded.randomize();
