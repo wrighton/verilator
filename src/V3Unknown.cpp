@@ -1401,6 +1401,7 @@ class UnknownVisitor final : public VNVisitor {
         case VCMethod::DYN_SLICE:
         case VCMethod::DYN_SLICE_BACK_BACK:
         case VCMethod::DYN_SLICE_FRONT_BACK:
+        case VCMethod::DYN_SLICE_PAD:
         case VCMethod::DYN_SLICE_PAD_BACK_BACK:
         case VCMethod::DYN_SLICE_PAD_FRONT_BACK:
         case VCMethod::DYN_SLICE_ASSIGN:
@@ -1421,11 +1422,14 @@ class UnknownVisitor final : public VNVisitor {
     static bool sliceArgHigh(VCMethod method, int n) {
         switch (method) {
         case VCMethod::DYN_SLICE:
-        case VCMethod::DYN_SLICE_ASSIGN: return n == 0;
+        case VCMethod::DYN_SLICE_ASSIGN:
+        case VCMethod::DYN_SLICE_PAD: return n == 0;
         case VCMethod::DYN_SLICE_FRONT_BACK:
-        case VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK: return true;
+        case VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK:
+        case VCMethod::DYN_SLICE_PAD_FRONT_BACK: return true;
         case VCMethod::DYN_SLICE_BACK_BACK:
-        case VCMethod::DYN_SLICE_ASSIGN_BACK_BACK: return n == 1;
+        case VCMethod::DYN_SLICE_ASSIGN_BACK_BACK:
+        case VCMethod::DYN_SLICE_PAD_BACK_BACK: return n == 1;
         default: return false;
         }
     }
