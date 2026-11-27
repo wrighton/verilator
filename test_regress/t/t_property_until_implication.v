@@ -28,8 +28,7 @@ module t (
 
   // Weak non-overlapping until as implication consequent.
   // IEEE 1800-2023 16.12.12: c true at every tick until at least one tick
-  // before d holds. Cycle-aggregated reject fires when c=0 and d=0 in a cycle
-  // where the consequent attempt is still live.
+  // before d holds. Each attempt still live fails when c=0 and d=0.
   assert property (@(posedge clk) trig |=> c until d)
   else fail_nonoverlap = fail_nonoverlap + 1;
 
@@ -61,12 +60,11 @@ module t (
       crc <= 64'h5aef0c8d_d70a4497;
     end
     else if (cyc == 99) begin
-      // Counts reflect NFA per-cycle reject aggregation, not some other sim's
-      // per-attempt action_block firing; the two differ by a small constant
-      // (see PR description for the model gap). Test is a regression for
-      // "no internal error on `until` as |=> consequent" (issue #7548).
-      `checkd(fail_nonoverlap, 7);  // Other sims: 8, one other: 7
-      `checkd(fail_overlap, 22);  // Other sims: 24, one other: 22
+      // Each attempt fails once (IEEE 1800-2023 16.14.1), also attempts waiting
+      // together; other simulators agree. Also a regression for "no internal
+      // error on `until` as |=> consequent" (issue #7548).
+      `checkd(fail_nonoverlap, 8);
+      `checkd(fail_overlap, 24);
       `checkd(fail_strong_nonoverlap, 0);
       `checkd(fail_strong_overlap, 1);
       $write("*-* All Finished *-*\n");

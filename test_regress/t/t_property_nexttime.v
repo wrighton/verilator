@@ -86,7 +86,7 @@ module t (
     `checkd(ref_fails_next, 13);
     `checkd(ref_fails_next2, 7);
     `checkd(ref_fails_next0, 14);
-    `checkd(ref_fails_until, 10);
+    `checkd(ref_fails_until, 11);
     `checkd(ref_fails_top, 23);
     `checkd(ref_fails_always, 12);
     `checkd(ref_fails_always2, 12);
