@@ -1444,9 +1444,27 @@ class SvaNfaBuilder final {
         if (opps.size() > MAX_FIXED_OR_OPERANDS) return BuildResult::fail();
         std::vector<FixedOrOperand> ops(opps.size());
         std::set<int> offsets{0};  // Offsets of the start, and where an operand checks or ends
+        // A strong always also fails at the end of simulation before its last tick (IEEE
+        // 1800-2023 16.12.11)
+        unsigned strongMask = 0;
         for (size_t i = 0; i < opps.size(); ++i) {
-            if (!flattenFixedSeq(opps[i], 0, ops[i].checks)) return BuildResult::fail();
-            ops[i].length = fixedLength(opps[i]);
+            if (const AstPropAlways* const alwaysp = VN_CAST(opps[i], PropAlways)) {
+                // A bounded always of a boolean checks it on each tick of its range
+                if (VN_IS(alwaysp->hiBoundp(), Unbounded) || !isPlainBoolean(alwaysp->propp())) {
+                    return BuildResult::fail();
+                }
+                ops[i].length = static_cast<int>(getConstUInt(alwaysp->hiBoundp()));
+                for (int k = getConstUInt(alwaysp->loBoundp()); k <= ops[i].length; ++k) {
+                    ops[i].checks[k].push_back(alwaysp->propp());
+                }
+                // cppcheck-suppress knownConditionTrueFalse
+                if (alwaysp->isStrong() && !m_noEosFailure && !m_isNegated) {
+                    strongMask |= 1U << i;
+                }
+            } else {
+                if (!flattenFixedSeq(opps[i], 0, ops[i].checks)) return BuildResult::fail();
+                ops[i].length = fixedLength(opps[i]);
+            }
             for (const auto& offsetChecks : ops[i].checks) offsets.insert(offsetChecks.first);
             offsets.insert(ops[i].length);
         }
@@ -1514,6 +1532,10 @@ class SvaNfaBuilder final {
             std::map<unsigned, SvaStateVertex*> nextp;
             for (const auto& subVtx : holdp) {
                 const unsigned gap = static_cast<unsigned>(*std::next(it) - offset);
+                // The attempt fails at the end of simulation while only strong operands remain
+                VL_RESTORER(m_markStrongPending);
+                m_markStrongPending = !(subVtx.first & ~strongMask);
+                subVtx.second->m_strongPending = m_markStrongPending;
                 nextp[subVtx.first] = addDelayChain(subVtx.second, gap, flp);
             }
             livep = std::move(nextp);

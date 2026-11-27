@@ -43,9 +43,8 @@ module t (
   assert property (@(posedge clk) (sync_reject_on(b) (a |-> ((b ##2 !b) or (a ##2 a))))
       or (always [0:2] c));
   assert property (@(posedge clk) (reject_on(a) (b ##1 c)) or (reject_on(b) (c ##1 a)));
-  assert property (@(posedge clk) a |-> ((always [0:1] b) or (always [0:2] c)));
-  assert property (@(posedge clk) (always [0:1] a) or (b ##1 c));
-  assert property (@(posedge clk) (always [0:0] a) or (s_always [2:2] b));
+  // An always operand unbounded or of a sequence is no fixed-length operand
+  assert property (@(posedge clk) (always [0:1] a) or (always [0:$] b));
   // An operand holding another operator would count every end inside it
   assert property (@(posedge clk) a |-> ((c throughout ((##2 a) or (##3 b) or (##4 c) or (##5 a)
       or (##6 b))) or (b ##2 a) or (c ##3 b) or (a ##4 c) or (b ##5 a)));
