@@ -280,8 +280,10 @@ class UnknownVisitor final : public VNVisitor {
         case VCMethod::DYN_SLICE_ASSIGN_BACK_BACK:
         case VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK: return 2;
         case VCMethod::DYN_SLICE_PLUS:
+        case VCMethod::DYN_SLICE_PLUS_BACK:
         case VCMethod::DYN_SLICE_PLUS_PAD:
         case VCMethod::DYN_SLICE_ASSIGN_PLUS:
+        case VCMethod::DYN_SLICE_ASSIGN_PLUS_BACK:
         case VCMethod::DYN_SLICE_ASSIGN_PLUS_PAD: return 1;  // Then the constant width
         default: return 0;
         }
