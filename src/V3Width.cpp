@@ -400,6 +400,7 @@ class WidthVisitor final : public VNVisitor {
     const bool m_paramsOnly;  // Computing parameter value; limit operation
     const bool m_doGenerate;  // Do errors later inside generate statement
     bool m_streamConcat = false;  // True if visiting arguments of stream concatenation
+    AstQueueDType* m_byteQueueDTypep = nullptr;  // Queue of bytes, as which strings stream
     // Function whose port default or static initial value is visited, evaluated outside it
     const AstNodeFTask* m_valueOutsideFTaskp = nullptr;
     bool m_inParamOverride = false;  // True if visiting the value of a parameter override pin
@@ -1299,6 +1300,57 @@ class WidthVisitor final : public VNVisitor {
 
         return VN_IS(backp, NodeAssign);
     }
+    // Whether a fixed-size unpacked array's elements are not packed, e.g. of more dimensions
+    static bool isUnpackedOfUnpacked(const AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        return VN_IS(dtypep, UnpackArrayDType)
+               && !dtypep->subDTypep()->skipRefp()->isIntegralOrPacked()
+               && dtypep->isStreamableFixedAggregate();
+    }
+    // A dynamic array or queue of strings read by a stream is the bytes of its strings, each
+    // string a dynamic array of bytes (IEEE 1800-2023 6.24.3): stream it as a queue of those bytes
+    void flattenStringArrayOperand(AstNodeStream* nodep) {
+        const AstNodeDType* const dtypep = nodep->lhsp()->dtypep()->skipRefp();
+        if (!VN_IS(dtypep, QueueDType) && !VN_IS(dtypep, DynArrayDType)) return;
+        if (!dtypep->subDTypep()->skipRefp()->isString()) return;
+        // Unpacking into it is not supported
+        const AstNodeExpr* basep = nodep->lhsp();
+        while (true) {
+            if (const AstNodeSel* const selp = VN_CAST(basep, NodeSel)) {
+                basep = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(basep, StructSel)) {
+                basep = selp->fromp();
+            } else {
+                break;
+            }
+        }
+        const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
+        const AstMemberRef* const memberp = VN_CAST(basep, MemberRef);
+        if ((refp && refp->access().isWriteOrRW())
+            || (memberp && memberp->access().isWriteOrRW())) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: Stream unpacked into "
+                                             << dtypep->prettyDTypeNameQ() << ".");
+            return;
+        }
+        FileLine* const flp = nodep->fileline();
+        // The strings concatenated, as a stream of them assigned to a string is
+        AstStreamR* const stringsp
+            = new AstStreamR{flp, nodep->lhsp()->unlinkFrBack(), new AstConst{flp, 1}};
+        stringsp->dtypeSetStream();
+        stringsp->didWidth(true);
+        AstCvtPackString* const stringp = new AstCvtPackString{flp, stringsp};
+        stringp->didWidth(true);
+        if (!m_byteQueueDTypep) {
+            m_byteQueueDTypep = new AstQueueDType{
+                flp, nodep->findBitDType(VL_BYTESIZE, VL_BYTESIZE, VSigning::UNSIGNED), nullptr};
+            m_byteQueueDTypep->dtypep(m_byteQueueDTypep);
+            v3Global.rootp()->typeTablep()->addTypesp(m_byteQueueDTypep);
+        }
+        AstCvtStringToQueue* const bytesp
+            = new AstCvtStringToQueue{flp, stringp, m_byteQueueDTypep};
+        bytesp->didWidth(true);
+        nodep->lhsp(bytesp);
+    }
     void visit(AstNodeStream* nodep) override {
         const bool nested = m_streamConcat;  // In the concatenation of another stream
         VL_RESTORER(m_streamConcat);
@@ -1308,6 +1360,7 @@ class WidthVisitor final : public VNVisitor {
             m_streamConcat = true;
             iterateCheckSelf(nodep, "LHS", nodep->lhsp(), SELF, BOTH);
             m_streamConcat = false;
+            flattenStringArrayOperand(nodep);
             iterateCheckSelf(nodep, "RHS", nodep->rhsp(), SELF, BOTH);
             V3Const::constifyParamsEdit(nodep->rhsp());  // rhsp may change
             const AstConst* const constp = VN_CAST(nodep->rhsp(), Const);
@@ -11089,7 +11142,8 @@ class WidthVisitor final : public VNVisitor {
                 underp = newp;
             }
         } else if (rhsAccess.isReadOnly() && VN_IS(underp, NodeStream)
-                   && !VN_IS(underp->dtypep(), StreamDType)
+                   && (!VN_IS(underp->dtypep(), StreamDType)
+                       || isUnpackedOfUnpacked(VN_AS(underp, NodeStream)->lhsp()->dtypep()))
                    && (VN_IS(expDTypep->skipRefp(), QueueDType)
                        || VN_IS(expDTypep->skipRefp(), DynArrayDType))
                    && expDTypep->skipRefp()->subDTypep()->skipRefp()->isIntegralOrPacked()) {
@@ -11097,6 +11151,8 @@ class WidthVisitor final : public VNVisitor {
             underp
                 = userIterateSubtreeReturnEdits(underp, WidthVP{SELF, FINAL, childStreamUse}.p());
             AstNodeStream* const streamp = VN_AS(underp, NodeStream);
+            // A fixed-size operand of more dimensions is packed in order, as for a cast
+            if (VN_IS(streamp->dtypep(), StreamDType)) packStreamOperand(streamp);
             VNRelinker linker;
             streamp->unlinkFrBack(&linker);
             AstNodeExpr* srcp = streamp;

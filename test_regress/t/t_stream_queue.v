@@ -47,6 +47,9 @@ module t;
   bit [65:0] d66_q[$];
   bit [64:0] s65_q[$];
   int int_d[];
+  bit [6:0] s7_2d[4:3][-2:0];
+  bit [6:0] s7_d[];
+  bit [64:0] s65_2d[1:0][0:1];
   int int_fa[3];
   int int_fd[2:0];
   shortint short_fa[4];
@@ -513,6 +516,27 @@ module t;
     w65_q = {>>{wide_fa}};
     `checks(w65_q.size(), 2);
     `checks_w(130, {>>{w65_q}}, {wide_fa[0], wide_fa[1]});
+    // A fixed-size array of more dimensions, in declared order
+    s7_2d[4][-2] = 7'h12;
+    s7_2d[4][-1] = 7'h65;
+    s7_2d[4][0] = 7'h2a;
+    s7_2d[3][-2] = 7'h78;
+    s7_2d[3][-1] = 7'h0f;
+    s7_2d[3][0] = 7'h31;
+    s7_d = {>>{s7_2d}};
+    `checks(s7_d.size(), 6);
+    `checks_w(42, {>>{s7_d}}, {7'h12, 7'h65, 7'h2a, 7'h78, 7'h0f, 7'h31});
+    s7_q = {<<7{s7_2d}};
+    `checks(s7_q.size(), 6);
+    `checks_w(42, {>>{s7_q}}, {7'h31, 7'h0f, 7'h78, 7'h2a, 7'h65, 7'h12});
+    s65_2d[1][0] = 65'h1_0000_0000_0000_0012;
+    s65_2d[1][1] = 65'h65;
+    s65_2d[0][0] = 65'h2a;
+    s65_2d[0][1] = 65'h1_0000_0000_0000_0078;
+    s65_q = {>>{s65_2d}};
+    `checks(s65_q.size(), 4);
+    `checks_w(260, {>>{s65_q}}, {65'h1_0000_0000_0000_0012, 65'h65, 65'h2a,
+                                 65'h1_0000_0000_0000_0078});
     $write("*-* All Finished *-*\n");
     $finish;
 

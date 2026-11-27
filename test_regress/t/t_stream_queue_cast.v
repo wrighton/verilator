@@ -28,6 +28,8 @@ module t;
   int rev_r[$];
   bit [7:0] byte_f[3];
   int desc_f[2:1];
+  bit [6:0] s7_2d[2][3];
+  bit [6:0] s7_nba[$];
 
   // A streaming cast to a queue of elements of another width gives elements of that width.
   // A stream whose width is not a multiple of the elements' is an error (IEEE 1800-2023 6.24.3)
@@ -109,9 +111,15 @@ module t;
     byte_r = '{8'h12, 8'h34, 8'h56};
     byte_f <= {<<8{byte_r}};
     desc_f <= {>>{short_q}};
+    s7_2d = '{'{7'h12, 7'h65, 7'h2a}, '{7'h78, 7'h0f, 7'h31}};
+    s7_nba <= {<<7{s7_2d}};
     #1;
     `checkh(desc_f[2], 32'h11112222);
     `checkh(desc_f[1], 32'h33334444);
+    `checkh(s7_nba.size(), 6);
+    `checkh(s7_nba[0], 7'h31);
+    `checkh(s7_nba[2], 7'h78);
+    `checkh(s7_nba[5], 7'h12);
     `checkh(byte_f[0], 8'h56);
     `checkh(byte_f[1], 8'h34);
     `checkh(byte_f[2], 8'h12);
