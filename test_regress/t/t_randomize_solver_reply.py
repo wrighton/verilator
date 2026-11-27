@@ -62,6 +62,8 @@ runs = [
     ('success', 1, 16),  # print-success echo ahead of every reply
     ('unknown_once', 2, 15),  # unknown answers one check-sat
     ('unknown_once', 9, 16),  # unknown answers a phase diversity round; the call still passes
+    ('unknown_reason_once', 2, 15),  # the same with its reason, as cvc5 gives under a limit
+    ('unknown_reason_once', 3, 16),  # at a spreading check
     ('unknown_twice', 2, 15),  # a second unknown must not warn again
     ('unknown_var', 1, 15),  # a variable that was never requested
     ('unknown_var', 4, 16),  # a spreading query answered with too many values
@@ -75,6 +77,13 @@ for mode, at, npass in runs:
                  run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
                  'TAMPER=' + mode + ' TAMPER_AT=' + str(at))
     test.file_grep(logfile, r'NPASS=(\d+)', npass)
+
+# The reason given with unknown is read as unknown: a check-sat out of time, not a reply
+# that is no status
+for at in (2, 3):
+    test.file_grep_not(test.obj_dir + '/sim_unknown_reason_once_' + str(at) + '.log',
+                       r'did not answer with a status')
+test.file_grep(test.obj_dir + '/sim_unknown_reason_once_2.log', r'Solver returned unknown')
 
 # 4 randomize calls through the diversity pin rounds, alone, from a fixed seed. A round
 # the solver leaves unsettled keeps the base solution, so every call still passes; the
