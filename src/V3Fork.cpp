@@ -1055,6 +1055,13 @@ class ForkVisitor final : public VNVisitor {
     void visit(AstVar* nodep) override {
         if (m_inFork) m_forkLocalsp.insert(nodep);
     }
+    // A class handle or a virtual interface: writing through it writes the object or the
+    // interface instance it designates, not the variable that holds it
+    static bool isHandleValue(const AstNodeExpr* const nodep) {
+        if (nodep->isClassHandleValue()) return true;
+        const AstIfaceRefDType* const dtypep = VN_CAST(nodep->dtypep()->skipRefp(), IfaceRefDType);
+        return dtypep && dtypep->isVirtual();
+    }
     void visit(AstVarRef* nodep) override {
         if (!m_inFork) return;
         AstVar* const varp = nodep->varp();
@@ -1071,7 +1078,7 @@ class ForkVisitor final : public VNVisitor {
         const AstSampled* const sampledp = VN_CAST(nodep->backp(), Sampled);
         if (varp->isPastValue() && sampledp && sampledp->exprp() == nodep) return;
 
-        if (nodep->access().isWriteOrRW() && (!nodep->isClassHandleValue() || nodep->user2())
+        if (nodep->access().isWriteOrRW() && (!isHandleValue(nodep) || nodep->user2())
             && !m_inInitStmt) {
             nodep->v3warn(
                 E_LIFETIME,
@@ -1088,7 +1095,7 @@ class ForkVisitor final : public VNVisitor {
         nodep->varp(capture(nodep));
     }
     void visit(AstAssign* nodep) override {
-        if (VN_IS(nodep->lhsp(), VarRef) && nodep->lhsp()->isClassHandleValue()) {
+        if (VN_IS(nodep->lhsp(), VarRef) && isHandleValue(nodep->lhsp())) {
             nodep->lhsp()->user2(true);
         }
         iterateChildren(nodep);
