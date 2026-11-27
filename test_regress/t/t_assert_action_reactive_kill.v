@@ -26,9 +26,25 @@ module t (
 
   always @(posedge clk) if (cyc == 4) #0 $assertkill;
 
+  // Test: of two evaluations in a time step, with an $assertkill between them, only the first
+  // is dropped
+  logic again_clk = 0;
+  int again_n = 0;
+  a_again :
+  assert property (@(posedge again_clk) 1'b0)
+  else ++again_n;
+  initial begin
+    #3 again_clk = 1;
+    #0 $assertkill(0, a_again);
+    $asserton(0, a_again);
+    #0 again_clk = 0;
+    #0 again_clk = 1;
+  end
+
   always @(negedge clk) begin
     if (cyc == 10) begin
       `checkd(fail_n, 4);
+      `checkd(again_n, 1);
       $write("*-* All Finished *-*\n");
       $finish;
     end
