@@ -23,7 +23,7 @@ test.file_grep(
     r"randomize\(\) returns 0: the constraints give 'q' \d+ elements, over the 1048576")
 test.file_grep(
     test.run_log_filename,
-    r"randomize\(\) returns 0: the constraints give 'd' \d+ elements, over the 1048576")
+    r"randomize\(\) returns 0: the constraints give 'a' \d+ elements, over the 1048576")
 
 # The limit the plusarg sets is the one checked
 test.execute(all_run_flags=["+verilator+rand+array+max+2", "+lowered"])

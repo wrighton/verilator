@@ -11803,8 +11803,11 @@ class SolverSmtLowering final : public V3SolverLowering {
     void addFrozenSizePin(FileLine* const fl, AstVar* const arrVarp, AstFunc* const randomizep,
                           AstVar* const genp, AstVar* const randModeVarp,
                           const AstMemberRef* const mselp = nullptr) {
-        // The size of an array of a member object is also kept while a handle to the object
-        // is inactive (IEEE 1800-2023 18.8); its constraints use the size variable even then
+        // The size variable of a resized array starts as the array's size, which a solve
+        // giving a size over the limit keeps where the constraints leave it unbounded
+        // (VlRandomizer::boundSizes). The size of an array of a member object is also kept
+        // while a handle to the object is inactive (IEEE 1800-2023 18.8); its constraints use
+        // the size variable even then
         const RandomizeMode rmode = {.asUQuad = arrVarp->user1()};
         AstNodeExpr* activep
             = mselp ? newHandlesActivep(m_memberMap, mselp->fromp(), true, false) : nullptr;
@@ -11812,10 +11815,20 @@ class SolverSmtLowering final : public V3SolverLowering {
             AstNodeExpr* const modep = newModeBitRead(arrVarp, mselp, randModeVarp, fl);
             activep = activep ? new AstLogAnd{fl, activep, modep} : modep;
         }
-        if (!activep) return;
         AstNodeStmt* const stmtsp = newSizeVarAssign(fl, arrVarp, mselp);
-        stmtsp->addNext(new AstIf{fl, new AstLogNot{fl, activep},
-                                  newPinSizeVariable(fl, arrVarp, genp, mselp)});
+        AstCMethodHard* const markp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(genp->user2p(), NodeModule), genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_MARK_RESIZED};
+        markp->dtypeSetVoid();
+        AstCExpr* const namep = new AstCExpr{
+            fl, AstCExpr::Pure{}, "\"" + siblingSmtName(sizeVarOf(arrVarp, mselp), mselp) + "\""};
+        namep->dtypeSetUInt32();
+        markp->addPinsp(namep);
+        stmtsp->addNext(markp->makeStmt());
+        if (activep) {
+            stmtsp->addNext(new AstIf{fl, new AstLogNot{fl, activep},
+                                      newPinSizeVariable(fl, arrVarp, genp, mselp)});
+        }
         randomizep->addStmtsp(newIfNonNullp(fl, stmtsp, mselp));
     }
 

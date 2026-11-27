@@ -146,20 +146,25 @@ module t;
     };
     `checkh(ok, 0);
     `checkh(inl.w.size(), 3);
-    // An empty array sized only by an element read fails too, without growing
+    // An array sized only by an element read, which leaves the size unbounded, keeps its
+    // size if the constraints allow it, else takes the least size they allow
     ok = lastElem.randomize();
-    `checkh(ok, 0);
-    `checkh(lastElem.q.size(), 0);
+    `checkh(ok, 1);
+    `checkh(lastElem.q.size(), 1);
+    `checkh(lastElem.q[0], 5);
     lastByte.q = '{1, 2};
     ok = lastByte.randomize() with {q[q.size() - 1] == 5;};
-    `checkh(ok, 0);
+    `checkh(ok, 1);
     `checkh(lastByte.q.size(), 2);
+    `checkh(lastByte.q[1], 5);
     ok = lastDyn.randomize();
-    `checkh(ok, 0);
-    `checkh(lastDyn.d.size(), 0);
+    `checkh(ok, 1);
+    `checkh(lastDyn.d.size(), 1);
+    `checkh(lastDyn.d[0], 5);
     ok = lastRead.randomize();
-    `checkh(ok, 0);
-    `checkh(lastRead.q.size(), 0);
+    `checkh(ok, 1);
+    `checkh(lastRead.q.size(), 1);
+    `checkh(lastRead.q[0], 5);
     // A bounded one is given, unless +verilator+rand+array+max+2 lowers the limit below it
     bounded.b = '{1, 2, 3};
     ok = bounded.randomize();

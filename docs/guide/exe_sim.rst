@@ -130,11 +130,13 @@ Options:
 .. option:: +verilator+rand+array+max+<value>
 
    Sets the most elements ``randomize()`` may give a dynamic array or
-   queue. A size constraint with no upper bound otherwise lets the solver
-   pick a size of billions of elements, which cannot be allocated
-   (IEEE 1800-2023 18.4 leaves the size the solver picks to the
-   implementation). Over this, ``randomize()`` reports a warning naming the
-   array, and returns 0 without changing any variable. Default is 1048576.
+   queue. When the solver picks a size over this, as it may for a size the
+   constraints leave unbounded, the array instead keeps its size if the
+   constraints allow it, else takes the least size they allow (IEEE
+   1800-2023 18.4 leaves the size the solver picks to the implementation).
+   If they allow no size within this, ``randomize()`` reports a warning
+   naming the array, and returns 0 without changing any variable. Default
+   is 1048576.
 
 .. option:: +verilator+rand+reset+<value>
 
