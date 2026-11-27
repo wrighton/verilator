@@ -10,7 +10,7 @@ module t (
   logic x, y, b, c;
 
   // A disjunction as the antecedent of followed-by stays unsupported
-  assert property (@(posedge clk) ((x or y) #-# b) or c);
+  assert property (@(posedge clk) ((x ##[1:$] y) #-# b) or c);
   assert property (@(posedge clk) (x or y) #=# b);
   assert property (@(posedge clk) (x or y) #-# s_eventually b);
 
