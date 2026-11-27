@@ -34,6 +34,7 @@
 #include <ostream>
 #include <set>
 #include <sstream>
+#include <tuple>
 #include <unordered_set>
 
 //=============================================================================
@@ -371,7 +372,17 @@ class VlRandomizer VL_NOT_FINAL {
         int width;  // Number of bits
         int root;  // Index of the whole variable or element it is part of
         int value0 = 0;  // Lowest bit of the value it is pinned to
+        bool same = false;  // A single bit tied to value0 again, rather than at random
     };
+    // What a spreading literal ties: a part of an element, and its value
+    struct SpreadLit final {
+        const VlRandomVar* varp = nullptr;  // Variable, none for a literal of no tie
+        int elem = 0;  // Element index, as for emitElement
+        int lsb = 0;  // Lowest bit
+        int width = 0;  // Number of bits
+        QData value = 0;  // Value it is tied to, of a part of at most 64 bits
+    };
+    using SlotKey = std::tuple<const VlRandomVar*, int, int>;  // Variable, bit and its value
     // Move the solution towards random values the constraints allow; uniqueExprsp, for a
     // flat solve, lets the solution be found again in a fresh session
     void solveDiversity(VlRNG& rngr, VlSolverSession& sess,
@@ -383,14 +394,24 @@ class VlRandomizer VL_NOT_FINAL {
                      const std::vector<std::string>* uniqueExprsp);
     // Pin terms to one of their few allowed combinations of values, picked uniformly
     int pinEnumerated(VlRNG& rngr, VlSolverSession& sess, const std::vector<PinTerm>& terms);
+    // Of single bits dropped for a whole array, the ones to tie again once the kept parts
+    // that ruled them out are dropped from keptr, the literals kept, see spreadTerms
+    static std::vector<PinTerm>
+    freeBitCauses(std::vector<int>& keptr, const std::vector<PinTerm>& terms,
+                  const std::vector<bool>& dropped, const std::vector<int>& slotIds,
+                  const std::vector<std::vector<int>>& keptCores,
+                  const std::vector<SpreadLit>& lits, std::set<SlotKey>& handledr);
     // Find a random solution again in a fresh session, after spreading kept nothing
     void resolveFresh(VlRNG& rngr, VlSolverSession& sess,
                       const std::vector<std::string>& uniqueExprs, uint64_t limit);
-    // Assume literals __Va<first>... (one per term) with keep, dropping conflicting ones until SAT
+    // Assume literals __Va<first>... (one per term) with keep, dropping conflicting ones until
+    // SAT. Into keptCoresp, for a single bit that conflicted alone, the kept literals of its
+    // unsat core.
     bool assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std::string& keep, int first,
                         const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
                         int& checksLeftr, std::vector<bool>* guessedp = nullptr,
-                        std::vector<int>* slotIdsp = nullptr, int* satisfiedLeftp = nullptr);
+                        std::vector<int>* slotIdsp = nullptr, int* satisfiedLeftp = nullptr,
+                        std::vector<std::vector<int>>* keptCoresp = nullptr);
     // Values of a (get-value) reply, in order
     bool readValues(VlSolverSession& sess, std::vector<std::string>& valuesr);
     // Layers of solve...before variables in dependency order

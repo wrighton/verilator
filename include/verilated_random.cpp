@@ -1591,6 +1591,7 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
         diversityCheckLimitMax, diversityCheckLimit + diversityCheckLimitSquare * nterms * nterms);
     const VlSolverLimit limit{sess, checkLimit};
     std::string keep;  // Surviving literals
+    std::vector<int> kept;  // Their numbers
     int lits = 0;  // Literals declared so far
     int checksLeft = diversityMaxChecks;
     // Satisfied checks are the slow ones on large problems; past their limit, no further
@@ -1601,23 +1602,34 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
     };
     bool settled = true;  // The last check was satisfied, so its model satisfies keep
     std::vector<bool> dropped;
+    std::vector<SpreadLit> litInfo;  // What each literal ties, by its number
+    std::set<SlotKey> handledBits;  // Slots of single bits whose causes were dropped
     while (!terms.empty() && checksLeft > 0) {
+        litInfo.resize(lits + terms.size());
         for (size_t k = 0; k < terms.size(); ++k) {
+            PinTerm& term = terms[k];
             os << "(declare-fun __Va" << lits + k << " () Bool)\n";
             os << "(assert (= __Va" << lits + k << " (=";
-            emitTerm(terms[k]);
+            emitTerm(term);
             os << " #b";
             IData bits = 0;
-            for (int b = 0; b < terms[k].width; ++b) {
-                if (!(b & VL_SIZEBITS_I)) bits = VL_RANDOM_RNG_I(rngr);
+            QData value = 0;  // Its low 64 bits
+            for (int b = 0; b < term.width; ++b) {
+                if (!(b & VL_SIZEBITS_I)) {
+                    bits = term.same ? term.value0 : VL_RANDOM_RNG_I(rngr);
+                    const IData used = bits & VL_MASK_I(std::min(VL_IDATASIZE, term.width - b));
+                    if (b < VL_QUADSIZE) value |= static_cast<QData>(used) << b;
+                }
                 os << (VL_BITISSET_I(bits, b & VL_SIZEBITS_I) ? '1' : '0');
             }
-            terms[k].value0 = VL_BITISSET_I(bits, (terms[k].width - 1) & VL_SIZEBITS_I) ? 1 : 0;
+            term.value0 = VL_BITISSET_I(bits, (term.width - 1) & VL_SIZEBITS_I) ? 1 : 0;
             os << ")))\n";
+            litInfo[lits + k] = {term.varp, term.elem, term.lsb, term.width, value};
         }
         std::vector<int> slotIds;
+        std::vector<std::vector<int>> keptCores;
         settled = assumeDropping(rngr, sess, keep, lits, terms, dropped, checksLeft, nullptr,
-                                 &slotIds, &satisfiedLeft);
+                                 &slotIds, &satisfiedLeft, &keptCores);
         if (!settled) break;
         satisfied();
         std::vector<PinTerm> conflicted;
@@ -1626,12 +1638,21 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
             const PinTerm& term = terms[k];
             if (!dropped[k]) {
                 keep += " __Va" + std::to_string(lits + k);
+                kept.push_back(lits + k);
             } else if (term.width > 1 && slotIds[k] >= 0) {
                 if (slots.size() <= static_cast<size_t>(slotIds[k])) slots.resize(slotIds[k] + 1);
                 slots[slotIds[k]].push_back(term);
             } else if (term.width > 1) {
                 conflicted.push_back(term);
             }
+        }
+        // Dropping kept literals leaves the last model satisfying keep
+        const size_t nkept = kept.size();
+        std::vector<PinTerm> bitsAgain
+            = freeBitCauses(kept, terms, dropped, slotIds, keptCores, litInfo, handledBits);
+        if (kept.size() != nkept) {
+            keep.clear();
+            for (const int lit : kept) keep += " __Va" + std::to_string(lit);
         }
         lits += terms.size();
         terms.clear();
@@ -1647,7 +1668,12 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
             }
         }
         // Out of checks, the last model, which satisfies keep, is the result
-        if (conflicted.empty() || checksLeft <= 0) break;
+        if (checksLeft <= 0) break;
+        if (conflicted.empty()) {
+            if (bitsAgain.empty()) break;
+            terms.swap(bitsAgain);
+            continue;
+        }
         // Which conflicted terms can differ from the last model's values at all
         os << "(get-value (";
         for (const PinTerm& term : conflicted) emitTerm(term);
@@ -1732,6 +1758,7 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
             if (!any) continue;
             for (const PinTerm& term : slots[sloti]) split(term);
         }
+        terms.insert(terms.end(), bitsAgain.begin(), bitsAgain.end());
     }
     if (!settled) {
         // Out of checks, or a check failed or was cut short. With none kept, that is solving
@@ -1754,6 +1781,71 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
         return sess.readStatus() == VlSolverStatus::SAT;
     }
     return true;
+}
+
+// A single bit that conflicts alone with the literals kept does so with a kept part of its
+// element: in d[i] < 200, bits 7:6 kept as 11 rule out bit 5 being 1. When such bits drop
+// their slot for all, the solver would choose every one of them, mostly 0, though most fit
+// their ties. Instead the kept parts of that position and value that their unsat cores name
+// are dropped for all elements, and the slot's bits are tied to their values again, which
+// were drawn uniformly. This takes no check of its own, and each slot, a position and value
+// of a single bit, is tied again once, so at most twice a variable's width of rounds.
+std::vector<VlRandomizer::PinTerm>
+VlRandomizer::freeBitCauses(std::vector<int>& keptr, const std::vector<PinTerm>& terms,
+                            const std::vector<bool>& dropped, const std::vector<int>& slotIds,
+                            const std::vector<std::vector<int>>& keptCores,
+                            const std::vector<SpreadLit>& lits, std::set<SlotKey>& handledr) {
+    // Per slot of single bits, in their order: those dropped for all, and the cause, a kept
+    // literal of a higher part of an element whose bit conflicted alone, of at most 64 bits
+    std::map<SlotKey, size_t> slotOf;
+    std::vector<SlotKey> keys;
+    std::vector<std::vector<size_t>> members;
+    std::vector<int> causes;
+    for (size_t k = 0; k < terms.size(); ++k) {
+        const PinTerm& term = terms[k];
+        if (!dropped[k] || term.width != 1) continue;
+        const SlotKey key{term.varp, term.lsb, term.value0};
+        const auto it = slotOf.emplace(key, keys.size());
+        if (it.second) {
+            keys.push_back(key);
+            members.emplace_back();
+            causes.push_back(-1);
+        }
+        const size_t sloti = it.first->second;
+        members[sloti].push_back(k);
+        if (causes[sloti] >= 0) continue;
+        for (const int idx : keptCores[k]) {
+            const SpreadLit& lit = lits[idx];
+            if (lit.varp == term.varp && lit.elem == term.elem && lit.lsb > term.lsb
+                && lit.width <= VL_QUADSIZE) {
+                causes[sloti] = idx;
+                break;
+            }
+        }
+    }
+    std::vector<PinTerm> again;
+    // Parts and values to drop: variable, lowest bit, width and value
+    using PartKey = std::tuple<const VlRandomVar*, int, int, QData>;
+    const auto partOf = [&](int lit) {
+        const SpreadLit& info = lits[lit];
+        return PartKey{info.varp, info.lsb, info.width, info.value};
+    };
+    std::set<PartKey> unkeep;
+    for (size_t sloti = 0; sloti < keys.size(); ++sloti) {
+        const bool forAll = std::any_of(members[sloti].begin(), members[sloti].end(),
+                                        [&](size_t k) { return slotIds[k] >= 0; });
+        if (!forAll || causes[sloti] < 0 || !handledr.emplace(keys[sloti]).second) continue;
+        unkeep.emplace(partOf(causes[sloti]));
+        for (const size_t k : members[sloti]) {
+            again.push_back(terms[k]);
+            again.back().same = true;
+        }
+    }
+    if (unkeep.empty()) return again;
+    keptr.erase(std::remove_if(keptr.begin(), keptr.end(),
+                               [&](int lit) { return unkeep.count(partOf(lit)) != 0; }),
+                keptr.end());
+    return again;
 }
 
 void VlRandomizer::resolveFresh(VlRNG& rngr, VlSolverSession& sess,
@@ -1791,11 +1883,14 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
                                   int first, const std::vector<PinTerm>& terms,
                                   std::vector<bool>& droppedr, int& checksLeftr,
                                   std::vector<bool>* guessedp, std::vector<int>* slotIdsp,
-                                  int* satisfiedLeftp) VL_REQUIRES(sess.m_mutex) {
+                                  int* satisfiedLeftp, std::vector<std::vector<int>>* keptCoresp)
+    VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     droppedr.assign(terms.size(), false);
     if (guessedp) guessedp->assign(terms.size(), false);
     if (slotIdsp) slotIdsp->assign(terms.size(), -1);
+    if (keptCoresp) keptCoresp->assign(terms.size(), {});
+    std::vector<int> keptCore;  // The kept literals of the last unsat core
     int nslots = 0;
     // Conflicts per part of an array's elements (and pinned value, for a single bit), and
     // whether each of them was among others in its unsat core
@@ -1807,9 +1902,11 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
     // Into corer, the terms of an unsat core that are not dropped yet
     const auto coreTerms = [&](std::vector<int>& corer) VL_REQUIRES(sess.m_mutex) {
         corer.clear();
+        keptCore.clear();
         for (const int idx : readUnsatAssumptions(sess)) {
             const int k = idx - first;
             if (k >= 0 && k < static_cast<int>(terms.size()) && !droppedr[k]) corer.push_back(k);
+            if (k < 0 && keptCoresp) keptCore.push_back(idx);
         }
     };
     // A solver need not give a minimal core, and one such as cvc5 names most of the ties
@@ -1923,6 +2020,10 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
         if (pick < 0) return false;
         droppedr[pick] = true;
         if (guessedp && candidates > 1) (*guessedp)[pick] = true;
+        // Not from a large core, whose kept literals need not rule the bit out
+        if (keptCoresp && order.empty() && candidates == 1 && terms[pick].width == 1) {
+            (*keptCoresp)[pick] = keptCore;
+        }
         // Once the same part of several elements of an array conflicts, that part of the
         // others likely does too, under one foreach: drop it for all of them, so the array
         // costs a few checks rather than one per element. The elements that conflicted are

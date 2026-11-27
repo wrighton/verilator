@@ -42,8 +42,11 @@ calls = [n for n in calls if n]
 # one by one (61 checks), rather than spending every check one by one (513). The last
 # Below, at a seed where the single bits of many elements conflict one by one while a
 # sample of the others fits, takes them one by one only for a few (52 checks, 43 to 54 over
-# 64 seeds), rather than until the satisfied checks run out (351).
-if len(calls) != 8 or calls[1] > 20 or calls[3] > 100 or calls[5] > 200 or calls[7] > 70:
+# 64 seeds), rather than until the satisfied checks run out (351). The last Most, whose bits
+# 5 to 3 conflict with kept parts of a quarter of its elements, ties them again once those
+# parts are dropped (89 checks, where Most takes 34 to 118 over 256 seeds).
+if (len(calls) != 10 or calls[1] > 20 or calls[3] > 100 or calls[5] > 200 or calls[7] > 70
+        or calls[9] > 150):
     test.error("Spreading checks per solve: " + str(calls))
 
 test.passes()
