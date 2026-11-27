@@ -31,7 +31,7 @@
    32 |   assert property (@(posedge clk) not ((a ##1 b) or (a ##[2:$] c)));
       |                                                  ^~
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:33:51: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
-   33 |   assert property (@(posedge clk) not (((a ##1 b) or c) ##1 a));
+   33 |   assert property (@(posedge clk) not (((a ##1 b) or c) ##[1:$] a));
       |                                                   ^~
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:34:57: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
    34 |   assert property (@(posedge clk) not ((always [0:1] a) or (b ##[2:3] c)));

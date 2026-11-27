@@ -8186,14 +8186,16 @@ class AssertNfaVisitor final : public VNVisitor {
         }
         return true;
     }
-    // True if the tree is a sequence 'or', or a negation of one, of operands not all of one
-    // length, whose matches the NFA lowering counts by tick rather than by attempt
-    static bool isUnequalSequenceOr(const SvaAttemptNode& node) {
+    // True if the tree is a sequence of variable length or a sequence 'or' of operands not all
+    // of one length, or a negation of one, whose matches the NFA lowering counts by tick or by
+    // match end rather than by attempt
+    static bool isVarLenSequence(const SvaAttemptNode& node) {
+        using Kind = SvaAttemptNode::Kind;
         const SvaAttemptNode* nodep = &node;
-        while (nodep->kind == SvaAttemptNode::Kind::NOT) nodep = nodep->lhsp.get();
+        while (nodep->kind == Kind::NOT) nodep = nodep->lhsp.get();
         std::set<int> lengths;
-        return nodep->kind == SvaAttemptNode::Kind::OR && sequenceOrLengths(*nodep, lengths)
-               && lengths.size() > 1;
+        return (nodep->kind == Kind::OR || nodep->kind == Kind::SEQUENCE)
+               && sequenceOrLengths(*nodep, lengths) && lengths.size() > 1;
     }
     // The tree to lower per attempt of an asserted property with an implication and another
     // property operator, which may be another implication, or of a property with an 'and' of an
@@ -8224,7 +8226,7 @@ class AssertNfaVisitor final : public VNVisitor {
         bool other = false;
         findAttemptKinds(*treep, implications, other);
         if (!hasVarLenAnd(*treep) && (cover || !implications || (!other && implications < 2))
-            && (cover || !isUnequalSequenceOr(*treep))) {
+            && (cover || !isVarLenSequence(*treep))) {
             return nullptr;
         }
         if (const SvaAttemptNode* const limitp = findOverLimit(*treep)) {
