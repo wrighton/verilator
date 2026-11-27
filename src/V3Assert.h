@@ -124,6 +124,8 @@ public:
         AstNode* containerp;  // Module or generate block holding its process
         AstSenTree* senTreep;  // Clock of its evaluation
         string scope;  // Named blocks around it in its process, for %m
+        // Its evaluation ends its attempts on an $assertkill, so a kill drops no pending action
+        bool evalKills = false;
     };
 
 private:
