@@ -63,6 +63,13 @@ module t;
     $asserton(0, a_kill);
   end
 
+  // Test: a cover counts each attempt succeeding once, at its first match, and no vacuous
+  // success (IEEE 1800-2023 16.14.3)
+  int cv[3];
+  cover property (@(posedge clk) a |-> ##[1:$] b) ++cv[0];
+  cover property (@(posedge clk) a |-> ##[2:$] b) ++cv[1];
+  cover property (@(posedge clk) a |-> b [-> 1]) ++cv[2];
+
   // Test: many attempts waiting long pass together
   bit start = 0, done = 0;
   int long_p = 0;
@@ -100,7 +107,7 @@ module t;
     repeat (CYCLES) @(posedge clk);
     #1;
     begin
-      automatic int ep[9] = '{default: 0}, ef[9] = '{default: 0};
+      automatic int ep[9] = '{default: 0}, ef[9] = '{default: 0}, ecv[3] = '{default: 0};
       for (int s = 0; s < CYCLES; ++s) begin
         automatic int r;
         automatic bit disabled = 0;
@@ -111,6 +118,9 @@ module t;
         end
         r = gotoEnd(s + 1, 1);
         if (r < CYCLES) ++ep[0];
+        if (r < CYCLES) ++ecv[0];
+        if (gotoEnd(s + 2, 1) < CYCLES) ++ecv[1];
+        if (gotoEnd(s, 1) < CYCLES) ++ecv[2];
         for (int t = s; t <= r && t < CYCLES; ++t) disabled |= hd[t];
         if (r < CYCLES && !disabled) ++ep[5];
         r = gotoEnd(s + 2, 1);
@@ -139,6 +149,7 @@ module t;
         `checkd(p[i], ep[i]);
         `checkd(f[i], ef[i]);
       end
+      for (int i = 0; i < 3; ++i) `checkd(cv[i], ecv[i]);
       `checkd(long_p, 100);
     end
     $write("*-* All Finished *-*\n");
