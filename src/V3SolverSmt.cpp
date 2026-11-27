@@ -2193,72 +2193,197 @@ static bool foreachBodyRunsPerElement(const AstConstraintForeach* foreachp) {
     return true;
 }
 
-// A conjunct of a constraint in a 'foreach' over a dynamic array or queue whose size is solved,
-// which reads that size and no loop variable, holds whenever the array has an element, if the
-// body runs for each element. The solve of the size expands the 'foreach' over the elements the
-// array has before it, none if it is empty (see gateOnCurrentSize), so each such conjunct is
-// also added after the 'foreach', as '<size> > 0 -> <conjunct>' (IEEE 1800-2023 18.5.8.1: size
-// constraints are solved first).
-static void addForeachSizeConjuncts(AstNode* itemsp) {
-    std::vector<AstConstraintForeach*> foreachps;
-    for (AstNode* nodep = itemsp; nodep; nodep = nodep->nextp()) {
-        nodep->foreach([&](AstConstraintForeach* foreachp) { foreachps.push_back(foreachp); });
+// Whether a reference reads the size variable of a size-solved array
+static bool isSizeVarRef(const AstVarRef* refp) { return refp->varp()->isRandSizeVar(); }
+
+// Moves each conjunct of the body of a 'foreach' over a dynamic array or queue whose size is
+// solved, which reads a solved size and no loop variable, out of the body, as
+// '<size> > 0 -> <conditions> -> <conjunct>' after the 'foreach', where the conditions are
+// those of the 'if's and implications of the body the conjunct is under, which read no loop
+// variable either. If the body runs for each element, the 'foreach' requires such a conjunct
+// exactly when the array has an element. In the body, the solve of the size, which expands the
+// 'foreach' over the elements the array has before it (see gateOnCurrentSize), would miss the
+// conjunct when the array starts empty, and require it when the array ends empty (IEEE
+// 1800-2023 18.5.8.1: size constraints are solved first). Any other conjunct of the body that
+// reads a solved size and no element of the array is made '<index> < <size> -> <conjunct>', so
+// that the solve of the size requires it only for the elements the array keeps.
+class ForeachSizeConjunctMover final {
+    // TYPES
+    struct Guard final {
+        AstNodeExpr* condp;  // Condition
+        bool negated;  // Under its 'else'
+    };
+    struct Move final {
+        AstNodeExpr* termp;  // Conjunct
+        std::vector<Guard> guards;  // Conditions it is under, outermost first
+    };
+
+    // STATE
+    const AstVar* const m_arrVarp;  // Array of the 'foreach'
+    AstVar* const m_idxVarp;  // Loop variable of the array
+    const bool m_movable;  // Whether the body runs for each element (see move)
+    std::unordered_set<const AstVar*> m_loopVarps;  // Loop variables of the 'foreach'
+    std::vector<Guard> m_guards;  // Conditions of the current position
+    bool m_localGuard = false;  // Under a condition that reads a loop variable
+    std::vector<Move> m_moves;  // Conjuncts to move, in order
+    std::vector<AstNodeExpr*> m_gates;  // Conjuncts to gate on the index
+
+    // METHODS
+    bool readsLoopVar(const AstNodeExpr* exprp) const {
+        return exprp->exists(
+            [&](const AstVarRef* refp) { return m_loopVarps.count(refp->varp()) > 0; });
     }
-    for (AstConstraintForeach* const foreachp : foreachps) {
-        const AstVarRef* const arrRefp = VN_CAST(foreachp->headerp()->fromp(), VarRef);
-        const AstVar* const sizeVarp = arrRefp ? VN_CAST(arrRefp->varp()->user4p(), Var) : nullptr;
-        if (!sizeVarp || foreachp->isSoft() || !foreachBodyRunsPerElement(foreachp)) continue;
-        std::unordered_set<const AstVar*> loopVarps;
-        for (AstNode* elemp = foreachp->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
-            if (const AstVar* const varp = VN_CAST(elemp, Var)) loopVarps.insert(varp);
+    // Whether an expression is solved or called once per constraint, so not copied
+    static bool once(const AstNodeExpr* exprp) {
+        return exprp->exists(
+            [](const AstNode* nodep) { return VN_IS(nodep, Dist) || VN_IS(nodep, NodeFTaskRef); });
+    }
+    // Collect what is under a condition
+    template <typename T_Collect>
+    void collectUnder(AstNodeExpr* condp, bool negated, T_Collect collect) {
+        if (readsLoopVar(condp) || once(condp)) {
+            const bool wasLocal = m_localGuard;
+            m_localGuard = true;
+            collect();
+            m_localGuard = wasLocal;
+            return;
         }
-        AstNode* lastp = foreachp;
-        for (AstNode* itemp = foreachp->bodyp(); itemp; itemp = itemp->nextp()) {
+        m_guards.push_back({condp, negated});
+        collect();
+        m_guards.pop_back();
+    }
+    void collectTerm(AstNodeExpr* termp) {
+        AstLogIf* const ifp = VN_CAST(termp, LogIf);
+        if (AstLogAnd* const andp = VN_CAST(termp, LogAnd)) {
+            collectTerm(andp->lhsp());
+            collectTerm(andp->rhsp());
+        } else if (ifp) {
+            collectUnder(ifp->lhsp(), false, [&]() { collectTerm(ifp->rhsp()); });
+        } else if (!once(termp)
+                   && termp->exists([](const AstVarRef* refp) { return isSizeVarRef(refp); })
+                   && !termp->exists(
+                       [&](const AstVarRef* refp) { return refp->varp() == m_arrVarp; })) {
+            if (m_movable && !m_localGuard && !readsLoopVar(termp)) {
+                m_moves.push_back({termp, m_guards});
+            } else {
+                m_gates.push_back(termp);
+            }
+        }
+    }
+    void collectItems(AstNode* itemsp) {
+        for (AstNode* itemp = itemsp; itemp; itemp = itemp->nextp()) {
             const AstConstraintExpr* const exprp = VN_CAST(itemp, ConstraintExpr);
-            if (!exprp || exprp->isSoft() || exprp->isDisableSoft()) continue;
-            // The conjuncts, in order
-            std::vector<AstNodeExpr*> conjps;
-            std::vector<AstNodeExpr*> pendingps{exprp->exprp()};
-            while (!pendingps.empty()) {
-                AstNodeExpr* const termp = pendingps.back();
-                pendingps.pop_back();
-                if (const AstLogAnd* const andp = VN_CAST(termp, LogAnd)) {
-                    pendingps.push_back(andp->rhsp());
-                    pendingps.push_back(andp->lhsp());
-                } else {
-                    conjps.push_back(termp);
-                }
-            }
-            for (size_t i = 0; i < conjps.size(); ++i) {
-                AstNodeExpr* const conjp = conjps[i];
-                AstVarRef* sizeRefp = nullptr;
-                bool hoistable = true;
-                conjp->foreach([&](AstNode* nodep) {
-                    if (AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
-                        if (loopVarps.count(refp->varp())) hoistable = false;
-                        if (refp->varp() == sizeVarp && !sizeRefp) sizeRefp = refp;
-                    } else if (VN_IS(nodep, Dist) || VN_IS(nodep, NodeFTaskRef)) {
-                        // Not copied, as it is solved, or called, once per constraint
-                        hoistable = false;
-                    }
-                });
-                if (!hoistable || !sizeRefp) continue;
-                FileLine* const fl = conjp->fileline();
-                AstGtS* const nonEmptyp
-                    = new AstGtS{fl, sizeRefp->cloneTree(false),
-                                 new AstConst{fl, AstConst::WidthedValue{}, 32, 0}};
-                nonEmptyp->dtypeSetBit();
-                nonEmptyp->user1(true);
-                AstLogIf* const impliesp = new AstLogIf{fl, nonEmptyp, conjp->cloneTree(false)};
-                impliesp->dtypeSetBit();
-                impliesp->user1(true);
-                AstConstraintExpr* const newp = new AstConstraintExpr{fl, impliesp};
-                lastp->addNextHere(newp);
-                lastp = newp;
+            AstConstraintIf* const ifp = VN_CAST(itemp, ConstraintIf);
+            if (exprp && !exprp->isSoft() && !exprp->isDisableSoft()) {
+                collectTerm(exprp->exprp());
+            } else if (ifp) {
+                collectUnder(ifp->condp(), false, [&]() { collectItems(ifp->thensp()); });
+                collectUnder(ifp->condp(), true, [&]() { collectItems(ifp->elsesp()); });
             }
         }
     }
-}
+    static AstNodeExpr* newImpliesp(FileLine* fl, AstNodeExpr* condp, AstNodeExpr* thenp) {
+        AstLogIf* const ifp = new AstLogIf{fl, condp, thenp};
+        ifp->dtypeSetBit();
+        ifp->user1(true);
+        return ifp;
+    }
+    // '<size> > 0 -> <conditions> -> <conjunct>'
+    static AstNodeExpr* newMovedp(const Move& move, AstVarRef* sizeRefp) {
+        FileLine* const fl = move.termp->fileline();
+        AstNodeExpr* exprp = move.termp->cloneTree(false);
+        for (size_t i = move.guards.size(); i > 0; --i) {
+            const Guard& guard = move.guards[i - 1];
+            AstNodeExpr* condp = guard.condp->cloneTree(false);
+            if (guard.negated) {
+                condp = new AstLogNot{fl, condp};
+                condp->dtypeSetBit();
+                condp->user1(guard.condp->user1());
+            }
+            exprp = newImpliesp(fl, condp, exprp);
+        }
+        AstGtS* const nonEmptyp = new AstGtS{fl, sizeRefp->cloneTree(false),
+                                             new AstConst{fl, AstConst::WidthedValue{}, 32, 0}};
+        nonEmptyp->dtypeSetBit();
+        nonEmptyp->user1(true);
+        return newImpliesp(fl, nonEmptyp, exprp);
+    }
+    // Remove a moved conjunct from the body
+    static void remove(AstNodeExpr* termp) {
+        if (AstLogAnd* const andp = VN_CAST(termp->backp(), LogAnd)) {
+            AstNodeExpr* const keptp = andp->lhsp() == termp ? andp->rhsp() : andp->lhsp();
+            andp->replaceWith(keptp->unlinkFrBack());
+            VL_DO_DANGLING(andp->deleteTree(), andp);
+            return;
+        }
+        termp->replaceWith(new AstConst{termp->fileline(), AstConst::BitTrue{}});
+        VL_DO_DANGLING(termp->deleteTree(), termp);
+    }
+    // Make a conjunct '<index> < <size> -> <conjunct>'
+    void gate(AstNodeExpr* termp, AstVarRef* sizeRefp) const {
+        FileLine* const fl = termp->fileline();
+        VNRelinker relinker;
+        termp->unlinkFrBack(&relinker);
+        AstLtS* const keptp = new AstLtS{fl, new AstVarRef{fl, m_idxVarp, VAccess::READ},
+                                         sizeRefp->cloneTree(false)};
+        keptp->dtypeSetBit();
+        keptp->user1(true);
+        relinker.relink(newImpliesp(fl, keptp, termp));
+    }
+    // A reference in the constraints to the size variable
+    static AstVarRef* findSizeRef(AstNode* itemsp, const AstVar* sizeVarp) {
+        AstVarRef* foundp = nullptr;
+        for (AstNode* nodep = itemsp; nodep; nodep = nodep->nextp()) {
+            nodep->foreach([&](AstVarRef* refp) {
+                if (refp->varp() == sizeVarp) foundp = refp;
+            });
+        }
+        return foundp;
+    }
+    ForeachSizeConjunctMover(AstConstraintForeach* foreachp, const AstVar* arrVarp,
+                             AstVar* idxVarp)
+        : m_arrVarp{arrVarp}
+        , m_idxVarp{idxVarp}
+        , m_movable{foreachBodyRunsPerElement(foreachp)} {
+        for (AstNode* elemp = foreachp->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
+            if (const AstVar* const varp = VN_CAST(elemp, Var)) m_loopVarps.insert(varp);
+        }
+        collectItems(foreachp->bodyp());
+    }
+    void apply(AstNode* itemsp, AstConstraintForeach* foreachp, const AstVar* sizeVarp) {
+        AstVarRef* const sizeRefp
+            = m_moves.empty() && m_gates.empty() ? nullptr : findSizeRef(itemsp, sizeVarp);
+        if (!sizeRefp) return;
+        AstNode* lastp = foreachp;
+        for (size_t i = 0; i < m_moves.size(); ++i) {
+            AstConstraintExpr* const newp
+                = new AstConstraintExpr{foreachp->fileline(), newMovedp(m_moves[i], sizeRefp)};
+            lastp->addNextHere(newp);
+            lastp = newp;
+        }
+        for (size_t i = 0; i < m_gates.size(); ++i) gate(m_gates[i], sizeRefp);
+        for (size_t i = 0; i < m_moves.size(); ++i) remove(m_moves[i].termp);
+    }
+
+public:
+    static void apply(AstNode* itemsp) {
+        std::vector<AstConstraintForeach*> foreachps;
+        for (AstNode* nodep = itemsp; nodep; nodep = nodep->nextp()) {
+            nodep->foreach([&](AstConstraintForeach* foreachp) { foreachps.push_back(foreachp); });
+        }
+        // Innermost first, so that what an inner one moves out moves out of the outer one too
+        for (size_t i = foreachps.size(); i > 0; --i) {
+            AstConstraintForeach* const foreachp = foreachps[i - 1];
+            const AstVarRef* const arrRefp = VN_CAST(foreachp->headerp()->fromp(), VarRef);
+            const AstVar* const sizeVarp
+                = arrRefp ? VN_CAST(arrRefp->varp()->user4p(), Var) : nullptr;
+            AstVar* const idxVarp = VN_CAST(foreachp->headerp()->elementsp(), Var);
+            if (!sizeVarp || !idxVarp || foreachp->isSoft()) continue;
+            ForeachSizeConjunctMover{foreachp, arrRefp->varp(), idxVarp}.apply(itemsp, foreachp,
+                                                                               sizeVarp);
+        }
+    }
+};
 
 class ConstraintExprVisitor final : public VNVisitor {
 public:
@@ -12934,7 +13059,7 @@ public:
                     }
                 }
                 if (constrp->itemsp()) {
-                    addForeachSizeConjuncts(constrp->itemsp());
+                    ForeachSizeConjunctMover::apply(constrp->itemsp());
                     lowerDistConstraints(taskp, constrp->itemsp(), randModeVarp);
                 }
                 VInsertionSet<AstVar*>& sizeArrays = m_sizeConstrainedArrays[classp];
@@ -13419,7 +13544,7 @@ public:
             for (const auto& ref : ConstraintSizeGuardVisitor::apply(capturedTreep, nullptr)) {
                 addSizeRef(ref.arrVarp, ref.guardp, sizeRefs);
             }
-            addForeachSizeConjuncts(capturedTreep);
+            ForeachSizeConjunctMover::apply(capturedTreep);
             const SizeDefaults defaults
                 = newSizeDefaults(nodep->fileline(), nullptr, randomizeFuncp, sizeRefs);
             if (defaults.itemsp) {
