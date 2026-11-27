@@ -266,6 +266,11 @@ class BeginVisitor final : public VNVisitor {
                 // variable
                 AstVar* const portp = nodep->cloneTreePure(false);
                 nodep->replaceWith(portp);
+                // A function's result variable is now the port
+                if (m_ftaskp->fvarp() == nodep) {
+                    m_ftaskp->fvarp(portp);
+                    nodep->funcReturn(false);
+                }
                 // The clone has user1 set, as cloning copies it, so the port is skipped when
                 // visited next in place of this variable. So visit its children here.
                 iterateChildren(portp);
