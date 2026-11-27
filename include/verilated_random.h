@@ -28,6 +28,7 @@
 
 #include "verilated.h"
 
+#include <functional>
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
@@ -276,6 +277,12 @@ class VlRandomizer VL_NOT_FINAL {
     ArrayInfoMap m_arr_vars;  // Tracks each element in array structures for iteration
     // Arrays whose elements must be distinct grouped by unique constraint
     std::map<uint32_t, std::unordered_set<std::string>> m_uniqueArrays;
+    struct KeySet final {  // An associative array read, see key_set()
+        int keyWidth;
+        int valueWidth;
+        std::function<void()> record;  // Records the array's current elements
+    };
+    std::map<std::string, KeySet> m_keySets;
     const VlQueue<CData>* m_randmodep = nullptr;  // rand_mode state;
     const VlQueue<CData>* m_static_randmodep = nullptr;  // Static rand_mode state (shared)
     std::unordered_set<std::string> m_staticVars;  // Names of static rand vars
@@ -327,6 +334,7 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<std::string> buildUniqueExprs() const;
     void emitDefines(std::ostream& os) const;
     void emitDeclares(std::ostream& os, bool pinCurrent) const;
+    void emitKeySets(std::ostream& os) const;  // Associative array reads, see key_set()
     void emitAsserts(std::ostream& os, const std::vector<std::string>& extras, bool named) const;
     bool nextFlat(VlRNG& rngr, VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
 
@@ -631,6 +639,21 @@ public:
     // solve time, so a container resized by the solver is handled correctly.
     void rand_unique(const std::string& name, const uint32_t key) {
         m_uniqueArrays[key].insert(name);
+    }
+    // Define, in each solve, '__Vrd_<name>' reading associative array 'var' named 'name', of
+    // elements of 'valueWidth' bits, by a key of 'keyWidth' bits, see emitKeySets(). Each solve
+    // first records its current elements, which may differ from those it was registered with.
+    template <typename T_Key, typename T_Value>
+    void key_set(VlAssocArray<T_Key, T_Value>& var, const std::string& name, int keyWidth,
+                 int valueWidth) {
+        VlAssocArray<T_Key, T_Value>* const varp = &var;
+        m_keySets[name] = KeySet{keyWidth, valueWidth, [this, varp, name]() {
+                                     m_index = 0;
+                                     clear_arr_table(name);
+                                     record_arr_table(*varp, name, 1, {}, {});
+                                     const auto it = m_vars.find(name);
+                                     if (it != m_vars.end()) it->second->clearCountCache();
+                                 }};
     }
 
     // Recursively record all elements in an unpacked array

@@ -1164,10 +1164,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         // element pinned to its current value (see VlRandomizer::emitDeclares), so is named as
         // when on, also where a random index selects from it
         const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
-        const bool pinnedArray = !m_nestedAccessp
-                                 && (VN_IS(dtypep, UnpackArrayDType)
-                                     || VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, QueueDType))
-                                 && dtypep->subDTypep()->skipRefp()->isIntegralOrPacked();
+        const bool pinnedArray
+            = !m_nestedAccessp
+              && (VN_IS(dtypep, UnpackArrayDType) || VN_IS(dtypep, DynArrayDType)
+                  || VN_IS(dtypep, QueueDType) || VN_IS(dtypep, AssocArrayDType))
+              && dtypep->subDTypep()->skipRefp()->isIntegralOrPacked();
         if (!randMode.usesMode || pinnedArray) {
             // Global constraints keep nodep alive for write_var processing
             if (!isGlobalConstrained) VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -2014,6 +2015,60 @@ class ConstraintExprVisitor final : public VNVisitor {
             m_nestedAccessp->addVarNamePart(herep, indexp->name());
         }
     }
+    // A rand associative array of integral elements reads its default for a key it does not
+    // hold, also when solved with its elements pinned while its rand_mode() is off (see
+    // createVarExprp).
+    // For its element select 'nodep' by a key of 'keyWidth' bits, register the set of its
+    // keys (see VlRandomizer::key_set) as 'namer', and return the default, else nullptr.
+    AstNodeExpr* newKeySetDefaultp(AstAssocSel* nodep, int keyWidth, std::string& namer) {
+        AstVarRef* const refp = VN_CAST(nodep->fromp(), VarRef);
+        if (!refp || m_structSel || m_nestedAccessp
+            || !nodep->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            return nullptr;
+        }
+        AstVar* const varp = refp->varp();
+        if (!varp->rand().isRandomizable()) return nullptr;
+        FileLine* const fl = nodep->fileline();
+        // The solve writes the array's elements back
+        AstVarRef* const arrayp = refp->cloneTreePure(false);
+        arrayp->access(VAccess::READWRITE);
+        AstCMethodHard* const keySetp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_KEY_SET, arrayp};
+        keySetp->addPinsp(new AstConst{fl, AstConst::String{}, refp->name()});
+        keySetp->addPinsp(new AstConst{fl, static_cast<uint32_t>(keyWidth)});
+        keySetp->addPinsp(new AstConst{fl, static_cast<uint32_t>(nodep->width())});
+        keySetp->dtypeSetVoid();
+        // In new(), as the array's registration, but without registering the array
+        AstBegin* const initp
+            = m_inlineInitBlockp
+                  ? m_inlineInitBlockp
+                  : newInitBlockp(
+                        VN_AS(m_memberMap.findMember(getLeftmostVarModulep(nullptr, varp), "new"),
+                              NodeFTask));
+        addRegistrationStmt(keySetp->makeStmt(), initp);
+        namer = refp->name();
+        AstCExpr* const defaultp = new AstCExpr{fl};
+        defaultp->add(refp->cloneTreePure(false));
+        defaultp->add(".atDefault()");
+        defaultp->dtypeFrom(nodep);
+        return getConstFormat(defaultp);
+    }
+    // The element select 'selp' of associative array 'name' as its read, see
+    // VlRandomizer::emitKeySets, reading 'defaultp' for a key the array does not hold
+    AstSFormatF* newKeySetReadp(AstSFormatF* selp, const std::string& name,
+                                AstNodeExpr* defaultp) {
+        FileLine* const fl = selp->fileline();
+        AstNodeExpr* const keyp = cloneTextp(VN_AS(selp->exprsp()->nextp(), NodeExpr));
+        VNRelinker handle;
+        selp->unlinkFrBack(&handle);
+        AstSFormatF* const newp
+            = new AstSFormatF{fl, "(__Vrd_" + name + " %s %s %s)", false, keyp};
+        newp->addExprsp(selp);
+        newp->addExprsp(defaultp);
+        handle.relink(newp);
+        return newp;
+    }
     void visit(AstAssocSel* nodep) override {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
@@ -2050,6 +2105,13 @@ class ConstraintExprVisitor final : public VNVisitor {
             VL_DO_DANGLING(origp->deleteTree(), origp);
             return;
         }
+        // Read for a key the array does not hold, see newKeySetDefaultp. A string key has 128
+        // bits.
+        std::string keySetName;
+        AstNodeExpr* const keySetDefaultp
+            = (keyIsString || keyIsPackedString || keyIsIntegral)
+                  ? newKeySetDefaultp(nodep, keyIsIntegral ? keySmtWidth(keyDtp) : 128, keySetName)
+                  : nullptr;
         AstSFormatF* newp = nullptr;
         if (keyIsString) {
             addStringNamePart(bitp);
@@ -2101,6 +2163,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
         }
         if (newp && m_structSel && newp->name() == "(select %s %s)") { newp->name("%s.%s"); }
+        // A key of these types was translated
+        if (keySetDefaultp) newp = newKeySetReadp(newp, keySetName, keySetDefaultp);
         // The element a random key selects has no current value to hold, as for a random index
         // into a queue or dynamic array (see visitElementSel)
         if (!newp || keyIsRand || !hoistRandModeOverSelectAndMember(newp, origp)) {

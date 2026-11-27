@@ -1007,6 +1007,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
         return true;
     }
     if (checkOnly && m_vars.empty() && m_constraints.empty()) return true;
+    for (const auto& keySet : m_keySets) keySet.second.record();
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
     m_checkOnly = checkOnly;
@@ -1079,6 +1080,20 @@ void VlRandomizer::emitDefines(std::ostream& os) const {
     os << "(define-fun __Vbool ((v (_ BitVec 1))) Bool (= #b1 v))\n";
 }
 
+// SMT literal of the key of the element 'info' of a one-dimensional associative array. The key
+// has the width of its C++ type, whole bytes, recorded by process_key() as one index, or as
+// several of 32 bits, most significant first, when wider than 32 bits.
+static void emitKeyLiteral(std::ostream& os, const ArrayInfo& info) {
+    const size_t width = info.m_idxWidths[0];
+    os << "#x";
+    for (size_t word = 0; word < std::max<size_t>(width / 32, 1); ++word) {
+        const IData value = info.m_indices[word];
+        for (int bit = std::min<int>(width, 32) - 4; bit >= 0; bit -= 4) {
+            os << "0123456789abcdef"[(value >> bit) & 0xf];
+        }
+    }
+}
+
 void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) {
@@ -1099,6 +1114,49 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
             var.second->emitConcreteValue(os);
             os << "))\n";
         }
+    }
+    emitKeySets(os);
+}
+
+void VlRandomizer::emitKeySets(std::ostream& os) const {
+    // A read of an associative array by key '?k', where '?v' is its element in the solver's
+    // array and '?d' its default, read for a key the array does not hold (IEEE 1800-2023 7.8.6).
+    // The keys are fixed while solving, whatever the array's rand_mode(). '__Vrk_<name>' maps
+    // each key to its position, and '__Vka_<name>' each position back to its key, so a key is
+    // held when it is the key at its position: two elements per key, and two array reads per
+    // array read, which the solver handles as fast as any array read. A chain or tree of tests
+    // of the keys was as slow to spread as to search, with many keys.
+    for (const auto& keySet : m_keySets) {
+        const std::string& name = keySet.first;
+        const int keyWidth = keySet.second.keyWidth;
+        const int valueWidth = keySet.second.valueWidth;
+        int nkeys = 0;
+        for (; m_arr_vars.count(generateKey(name, nkeys)); ++nkeys) {
+            if (!nkeys) {
+                os << "(declare-fun __Vrk_" << name << " () (Array (_ BitVec " << keyWidth
+                   << ") (_ BitVec 32)))\n";
+                os << "(declare-fun __Vka_" << name << " () (Array (_ BitVec 32) (_ BitVec "
+                   << keyWidth << ")))\n";
+            }
+            const ArrayInfo& info = *m_arr_vars.at(generateKey(name, nkeys));
+            os << "(assert (= (select __Vrk_" << name << ' ';
+            emitKeyLiteral(os, info);
+            os << ") (_ bv" << nkeys << " 32)))\n";
+            os << "(assert (= (select __Vka_" << name << " (_ bv" << nkeys << " 32)) ";
+            emitKeyLiteral(os, info);
+            os << "))\n";
+        }
+        os << "(define-fun __Vrd_" << name << " ((?k (_ BitVec " << keyWidth << ")) (?v (_ BitVec "
+           << valueWidth << ")) (?d (_ BitVec " << valueWidth << "))) (_ BitVec " << valueWidth
+           << ") ";
+        if (nkeys) {
+            os << "(ite (and (bvult (select __Vrk_" << name << " ?k) (_ bv" << nkeys
+               << " 32)) (= (select __Vka_" << name << " (select __Vrk_" << name
+               << " ?k)) ?k)) ?v ?d)";
+        } else {
+            os << "?d";
+        }
+        os << ")\n";
     }
 }
 
