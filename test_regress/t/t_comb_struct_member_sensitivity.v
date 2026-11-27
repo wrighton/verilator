@@ -23,6 +23,11 @@ typedef struct packed {
 } odd_t;
 
 typedef struct packed {
+  logic [4:0] f;
+  logic [2:0] g;
+} edge_t;
+
+typedef struct packed {
   logic [3:0] a;
   logic [3:0] b;
   logic [3:0] x;
@@ -91,6 +96,14 @@ module t (
     end
   end
 
+  // Test: a write at positions all past its member, which writes nothing
+  edge_t e;
+  always_comb begin
+    e.f = '0;
+    e.f[3'd5+3'(k[0])] = 1'b1;
+  end
+  always_comb e.g = qb[2:0];
+
   // Test: members at constant positions
   narrow_t n;
   always_comb begin
@@ -121,6 +134,7 @@ module t (
       `checkh(n.x, qa ^ qb);
       `checkh(u[k].x, qa ^ qb);
       `checkh(m[0].x, mfold(qa, qb));
+      `checkh(e, {5'h0, qb[2:0]});
     end
     cyc <= cyc + 1;
     q <= {q[298:0], ~q[299]} ^ 300'(cyc * 32'h9e3779b9);
