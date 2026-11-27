@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_func_noinline_purity_cycle_bad.v:34:12: Unsupported: Impure function calls in sensitivity lists
+   34 |   always @(Z(sig)) o = sig;   
+      |            ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

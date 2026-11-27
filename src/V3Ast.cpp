@@ -34,10 +34,12 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 
 // {  Hot cache line
 // These must all initialize to zero to stay in same single hot cache-line linker section
-// Check: nm -n ../bin/verilator_bin | grep -E "s_cachedCntGbl|s_editCntGbl|s_opCount|s_userCntGbl"
+// Check: nm -n ../bin/verilator_bin |
+//   grep -E "s_cachedCntGbl|s_editCntGbl|s_opCount|s_setCntGbl|s_userCntGbl"
 uint64_t VIsCached::s_cachedCntGbl = 0;  // Warm
 uint64_t AstNode::s_editCntGbl = 0;  // Hot, leave adjacent
 std::atomic<uint64_t> V3Global::s_opCount;  // Hot, leave adjacent
+uint64_t VIsCached::s_setCntGbl = 0;  // Warm
 // To allow for fast clearing of all user pointers, we keep a "timestamp"
 // along with each userp, and thus by bumping this count we can make it look
 // as if we iterated across the entire tree to set all the userp's to null.

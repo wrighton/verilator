@@ -520,6 +520,10 @@ class TaskVisitor final : public VNVisitor {
     std::map<const AstIface*, VifDispatcher> m_vifDispatchers;  // Dispatchers of each interface
 
     // STATE - across all visitors
+    // Purity of each function not in or calling into a cycle, before the first edit, only looked
+    // up
+    std::unordered_map<const AstNodeFTask*, bool> m_ftaskPurity;
+    VDouble0 m_statPurities;  // Purities computed for freeing function bodies
     DpiCFuncs m_dpiNames;  // Map of all created DPI functions
     std::map<std::string, const AstStructDType*> m_dpiStructs;  // C names of DPI structures
     std::map<const AstEnumDType*, size_t> m_enumNumbers;  // Unique numbers of enum types
@@ -2123,6 +2127,54 @@ class TaskVisitor final : public VNVisitor {
         m_modp = m_scopep->modp();
         iterate(nodep);
     }
+    // The functions in a cycle of calls, as their purities follow them, or calling into one
+    static std::unordered_set<const AstNodeFTask*>
+    reachingCallCycle(const std::vector<AstNodeFTask*>& ftaskps) {
+        V3Graph graph;
+        std::unordered_map<const AstNodeFTask*, V3GraphVertex*> vertexps;
+        // Not in the vertex's userp, which stronglyConnected overwrites
+        std::unordered_map<const V3GraphVertex*, const AstNodeFTask*> ftaskOf;
+        const auto newVertexp = [&](const AstNodeFTask* ftaskp) {
+            V3GraphVertex* const vtxp = new V3GraphVertex{&graph};
+            ftaskOf.emplace(vtxp, ftaskp);
+            return vtxp;
+        };
+        for (AstNodeFTask* const ftaskp : ftaskps) vertexps.emplace(ftaskp, newVertexp(ftaskp));
+        // An edge for each call, as purity follows them (see AstNodeFTaskRef::isPure)
+        const auto addCallEdges = [&](const AstNodeFTask* ftaskp) {
+            V3GraphVertex* const fromp = vertexps.at(ftaskp);
+            ftaskp->foreach([&](const AstNodeFTaskRef* refp) {
+                const auto it = vertexps.find(refp->taskp());
+                if (it != vertexps.end()) new V3GraphEdge{&graph, fromp, it->second, 1};
+            });
+        };
+        for (const AstNodeFTask* const ftaskp : ftaskps) addCallEdges(ftaskp);
+        // Colors the vertices of each cycle, including a function calling itself
+        graph.stronglyConnected(&V3GraphEdge::followAlwaysTrue);
+        std::unordered_set<const AstNodeFTask*> reachingps;
+        std::vector<const V3GraphVertex*> workps;
+        const auto reach = [&](const V3GraphVertex* vtxp) {
+            if (reachingps.insert(ftaskOf.at(vtxp)).second) workps.push_back(vtxp);
+        };
+        for (const V3GraphVertex& vtx : graph.vertices()) {
+            if (vtx.color()) reach(&vtx);
+        }
+        // And their callers
+        while (!workps.empty()) {
+            const V3GraphVertex* const vtxp = workps.back();
+            workps.pop_back();
+            for (const V3GraphEdge& edge : vtxp->inEdges()) reach(edge.fromp());
+        }
+        return reachingps;
+    }
+    // Purity computed now, from no cached purity, as within a recursion it may be provisional
+    bool freshPurity(AstNodeFTask* nodep) {
+        VIsCached::clearCacheTree();
+        const uint64_t purityCnt = VIsCached::setCntGbl();
+        const bool pure = nodep->isPure();
+        m_statPurities += VIsCached::setCntGbl() - purityCnt;
+        return pure;
+    }
     void insertBeforeStmt(AstNode* nodep, AstNode* newp) {
         UINFOTREE(9, nodep, "", "newstmt");
         UASSERT_OBJ(m_insStmtp, nodep, "Function call not underneath a statement");
@@ -2185,7 +2237,7 @@ class TaskVisitor final : public VNVisitor {
     static AstVarRef* getterVarRefp(AstNodeFTask* taskp) {
         // Only the return variable is declared, so no arguments or locals
         const AstVar* const fvarp = taskp->fvarp();
-        if (taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
+        if (!fvarp || taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
         AstNode* stmtp = taskp->stmtsp();
         // Skip the default initialization of the function's return value
         if (const AstAssign* const initp = VN_CAST(stmtp, Assign)) {
@@ -2405,6 +2457,30 @@ class TaskVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(vscp->unlinkFrBack()), vscp);
                 }
             }
+            // Calls to a non-inlined function only need its ports and purity, so free the rest of
+            // its body now rather than at the end of the visitor (replaceGetterCall still needs a
+            // getter's body). The visitor follows no other pointer into it except as kept below.
+            if (noInline && !getterVarRefp(nodep)) {
+                // Purity as found before the visitor's first edit (see m_ftaskPurity), as any edit
+                // clears every cached purity, so computing it now would walk the bodies of the
+                // functions it calls, not freed yet, again for each function. That of a function
+                // in or calling into a cycle of calls is computed now, as it was.
+                const auto pit = m_ftaskPurity.find(nodep);
+                const bool pure = pit != m_ftaskPurity.end() ? pit->second : freshPurity(nodep);
+                AstNode* const impurep = m_statep->checkImpure(nodep);
+                for (AstNode *stmtp = nodep->stmtsp(), *nextp; stmtp; stmtp = nextp) {
+                    nextp = stmtp->nextp();
+                    if (VN_IS(stmtp, Var)) continue;
+                    // Keep the impure reference, IMPURE warnings on callers may show it
+                    if (impurep
+                        && stmtp->exists([&](const AstVarRef* refp) { return refp == impurep; })) {
+                        pushDeletep(impurep->unlinkFrBack());
+                    }
+                    VL_DO_DANGLING(stmtp->unlinkFrBack()->deleteTree(), stmtp);
+                }
+                // A call computes its purity from the body, so keep an impure function impure
+                if (!pure) nodep->addStmtsp(new AstCStmt{nodep->fileline()});
+            }
             // Just push for deletion, as other references to func may
             // remain until visitor exits
             nodep->unlinkFrBack();
@@ -2474,9 +2550,25 @@ public:
     // CONSTRUCTORS
     TaskVisitor(AstNetlist* nodep, TaskStateVisitor* statep)
         : m_statep{statep} {
+        // A function's body only changes when it is visited, so its purity before the first
+        // edit is that when its body is freed, for which the purities of all are found here at
+        // once, sharing the purities cached for the functions they call. Except for a function
+        // in or calling into a cycle of calls, whose purities cached within the cycle may be
+        // provisional (see AstNodeFTaskRef::isPure), so depend on where the search started.
+        std::vector<AstNodeFTask*> ftaskps;
+        nodep->foreach([&](AstNodeFTask* ftaskp) { ftaskps.push_back(ftaskp); });
+        const std::unordered_set<const AstNodeFTask*> cyclicps = reachingCallCycle(ftaskps);
+        const auto cyclic
+            = [&](const AstNodeFTask* ftaskp) { return cyclicps.count(ftaskp) != 0; };
+        ftaskps.erase(std::remove_if(ftaskps.begin(), ftaskps.end(), cyclic), ftaskps.end());
+        VIsCached::clearCacheTree();
+        const uint64_t purityCnt = VIsCached::setCntGbl();
+        for (AstNodeFTask* const ftaskp : ftaskps) m_ftaskPurity.emplace(ftaskp, ftaskp->isPure());
+        m_statPurities += VIsCached::setCntGbl() - purityCnt;
         iterate(nodep);
     }
     ~TaskVisitor() {
+        V3Stats::addStat("Optimizations, Function purities computed", m_statPurities);
         V3Stats::addStat("Optimizations, Functions inlined", m_statInlines);
         V3Stats::addStat("Optimizations, Function getters replaced with reads", m_statGetters);
         V3Stats::addStat("Optimizations, Hierarchical DPI wrappers with costs",
