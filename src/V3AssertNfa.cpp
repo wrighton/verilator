@@ -1938,6 +1938,7 @@ class SvaNfaLowering final {
         bool trackAntecedentEnd;  // Compute SignalSet::antecedentEndCountp
         bool needSuccessCount;  // Compute SignalSet::successCountp
         bool needRejectCount;  // Compute SignalSet::rejectCountp
+        bool countAttemptPasses;  // Compute the attempt pass counts of SignalSet, if possible
         // Per vertex, rejections by a required step or at the end of the sequence, if
         // needRejectCount
         std::unordered_map<const SvaStateVertex*, AstNodeExpr*> otherRejectps = {};
@@ -2097,6 +2098,8 @@ class SvaNfaLowering final {
         AstNodeExpr* antecedentRejectp = nullptr;  // A followed-by's antecedent not matching
         // Threads that rejectCountp would count twice, by a throughout guard and another check
         AstNodeExpr* rejectOverlapCountp = nullptr;
+        // Attempts succeeding nonvacuously on this tick, if counted
+        AstNodeExpr* attemptNonvacuousPassCountp = nullptr;
     };
 
     // Disable condition also aborts attempts between clock events. A constant disable
@@ -2598,6 +2601,42 @@ class SvaNfaLowering final {
         return new AstCond{c.flp, livep, countp, newTypedConstp(c.flp, m_u32DTypep, 0)};
     }
 
+    // The nonvacuous passes of the attempts of an assertion on this tick, from its threads
+    // matching, when each of its attempts matches at most once
+    void setAttemptPassCounts(LowerCtx& c, SignalSet& sigs) {
+        AstNodeExpr* nonvacuousp = newAttemptMatchCountp(c);
+        if (c.matchCondp) {
+            nonvacuousp = addCountp(c.flp, nullptr, nonvacuousp,
+                                    sampled(c.matchCondp->cloneTreePure(false)));
+        }
+        if (c.disableExprp) {
+            nonvacuousp = addCountp(c.flp, nullptr, nonvacuousp,
+                                    new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
+        }
+        sigs.attemptNonvacuousPassCountp
+            = addCountp(c.flp, nullptr, nonvacuousp, notKillActive(c));
+    }
+
+    // Number of attempts completing this tick, from the threads reaching the match: a range
+    // ring's all match, as its first match clears it, and other vertices hold one. Only a
+    // throughout puts a condition on a link to the match, which the attempts counted do not
+    // have.
+    AstNodeExpr* newAttemptMatchCountp(LowerCtx& c) {
+        AstNodeExpr* countp = nullptr;
+        for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
+            if (tedgep->toVtxp() != c.graph.m_matchVertexp) continue;
+            const SvaStateVertex* const fromVtxp = tedgep->fromVtxp();
+            AstNodeExpr* const threadsp
+                = fromVtxp->m_delayRingSize && !fromVtxp->m_isFixedDelayRing
+                      ? new AstVarRef{c.flp, fromVtxp->datap()->delayRingLiveCountVarp,
+                                      VAccess::READ}
+                      : fromVtxp->datap()->stateSigp->cloneTreePure(false);
+            countp
+                = addCountp(c.flp, countp, new AstExtend{c.flp, threadsp, m_u32DTypep->width()});
+        }
+        return countp;
+    }
+
     SignalSet computeSignals(LowerCtx& c, const bool needThreadFailCount,
                              const bool needThroughoutThreadFailCount, const bool needMatchCount) {
         SignalSet sigs;
@@ -2674,6 +2713,7 @@ class SvaNfaLowering final {
         sigs.throughoutRejectp = gateNotKill(c, sigs.throughoutRejectp);
 
         if (c.trackAntecedentEnd) sigs.antecedentEndCountp = newAntecedentEndCountp(c);
+        if (c.countAttemptPasses) setAttemptPassCounts(c, sigs);
 
         // Clean up intermediate state signals. These are orphan subtrees
         // (never linked into the enclosing AST); deleteTree() is immediate
@@ -2995,7 +3035,8 @@ public:
                     AstSenTree* const senTreep, AstNodeExpr* const matchCondp,
                     AstNodeExpr* const disableExprp, const bool needThreadFailCount,
                     const bool needThroughoutThreadFailCount, const bool trackAntecedentEnd,
-                    const bool needSuccessCount = false, const bool needRejectCount = false) {
+                    const bool needSuccessCount = false, const bool needRejectCount = false,
+                    const bool countAttemptPasses = false) {
         FileLine* const flp = assertp->fileline();
         AstCover* const coverp = VN_CAST(assertp, Cover);
         const bool isSeqEvent = coverp && coverp->isSeqEvent();
@@ -3156,7 +3197,8 @@ public:
                    graph,
                    trackAntecedentEnd,
                    needSuccessCount,
-                   needRejectCount};
+                   needRejectCount,
+                   countAttemptPasses};
 
         // Phase 1: Resolve combinational Links.
         AstNodeExpr* const triggerExprp
@@ -3356,6 +3398,20 @@ class AssertNfaVisitor final : public VNVisitor {
         return !nodep->exists([](const AstNodeExpr* exprp) { return exprp->isMultiCycleSva(); });
     }
 
+    // True if an attempt of a sequence has at most one thread at a time, or ends in a bounded
+    // range delay of a boolean, whose first match ends the attempt, so that each attempt
+    // matches at most once
+    static bool matchesOncePerAttempt(const AstNodeExpr* nodep) {
+        if (oneThreadPerAttempt(nodep)) return true;
+        const AstSExpr* const sexprp = VN_CAST(nodep, SExpr);
+        if (!sexprp) return false;
+        const AstDelay* const delayp = VN_AS(sexprp->delayp(), Delay);
+        return delayp->isRangeDelay() && !delayp->isUnbounded()
+               && (!sexprp->preExprp() || oneThreadPerAttempt(sexprp->preExprp()))
+               && !sexprp->exprp()->exists(
+                   [](const AstNodeExpr* exprp) { return exprp->isMultiCycleSva(); });
+    }
+
     // Prefix stmtsp, the pass actions of attempts passing on a tick when another attempt fails,
     // to the fail action, once per assertion. The fail control applies to the fail action only
     // (IEEE 1800-2023 20.11), so it is gated here instead of by V3Assert.
@@ -3435,9 +3491,41 @@ class AssertNfaVisitor final : public VNVisitor {
         assertp->addPasssp(ifp);
     }
 
-    void splitImplicationPassActions(AstAssert* const assertp, const PropertyParts& parts,
-                                     AstNodeExpr* const nonvacuousMatchp) {
+    // The nonvacuous successes of an implication on this tick, under their pass control: the
+    // threads of its consequent matching if counted, else whether it matches. Takes ownership.
+    AstNodeExpr* newNonvacuousCountp(const AstAssert* const assertp, AstNodeExpr* const matchp,
+                                     AstNodeExpr* const attemptNonvacuousPassCountp) const {
         FileLine* const flp = assertp->fileline();
+        AstNodeExpr* const passOnp
+            = assertPassOnCond(flp, assertp->userType(), assertp->directive(), /*vacuous=*/false);
+        if (!attemptNonvacuousPassCountp)
+            return newCountp(flp, new AstLogAnd{flp, matchp, passOnp});
+        VL_DO_DANGLING(matchp->deleteTree(), matchp);
+        return new AstCond{flp, passOnp, attemptNonvacuousPassCountp,
+                           newTypedConstp(flp, u32DTypep(), 0)};
+    }
+
+    void splitImplicationPassActions(AstAssert* const assertp, const PropertyParts& parts,
+                                     AstNodeExpr* const nonvacuousMatchp,
+                                     AstNodeExpr* const attemptNonvacuousPassCountp) {
+        FileLine* const flp = assertp->fileline();
+        if (attemptNonvacuousPassCountp) {
+            // As below, from a count of the attempts, each matching at most once
+            AstNodeExpr* countp
+                = newNonvacuousCountp(assertp, nonvacuousMatchp, attemptNonvacuousPassCountp);
+            if (!parts.isFollowedBy) {
+                AstNodeExpr* const vacuousp = new AstLogAnd{
+                    flp,
+                    assertPassOnCond(flp, assertp->userType(), assertp->directive(),
+                                     /*vacuous=*/true),
+                    new AstLogAnd{
+                        flp, assertOnCond(flp, assertp->userType(), assertp->directive()),
+                        new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))}}};
+                countp = new AstAdd{flp, newCountp(flp, vacuousp), countp};
+            }
+            addCountedPassActions(assertp, countp);
+            return;
+        }
 
         AstNodeStmt* const passsp = assertp->passsp()->unlinkFrBackWithNext();
         AstNodeStmt* splitsp = nullptr;
@@ -3656,7 +3744,8 @@ class AssertNfaVisitor final : public VNVisitor {
                          AstSenTree* senTreep, AstNodeExpr* outputp, AstNodeExpr* matchp,
                          AstNodeExpr* matchCountp, AstNodeExpr* threadFailCountp,
                          AstNodeExpr* antecedentEndCountp, AstNodeExpr* rejectCountp,
-                         AstNodeExpr* antecedentRejectp) {
+                         AstNodeExpr* antecedentRejectp,
+                         AstNodeExpr* attemptNonvacuousPassCountp) {
         AstNodeExpr* outputExprp = outputp;
         FileLine* const flp = assertp->fileline();
         AstPropSpec* const propp = VN_AS(assertp->propp(), PropSpec);
@@ -3686,7 +3775,7 @@ class AssertNfaVisitor final : public VNVisitor {
                 attachActionHandlers(assertAssertp, nullptr, senTreep->cloneTree(false),
                                      threadFailCountp);
             }
-            splitImplicationPassActions(assertAssertp, parts, matchp);
+            splitImplicationPassActions(assertAssertp, parts, matchp, attemptNonvacuousPassCountp);
         } else {
             attachActionHandlers(assertAssertp, parts.hasImplication ? nullptr : matchp,
                                  threadFailCountp ? senTreep->cloneTree(false) : nullptr,
@@ -3724,15 +3813,17 @@ class AssertNfaVisitor final : public VNVisitor {
                                   assertPassOnCond(flp, assertp->userType(), assertp->directive(),
                                                    /*vacuous=*/true),
                                   antecedentEndCountp, newTypedConstp(flp, u32DTypep(), 0)};
-                AstNodeExpr* const nonvacuousp
-                    = new AstLogAnd{flp, matchp,
-                                    assertPassOnCond(flp, assertp->userType(),
-                                                     assertp->directive(), /*vacuous=*/false)};
-                addCountedPassActions(assertAssertp,
-                                      new AstAdd{flp, vacuousCountp, newCountp(flp, nonvacuousp)});
+                addCountedPassActions(
+                    assertAssertp, new AstAdd{flp, vacuousCountp,
+                                              newNonvacuousCountp(assertAssertp, matchp,
+                                                                  attemptNonvacuousPassCountp)});
             } else if (matchp && parts.hasImplication) {
                 // Without a match per attempt, the pass of a delayed antecedent follows from no
                 // rejection. After Off, only the attempts already executing still pass.
+                // Without its antecedent's end, the consequent's matches go uncounted too
+                if (attemptNonvacuousPassCountp)
+                    VL_DO_DANGLING(pushDeletep(attemptNonvacuousPassCountp),
+                                   attemptNonvacuousPassCountp);
                 AstNodeStmt* const passsp = assertAssertp->passsp()->unlinkFrBackWithNext();
                 AstNodeExpr* const onp
                     = assertOnCond(flp, assertp->userType(), assertp->directive());
@@ -4146,9 +4237,15 @@ class AssertNfaVisitor final : public VNVisitor {
         const bool replayFails = assertAssertp && !parts.hasImplication && !negated;
         const bool replaySuccesses = assertAssertp && negated;
         const bool countPasses = needMatch && negated && !parts.hasImplication;
-        const auto signals = m_loweringp->lower(
-            assertp, graph, senTreep, result.finalCondp, disableExprp, replayFails || countPasses,
-            replayFails || countPasses, trackAntecedentEnd, replaySuccesses, countPasses);
+        // The nonvacuous successes of an implication are its consequent's matches, counted when
+        // each attempt matches at most once
+        const bool countAttemptPasses
+            = (splitsImplicationPasssp(assertp, parts) || trackAntecedentEnd) && !negated
+              && matchesOncePerAttempt(seqBodyp);
+        const auto signals = m_loweringp->lower(assertp, graph, senTreep, result.finalCondp,
+                                                disableExprp, replayFails || countPasses,
+                                                replayFails || countPasses, trackAntecedentEnd,
+                                                replaySuccesses, countPasses, countAttemptPasses);
         AstNodeExpr* matchExprp = nullptr;
         AstNodeExpr* const outputExprp
             = m_loweringp->assembleResult(assertp, negated, result.finalCondp, signals,
@@ -4166,7 +4263,8 @@ class AssertNfaVisitor final : public VNVisitor {
         }
         finishDirective(assertp, parts, senTreep, outputExprp, matchExprp, signals.matchCountp,
                         replayFails ? threadFailCountp : signals.successCountp,
-                        signals.antecedentEndCountp, signals.rejectCountp, antecedentRejectp);
+                        signals.antecedentEndCountp, signals.rejectCountp, antecedentRejectp,
+                        signals.attemptNonvacuousPassCountp);
         VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
 
         UINFO(4, "NFA converted assertion at " << flp << endl);
