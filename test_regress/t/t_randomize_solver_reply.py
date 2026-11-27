@@ -88,6 +88,8 @@ runs = [
     ('success', 1, 16),  # print-success echo ahead of every reply
     ('unknown_once', 2, 15),  # unknown answers one check-sat
     ('unknown_once', 9, 16),  # unknown answers a spreading check
+    ('unknown_reason_once', 2, 15),  # the same with its reason, as cvc5 gives under a limit
+    ('unknown_reason_once', 9, 16),
     ('unknown_twice', 2, 14),  # both the Packet hard check and Softy soft check must fail
     ('unknown_var', 1, 15),  # a variable that was never requested
     ('unknown_var', 4, 16),  # a spreading query answered with too many values
@@ -105,6 +107,13 @@ for mode, at, npass in runs:
                  run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
                  'TAMPER=' + mode + ' TAMPER_AT=' + str(at))
     test.file_grep(logfile, r'NPASS=(\d+)', npass)
+
+# The reason given with unknown is read as unknown: a check-sat out of time, not a reply
+# that is no status
+for at in (2, 9):
+    test.file_grep_not(test.obj_dir + '/sim_unknown_reason_once_' + str(at) + '.log',
+                       r'did not answer with a status')
+test.file_grep(test.obj_dir + '/sim_unknown_reason_once_2.log', r'Solver returned unknown')
 
 # An array with no element has no element a select can name
 test.file_grep(test.obj_dir + '/sim_select_empty_1.log',
@@ -230,11 +239,13 @@ for phased in (0, 1):
         for mode, at, expected in soft_runs:
             tag = str(phased) + '_' + str(kept) + '_' + mode + '_' + str(at)
             test.execute(logfile=test.obj_dir + '/sim_soft_' + tag + '.log',
-                         all_run_flags=['+MODE=soft_unknown', '+PHASED=' + str(phased),
-                                        '+KEPT=' + str(kept), '+EXPECT=' + str(expected)],
+                         all_run_flags=[
+                             '+MODE=soft_unknown', '+PHASED=' + str(phased), '+KEPT=' + str(kept),
+                             '+EXPECT=' + str(expected)
+                         ],
                          run_env=('VERILATOR_SOLVER="' + test.t_dir +
-                                  '/randomize_solver_tamper.py" TAMPER=' + mode +
-                                  ' TAMPER_AT=' + str(at)) if mode != 'none' else '')
+                                  '/randomize_solver_tamper.py" TAMPER=' + mode + ' TAMPER_AT=' +
+                                  str(at)) if mode != 'none' else '')
 
 # 4 randomize calls with a variable whose rand_mode is off: an unusable value for it fails
 # the call even though it is not written

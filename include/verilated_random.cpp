@@ -591,13 +591,27 @@ static void warnSolverReply(const std::string& reply) {
 
 // Read one solver status; only a print-success echo may precede it. A check under a
 // resource limit may stop short, so its unknown is not warned.
+// Whether a status is unknown with a reason, an upper-case word in parentheses
+static bool isUnknownReason(const std::string& line) {
+    static const std::string prefix = "unknown (";
+    if (line.size() <= prefix.size() + 1 || line.compare(0, prefix.size(), prefix) != 0
+        || line.back() != ')') {
+        return false;
+    }
+    for (size_t i = prefix.size(); i + 1 < line.size(); ++i) {
+        if (!std::isupper(static_cast<unsigned char>(line[i])) && line[i] != '_') return false;
+    }
+    return true;
+}
+
 static VlSolverStatus readStatus(std::istream& is, bool limited) {
     std::string line;
     while (readLine(is, line)) {
         if (line == "success") continue;
         if (line == "sat") return VlSolverStatus::SAT;
         if (line == "unsat") return VlSolverStatus::UNSAT;
-        if (line == "unknown") {
+        // cvc5 gives its reason too: unknown (RESOURCEOUT), under a resource limit
+        if (line == "unknown" || isUnknownReason(line)) {
             static bool s_warnedUnknown = false;
             if (!limited && !s_warnedUnknown) {
                 s_warnedUnknown = true;
