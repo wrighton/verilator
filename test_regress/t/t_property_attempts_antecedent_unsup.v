@@ -13,13 +13,15 @@ module t (
     input e
 );
   // verilog_format: off
-  // An antecedent of more match lengths than an implication is split by, or longer than a
-  // property lowered per attempt, in another property operator
+  // An antecedent of more match lengths than an implication is split by, longer than a
+  // property lowered per attempt, or making longer implications, in another property operator
   assert property (@(posedge clk) ((a ##[1:17] b) |-> c) and (d |-> e));
   assert property (@(posedge clk) ((a [* 1:17]) |-> c) and (d |-> e));
   assert property (@(posedge clk) e |-> ((a ##[1:17] b) |-> c));
   assert property (@(posedge clk) ((a ##[1:17] b) #-# c) or (d |-> e));
   assert property (@(posedge clk) ((a ##[250:260] b) |-> c) and (d |-> e));
+  // Implications of the match lengths over 256 cycles in all, just beyond: 128 + 129
+  assert property (@(posedge clk) ((a ##[127:128] b) |=> c) and (d |-> e));
   // Alone, an implication is lowered as before
   assert property (@(posedge clk) (a ##[1:17] b) |-> c);
   // verilog_format: on
