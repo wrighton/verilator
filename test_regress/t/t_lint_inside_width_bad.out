@@ -1,0 +1,31 @@
+%Warning-WIDTHEXPAND: t/t_lint_inside_width_bad.v:18:12: Operator INSIDE expects 9 bits on the Inside expression, but Inside expression's VARREF 'v' generates 4 bits.
+                                                       : ... note: In instance 't'
+   18 |     r1 = v inside {9'd300, 2'd1};
+      |            ^~~~~~
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Warning-WIDTHEXPAND: t/t_lint_inside_width_bad.v:18:12: Operator INSIDE expects 9 bits on the Inside Item, but Inside Item's CONST '2'h1' generates 2 bits.
+                                                       : ... note: In instance 't'
+   18 |     r1 = v inside {9'd300, 2'd1};
+      |            ^~~~~~
+%Warning-WIDTHEXPAND: t/t_lint_inside_width_bad.v:19:20: Operator INSIDERANGE expects 9 or 4 bits on the Range LHS, but Range LHS's CONST '2'h0' generates 2 bits.
+                                                       : ... note: In instance 't'
+   19 |     r2 = v inside {[2'd0 : 9'd300]};
+      |                    ^
+%Warning-WIDTHEXPAND: t/t_lint_inside_width_bad.v:20:12: Operator INSIDE expects 8 bits on the Inside expression, but Inside expression's VARREF 's' generates 4 bits.
+                                                       : ... note: In instance 't'
+   20 |     r3 = s inside {[-8'sd3 : 3'sd2], 5'd7};
+      |            ^~~~~~
+%Warning-WIDTHEXPAND: t/t_lint_inside_width_bad.v:20:20: Operator INSIDERANGE expects 8 bits on the Range RHS, but Range RHS's CONST '3'sh2' generates 3 bits.
+                                                       : ... note: In instance 't'
+   20 |     r3 = s inside {[-8'sd3 : 3'sd2], 5'd7};
+      |                    ^
+%Warning-WIDTHEXPAND: t/t_lint_inside_width_bad.v:20:12: Operator INSIDE expects 8 bits on the Inside Item, but Inside Item's CONST '5'h7' generates 5 bits.
+                                                       : ... note: In instance 't'
+   20 |     r3 = s inside {[-8'sd3 : 3'sd2], 5'd7};
+      |            ^~~~~~
+%Warning-WIDTHEXPAND: t/t_lint_inside_width_bad.v:21:24: Operator INSIDE expects 9 bits on the Inside expression, but Inside expression's FUNCREF 'next_value' generates 4 bits.
+                                                       : ... note: In instance 't'
+   21 |     r4 = next_value(v) inside {9'd300};
+      |                        ^~~~~~
+%Error: Exiting due to
