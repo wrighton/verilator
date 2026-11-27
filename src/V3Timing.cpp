@@ -969,6 +969,7 @@ class TimingControlVisitor final : public VNVisitor {
     V3UniqueNames m_intraValueNames{"__Vintraval"};  // Intra assign delay value var names
     V3UniqueNames m_intraIndexNames{"__Vintraidx"};  // Intra assign delay index var names
     V3UniqueNames m_intraLsbNames{"__Vintralsb"};  // Intra assign delay LSB var names
+    V3UniqueNames m_intraHandleNames{"__Vintrahandle"};  // Intra assign delay handle var names
     V3UniqueNames m_trigSchedNames{"__VtrigSched"};  // Trigger scheduler name generator
     V3UniqueNames m_dynTrigNames{"__VdynTrigger"};  // Dynamic trigger name generator
     V3UniqueNames m_eventCountNames{"__VeventCount"};  // Event control count var names
@@ -2038,10 +2039,12 @@ class TimingControlVisitor final : public VNVisitor {
                       new AstAssign{flp, new AstVarRef{flp, newvscp, VAccess::WRITE}, valuep});
               };
         // NBAs with delays evaluate the indices selecting the target now (IEEE 1800-2023 10.4.2),
-        // in order, each as a whole, also the selects and function calls in it. So follow the
-        // selects of the target up from the variable, not into their indices. As an example, this
-        // transforms 'x[a[i]][f(j)] <= #1 y' into 't0 = a[i]; t1 = f(j); x[t0][t1] <= #1 y'.
-        // V3Const has split NBAs to concatenations, also streamed, into NBAs to each part.
+        // in order, each as a whole, also the selects and function calls in it, and the handles
+        // the target goes through. So follow the selects of the target up from the variable, not
+        // into their indices. As an example, this transforms 'x[a[i]][f(j)] <= #1 y' into
+        // 't0 = a[i]; t1 = f(j); x[t0][t1] <= #1 y', and 'h.m <= #1 y' into
+        // 't0 = h; t0.m <= #1 y'. V3Const has split NBAs to concatenations, also streamed, into
+        // NBAs to each part.
         if (inAssignDly) {
             for (AstNode* exprp = nodep->lhsp()->baseFromp(true); exprp != nodep;
                  exprp = exprp->firstAbovep()) {
@@ -2053,6 +2056,13 @@ class TimingControlVisitor final : public VNVisitor {
                 } else if (AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
                     if (!VN_IS(selp->bitp(), Const)) {
                         replaceWithIntermediate(selp->bitp(), m_intraIndexNames.get(nodep));
+                    }
+                } else if (AstMemberRef* const selp = VN_CAST(exprp, MemberRef)) {
+                    AstNodeExpr* const fromp = selp->fromp();
+                    const AstIfaceRefDType* const ifacep
+                        = VN_CAST(fromp->dtypep()->skipRefp(), IfaceRefDType);
+                    if (fromp->isClassHandleValue() || (ifacep && ifacep->isVirtual())) {
+                        replaceWithIntermediate(fromp, m_intraHandleNames.get(nodep));
                     }
                 }
             }
