@@ -1,0 +1,130 @@
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:27:32: Unsupported: Randomized index into an array of class objects selecting a member in a negation.
+   27 |   constraint not_c {!(items[k].v == 7'd5);}
+      |                                ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:29:38: Unsupported: Randomized index into an array of class objects selecting a member in an implication antecedent.
+                                                               : ... note: In instance 't'
+   29 |   constraint antecedent_c {(items[k].v == 7'd5) -> x == 7'd1;}
+      |                                      ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:30:33: Unsupported: Randomized index into an array of class objects selecting a member in an if condition.
+                                                               : ... note: In instance 't'
+   30 |   constraint if_c {if (items[k].v > 7'd3) x < 7'd9;}
+      |                                 ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:31:38: Unsupported: Randomized index into an array of class objects selecting a member in a conditional expression.
+   31 |   constraint cond_c {x == ((items[k].v == 7'd2) ? 7'd1 : 7'd2);}
+      |                                      ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:32:31: Unsupported: Randomized index into an array of class objects selecting a member in an exclusive or.
+   32 |   constraint xor_c {(items[k].v == 7'd5) ^ (x == 7'd3);}
+      |                               ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:33:31: Unsupported: Randomized index into an array of class objects selecting a member outside a comparison.
+                                                               : ... note: In instance 't'
+   33 |   constraint bool_c {items[k].f;}
+      |                               ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:35:45: Unsupported: Randomized index into an array of class objects selecting a member in a predicate used as a value.
+                                                               : ... note: In instance 't'
+   35 |   constraint nested_c {(items[k].v == 7'd5) == b;}
+      |                                             ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:36:40: Unsupported: Randomized index into an array of class objects selecting a member in a conditional expression.
+   36 |   constraint arm_c {x == (b ? items[k].v : 7'd2);}
+      |                                        ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:37:36: Unsupported: Randomized index into an array of class objects selecting a member in a soft constraint.
+   37 |   constraint soft_c {soft items[k].v == 7'd4;}
+      |                                    ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:39:54: Unsupported: Randomized index into an array of class objects selecting a member in an array method.
+   39 |   constraint sum_c {sel.sum() with (int'(items[item].v)) < 20;}
+      |                                                      ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:41:54: Unsupported: Randomized index into an array of class objects selecting a member in a predicate used as a value.
+                                                               : ... note: In instance 't'
+   41 |   constraint or_value_c {((items[k].v == 7'd5) || b) == c;}
+      |                                                      ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:42:52: Unsupported: Randomized index into an array of class objects selecting a member in a predicate used as a value.
+   42 |   constraint and_value_c {7'(((items[k].v == 7'd5) && b)) + x == 7'd2;}
+      |                                                    ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:43:29: Unsupported: Randomized index into an array of class objects selecting a member.
+   43 |   constraint struct_c {items[k].payload.v == 7'd5;}
+      |                             ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:45:31: Unsupported: Randomized index into an array of class objects selecting a member.
+   45 |   constraint dstruct_c {ditems[k].payload.v == 7'd5;}
+      |                               ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:46:33: Unsupported: Randomized index into an array of class objects selecting a member in an equivalence.
+   46 |   constraint equiv_c {(items[k].v == 7'd5) <-> (x == 7'd3);}
+      |                                 ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:47:55: Unsupported: Randomized index into an array of class objects selecting a member in a predicate used as a value.
+                                                               : ... note: In instance 't'
+   47 |   constraint imp_value_c {(c -> (items[k].v == 7'd5)) == b;}
+      |                                                       ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:53:40: Unsupported: Randomized index into an array of class objects selecting a member in a conditional expression.
+   53 |   constraint func_c {pick(sb, items[k].v) == 7'd5;}
+      |                                        ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:54:47: Unsupported: Randomized index into an array of class objects selecting a member in a conditional expression.
+   54 |   constraint state_arm_c {x == (sb ? items[k].v : 7'd2);}
+      |                                               ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:55:25: Unsupported: Randomized index into an array of class objects selecting a member in a predicate used as a value.
+                                                               : ... note: In instance 't'
+   55 |   constraint not_imp_c {~(b -> (items[k].v == 7'd5));}
+      |                         ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:56:41: Unsupported: Randomized index into an array of class objects selecting a member outside a comparison.
+   56 |   constraint imp_bool_c {(c -> items[k].f) == b;}
+      |                                         ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:57:35: Unsupported: Randomized index into an array of class objects selecting a member outside a comparison.
+   57 |   constraint or_bool_c {(items[k].f || c) == b;}
+      |                                   ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:58:36: Unsupported: Randomized index into an array of class objects selecting a member outside a comparison.
+   58 |   constraint and_bool_c {(items[k].f && c) == b;}
+      |                                    ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:59:53: Unsupported: Randomized index into an array of class objects selecting a member by an index that selects through a random index too.
+   59 |   constraint nested_index_c {items[items[k].v[1:0]].v == 7'd5;}
+      |                                                     ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:60:48: Unsupported: Randomized index into an array of class objects selecting a member by an index that selects through a random index too.
+   60 |   constraint state_index_c {items[items[k].nr].v == 7'd5;}
+      |                                                ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:62:39: Unsupported: Randomized index into an array of class objects selecting a member in an if condition.
+                                                               : ... note: In instance 't'
+   62 |   constraint state_if_c {if (items[k].nr == 2'd1) x == 7'd1;}
+      |                                       ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:63:38: Unsupported: Randomized index into an array of class objects selecting a member in a negation.
+   63 |   constraint state_not_c {!(items[k].nr == 2'd2);}
+      |                                      ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:64:39: Unsupported: State member 'next' read through a randomized index, other than as an integral member of an object selected from a rand array variable.
+   64 |   constraint state_handle_c {items[k].next != null;}
+      |                                       ^~~~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:65:43: Unsupported: State member 'nr' read through a randomized index, other than as an integral member of an object selected from a rand array variable.
+   65 |   constraint state_chain_c {items[k].next.nr == 2'd1;}
+      |                                           ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:67:42: Unsupported: State member 'nr' read through a randomized index, other than as an integral member of an object selected from a rand array variable.
+   67 |   constraint state_2d_c {items2[k[0]][1].nr == 2'd1;}
+      |                                          ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:69:39: Unsupported: State member 'next' read through a randomized index, other than as an integral member of an object selected from a rand array variable.
+   69 |   constraint state_queue_c {qitems[k].next != null;}
+      |                                       ^~~~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:72:40: Unsupported: State member 'next' read through a randomized index, other than as an integral member of an object selected from a rand array variable.
+   72 |   constraint state_assoc_c {aitems[ak].next != null;}
+      |                                        ^~~~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:73:50: Unsupported: State member 'nr' read through a randomized index, other than as an integral member of an object selected from a rand array variable.
+   73 |   constraint state_struct_field_c {items[k].sh.h.nr == 2'd1;}
+      |                                                  ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:74:51: Unsupported: State member 'nr' read through a randomized index, other than as an integral member of an object selected from a rand array variable.
+   74 |   constraint state_member_queue_c {items[k].hq[0].nr == 2'd1;}
+      |                                                   ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:76:61: Unsupported: Randomized index into an array of class objects selecting a member in an array method.
+   76 |   constraint state_sum_c {rsel.sum() with (int'(items[item].nr)) < 4;}
+      |                                                             ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:77:71: Unsupported: State member 'nr' read through a randomized index, other than as an integral member of an object selected from a rand array variable.
+   77 |   constraint state_sum_next_c {rsel.sum() with (int'(items[item].next.nr)) < 4;}
+      |                                                                       ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:80:75: Unsupported: Randomized index into an array of class objects selecting a member in an array method.
+   80 |     rsel.sum(outer) with (state_values.sum(inner) with (int'(items[outer].nr))) == 2;
+      |                                                                           ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:83:49: Unsupported: State member 'nr' read through a randomized index, other than as an integral member of an object selected from a rand array variable.
+   83 |   constraint state_path_c {x == 7'(sub.items[k].nr);}
+      |                                                 ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:88:46: Unsupported: Randomized index into an array of class objects selecting a member in the index of an element of an array of structs.
+   88 |   constraint state_struct_c {spicks[items[k].nr].x == 2'd1;}
+      |                                              ^~
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:90:49: Unsupported: Randomized index into an array of class objects selecting a member by an index that selects through a random index too.
+   90 |   constraint struct_index_c {items[picks[pj].x].v == 7'd5;}
+      |                                                 ^
+%Error-UNSUPPORTED: t/t_constraint_rand_obj_index_unsup.v:93:55: Unsupported: Randomized index into an array of class objects selecting a member by an index that selects through a random index too.
+   93 |   constraint struct2_index_c {items[picks2[pj2][1].x].v == 7'd5;}
+      |                                                       ^
+%Error: Exiting due to

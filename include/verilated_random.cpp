@@ -1063,8 +1063,9 @@ static void emitSolverSeed(std::ostream& os, VlRNG& rngr) {
     os << "(set-option :random-seed " << (VL_RANDOM_RNG_I(rngr) & 0x7fffffffU) << ")\n";
 }
 
-// The runtime's own symbols (these, the __Va<N>, __Vd<N> and __Vf<N> literals and the
-// __Vcons<N> labels) use the __V prefix Verilator reserves, so no random variable shares them
+// The runtime's own symbols (these, the __Va<N>, __Vd<N> and __Vf<N> literals, the __Vp<N>
+// bindings and the __Vcons<N> labels) use the __V prefix Verilator reserves, so no random
+// variable shares them
 void VlRandomizer::emitDefines(std::ostream& os) const {
     os << "(define-fun __Vbv ((b Bool)) (_ BitVec 1) (ite b #b1 #b0))\n";
     os << "(define-fun __Vbool ((v (_ BitVec 1))) Bool (= #b1 v))\n";
@@ -1872,6 +1873,146 @@ void VlRandomizer::nullReadCheck(const std::string& constraint, const char* file
 std::string VlRandomizer::null_read(const std::string& name, const std::string& smtName) {
     m_nullReads.emplace_back(smtName, name);
     return smtName;
+}
+
+// Append the tree of keys[lo..hi], of leaves, or of equalities with the index if leavesp is null
+static void indexTreeAppend(std::string& out, const VlQueue<std::string>& keys,
+                            const VlQueue<std::string>* leavesp, const std::string& index, int lo,
+                            int hi) {
+    if (lo == hi) {
+        if (leavesp) {
+            out += leavesp->at(lo);
+        } else {
+            out += "(= " + index + " " + keys.at(lo) + ")";
+        }
+        return;
+    }
+    const int mid = lo + (hi - lo + 1) / 2;
+    out += "(ite (bvult " + index + " " + keys.at(mid) + ") ";
+    indexTreeAppend(out, keys, leavesp, index, lo, mid - 1);
+    out += ' ';
+    indexTreeAppend(out, keys, leavesp, index, mid, hi);
+    out += ')';
+}
+
+std::string VlRandomizer::indexSelect(const VlQueue<std::string>& keys,
+                                      const VlQueue<std::string>& leaves, const std::string& index,
+                                      const std::string& emptyText) {
+    if (keys.size() == 0) return emptyText;
+    std::string out;
+    indexTreeAppend(out, keys, &leaves, index, 0, keys.size() - 1);
+    return out;
+}
+
+std::string VlRandomizer::indexValid(const VlQueue<std::string>& keys, const std::string& index) {
+    if (keys.size() == 0) return "false";
+    std::string out;
+    indexTreeAppend(out, keys, nullptr, index, 0, keys.size() - 1);
+    return out;
+}
+
+// Append the multiplexer of the leaves from position base, on index bits bit down to 0
+static void positionMuxAppend(std::string& out, const VlQueue<std::string>& leaves,
+                              const std::string& index, int bit, int base) {
+    if (bit < 0) {
+        out += leaves.at(base);
+        return;
+    }
+    const int upper = base + (1 << bit);
+    if (upper >= leaves.size()) {
+        positionMuxAppend(out, leaves, index, bit - 1, base);
+        return;
+    }
+    const std::string bitText = std::to_string(bit);
+    out += "(ite (= ((_ extract " + bitText + " " + bitText + ") " + index + ") #b1) ";
+    positionMuxAppend(out, leaves, index, bit - 1, upper);
+    out += ' ';
+    positionMuxAppend(out, leaves, index, bit - 1, base);
+    out += ')';
+}
+
+// Bit k, counted from the most significant, of a binary or hexadecimal literal
+static bool literalBit(const std::string& literal, size_t k) {
+    if (literal[1] == 'b') return literal[2 + k] == '1';
+    const char digit = literal[2 + k / 4];
+    const int value = digit <= '9' ? digit - '0' : (digit | 0x20) - 'a' + 10;
+    return (value >> (3 - k % 4)) & 1;
+}
+
+// Formula of whether bit k of the literal leaf, selected from base by the index bits up to bit,
+// named '__Vp<bit>', is set; "true" or "false" where the leaves agree
+static std::string positionBitFormula(const VlQueue<std::string>& leaves, size_t k, int bit,
+                                      int base) {
+    if (bit < 0) return literalBit(leaves.at(base), k) ? "true" : "false";
+    const int upper = base + (1 << bit);
+    if (upper >= leaves.size()) return positionBitFormula(leaves, k, bit - 1, base);
+    const std::string onep = positionBitFormula(leaves, k, bit - 1, upper);
+    const std::string zerop = positionBitFormula(leaves, k, bit - 1, base);
+    if (onep == zerop) return onep;
+    const std::string name = "__Vp" + std::to_string(bit);
+    if (onep == "true" && zerop == "false") return name;
+    if (onep == "false" && zerop == "true") return "(not " + name + ")";
+    return "(ite " + name + " " + onep + " " + zerop + ")";
+}
+
+std::string VlRandomizer::positionSelect(const VlQueue<std::string>& leaves,
+                                         const std::string& index, IData width,
+                                         const std::string& emptyText) {
+    const int size = leaves.size();
+    if (size == 0) return emptyText;
+    int bits = 0;
+    while ((1 << bits) < size) ++bits;
+    std::string out;
+    // A narrow index has no position out of range
+    const bool checkRange = width > static_cast<IData>(bits) || (1 << width) > size;
+    if (checkRange) {
+        out += "(ite (bvult " + index + " (_ bv" + std::to_string(size) + " "
+               + std::to_string(width) + ")) ";
+    }
+    bool same = true;
+    for (int i = 1; same && i < size; ++i) same = leaves.at(i) == leaves.at(0);
+    // Binary or hexadecimal literals of one width, as of an array that is not solved
+    const std::string& firstLeaf = leaves.at(0);
+    const size_t literalSize = firstLeaf.size();
+    bool literal
+        = literalSize > 2 && firstLeaf[0] == '#' && (firstLeaf[1] == 'b' || firstLeaf[1] == 'x');
+    for (int i = 1; literal && i < size; ++i) {
+        literal = leaves.at(i).size() == literalSize
+                  && leaves.at(i).compare(0, 2, firstLeaf, 0, 2) == 0;
+    }
+    // A narrow index reaches only the positions it can represent
+    const int usedBits = std::min(bits, static_cast<int>(width));
+    if (same) {
+        out += leaves.at(0);
+    } else if (literal) {
+        // Bit by bit, as propositions on the index bits, which a solver decides by its SAT
+        // search in any logic, where it would case split on a multiplexer of literals
+        out += "(let (";
+        for (int bit = 0; bit < usedBits; ++bit) {
+            const std::string bitText = std::to_string(bit);
+            out += "(__Vp" + bitText + " (= ((_ extract " + bitText + " " + bitText + ") " + index
+                   + ") #b1))";
+        }
+        out += ")";
+        const size_t literalBits = (literalSize - 2) * (firstLeaf[1] == 'x' ? 4 : 1);
+        if (literalBits > 1) out += " (concat";
+        for (size_t k = 0; k < literalBits; ++k) {
+            const std::string formula = positionBitFormula(leaves, k, usedBits - 1, 0);
+            if (formula == "true") {
+                out += " #b1";
+            } else if (formula == "false") {
+                out += " #b0";
+            } else {
+                out += " (ite " + formula + " #b1 #b0)";
+            }
+        }
+        if (literalBits > 1) out += ")";
+        out += ")";
+    } else {
+        positionMuxAppend(out, leaves, index, usedBits - 1, 0);
+    }
+    if (checkRange) out += " " + emptyText + ")";
+    return out;
 }
 
 void VlRandomizer::clearConstraints() {

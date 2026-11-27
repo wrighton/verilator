@@ -27,6 +27,7 @@
 
 #include "V3Ast.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -51,6 +52,16 @@ union RandomizeMode final {
         uint32_t index : 31;  // Index of var/constraint in rand_mode/constraint_mode vector
     };
     uint64_t asUQuad;  // Representation as int to be stored in nodep->user*
+};
+
+// Utilities shared by the randomization front end and the solver lowering
+class RandomizeUtil final {
+public:
+    // Return the random index select into a random array that exprp reads through: exprp is
+    // the select itself, or reached from it through member and element selects
+    static AstNodeExpr* randArrayIndexSelp(
+        AstNodeExpr* exprp,
+        const std::function<bool(const AstNodeExpr* indexp)>& isRandIndex) VL_MT_DISABLED;
 };
 
 // The rand_mode/constraint_mode state arrays created by the front end

@@ -51,6 +51,7 @@
 #include "V3File.h"
 #include "V3MemberMap.h"
 #include "V3Randomize.h"
+#include "V3Stats.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
 
@@ -162,6 +163,19 @@ class ConstraintExprVisitor final : public VNVisitor {
     bool m_structSel = false;  // Marks when inside structSel
                                // (used to format "%s.%s" for struct arrays and nested structs)
     bool m_deferRandModeHoist = false;  // Wait for the complete struct member path
+    // Disjunction "(or ...)" that a random index selects one of the objects of a rand handle
+    // array read by the comparison being formatted, which conjoins it (see
+    // lowerRandIndexedObjectMember)
+    AstNodeExpr* m_objIndexValidp = nullptr;
+    bool m_inComparison = false;  // Formatting the operands of a comparison
+    uint32_t m_objIndexValidations = 0;  // Comparisons that took the validity of an object select
+    uint32_t m_randIndexLowerings = 0;  // Object selects at a random index lowered
+    bool m_objIndexValidated = false;  // The operand just formatted is a comparison that took
+                                       // the validity of a random object select
+    // Why a random object select here cannot be required valid, or nullptr
+    const char* m_objIndexRejectp = nullptr;
+    bool m_inSoftItem = false;  // Formatting a soft constraint
+    AstQueueDType* m_textQueueDtp = nullptr;  // Of the queues of texts of a select's keys
     std::set<std::string>& m_writtenVars;  // Track which variable paths have write_var generated
                                            // (shared across all constraints)
     std::set<std::string> m_inlineWrittenVars;  // Per-instance tracking for inline constraints
@@ -626,6 +640,15 @@ class ConstraintExprVisitor final : public VNVisitor {
             return nullptr;
         }
 
+        // A comparison takes the validity of the object selects read by its operands
+        const bool comparison = isComparison(nodep);
+        bool operandValidated = false;  // A conjunction or disjunction of a validated comparison
+        AstNodeExpr* const outerValidp = comparison ? m_objIndexValidp : nullptr;
+        if (comparison) m_objIndexValidp = nullptr;
+        // A conjunction or disjunction is a predicate again, not a value of the comparison
+        VL_RESTORER(m_inComparison);
+        m_inComparison
+            = comparison || (m_inComparison && !VN_IS(nodep, LogAnd) && !VN_IS(nodep, LogOr));
         const int lhsWidth = lhsp ? lhsp->width() : 0;
         const int rhsWidth = rhsp ? rhsp->width() : 0;
         const int thsWidth = thsp ? thsp->width() : 0;
@@ -636,23 +659,29 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (lhsp) {
             VL_RESTORER(m_conditionp);
             m_conditionp = nullptr;
+            m_objIndexValidated = false;
             lhsp = VN_AS(iterateSubtreeReturnEdits(lhsp->backp() ? lhsp->unlinkFrBack() : lhsp),
                          NodeExpr);
             lhsCondp = m_conditionp;
+            checkObjIndexValidated(nodep, operandValidated);
         }
         if (rhsp) {
             VL_RESTORER(m_conditionp);
             m_conditionp = nullptr;
+            m_objIndexValidated = false;
             rhsp = VN_AS(iterateSubtreeReturnEdits(rhsp->backp() ? rhsp->unlinkFrBack() : rhsp),
                          NodeExpr);
             rhsCondp = m_conditionp;
+            checkObjIndexValidated(nodep, operandValidated);
         }
         if (thsp) {
             VL_RESTORER(m_conditionp);
             m_conditionp = nullptr;
+            m_objIndexValidated = false;
             thsp = VN_AS(iterateSubtreeReturnEdits(thsp->backp() ? thsp->unlinkFrBack() : thsp),
                          NodeExpr);
             thsCondp = m_conditionp;
+            checkObjIndexValidated(nodep, operandValidated);
         }
 
         AstNodeExpr* argsp = nullptr;
@@ -686,11 +715,41 @@ class ConstraintExprVisitor final : public VNVisitor {
         UASSERT_OBJ(!lhsp, nodep, "Missing emitSMT %l for " << lhsp);
         UASSERT_OBJ(!rhsp, nodep, "Missing emitSMT %r for " << rhsp);
         UASSERT_OBJ(!thsp, nodep, "Missing emitSMT %t for " << thsp);
-        AstSFormatF* const newp = new AstSFormatF{nodep->fileline(), smtExpr, false, argsp};
+        AstSFormatF* newp = new AstSFormatF{nodep->fileline(), smtExpr, false, argsp};
+        m_objIndexValidated = operandValidated;
+        if (comparison) {
+            const bool validated = m_objIndexValidp;
+            if (validated) {
+                ++m_objIndexValidations;
+                newp = new AstSFormatF{nodep->fileline(), "(bvand %s (__Vbv %s))", false, newp};
+                newp->addExprsp(m_objIndexValidp);
+            }
+            m_objIndexValidated = validated;
+            m_objIndexValidp = outerValidp;
+        }
 
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         return newp;
+    }
+    // A comparison that requires a random object select valid is a predicate of the constraint
+    // only as an operand of a conjunction, disjunction or implication consequent, not as a
+    // value. A conjunction or disjunction of one is such a predicate too, so passes it on.
+    void checkObjIndexValidated(AstNode* const nodep, bool& validatedr) {
+        if (!m_objIndexValidated) return;
+        m_objIndexValidated = false;
+        if (VN_IS(nodep, LogAnd) || VN_IS(nodep, LogOr) || VN_IS(nodep, LogIf)) {
+            validatedr = true;
+            return;
+        }
+        nodep->v3warn(E_UNSUPPORTED, "Unsupported: Randomized index into an array of class "
+                                     "objects selecting a member in a predicate used as a value.");
+    }
+    static bool isComparison(const AstNode* const nodep) {
+        return VN_IS(nodep, Eq) || VN_IS(nodep, Neq) || VN_IS(nodep, Lt) || VN_IS(nodep, Lte)
+               || VN_IS(nodep, Gt) || VN_IS(nodep, Gte) || VN_IS(nodep, LtS) || VN_IS(nodep, LteS)
+               || VN_IS(nodep, GtS) || VN_IS(nodep, GteS) || VN_IS(nodep, EqCase)
+               || VN_IS(nodep, NeqCase) || VN_IS(nodep, EqWild) || VN_IS(nodep, NeqWild);
     }
 
     AstNodeExpr* editSingle(FileLine* fl, AstNode* itemsp) {
@@ -1275,6 +1334,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         const bool indexIsRand = nodep->bitp()->exists([](const AstNodeVarRef* const vrefp) {
             return vrefp->varp()->rand().isRandomizable();
         });
+        if (indexIsRand && m_structSel && nodep->fromp()->user1()
+            && VN_IS(nodep->dtypep()->skipRefp(), ClassRefDType)) {
+            unsupportedObjectRandIndex(nodep);
+            return;
+        }
         if (nodep->fromp()->user1()) {
             // Queue/dynamic element: pre-edit clone for the rand_mode hoist, non-rand index
             // only. A std::randomize() with-clause argument carries no rand qualifier of its
@@ -1937,6 +2001,23 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (editFormat(nodep)) return;
         editSMT(nodep, nodep->lhsp());
     }
+    // A negation, or an operand of an equivalence, would let an invalid random object select
+    // satisfy the constraint
+    void visit(AstLogNot* nodep) override {
+        VL_RESTORER(m_objIndexRejectp);
+        m_objIndexRejectp = "in a negation";
+        visit(static_cast<AstNodeUniop*>(nodep));
+    }
+    void visit(AstLogEq* nodep) override {
+        VL_RESTORER(m_objIndexRejectp);
+        m_objIndexRejectp = "in an equivalence";
+        visit(static_cast<AstNodeBiop*>(nodep));
+    }
+    void visit(AstXor* nodep) override {
+        VL_RESTORER(m_objIndexRejectp);
+        if (nodep->width() == 1) m_objIndexRejectp = "in an exclusive or";
+        visit(static_cast<AstNodeBiop*>(nodep));
+    }
     void visit(AstNodeTriop* nodep) override {
         if (editFormat(nodep)) return;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp(), nodep->thsp());
@@ -1944,6 +2025,9 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstCond* nodep) override {
         // Already text: the null class handle check of one, visited again (see below)
         if (nodep->isString()) return;
+        // Neither its condition nor the value of an arm, whose validity would not be selected
+        VL_RESTORER(m_objIndexRejectp);
+        m_objIndexRejectp = "in a conditional expression";
         if (editFormat(nodep)) return;
         if (!nodep->condp()->user1()) {
             const int width = nodep->width();
@@ -2402,6 +2486,14 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         return getConstFormat(new AstExtend{fl, newArraySizep(arrayp), width});
     }
+    // The fields of the objects of an array are named by their index
+    // (createWriteVarForClassFields), which a random index does not give before solving
+    void unsupportedObjectRandIndex(AstNodeExpr* const selp) {
+        selp->v3warn(E_UNSUPPORTED, "Unsupported: Randomized index into an array of class "
+                                    "objects selecting a member.");
+        selp->user1(false);
+        editFormat(selp);
+    }
     // Name an element of an array of structs or objects the way the solver registers it
     void renameArrayExpr(AstSFormatF* const newp, const bool objectElem) const {
         if (m_structSel) {
@@ -2475,6 +2567,10 @@ class ConstraintExprVisitor final : public VNVisitor {
                 return;
             }
         }
+        if (indexIsRand && objectElem && m_structSel) {
+            unsupportedObjectRandIndex(nodep);
+            return;
+        }
         // Keep a pre-edit clone for the rand_mode hoist below, of a non-random index
         AstNodeExpr* const origp = indexIsRand ? nullptr : nodep->cloneTree(false);
         const bool indexSigned = nodep->bitp()->isSigned();
@@ -2501,6 +2597,12 @@ class ConstraintExprVisitor final : public VNVisitor {
             indexp = new AstSFormatF{fl, "#x%8x", false, indexp};
         }
         handle.relink(indexp);
+        // A struct element is named by its index, which an object select in it could not
+        // require valid
+        VL_RESTORER(m_objIndexRejectp);
+        if (indexIsRand && m_structSel && !m_objIndexRejectp) {
+            m_objIndexRejectp = "in the index of an element of an array of structs";
+        }
         AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
         if (newp) {
             renameArrayExpr(newp, objectElem);
@@ -2667,7 +2769,383 @@ class ConstraintExprVisitor final : public VNVisitor {
         condp->user1(true);  // Mark as formatted
         return condp;
     }
+    // Whether an index depends on a variable being randomized. A std::randomize() with-clause
+    // argument carries no rand qualifier of its own but is still part of the solve.
+    static bool isRandIndex(const AstNodeExpr* indexp) {
+        return indexp->exists([](const AstNodeVarRef* const vrefp) {
+            return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
+        });
+    }
+    // The element select of a rand class handle array variable at a random index whose integral
+    // member refp reads, rand or state, or nullptr
+    static AstNodeSel* randObjIndexSelp(const AstMemberRef* const refp) {
+        AstNodeSel* const selp = VN_CAST(refp->fromp(), NodeSel);
+        const AstQueueSel* const queueSelp = VN_CAST(selp, QueueSel);
+        const AstAssocSel* const assocSelp = VN_CAST(selp, AssocSel);
+        if (!VN_IS(selp, ArraySel) && !VN_IS(selp, DynArraySel)
+            && !(queueSelp && !queueSelp->fromBack()) && !assocSelp) {
+            return nullptr;
+        }
+        // An associative array by an integral key, which is compared as a bit vector
+        if (assocSelp
+            && !VN_AS(selp->fromp()->dtypep()->skipRefp(), AssocArrayDType)
+                    ->keyDTypep()
+                    ->skipRefp()
+                    ->isIntegralOrPacked()) {
+            return nullptr;
+        }
+        const AstVarRef* const arrayRefp = VN_CAST(selp->fromp(), VarRef);
+        if (!VN_IS(selp->dtypep()->skipRefp(), ClassRefDType) || !arrayRefp
+            || !arrayRefp->varp()->rand().isRandomizable() || !isRandIndex(selp->bitp())
+            || !refp->varp()->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            return nullptr;
+        }
+        return selp;
+    }
+    // Whether refp reads a state member of an object reached from an element selected at a
+    // random index of a rand array, which the mark pass marks as depending on the index (by the
+    // same walk, RandomizeUtil::randArrayIndexSelp)
+    static bool isRandArrayStateMember(const AstMemberRef* const refp) {
+        if (refp->varp()->rand().isRandomizable()) return false;
+        return RandomizeUtil::randArrayIndexSelp(refp->fromp(), isRandIndex) != nullptr;
+    }
+    // Whether refp reads such a member in a constraint, depending on the random index
+    static bool isRandObjIndexRead(const AstMemberRef* const refp) {
+        const AstNodeExpr* const selp = randObjIndexSelp(refp);
+        return selp && selp->user1();
+    }
+    // Report the members nodep reads through random object selects in a context where the
+    // validity of the select cannot be required
+    void rejectRandObjIndex(AstNode* const nodep, const char* const contextp,
+                            const bool formatted = false) {
+        std::vector<AstMemberRef*> refps;
+        // A read being formatted is reported alone: what it reads is replaced with it
+        if (formatted) {
+            refps.push_back(VN_AS(nodep, MemberRef));
+        } else {
+            nodep->foreach([&](AstMemberRef* const refp) {
+                if (isRandObjIndexRead(refp)) refps.push_back(refp);
+            });
+        }
+        for (AstMemberRef* const refp : refps) rejectRandObjIndexRead(refp, contextp, formatted);
+    }
+    void rejectRandObjIndexRead(AstMemberRef* const refp, const char* const contextp,
+                                const bool formatted) {
+        refp->v3warn(E_UNSUPPORTED, "Unsupported: Randomized index into an array of class "
+                                    "objects selecting a member "
+                                        << contextp << ".");
+        // Replaced by a value; formatted as one when its constraint is being formatted
+        AstNodeExpr* valuep
+            = new AstConst{refp->fileline(), AstConst::WidthedValue{}, refp->width(), 0};
+        if (formatted) valuep = getConstFormat(valuep);
+        refp->replaceWith(valuep);
+        VL_DO_DANGLING(pushDeletep(refp), refp);
+    }
+    // A random object select, as lowerRandIndexedObjectMember loops over its array
+    struct ObjIndexSel final {
+        FileLine* flp;  // Of the member read
+        AstNodeExpr* arrayp;  // Array selected from, cloned for each loop
+        AstNodeExpr* indexp;  // Random index, cloned for each loop
+        AstNodeDType* loopDtp;  // Of the loop variable: int, or the key
+        AstNodeDType* elemDtp;  // Of the objects
+        bool assoc;  // Associative array, selected by key
+        bool unpacked;  // Fixed-size unpacked array, indexed by element offset
+        bool descending;  // Visited by a foreach in descending element offsets
+        int lo;  // Low bound of an unpacked array, else 0
+        int selWidth;  // Width of the element index
+        int cmpWidth;  // Width at which the index and the element index are compared
+    };
+    // One iteration of such a loop, for a non-null object
+    struct ObjIndexIter final {
+        AstNodeStmt* loopp;  // The loop
+        AstIf* ifp;  // Its body, taken for a non-null object, with no statements yet
+        AstNodeExpr* elemSelp;  // Select of the iteration's object
+        AstNodeExpr* keyp;  // The object's index, formatted at the width it is compared at
+    };
+    // Offset of the element of foreach variable loopVarp in an array with lower bound lo, at
+    // the given width, as V3WidthSel computes from an index
+    static AstNodeExpr* newElementOffsetp(FileLine* fl, AstVar* loopVarp, int lo, int width) {
+        AstNodeExpr* offsetp = new AstVarRef{fl, loopVarp, VAccess::READ};
+        if (lo) offsetp = new AstSub{fl, offsetp, new AstConst{fl, static_cast<uint32_t>(lo)}};
+        if (width < offsetp->width()) return new AstSel{fl, offsetp, 0, width};
+        if (width > offsetp->width()) return new AstExtend{fl, offsetp, width};
+        return offsetp;
+    }
+    // Index indexp at the width the index and the element index are compared at
+    static AstNodeExpr* newCmpIndexp(AstNodeExpr* indexp, bool isSigned, int width) {
+        if (indexp->width() >= width) return indexp;
+        FileLine* const fl = indexp->fileline();
+        AstNodeExpr* const newp
+            = isSigned ? static_cast<AstNodeExpr*>(new AstExtendS{fl, indexp, width})
+                       : new AstExtend{fl, indexp, width};
+        newp->user1(indexp->user1());
+        return newp;
+    }
+    // The index of such a select, formatted once into a text variable of blockp, as it is
+    // compared with the elements'
+    AstVar* newObjIndexTextp(const ObjIndexSel& sel, AstBegin* const blockp) {
+        FileLine* const fl = sel.flp;
+        AstVar* const textVarp = newTextVarp(sel.indexp);
+        textVarp->name(m_uniqueNames.get("__VindexText"));
+        blockp->addDeclsp(textVarp);
+        // An unpacked array index is the unsigned offset of the element; a dynamic array or
+        // queue index, or a key, as signed as declared
+        AstNodeExpr* indexp = sel.indexp->cloneTreePure(false);
+        // V3WidthSel offsets the index into an unpacked array not based at zero by the low
+        // bound as an unsigned constant, so a narrower signed index is zero extended; as an
+        // index, its value is signed
+        AstNodeBiop* const offsetp = sel.lo ? VN_CAST(indexp, NodeBiop) : nullptr;
+        AstExtend* const extendp = offsetp && (VN_IS(offsetp, Add) || VN_IS(offsetp, Sub))
+                                           && VN_IS(offsetp->rhsp(), Const)
+                                       ? VN_CAST(offsetp->lhsp(), Extend)
+                                       : nullptr;
+        if (extendp && extendp->lhsp()->isSigned()) {
+            AstExtendS* const signedp
+                = new AstExtendS{extendp->fileline(), extendp->lhsp()->unlinkFrBack()};
+            signedp->dtypeFrom(extendp);
+            signedp->user1(extendp->user1());
+            extendp->replaceWith(signedp);
+            VL_DO_DANGLING(extendp->deleteTree(), extendp);
+        }
+        indexp = newCmpIndexp(indexp, !sel.unpacked && sel.indexp->isSigned(), sel.cmpWidth);
+        AstNodeExpr* textp;
+        {
+            VL_RESTORER(m_conditionp);
+            m_conditionp = nullptr;
+            textp = VN_AS(iterateSubtreeReturnEdits(indexp), NodeExpr);
+            if (m_conditionp) VL_DO_DANGLING(pushDeletep(m_conditionp), m_conditionp);
+        }
+        blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, textVarp, VAccess::WRITE}, textp});
+        return textVarp;
+    }
+    ObjIndexIter makeObjIndexLoop(const ObjIndexSel& sel) {
+        FileLine* const fl = sel.flp;
+        AstVar* const loopVarp
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vindex"), sel.loopDtp};
+        AstForeachHeader* const headerp
+            = new AstForeachHeader{fl, sel.arrayp->cloneTreePure(false), loopVarp};
+        AstNodeExpr* const elemIndexp
+            = sel.assoc ? static_cast<AstNodeExpr*>(new AstVarRef{fl, loopVarp, VAccess::READ})
+                        : newElementOffsetp(fl, loopVarp, sel.lo, sel.selWidth);
+        AstNodeExpr* const elemSelp = newSel(fl, sel.arrayp->cloneTreePure(false), elemIndexp);
+        elemSelp->dtypep(sel.elemDtp);
+        AstNodeExpr* const nonNullp
+            = new AstNeq{fl, elemSelp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
+        AstNodeExpr* const loopIndexp
+            = sel.assoc ? newCmpIndexp(new AstVarRef{fl, loopVarp, VAccess::READ},
+                                       loopVarp->isSigned(), sel.cmpWidth)
+                        : newElementOffsetp(fl, loopVarp, sel.lo, sel.cmpWidth);
+        AstIf* const ifp = new AstIf{fl, nonNullp};
+        return {new AstForeach{fl, headerp, ifp}, ifp, elemSelp, getConstFormat(loopIndexp)};
+    }
+    // Variable of blockp collecting the texts of a select's keys or leaves, in key order
+    AstVar* newTextQueueVarp(FileLine* fl, AstBegin* const blockp, const std::string& name) {
+        if (!m_textQueueDtp) {
+            m_textQueueDtp = new AstQueueDType{fl, blockp->findStringDType(), nullptr};
+            v3Global.rootp()->typeTablep()->addTypesp(m_textQueueDtp);
+        }
+        AstVar* const varp
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get(name), m_textQueueDtp};
+        varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        blockp->addDeclsp(varp);
+        return varp;
+    }
+    // Statement adding the text textp to the queue in varp, at its front if front, so the keys
+    // of a loop visiting them in descending order are ascending
+    static AstStmtExpr* newTextPushp(FileLine* fl, AstVar* varp, AstNodeExpr* textp, bool front) {
+        AstCMethodHard* const callp = new AstCMethodHard{
+            fl, new AstVarRef{fl, varp, VAccess::WRITE},
+            front ? VCMethod::ARRAY_PUSH_FRONT : VCMethod::ARRAY_PUSH_BACK, textp};
+        callp->dtypeSetVoid();
+        return callp->makeStmt();
+    }
+    // Text selecting, by the index in indexTextVarp, the leaf of the key in keysVarp, or
+    // without keys whether k selects an object; or the leaf at the position of the index,
+    // emptyp out of range
+    AstNodeExpr* newObjIndexSelectp(const ObjIndexSel& sel, AstVar* keysVarp, AstVar* leavesVarp,
+                                    AstVar* indexTextVarp, AstNodeExpr* emptyp) {
+        FileLine* const fl = sel.flp;
+        AstCFuncHard* callp;
+        if (!keysVarp) {
+            callp = new AstCFuncHard{fl, VCFunction::RANDOMIZER_POSITION_SELECT,
+                                     new AstVarRef{fl, leavesVarp, VAccess::READ}};
+            callp->addPinsp(new AstVarRef{fl, indexTextVarp, VAccess::READ});
+            callp->addPinsp(new AstConst{fl, static_cast<uint32_t>(sel.cmpWidth)});
+            callp->addPinsp(emptyp);
+        } else if (leavesVarp) {
+            callp = new AstCFuncHard{fl, VCFunction::RANDOMIZER_INDEX_SELECT,
+                                     new AstVarRef{fl, keysVarp, VAccess::READ}};
+            callp->addPinsp(new AstVarRef{fl, leavesVarp, VAccess::READ});
+            callp->addPinsp(new AstVarRef{fl, indexTextVarp, VAccess::READ});
+            callp->addPinsp(emptyp);
+        } else {
+            callp = new AstCFuncHard{fl, VCFunction::RANDOMIZER_INDEX_VALID,
+                                     new AstVarRef{fl, keysVarp, VAccess::READ}};
+            callp->addPinsp(new AstVarRef{fl, indexTextVarp, VAccess::READ});
+            VL_DO_DANGLING(emptyp->deleteTree(), emptyp);
+        }
+        callp->dtypeSetString();
+        return callp;
+    }
+    // A member of the object at random index k of a rand class handle array is a select among
+    // the current non-null objects, built at runtime as a balanced tree of comparisons of k
+    // with their indices (VlRandomizer::indexSelect), as each object's member is a solver
+    // variable of its own (arr.<index>.member). A member read through a null handle or out of
+    // range is an error, not a default value, so the comparison reading it also requires k to
+    // select an object (VlRandomizer::indexValid).
+    void lowerRandIndexedObjectMember(AstMemberRef* const nodep) {
+        FileLine* const fl = nodep->fileline();
+        AstNodeSel* const selp = VN_AS(nodep->fromp(), NodeSel);
+        const bool assoc = VN_IS(selp, AssocSel);
+        AstNodeExpr* const arrayp = selp->fromp();
+        AstNodeExpr* const indexp = selp->bitp();
+        const AstUnpackArrayDType* const unpackDtp
+            = VN_CAST(arrayp->dtypep()->skipRefp(), UnpackArrayDType);
+        AstNodeDType* const loopDtp
+            = assoc ? VN_AS(arrayp->dtypep()->skipRefp(), AssocArrayDType)->keyDTypep()
+                    : nodep->findIntDType();
+        // An unpacked array is indexed at the width V3WidthSel gave the index, but at least the
+        // width of its positions, so a narrower index is extended, other arrays with an int, or
+        // the key
+        const int selWidth
+            = unpackDtp
+                  ? std::max(indexp->width(),
+                             V3Number::log2b(std::max(unpackDtp->elementsConst(), 2) - 1) + 1)
+                  : loopDtp->width();
+        const ObjIndexSel sel{fl,
+                              arrayp,
+                              indexp,
+                              loopDtp,
+                              selp->dtypep(),
+                              assoc,
+                              unpackDtp != nullptr,
+                              unpackDtp && !unpackDtp->declRange().ascending(),
+                              unpackDtp ? unpackDtp->lo() : 0,
+                              selWidth,
+                              std::max(indexp->width(), selWidth)};
+        // Not yet an index that itself selects through a random index, as an object select,
+        // found as the index is formatted, whose own validity would need to be required with
+        // this one's, or a struct select, which names the struct element by its index
+        if (indexp->exists([](const AstStructSel* const structSelp) {
+                return RandomizeUtil::randArrayIndexSelp(structSelp->fromp(), isRandIndex)
+                       != nullptr;
+            })) {
+            rejectRandObjIndex(nodep, "by an index that selects through a random index too", true);
+            return;
+        }
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
+        const uint32_t loweringsBefore = m_randIndexLowerings;
+        AstVar* indexTextVarp;
+        {
+            VL_RESTORER(m_objIndexValidp);
+            m_objIndexValidp = nullptr;
+            indexTextVarp = newObjIndexTextp(sel, blockp);
+            if (m_objIndexValidp) VL_DO_DANGLING(pushDeletep(m_objIndexValidp), m_objIndexValidp);
+        }
+        if (m_randIndexLowerings != loweringsBefore) {
+            VL_DO_DANGLING(pushDeletep(blockp), blockp);
+            rejectRandObjIndex(nodep, "by an index that selects through a random index too", true);
+            return;
+        }
+        ++m_randIndexLowerings;
+        // An associative array's objects are selected by key, those of other arrays by
+        // position, where a null object reads the value of none
+        AstVar* const keysVarp = sel.assoc ? newTextQueueVarp(fl, blockp, "__Vkeys") : nullptr;
+        AstVar* const leavesVarp = newTextQueueVarp(fl, blockp, "__Vleaves");
+        const ObjIndexIter iter = makeObjIndexLoop(sel);
+        AstMemberRef* const elemp = new AstMemberRef{fl, iter.elemSelp, nodep->varp()};
+        elemp->dtypeFrom(nodep);
+        // A state member of each object is its value
+        elemp->user1(nodep->varp()->rand().isRandomizable());
+        iter.elemSelp->user1(true);
+        if (keysVarp) {
+            iter.ifp->addThensp(newTextPushp(fl, keysVarp, iter.keyp, sel.descending));
+        } else {
+            VL_DO_DANGLING(iter.keyp->deleteTree(), iter.keyp);
+        }
+        // A member with rand_mode is formatted as a choice of its name or its value
+        {
+            VL_RESTORER(m_conditionp);
+            m_conditionp = nullptr;
+            iter.ifp->addThensp(newTextPushp(fl, leavesVarp,
+                                             VN_AS(iterateSubtreeReturnEdits(elemp), NodeExpr),
+                                             sel.descending));
+            if (m_conditionp) VL_DO_DANGLING(pushDeletep(m_conditionp), m_conditionp);
+        }
+        // Never the value read: the comparison requires k to select an object
+        AstNodeExpr* const nonep
+            = getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0});
+        if (!keysVarp) {
+            iter.ifp->addElsesp(
+                newTextPushp(fl, leavesVarp, nonep->cloneTree(false), sel.descending));
+        }
+        blockp->addStmtsp(iter.loopp);
+        AstNodeExpr* const selectp
+            = newObjIndexSelectp(sel, keysVarp, leavesVarp, indexTextVarp, nonep);
+        // The validity, in a block of its own, for the comparison
+        AstBegin* const validBlockp
+            = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
+        AstVar* const validIndexTextVarp = newObjIndexTextp(sel, validBlockp);
+        AstVar* const validKeysVarp
+            = sel.assoc ? newTextQueueVarp(fl, validBlockp, "__Vkeys") : nullptr;
+        AstVar* const validLeavesVarp
+            = sel.assoc ? nullptr : newTextQueueVarp(fl, validBlockp, "__Vleaves");
+        const ObjIndexIter valid = makeObjIndexLoop(sel);
+        VL_DO_DANGLING(pushDeletep(valid.elemSelp), valid.elemSelp);
+        if (validKeysVarp) {
+            valid.ifp->addThensp(newTextPushp(fl, validKeysVarp, valid.keyp, sel.descending));
+        } else {
+            VL_DO_DANGLING(valid.keyp->deleteTree(), valid.keyp);
+            valid.ifp->addThensp(newTextPushp(fl, validLeavesVarp,
+                                              new AstConst{fl, AstConst::String{}, "true"},
+                                              sel.descending));
+            valid.ifp->addElsesp(newTextPushp(fl, validLeavesVarp,
+                                              new AstConst{fl, AstConst::String{}, "false"},
+                                              sel.descending));
+        }
+        validBlockp->addStmtsp(valid.loopp);
+        AstNodeExpr* const validCallp
+            = newObjIndexSelectp(sel, validKeysVarp, validLeavesVarp, validIndexTextVarp,
+                                 new AstConst{fl, AstConst::String{}, "false"});
+        AstSFormatF* const validp
+            = new AstSFormatF{fl, "%s", false, new AstExprStmt{fl, validBlockp, validCallp}};
+        if (m_objIndexValidp) {
+            AstSFormatF* const bothp = new AstSFormatF{fl, "(and %s %s)", false, m_objIndexValidp};
+            bothp->addExprsp(validp);
+            m_objIndexValidp = bothp;
+        } else {
+            m_objIndexValidp = validp;
+        }
+        nodep->replaceWith(new AstSFormatF{fl, "%s", false, new AstExprStmt{fl, blockp, selectp}});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstMemberRef* nodep) override {
+        if (isRandObjIndexRead(nodep)) {
+            // A soft constraint, unlike a hard one, would just be dropped for an invalid k
+            const char* const whyp = m_objIndexRejectp ? m_objIndexRejectp
+                                     : m_inSoftItem    ? "in a soft constraint"
+                                     : !m_inComparison ? "outside a comparison"
+                                                       : nullptr;
+            if (whyp) {
+                rejectRandObjIndex(nodep, whyp, true);
+            } else {
+                lowerRandIndexedObjectMember(nodep);
+            }
+            return;
+        }
+        if (nodep->user1() && isRandArrayStateMember(nodep)) {
+            // Not lowered above: not integral, or of an object not named directly
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: State member "
+                                             << nodep->prettyNameQ()
+                                             << " read through a randomized index, other than "
+                                                "as an integral member of an object selected "
+                                                "from a rand array variable.");
+            nodep->replaceWith(getConstFormat(new AstConst{
+                nodep->fileline(), AstConst::WidthedValue{}, std::max(nodep->width(), 1), 0}));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         // Check if rootVar is globalConstrained
         if (nodep->varp()->rand().isRandomizable() && nodep->fromp()) {
             FileLine* const fl = nodep->fileline();
@@ -2861,12 +3339,24 @@ class ConstraintExprVisitor final : public VNVisitor {
         return resultp;
     }
     void visit(AstLogIf* nodep) override {
+        // Like a conjunction or disjunction, an implication is a predicate of the constraint
+        // only where it is not a value, so whether its consequent took the validity of an
+        // object select passes on to its parent (see checkObjIndexValidated)
+        const uint32_t validatedBefore = m_objIndexValidations;
+        VL_RESTORER(m_inComparison);
+        m_inComparison = false;
+        // Its antecedent, unlike its consequent; one scan of the antecedent, whose own
+        // implications scan only their antecedents again
+        rejectRandObjIndex(nodep->lhsp(), "in an implication antecedent");
         // Its antecedent guards its consequent
         const size_t pushed = pushStateGuards(nodep->lhsp(), false);
         visit(static_cast<AstNodeBiop*>(nodep));
         popStateGuards(pushed);
+        m_objIndexValidated = m_objIndexValidations != validatedBefore;
     }
     void visit(AstConstraintIf* nodep) override {
+        // A scan of the condition only, which holds no constraint
+        rejectRandObjIndex(nodep->condp(), "in an if condition");
         // Outside a fold, this if's branches are folded here and m_constraintVars collects
         // their names for the constraint replacing it; a nested if adds to its parent's fold
         const bool foldOwner = !m_wantSingle;
@@ -3210,6 +3700,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         VL_RESTORER(m_constraintVarsp);
         m_constraintVarsp = m_wantSingle ? &m_constraintVars : &vars;
+        VL_RESTORER(m_inSoftItem);
+        m_inSoftItem = nodep->isSoft();
         if (nodep->isDisableSoft()) {
             nodep->replaceWith(buildDisableSoftCallStmt(nodep));
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
@@ -3286,6 +3778,10 @@ class ConstraintExprVisitor final : public VNVisitor {
         editFormat(nodep);
     }
     void visit(AstCMethodHard* nodep) override {
+        // An array method formats its items in loops of its own, which the validity of a
+        // random object select would not be required in
+        VL_RESTORER(m_objIndexRejectp);
+        if (!m_objIndexRejectp) m_objIndexRejectp = "in an array method";
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
 
@@ -3763,6 +4259,11 @@ public:
             nodep->addNext(hoistListp);
         }
         iterateAndNextNull(nodep);
+    }
+    ~ConstraintExprVisitor() override {
+        V3Stats::addStatSum("Randomize, object selects at a random index", m_randIndexLowerings);
+        V3Stats::addStatSum("Randomize, comparisons requiring an object select",
+                            m_objIndexValidations);
     }
 };
 

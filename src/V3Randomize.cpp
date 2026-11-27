@@ -264,6 +264,14 @@ class RandomizeMarkVisitor final : public VNVisitor {
     const AstClass* m_constraintClassp = nullptr;  // Class of the current class constraint
 
     // METHODS
+    // Whether an array index depends on a variable being randomized, by its marks
+    static bool isMarkedRandIndex(const AstNodeExpr* indexp) {
+        // Not a check of the variables' rand: std::randomize() arguments get their own
+        // variables only later
+        return indexp->exists([](const AstNode* const nodep) {
+            return (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef)) && nodep->user1();
+        });
+    }
     // Mark all rand variables in IS_RANDOMIZED_GLOBAL classes as globalConstrained
     void markGlobalConstrainedVars(AstClass* classp) {
         for (const AstClass* cp = classp; cp;
@@ -984,6 +992,11 @@ class RandomizeMarkVisitor final : public VNVisitor {
             nodep->user1(true);
             // Mark parent object for constraint expression visitor
             if (VN_IS(nodep->fromp(), VarRef)) nodep->fromp()->user1(true);
+        } else if (!inStdWith
+                   && RandomizeUtil::randArrayIndexSelp(nodep->fromp(), isMarkedRandIndex)) {
+            // A state member of an element selected by a random index, which is solved, or
+            // of an object or struct reached from such a member
+            nodep->user1(true);
         }
 
         if (m_withp) {

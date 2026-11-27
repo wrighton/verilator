@@ -972,6 +972,18 @@ public:
     // constraint added after reads in an evaluation error that fails the next solve (IEEE
     // 1800-2023 18.5.12), unless a guard keeps it out. Return smtName, standing in for it.
     std::string null_read(const std::string& name, const std::string& smtName);
+    // Text selecting the leaf of the key equal to the solver index, keys in ascending unsigned
+    // order, as a balanced tree of comparisons, which a solver decides in depth logarithmic in
+    // the number of keys; emptyText if there are none
+    static std::string indexSelect(const VlQueue<std::string>& keys,
+                                   const VlQueue<std::string>& leaves, const std::string& index,
+                                   const std::string& emptyText);
+    // Text of whether the solver index equals one of the keys, as such a tree
+    static std::string indexValid(const VlQueue<std::string>& keys, const std::string& index);
+    // Text selecting the leaf at the position given by the solver index, of the given width, as
+    // a multiplexer on the index bits; emptyText for a position out of range
+    static std::string positionSelect(const VlQueue<std::string>& leaves, const std::string& index,
+                                      IData width, const std::string& emptyText);
     void clearConstraints();
     void clearAll();  // Clear both constraints and variables
     // Unregister the fields of the objects in a class handle array

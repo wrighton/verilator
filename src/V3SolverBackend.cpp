@@ -100,3 +100,24 @@ AstVar* RandModeVars::constraintModeVarp(AstClass* classp) {
     }
     return nullptr;
 }
+
+AstNodeExpr* RandomizeUtil::randArrayIndexSelp(
+    AstNodeExpr* exprp, const std::function<bool(const AstNodeExpr* indexp)>& isRandIndex) {
+    // Each step is to the first operand, fromp, e.g. 'arr[idx].obj.x'
+    for (AstNodeExpr* curp = exprp;;) {
+        AstNodeExpr* fromp;
+        AstNodeExpr* indexp = nullptr;
+        if (const AstNodeSel* const selp = VN_CAST(curp, NodeSel)) {
+            fromp = selp->fromp();
+            indexp = selp->bitp();
+        } else if (const AstStructSel* const structSelp = VN_CAST(curp, StructSel)) {
+            fromp = structSelp->fromp();
+        } else if (const AstMemberRef* const memberSelp = VN_CAST(curp, MemberRef)) {
+            fromp = memberSelp->fromp();
+        } else {
+            return nullptr;
+        }
+        if (indexp && fromp->user1() && isRandIndex(indexp)) return curp;
+        curp = fromp;
+    }
+}
