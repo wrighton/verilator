@@ -3453,7 +3453,7 @@ bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
         return sess.readSExpr(replyr);
     };
     // Whether a reply is an error, warned of
-    const auto rejected = [&](const std::string& reply) {
+    const auto rejected = [&](const std::string& reply) VL_REQUIRES(sess.m_mutex) {
         if (!isSolverError(reply)) return false;
         sess.warnReply(reply);
         return true;
