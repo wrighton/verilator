@@ -53,4 +53,12 @@ module t (
   assert property (@(posedge clk) cb1.in);
   assert property (@(posedge clk) cb4.in4);
   always @(posedge clk) if ($rose(cb4.in4)) $display(cb4.in4);
+
+  // Clockvars with a non-constant skew are still usable after the error
+  logic out5;
+  clocking cb5 @(posedge clk);
+    output #cyc out5;
+  endclocking
+  assert property (@(posedge clk) cb2.in);
+  always @(cb5) cb5.out5 <= 1;
 endmodule
