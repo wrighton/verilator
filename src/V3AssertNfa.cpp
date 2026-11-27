@@ -1999,6 +1999,97 @@ class SvaNfaBuilder final {
         return condp;
     }
 
+    // The fixed-length alternatives of a sequence of plain booleans whose bounded repetition
+    // ranges and ranged cycle delays give it several lengths, as new trees, if it has at most
+    // limit of them, else false with none. A match item or local variable is not cloned.
+    static bool fixedAlternatives(AstNodeExpr* nodep, std::vector<AstNodeExpr*>& out,
+                                  size_t limit) {
+        FileLine* const flp = nodep->fileline();
+        if (nodep->exists([](const AstNode* np) { return VN_IS(np, ExprStmt); })) return false;
+        std::map<int, std::vector<AstNodeExpr*>> checks;
+        if (fixedLength(nodep) >= 0 && flattenFixedSeq(nodep, 0, checks)) {
+            out.push_back(nodep->cloneTreePure(false));
+            return true;
+        }
+        if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            const AstConst* const minp = VN_CAST(repp->countp(), Const);
+            const AstConst* const maxp = VN_CAST(repp->maxCountp(), Const);
+            if (!minp || !maxp || !minp->toUInt() || !isPlainBoolean(repp->exprp())
+                || maxp->toUInt() - minp->toUInt() >= limit) {
+                return false;
+            }
+            for (uint32_t n = minp->toUInt(); n <= maxp->toUInt(); ++n) {
+                AstSConsRep* const newp = new AstSConsRep{flp, repp->exprp()->cloneTreePure(false),
+                                                          new AstConst{flp, n}};
+                newp->dtypeFrom(repp);
+                out.push_back(newp);
+            }
+            return true;
+        }
+        const AstSExpr* const sexprp = VN_CAST(nodep, SExpr);
+        const AstDelay* const delayp = sexprp ? VN_CAST(sexprp->delayp(), Delay) : nullptr;
+        if (!delayp || !delayp->isCycleDelay() || delayp->throughoutp()) return false;
+        const AstConst* const minp = VN_CAST(delayp->lhsp(), Const);
+        const AstConst* const maxp
+            = delayp->isRangeDelay() ? VN_CAST(delayp->rhsp(), Const) : minp;
+        if (!minp || !maxp) return false;
+        std::vector<AstNodeExpr*> pres;
+        std::vector<AstNodeExpr*> exprs;
+        bool ok = (!sexprp->preExprp() || fixedAlternatives(sexprp->preExprp(), pres, limit))
+                  && fixedAlternatives(sexprp->exprp(), exprs, limit);
+        const size_t count = std::max<size_t>(pres.size(), 1) * exprs.size()
+                             * (maxp->toUInt() - minp->toUInt() + 1);
+        if (ok && count <= limit) {
+            for (size_t i = 0; i < std::max<size_t>(pres.size(), 1); ++i) {
+                for (uint32_t n = minp->toUInt(); n <= maxp->toUInt(); ++n) {
+                    for (AstNodeExpr* const exprp : exprs) {
+                        AstNodeExpr* const newp = new AstSExpr{
+                            flp, pres.empty() ? nullptr : pres[i]->cloneTreePure(false),
+                            new AstDelay{flp, new AstConst{flp, n}, /*isCycle=*/true},
+                            exprp->cloneTreePure(false)};
+                        newp->dtypeSetBit();
+                        out.push_back(newp);
+                    }  // LCOV_EXCL_LINE -- closing a range-for body, instrumented in debug only
+                }
+            }
+        } else {
+            ok = false;
+        }
+        for (AstNodeExpr* const altp : pres) VL_DO_DANGLING(altp->deleteTree(), altp);
+        for (AstNodeExpr* const altp : exprs) VL_DO_DANGLING(altp->deleteTree(), altp);
+        return ok;
+    }
+    // A sequence 'and' of operands of a few lengths as the 'or' of the conjoined checks of each
+    // pair of their fixed-length alternatives (IEEE 1800-2023 16.9.5, 16.9.7), if there are at
+    // most MAX_FIXED_OR_OPERANDS of them, which an asserted 'or' tracks per attempt, else
+    // nullptr; the lengths of the alternatives
+    static AstNodeExpr* newAndAlternativesp(const AstSAnd* andp,
+                                            std::set<int>* lengthsp = nullptr) {
+        std::vector<AstNodeExpr*> lhsAlts;
+        std::vector<AstNodeExpr*> rhsAlts;
+        AstNodeExpr* orp = nullptr;
+        if (fixedAlternatives(andp->lhsp(), lhsAlts, MAX_FIXED_OR_OPERANDS)
+            && fixedAlternatives(andp->rhsp(), rhsAlts, MAX_FIXED_OR_OPERANDS)
+            && lhsAlts.size() * rhsAlts.size() > 1
+            && lhsAlts.size() * rhsAlts.size() <= MAX_FIXED_OR_OPERANDS) {
+            for (AstNodeExpr* const lhsp : lhsAlts) {
+                for (AstNodeExpr* const rhsp : rhsAlts) {
+                    AstNodeExpr* const conjp = conjoinFixedSeqs(lhsp, rhsp, andp->fileline());
+                    if (lengthsp) lengthsp->insert(std::max(fixedLength(lhsp), fixedLength(rhsp)));
+                    if (!orp) {
+                        orp = conjp;
+                    } else {
+                        orp = new AstSOr{andp->fileline(), orp, conjp};
+                        orp->dtypeSetBit();
+                    }
+                }  // LCOV_EXCL_LINE -- closing a range-for body, instrumented in debug only
+            }  // LCOV_EXCL_LINE -- closing a range-for body, instrumented in debug only
+        }
+        for (AstNodeExpr* const altp : lhsAlts) VL_DO_DANGLING(altp->deleteTree(), altp);
+        for (AstNodeExpr* const altp : rhsAlts) VL_DO_DANGLING(altp->deleteTree(), altp);
+        return orp;
+    }
+
     // Conjoin two equal-length fixed sequences into one: at each clock offset
     // AND the boolean checks of both operands (IEEE 1800-2023 16.9.6 -- both
     // operands match the same window). Returns null if either operand is not a
@@ -2584,6 +2675,15 @@ public:
                 if (AstNodeExpr* const conjp
                     = conjoinFixedSeqs(andp->lhsp(), andp->rhsp(), andp->fileline())) {
                     return buildFromLoweringTree(conjp, entryVtxp, isTopLevelStep);
+                }
+            }
+            // Operands of a few lengths, at the end of an asserted property: the 'or' of the
+            // conjoined pairs of their alternatives, tracked per attempt
+            if (wantBoolLeaf && !m_isCoverSeq && !m_noEosFailure && !m_isSeqEvent
+                && !m_inAntecedent && !m_inMergeFallback) {
+                if (AstNodeExpr* const orp = newAndAlternativesp(andp)) {
+                    m_wantBoolLeaf = true;
+                    return buildFromLoweringTree(orp, entryVtxp, isTopLevelStep);
                 }
             }
             return buildAndCombiner(andp->lhsp(), andp->rhsp(), entryVtxp, andp->fileline());
@@ -5181,10 +5281,11 @@ class AssertNfaVisitor final : public VNVisitor {
 
         FileLine* const flp = assertp->fileline();
 
-        // A property passes, or is covered, on the first match of an attempt (IEEE 1800-2023
-        // 16.12.2, 16.14.3). A sequence 'and' first matches at the later of its operands' first
-        // matches (16.9.5), so an operand ending in a repetition range keeps its shortest count
-        if (!parts.hasImplication && !isCoverSeq) {
+        // A property passes, or is covered, on the first match of an attempt, as an implication
+        // on the first match of its consequent (IEEE 1800-2023 16.12.2, 16.12.7, 16.14.3). A
+        // sequence 'and' first matches at the later of its operands' first matches (16.9.5), so
+        // an operand ending in a repetition range keeps its shortest count
+        if (!isCoverSeq) {
             AstNodeExpr* lastp = seqBodyp;
             while (AstSExpr* const sexprp = VN_CAST(lastp, SExpr)) lastp = sexprp->exprp();
             if (AstSAnd* const andp = VN_CAST(lastp, SAnd)) {

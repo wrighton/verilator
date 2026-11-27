@@ -23,12 +23,6 @@
                                                        : ... note: In instance 't'
    34 |   assert property (@(posedge clk) if (a) ((b ##1 c)[*2]) else d) $display("pass");
       |                                                    ^~
-%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:52:52: Unsupported: ranged cycle delay in an operand of property 'and'
-   52 |   assert property (@(posedge clk) (1'b1 ##[1:2] b) and c);
-      |                                                    ^~~
-%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:53:37: Unsupported: ranged cycle delay in an operand of property 'and'
-   53 |   assert property (@(posedge clk) c and (1'b1 ##[1:2] b));
-      |                                     ^~~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:54:54: Unsupported: ranged cycle delay in an operand of property 'and'
    54 |   assert property (@(posedge clk) (1'b1 ##[1:300] b) and c);
       |                                                      ^~~
