@@ -29,6 +29,7 @@ module t;
   longint wide_hi = 64'sd6442450943;
   longint wide_lo = -64'sd6442450943;
   bit [31:0] u31 = 32'h8000_0000;
+  longint wide_one = 1;
   int calls = 0;
   function int pos_call();
     ++calls;
@@ -289,6 +290,46 @@ module t;
       `checkp(ri, "'{'ha, 'hb}");
       ri = iq[wide_hi:wide_hi];
       `checkp(ri, "'{}");
+      // A bound relative to '$' may be wider than '$'
+      // verilator lint_off WIDTHEXPAND
+      ri = iq[$-wide_hi:$];
+      `checkp(ri, "'{'ha, 'hb, 'hc}");
+      ri = iq[$-wide_lo:$];
+      `checkp(ri, "'{}");
+      ri = iq[$-wide:$];
+      `checkp(ri, "'{'ha, 'hb, 'hc}");
+      ri = iq[$-wide_one:$];
+      `checkp(ri, "'{'hb, 'hc}");
+      ri = iq[wide_lo:$-wide_one];
+      `checkp(ri, "'{'ha, 'hb}");
+      ri = iq[0:$-wide_hi];
+      `checkp(ri, "'{}");
+      ri = iq[0:$-wide_lo];
+      `checkp(ri, "'{'ha, 'hb, 'hc}");
+      ri = iq[$-wide_hi:$-wide_one];
+      `checkp(ri, "'{'ha, 'hb}");
+      `checkh(iq[$-wide_hi], 0);
+      `checkh(iq[$-wide_lo], 0);
+      `checkh(iq[$-wide], 0);
+      `checkh(iq[$-wide_one], 'hb);
+      iq[$-wide_one] = 99;
+      `checkp(iq, "'{'ha, 'h63, 'hc}");
+      iq[$-wide_hi] = 98;
+      iq[$-wide_lo] = 97;
+      `checkp(iq, "'{'ha, 'h63, 'hc}");
+      iq[$-wide_one:$] = '{7, 8};
+      `checkp(iq, "'{'ha, 'h7, 'h8}");
+      iq[$-wide_hi:$] = '{1, 2, 3};
+      `checkp(iq, "'{'h1, 'h2, 'h3}");
+      // verilator lint_on WIDTHEXPAND
+      // A 32-bit bound relative to '$' needs no extension
+      iq = '{10, 11, 12};
+      ri = iq[$-pos:$];
+      `checkp(ri, "'{'hb, 'hc}");
+      ri = iq[$-big:$];
+      `checkp(ri, "'{'ha, 'hb, 'hc}");
+      `checkh(iq[$-big], 0);
+      iq = '{10, 11, 12};
       // A slice with an X or Z position selects no element
       ri = iq[4'bx000:1];
       `checkp(ri, "'{}");
