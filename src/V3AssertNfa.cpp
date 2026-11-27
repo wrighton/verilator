@@ -1294,6 +1294,12 @@ class SvaNfaBuilder final {
             return np->isMultiCycleSva() || VN_IS(np, Implication) || VN_IS(np, SEventually);
         });
     }
+    // Whether an implication decides its vacuous pass on its first tick, with a boolean
+    // antecedent and no other implication
+    static bool isVacuousAtEntry(const AstImplication* implp) {
+        return implp && !implp->isFollowedBy() && isPlainBoolean(implp->lhsp())
+               && !implp->rhsp()->exists([](const AstImplication*) { return true; });
+    }
     // Build `b or p` at the end of an asserted property, with b boolean
     BuildResult buildBoolOrProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
                                 FileLine* flp) {
@@ -1319,6 +1325,12 @@ class SvaNfaBuilder final {
                     new AstLogNot{flp, sampled(boolp->cloneTreePure(false))}, flp);
         VL_RESTORER(m_wantBoolLeaf);
         m_wantBoolLeaf = true;
+        // An implication passes vacuously when its antecedent does not match (IEEE 1800-2023
+        // 16.12.7), which is a pass of the 'or' too. Only a boolean antecedent decides that on
+        // the first tick. The vacuous passes of other implications, and of one with another
+        // implication in it, are not seen.
+        const AstImplication* const implicationp = VN_CAST(propp, Implication);
+        const bool vacuousAtEntry = isVacuousAtEntry(implicationp);
         const BuildResult prop = buildExpr(propp, propEntryp, /*isTopLevelStep=*/true);
         if (!prop.valid()) return prop;
         SvaStateVertex* const propTermp = prop.termVertexp;
@@ -1334,6 +1346,11 @@ class SvaNfaBuilder final {
         // Otherwise reach the merge vertex as p would reach the match vertex
         SvaStateVertex* const mergeVtxp = scopedCreateVertex();
         guardedLink(entryVtxp, mergeVtxp, sampled(boolp->cloneTreePure(false)), flp);
+        if (vacuousAtEntry) {
+            guardedLink(propEntryp, mergeVtxp,
+                        new AstLogNot{flp, sampled(implicationp->lhsp()->cloneTreePure(false))},
+                        flp);
+        }
         if (!prop.finalCondp) {
             guardedLink(propTermp, mergeVtxp, flp);
             return {mergeVtxp, nullptr, {}};
