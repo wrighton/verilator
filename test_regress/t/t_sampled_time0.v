@@ -72,6 +72,22 @@ module t;
     tick++;
   end
 
+  // Also when a lone constant write in an initial procedure sets the variable
+  bit g;
+  initial g = 1;
+  bit [6:0] gv;
+  initial gv = 7'h2a;
+  int gtick = 0;
+  always @(posedge clk) begin
+    `checkh($sampled(g), gtick != 0);
+    `checkh($past(g), 1'b0);
+    `checkh($rose(g), gtick != 0);
+    `checkh($sampled(gv), gtick == 0 ? 7'h00 : 7'h2a);
+    `checkh($past(gv), 7'h00);
+    `checkh($stable(gv), gtick == 0);
+    gtick++;
+  end
+
   // A value change function compares sampled values, not a value written earlier in the
   // time step
   bit [6:0] c = 0;
