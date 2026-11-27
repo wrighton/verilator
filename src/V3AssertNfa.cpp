@@ -5357,13 +5357,12 @@ public:
             }
             if (sigs.vacuousp) matchp = new AstLogOr{flp, matchp, sigs.vacuousp};
             if (outMatchpp) {
+                // Without a final condition, reaching a terminal is a match, not a rejection
                 AstNodeExpr* notPMatchp = nullptr;
                 if (matchCondp && rejectBasep) {
                     AstNodeExpr* const sampledCondp = sampled(matchCondp->cloneTreePure(false));
                     notPMatchp = new AstLogAnd{flp, rejectBasep->cloneTreePure(false),
                                                new AstLogNot{flp, sampledCondp}};
-                } else if (rejectBasep) {
-                    notPMatchp = rejectBasep->cloneTreePure(false);
                 }
                 if (throughoutRejectp)
                     notPMatchp = orExprs(flp, notPMatchp, throughoutRejectp->cloneTreePure(false));
