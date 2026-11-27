@@ -255,8 +255,11 @@ struct SvaAttemptSeq final {
 struct SvaAttemptNode final {
     enum class Kind : uint8_t { SEQUENCE, IMPLICATION, NOT, AND, OR, ACCEPT, REJECT };
     Kind kind = Kind::SEQUENCE;
-    AstNodeExpr* condp = nullptr;  // Antecedent of an implication, condition of an abort
+    AstNodeExpr* condp = nullptr;  // Boolean antecedent of an implication, condition of an abort
     std::map<int, std::vector<AstNodeExpr*>> checks;  // Sequence: boolean checks by tick offset
+    // Implication: checks by tick offset of an antecedent of more than one tick
+    std::map<int, std::vector<AstNodeExpr*>> antChecks;
+    int antLen = 0;  // Implication: ticks from its start to the match of its antecedent
     std::unique_ptr<SvaAttemptSeq> seqp;  // Sequence not of fixed checks, instead of checks
     std::unique_ptr<SvaAttemptNode> lhsp;  // Operand, consequent of an implication
     std::unique_ptr<SvaAttemptNode> rhsp;  // Second operand of 'and' and 'or'
@@ -2980,9 +2983,16 @@ public:
             return nodep->isPure() ? std::move(treep) : nullptr;
         }
         if (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
-            if (!isPlainBoolean(implp->lhsp()) || !implp->lhsp()->isPure()) return nullptr;
+            AstNodeExpr* const antp = implp->lhsp();
+            if (!antp->isPure()) return nullptr;
             treep->kind = Kind::IMPLICATION;
-            treep->condp = implp->lhsp();
+            if (isPlainBoolean(antp)) {
+                treep->condp = antp;
+            } else {
+                // An antecedent of fixed checks matches on one tick of the attempt
+                if (!flattenFixedSeq(antp, 0, treep->antChecks)) return nullptr;
+                treep->antLen = treep->antChecks.rbegin()->first;
+            }
             treep->delay = implp->isOverlapped() ? 0 : 1;
             treep->followedBy = implp->isFollowedBy();
             lhsp = implp->rhsp();
@@ -3015,7 +3025,7 @@ public:
         }
         treep->lhsp = buildAttemptTree(lhsp);
         if (!treep->lhsp) return nullptr;
-        treep->latency = treep->delay + treep->lhsp->latency;
+        treep->latency = treep->antLen + treep->delay + treep->lhsp->latency;
         if (rhsp) {
             treep->rhsp = buildAttemptTree(rhsp);
             if (!treep->rhsp) return nullptr;
@@ -4155,9 +4165,40 @@ class SvaNfaLowering final {
         }
         return events;
     }
+    // With an antecedent of fixed checks, vacuous on the tick the antecedent fails, else its
+    // consequent from the tick the antecedent matches on (IEEE 1800-2023 16.12.7, 16.12.9)
+    AttemptEvents lowerAttemptSeqImplication(AttemptCtx& a, const SvaAttemptNode& node,
+                                             int startOffset, AstVar* startVarp) {
+        FileLine* const flp = a.c.flp;
+        SvaAttemptNode antNode;
+        antNode.checks = node.antChecks;
+        antNode.latency = node.antLen;
+        const AttemptEvents ant = lowerAttemptSequence(a, antNode, startOffset, startVarp);
+        // The match of the antecedent is of the attempt of one age
+        AstNodeExpr* consStartp = new AstRedOr{flp, newAttemptRefp(a, ant.succp)};
+        if (node.delay) {
+            AstVar* const regp = newAttemptRegp(a, m_modp->findBitDType());
+            setAttemptRegp(a, regp, consStartp);
+            consStartp = new AstVarRef{flp, regp, VAccess::READ};
+        }
+        AttemptEvents events
+            = lowerAttempt(a, *node.lhsp, startOffset + node.antLen + node.delay, consStartp);
+        // Nonvacuous with a match of its antecedent if its consequent is (16.14.8 h-k)
+        if (alwaysNonvacuous(*node.lhsp)) events.nonvacp = ant.succp;
+        // A followed-by fails without a match of its antecedent, vacuously (16.14.8 j, k)
+        if (node.followedBy) {
+            events.failVacp = newAttemptOrp(a, events.failVacp, ant.failp);
+        } else {
+            events.succVacp = newAttemptOrp(a, events.succVacp, ant.failp);
+        }
+        return events;
+    }
     // Vacuous without its antecedent, else its consequent (IEEE 1800-2023 16.12.7, 16.12.9)
     AttemptEvents lowerAttemptImplication(AttemptCtx& a, const SvaAttemptNode& node,
                                           int startOffset, AstVar* startVarp) {
+        if (!node.antChecks.empty()) {
+            return lowerAttemptSeqImplication(a, node, startOffset, startVarp);
+        }
         FileLine* const flp = a.c.flp;
         const auto startRefp = [&]() { return new AstVarRef{flp, startVarp, VAccess::READ}; };
         AstVar* const antVarp
@@ -7781,18 +7822,15 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     // Count the implications of the tree, and find whether it has another property operator
-    // and a sequence not of fixed checks
-    static void findAttemptKinds(const SvaAttemptNode& node, int& implications, bool& other,
-                                 bool& varSeq) {
+    static void findAttemptKinds(const SvaAttemptNode& node, int& implications, bool& other) {
         using Kind = SvaAttemptNode::Kind;
         if (node.kind == Kind::IMPLICATION) {
             ++implications;
         } else if (node.kind != Kind::SEQUENCE) {
             other = true;
         }
-        if (node.seqp) varSeq = true;
-        if (node.lhsp) findAttemptKinds(*node.lhsp, implications, other, varSeq);
-        if (node.rhsp) findAttemptKinds(*node.rhsp, implications, other, varSeq);
+        if (node.lhsp) findAttemptKinds(*node.lhsp, implications, other);
+        if (node.rhsp) findAttemptKinds(*node.rhsp, implications, other);
     }
     // True if the tree has an 'and' or 'intersect' with an operand of variable length, whose
     // matches the NFA lowering pairs across attempts
@@ -7807,9 +7845,8 @@ class AssertNfaVisitor final : public VNVisitor {
         return (node.lhsp && hasVarLenAnd(*node.lhsp)) || (node.rhsp && hasVarLenAnd(*node.rhsp));
     }
     // The tree to lower per attempt of an asserted property with an implication and another
-    // property operator, which may be another implication, over sequences of fixed checks, or
-    // of a property with an 'and' of an operand of variable length, if each operand of it
-    // resolves within a fixed number of ticks
+    // property operator, which may be another implication, or of a property with an 'and' of an
+    // operand of variable length, if each operand of it resolves within a fixed number of ticks
     static std::unique_ptr<SvaAttemptNode> attemptTree(const AstNodeCoverOrAssert* assertp,
                                                        AstNodeExpr* bodyp, bool localValues) {
         // A match item or future value is not on a tick of the attempt, and a cover sequence
@@ -7824,10 +7861,8 @@ class AssertNfaVisitor final : public VNVisitor {
         if (!treep) return nullptr;
         int implications = 0;
         bool other = false;
-        bool varSeq = false;
-        findAttemptKinds(*treep, implications, other, varSeq);
-        if (!hasVarLenAnd(*treep)
-            && (cover || !implications || (!other && implications < 2) || varSeq)) {
+        findAttemptKinds(*treep, implications, other);
+        if (!hasVarLenAnd(*treep) && (cover || !implications || (!other && implications < 2))) {
             return nullptr;
         }
         if (treep->latency > SvaAttemptNode::MAX_LATENCY) {
