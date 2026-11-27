@@ -11743,6 +11743,8 @@ class WidthVisitor final : public VNVisitor {
             return true;
         } else if (AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
             const bool assocSel = VN_IS(selp, AssocSel) || VN_IS(selp, WildcardSel);
+            // Elements of a const array, as in 'const int a[int]', are const
+            if (assocSel && VN_IS(selp->dtypep()->skipRefToConstp(), ConstDType)) return false;
             if (!assocElemAtWriteRecurse(selp->fromp(), underAssocSel || assocSel,
                                          underSel || !assocSel)) {
                 return false;
