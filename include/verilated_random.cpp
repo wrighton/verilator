@@ -2300,7 +2300,7 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
     }
     m_scalarElems.clear();
     for (const auto& ghost : m_ghostElems) {
-        os << "(declare-fun " << ghost.first << " () (_ BitVec " << ghost.second << "))\n";
+        os << "(declare-fun " << ghost.first << " () (_ BitVec " << ghost.second.m_width << "))\n";
     }
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) {
@@ -2341,6 +2341,7 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
             os << ")) " << domainIt->second << "))\n";
         }
     }
+    emitChainDefines(os);
     // Variables registered by different paths to the same object, as through two handles to it,
     // are one variable
     std::map<const void*, const VlRandomVar*> scalars;
@@ -4081,11 +4082,69 @@ const std::string& VlRandomizer::elemTerm(const std::string& name, IData index) 
     }
     std::string ghost;
     VlRandomVar::elementNameOf(ghost, name, index, "__Vg");
-    return m_ghostElems.emplace(ghost, var.width()).first->first;
+    return m_ghostElems.emplace(ghost, GhostElem{var.width(), name, index}).first->first;
+}
+
+const std::string& VlRandomizer::elemChain(const std::string& name, const std::string& index) {
+    const auto varIt = m_vars.find(name);
+    if (VL_UNCOVERABLE(varIt == m_vars.end())) {
+        VL_FATAL_MT(__FILE__, __LINE__, "randomize", "elemChain of an unregistered array");
+    }
+    varIt->second->scalar(true);
+    // The same index term selects the same element
+    const auto it
+        = std::find_if(m_chainElems.begin(), m_chainElems.end(), [&](const ChainElem& elem) {
+              return elem.m_array == name && elem.m_index == index;
+          });
+    if (it != m_chainElems.end()) return it->m_name;
+    std::string chain;
+    VlRandomVar::elementNameOf(chain, name, static_cast<IData>(m_chainElems.size()), "__Vc");
+    m_chainElems.push_back(ChainElem{chain, name, index});
+    return m_chainElems.back().m_name;
+}
+
+// Each chain element's constant (see elemChain): the element at its index if declared, else
+// the earlier chain element of the array at the same index, else a constant of its own,
+// '<name>__Vu<n>', declared but not read back. Linear in the array's declared elements.
+void VlRandomizer::emitChainDefines(std::ostream& os) const {
+    for (size_t i = 0; i < m_chainElems.size(); ++i) {
+        const ChainElem& chain = m_chainElems[i];
+        const VlRandomVar& var = *m_vars.at(chain.m_array);
+        std::string own;
+        VlRandomVar::elementNameOf(own, chain.m_array, static_cast<IData>(i), "__Vu");
+        os << "(declare-fun " << own << " () (_ BitVec " << var.width() << "))\n";
+        std::string term = own;
+        const auto addCase = [&](const std::string& indexTerm, const std::string& valueTerm) {
+            term = "(ite (= " + chain.m_index + " " + indexTerm + ") " + valueTerm + " " + term
+                   + ")";
+        };
+        const auto hexIndex = [](IData index) {
+            std::ostringstream ss;
+            ss << "#x" << std::hex << std::setw(8) << std::setfill('0') << index;
+            return ss.str();
+        };
+        for (size_t j = 0; j < i; ++j) {
+            const ChainElem& earlier = m_chainElems[j];
+            if (earlier.m_array == chain.m_array) addCase(earlier.m_index, earlier.m_name);
+        }
+        for (const auto& ghost : m_ghostElems) {
+            if (ghost.second.m_array == chain.m_array) {
+                addCase(hexIndex(ghost.second.m_index), ghost.first);
+            }
+        }
+        for (auto it = m_arr_vars.lower_bound({chain.m_array, 0});
+             it != m_arr_vars.end() && it->first.first == chain.m_array; ++it) {
+            const IData index = it->second->m_indices[0];
+            addCase(hexIndex(index), var.elementName(index));
+        }
+        os << "(define-fun " << chain.m_name << " () (_ BitVec " << var.width() << ") " << term
+           << ")\n";
+    }
 }
 
 void VlRandomizer::clearConstraints() {
     m_ghostElems.clear();
+    m_chainElems.clear();
     m_nullReads.clear();
     m_failPending.clear();
     m_failFilename = nullptr;
