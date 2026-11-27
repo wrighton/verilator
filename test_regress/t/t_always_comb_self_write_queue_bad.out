@@ -1,0 +1,9 @@
+%Warning-UNOPTFLAT: t/t_always_comb_self_write_queue_bad.v:18:7: Signal unoptimizable: Circular combinational logic: 't.n'
+   18 |   int n = 0;
+      |       ^
+                    ... For warning description see https://verilator.org/warn/UNOPTFLAT?v=latest
+                    ... Use "/* verilator lint_off UNOPTFLAT */" and lint_on around source to disable this message.
+                    t/t_always_comb_self_write_queue_bad.v:18:7:      Example path: t.n
+                    t/t_always_comb_self_write_queue_bad.v:23:3:      Example path: ALWAYS
+                    t/t_always_comb_self_write_queue_bad.v:18:7:      Example path: t.n
+%Error: Exiting due to
