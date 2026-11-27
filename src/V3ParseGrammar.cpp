@@ -280,12 +280,7 @@ AstVar* V3ParseGrammar::createVariable(FileLine* fileline, const string& name,
             return GRAMMARP->m_varDTypep->cloneTree(false);
         }
         // Created implicitly
-        if (m_insideProperty) {
-            if (m_typedPropertyPort) {
-                fileline->v3warn(E_UNSUPPORTED, "Untyped property port following a typed port");
-            }
-            return new AstBasicDType{fileline, VBasicDTypeKwd::UNTYPED};
-        }
+        if (m_insideProperty) return new AstBasicDType{fileline, VBasicDTypeKwd::UNTYPED};
         return new AstBasicDType{fileline, LOGIC_IMPLICIT};
     }();
 
