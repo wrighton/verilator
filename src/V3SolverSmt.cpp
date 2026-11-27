@@ -1968,6 +1968,206 @@ public:
     }
 };
 
+// The values a foreach constraint item allows every element of a random array, registered for
+// the runtime's check that a uniqueness constraint has values enough for its elements
+// (VlRandomizer::uniqueDomainsUnsat). Only a comparison of the loop's own element with
+// constants, under && and ||, is read: anything else allows values unknown here.
+class UniqueDomainBuilder final {
+public:
+    using Ranges = std::vector<std::pair<uint64_t, uint64_t>>;  // Keys of values, see key()
+
+private:
+    const AstVar* const m_arrVarp;  // The array
+    const AstVar* const m_idxVarp;  // Its loop index
+    const int m_width;  // Of an element
+    const bool m_signed;  // Elements are signed
+
+    // Keys order the values from 0, the least signed value first
+    uint64_t key(uint64_t value) const {
+        return (value & VL_MASK_Q(m_width)) ^ (m_signed ? uint64_t{1} << (m_width - 1) : 0);
+    }
+    static Ranges unite(Ranges a, const Ranges& b) {
+        a.insert(a.end(), b.begin(), b.end());
+        std::sort(a.begin(), a.end());
+        Ranges result;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (!result.empty()
+                && (result.back().second == std::numeric_limits<uint64_t>::max()
+                    || a[i].first <= result.back().second + 1)) {
+                result.back().second = std::max(result.back().second, a[i].second);
+            } else {
+                result.push_back(a[i]);
+            }
+        }
+        return result;
+    }
+    static Ranges intersect(const Ranges& a, const Ranges& b) {
+        Ranges result;
+        size_t i = 0;
+        size_t j = 0;
+        while (i < a.size() && j < b.size()) {
+            const uint64_t lo = std::max(a[i].first, b[j].first);
+            const uint64_t hi = std::min(a[i].second, b[j].second);
+            if (lo <= hi) result.emplace_back(lo, hi);
+            if (a[i].second < b[j].second) {
+                ++i;
+            } else {
+                ++j;
+            }
+        }
+        return result;
+    }
+    // Whether exprp is the element at the loop index, or an extension keeping its order
+    bool isElement(const AstNodeExpr* exprp) const {
+        if (const AstExtend* const extendp = VN_CAST(exprp, Extend)) {
+            if (m_signed) return false;
+            exprp = extendp->lhsp();
+        } else if (const AstExtendS* const extendp = VN_CAST(exprp, ExtendS)) {
+            if (!m_signed) return false;
+            exprp = extendp->lhsp();
+        }
+        // An element of a fixed-size array, dynamic array or queue, counted from the front
+        const AstNodeSel* const elemSelp = VN_CAST(exprp, NodeSel);
+        const AstQueueSel* const queueSelp = VN_CAST(exprp, QueueSel);
+        if (!(VN_IS(exprp, ArraySel) || VN_IS(exprp, DynArraySel)
+              || (queueSelp && !queueSelp->fromBack()))) {
+            return false;
+        }
+        const AstNodeExpr* const fromp = elemSelp->fromp();
+        const AstNodeExpr* indexp = elemSelp->bitp();
+        // Less the low bound of a fixed-size array's range
+        if (const AstSub* const subp = VN_CAST(indexp, Sub)) {
+            if (!VN_IS(subp->rhsp(), Const)) return false;
+            indexp = subp->lhsp();
+        }
+        const AstVarRef* const arrRefp = VN_CAST(fromp, VarRef);
+        const AstVarRef* const idxRefp = VN_CAST(indexp, VarRef);
+        return arrRefp && idxRefp && arrRefp->varp() == m_arrVarp && idxRefp->varp() == m_idxVarp
+               && exprp->width() == m_width;
+    }
+    // The keys of the element values v with 'v rel c', in the element's own order
+    template <typename T>
+    Ranges relation(char rel, T c, T min, T max) const {
+        T lo = min;
+        T hi = max;
+        switch (rel) {
+        case 'g':  // >=
+            if (c > max) return {};
+            lo = std::max(c, min);
+            break;
+        case 'G':  // >
+            if (c >= max) return {};
+            lo = c < min ? min : c + 1;
+            break;
+        case 'l':  // <=
+            if (c < min) return {};
+            hi = std::min(c, max);
+            break;
+        case 'L':  // <
+            if (c <= min) return {};
+            hi = c > max ? max : c - 1;
+            break;
+        case '!': {  // !=
+            if (c < min || c > max) break;
+            Ranges result;
+            if (c > min) {
+                result.emplace_back(key(static_cast<uint64_t>(min)),
+                                    key(static_cast<uint64_t>(c - 1)));
+            }
+            if (c < max) {
+                result.emplace_back(key(static_cast<uint64_t>(c + 1)),
+                                    key(static_cast<uint64_t>(max)));
+            }
+            return result;
+        }
+        default:  // ==
+            if (c < min || c > max) return {};
+            lo = c;
+            hi = c;
+        }
+        return {{key(static_cast<uint64_t>(lo)), key(static_cast<uint64_t>(hi))}};
+    }
+    // The value of a constant, or of a negated one, as a negative bound is left before V3Const
+    static bool constValue(const AstNodeExpr* exprp, uint64_t& valuer) {
+        const AstNegate* const negatep = VN_CAST(exprp, Negate);
+        const AstConst* const constp = VN_CAST(negatep ? negatep->lhsp() : exprp, Const);
+        if (!constp || constp->num().isFourState() || exprp->width() > 64
+            || constp->width() != exprp->width()) {
+            return false;
+        }
+        valuer = constp->num().toUQuad();
+        if (negatep) valuer = (~valuer + 1) & VL_MASK_Q(exprp->width());
+        return true;
+    }
+    bool compare(const AstNodeBiop* nodep, Ranges& rangesr) const {
+        const bool lhsElement = isElement(nodep->lhsp());
+        if (!lhsElement && !isElement(nodep->rhsp())) return false;
+        const AstNodeExpr* const boundp = lhsElement ? nodep->rhsp() : nodep->lhsp();
+        uint64_t value;
+        if (!constValue(boundp, value)) return false;
+        // The relation with the element on the left, and the order compared in
+        char rel;
+        bool isSigned = m_signed;
+        if (VN_IS(nodep, Gte) || VN_IS(nodep, GteS)) {
+            rel = lhsElement ? 'g' : 'l';
+            isSigned = VN_IS(nodep, GteS);
+        } else if (VN_IS(nodep, Gt) || VN_IS(nodep, GtS)) {
+            rel = lhsElement ? 'G' : 'L';
+            isSigned = VN_IS(nodep, GtS);
+        } else if (VN_IS(nodep, Lte) || VN_IS(nodep, LteS)) {
+            rel = lhsElement ? 'l' : 'g';
+            isSigned = VN_IS(nodep, LteS);
+        } else if (VN_IS(nodep, Lt) || VN_IS(nodep, LtS)) {
+            rel = lhsElement ? 'L' : 'G';
+            isSigned = VN_IS(nodep, LtS);
+        } else if (VN_IS(nodep, Eq) || VN_IS(nodep, EqWild)) {
+            rel = '=';
+        } else if (VN_IS(nodep, Neq) || VN_IS(nodep, NeqWild)) {
+            rel = '!';
+        } else {
+            return false;
+        }
+        if (isSigned != m_signed) return false;
+        const int width = boundp->width();
+        if (m_signed && width < 64 && (value >> (width - 1)) & 1) value |= ~VL_MASK_Q(width);
+        if (m_signed) {
+            const int64_t max = static_cast<int64_t>(VL_MASK_Q(m_width - 1));
+            rangesr = relation<int64_t>(rel, static_cast<int64_t>(value), -max - 1, max);
+        } else {
+            rangesr = relation<uint64_t>(rel, value, 0, VL_MASK_Q(m_width));
+        }
+        return true;
+    }
+
+public:
+    UniqueDomainBuilder(const AstVar* arrVarp, const AstVar* idxVarp, int width, bool isSigned)
+        : m_arrVarp{arrVarp}
+        , m_idxVarp{idxVarp}
+        , m_width{width}
+        , m_signed{isSigned} {}
+    // The keys of the values exprp allows the element, false if not known here
+    bool ranges(const AstNodeExpr* exprp, Ranges& rangesr) const {
+        if (const AstLogOr* const orp = VN_CAST(exprp, LogOr)) {
+            Ranges lhs;
+            Ranges rhs;
+            if (!ranges(orp->lhsp(), lhs) || !ranges(orp->rhsp(), rhs)) return false;
+            rangesr = unite(lhs, rhs);
+            return true;
+        }
+        if (const AstLogAnd* const andp = VN_CAST(exprp, LogAnd)) {
+            Ranges lhs;
+            Ranges rhs;
+            if (!ranges(andp->lhsp(), lhs) || !ranges(andp->rhsp(), rhs)) return false;
+            rangesr = intersect(lhs, rhs);
+            return true;
+        }
+        if (const AstNodeBiop* const biopp = VN_CAST(exprp, NodeBiop)) {
+            return compare(biopp, rangesr);
+        }
+        return false;
+    }
+};
+
 class ConstraintExprVisitor final : public VNVisitor {
 public:
     struct MemberSizeBindings final {
@@ -7990,9 +8190,83 @@ private:
         // Dubious but this is what we used to do. Does that mean no randomzie
         // methods work under a generage block?
     }
+    // Whether a uniqueness constraint of the class or its bases names the whole array 'varp',
+    // lowered or not
+    bool isUniqueArray(const AstVar* varp) const {
+        for (const AstClass* classp = m_classp; classp;
+             classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr) {
+            const bool found = classp->exists([&](const AstNode* nodep) {
+                if (const AstConstraintUnique* const uniquep = VN_CAST(nodep, ConstraintUnique)) {
+                    for (const AstNode* itemp = uniquep->rangesp(); itemp;
+                         itemp = itemp->nextp()) {
+                        const AstVarRef* const refp = VN_CAST(itemp, VarRef);
+                        if (refp && refp->varp() == varp) return true;
+                    }
+                } else if (const AstCMethodHard* const callp = VN_CAST(nodep, CMethodHard)) {
+                    const AstConst* const namep = VN_CAST(callp->pinsp(), Const);
+                    return callp->method() == VCMethod::RANDOMIZER_UNIQUE && namep
+                           && namep->num().toString() == SmtUtil::smtSymbol(varp->name());
+                }
+                return false;
+            });
+            if (found) return true;
+        }
+        return false;
+    }
+    // Registration of the values an unconditional foreach item allows every element of a
+    // whole random array, before the item's own constraints, nullptr if unknown
+    AstNodeStmt* newUniqueDomainp(const AstConstraintForeach* nodep) const {
+        const AstVarRef* const arrRefp = VN_CAST(nodep->headerp()->fromp(), VarRef);
+        const AstNode* const idxp = nodep->headerp()->elementsp();
+        const AstConstraintExpr* const itemp = VN_CAST(nodep->bodyp(), ConstraintExpr);
+        if (!arrRefp || !VN_IS(idxp, Var) || idxp->nextp() || !itemp || itemp->nextp()
+            || itemp->isSoft() || itemp->isDisableSoft()
+            || !arrRefp->varp()->rand().isRandomizable()) {
+            return nullptr;
+        }
+        const AstNodeDType* const dtypep = arrRefp->varp()->dtypep()->skipRefp();
+        if (!VN_IS(dtypep, QueueDType) && !VN_IS(dtypep, DynArrayDType)
+            && !VN_IS(dtypep, UnpackArrayDType)) {
+            return nullptr;
+        }
+        const AstNodeDType* const elemp = dtypep->subDTypep()->skipRefp();
+        if (!elemp->isIntegralOrPacked() || elemp->width() < 1 || elemp->width() > 64
+            || !isUniqueArray(arrRefp->varp())) {
+            return nullptr;
+        }
+        const UniqueDomainBuilder builder{arrRefp->varp(), VN_AS(idxp, Var), elemp->width(),
+                                          elemp->isSigned()};
+        UniqueDomainBuilder::Ranges ranges;
+        if (!builder.ranges(itemp->exprp(), ranges)) return nullptr;
+        FileLine* const fl = nodep->fileline();
+        AstNodeModule* const genModp = VN_AS(m_genp->user2p(), NodeModule);
+        AstCMethodHard* const domainp = new AstCMethodHard{
+            fl, new AstVarRef{fl, genModp, m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_UNIQUE_DOMAIN,
+            new AstConst{fl, AstConst::String{}, SmtUtil::smtSymbol(arrRefp->varp()->name())}};
+        domainp->addPinsp(new AstConst{fl, static_cast<uint32_t>(elemp->width())});
+        domainp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, elemp->isSigned()});
+        domainp->dtypeSetVoid();
+        AstNodeStmt* stmtsp = domainp->makeStmt();
+        for (size_t i = 0; i < ranges.size(); ++i) {
+            AstCMethodHard* const rangep
+                = new AstCMethodHard{fl, new AstVarRef{fl, genModp, m_genp, VAccess::READWRITE},
+                                     VCMethod::RANDOMIZER_UNIQUE_RANGE,
+                                     new AstConst{fl, AstConst::Unsized64{}, ranges[i].first}};
+            rangep->addPinsp(new AstConst{fl, AstConst::Unsized64{}, ranges[i].second});
+            rangep->dtypeSetVoid();
+            stmtsp = AstNode::addNext(stmtsp, rangep->makeStmt());
+        }
+        return stmtsp;
+    }
     void visit(AstConstraintForeach* nodep) override {
         // Convert to plain foreach
         FileLine* const fl = nodep->fileline();
+        if (!m_wantSingle) {
+            if (AstNodeStmt* const domainp = newUniqueDomainp(nodep)) {
+                nodep->addHereThisAsNext(domainp);
+            }
+        }
         // Registrations referencing the index are appended to the holder of the body
         VL_RESTORER(m_foreachBodyp);
         VL_RESTORER_COPY(m_foreachIdxVars);

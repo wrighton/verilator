@@ -2261,6 +2261,9 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
         return true;
     }
     if (checkOnly && m_vars.empty() && m_constraints.empty()) return true;
+    // A uniqueness group short of values fails at once, leaving the values as they were (IEEE
+    // 1800-2023 18.6.3); the sizes it counts are those solved
+    if (!checkOnly && !sizeSolve && uniqueDomainsUnsat()) return false;
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
     m_checkOnly = checkOnly;
@@ -2305,7 +2308,10 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
     // sizes, which the final solve picks again, so it asks none of them to differ. Asked, more
     // old elements than the values they may take would be a pigeonhole a solver takes very long
     // on. The randc history above sees the groups still, as before the final solve.
-    if (sizeSolve) uniqueExprs.erase(uniqueExprs.begin(), uniqueExprs.begin() + groupExprs);
+    if (sizeSolve) {
+        uniqueExprs.erase(uniqueExprs.begin(), uniqueExprs.begin() + groupExprs);
+        addUniqueSizeBounds(uniqueExprs);
+    }
 
     // Reseeded from outside, so everything cached came from the old seed.
     if (m_ug2.rngReseeds != rngr.reseeds()) {
@@ -3811,33 +3817,163 @@ void VlRandomizer::reportUnsatCore(VlSolverSession& sess) VL_REQUIRES(sess.m_mut
         return;
     }
     const std::vector<int> numbers = scanIntRuns(reply);
-    if (Verilated::threadContextp()->warnUnsatConstr()) {
-        for (const int n : numbers) {
-            if (static_cast<size_t>(n) < m_constraints_line.size()) {
-                const std::string& constraint_info = m_constraints_line[n];
-                // Parse "filename:linenum   source" format, parts optional
-                std::string filename;
-                int linenum = 0;
-                std::string source = constraint_info;
-                const size_t colon_pos = constraint_info.find(':');
-                if (colon_pos != std::string::npos) {
-                    filename = constraint_info.substr(0, colon_pos);
-                    const size_t space_pos = constraint_info.find("   ", colon_pos);
-                    const size_t num_end
-                        = space_pos == std::string::npos ? constraint_info.size() : space_pos;
-                    linenum = std::atoi(
-                        constraint_info.substr(colon_pos + 1, num_end - colon_pos - 1).c_str());
-                    source = space_pos == std::string::npos
-                                 ? ""
-                                 : constraint_info.substr(space_pos + 3);
+    for (const int n : numbers) warnUnsatConstraint(static_cast<size_t>(n));
+}
+
+// The number of values of ranges in key order, overlapping or not, but at most cap
+static uint64_t uniqueCount(const std::vector<std::pair<uint64_t, uint64_t>>& ranges,
+                            uint64_t cap) {
+    uint64_t count = 0;
+    uint64_t from = 0;  // Least key not counted
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        if (count >= cap) return cap;
+        if (ranges[i].second < from) continue;
+        const uint64_t lo = std::max(ranges[i].first, from);
+        if (ranges[i].second - lo >= cap - count - 1) return cap;
+        count += ranges[i].second - lo + 1;
+        if (ranges[i].second == std::numeric_limits<uint64_t>::max()) break;
+        from = ranges[i].second + 1;
+    }
+    return count;
+}
+
+bool VlRandomizer::uniqueAllowed(const std::vector<std::string>& names,
+                                 std::vector<UniqueRanges>& allowedr) const {
+    const UniqueDomain* firstp = nullptr;
+    for (const std::string& name : names) {
+        const auto domainsIt = m_uniqueDomains.find(name);
+        if (domainsIt == m_uniqueDomains.end() || !m_vars.count(name)) return false;
+        UniqueRanges allowed = domainsIt->second.front().ranges;
+        for (const UniqueDomain& domain : domainsIt->second) {
+            if (!firstp) firstp = &domain;
+            // IEEE 1800-2023 18.5.4 requires the members be of equivalent types
+            if (domain.width != firstp->width || domain.isSigned != firstp->isSigned) {
+                return false;  // LCOV_EXCL_LINE
+            }
+            // Both in key order: keep what both allow
+            UniqueRanges both;
+            size_t i = 0;
+            size_t j = 0;
+            while (i < allowed.size() && j < domain.ranges.size()) {
+                const uint64_t lo = std::max(allowed[i].first, domain.ranges[j].first);
+                const uint64_t hi = std::min(allowed[i].second, domain.ranges[j].second);
+                if (lo <= hi) both.emplace_back(lo, hi);
+                if (allowed[i].second < domain.ranges[j].second) {
+                    ++i;
+                } else {
+                    ++j;
                 }
-                std::string msg = "UNSATCONSTR: Unsatisfied constraint";
-                const size_t start = source.find_first_not_of(" \t");
-                if (start != std::string::npos) msg += ": '" + source.substr(start) + "'";
-                VL_WARN_MT(filename.c_str(), linenum, "", msg.c_str());
+            }
+            allowed = std::move(both);
+        }
+        allowedr.push_back(std::move(allowed));
+    }
+    return true;
+}
+
+// Whether a uniqueness group of whole arrays has more elements than values for them, as a
+// whole or in one of its arrays, warning of the constraints limiting the values. An array's
+// elements may take the values all its unique_domain() constraints allow, the group's those
+// of any of its arrays. A group with an array of no such constraint, or of elements of another
+// width or signedness, is left to the solver, as are all other ways of too few values for
+// distinct elements, which a solver can take very long to prove (a pigeonhole problem).
+bool VlRandomizer::uniqueDomainsUnsat() const {
+    for (const auto& group : m_uniqueArrays) {
+        std::vector<std::string> names{group.second.begin(), group.second.end()};
+        std::sort(names.begin(), names.end());  // Warnings in a set order
+        std::vector<UniqueRanges> allowed;
+        if (!uniqueAllowed(names, allowed)) continue;
+        UniqueRanges values;  // Of the group
+        uint64_t elements = 0;
+        bool fewer = false;
+        for (size_t i = 0; i < names.size(); ++i) {
+            const uint64_t arrayElements
+                = m_vars.at(names[i])->countMatchingElements(m_arr_vars, names[i]);
+            if (uniqueCount(allowed[i], arrayElements) < arrayElements) fewer = true;
+            values.insert(values.end(), allowed[i].begin(), allowed[i].end());
+            elements += arrayElements;
+        }
+        std::sort(values.begin(), values.end());
+        if (!fewer && uniqueCount(values, elements) == elements) continue;
+        for (const std::string& name : names) {
+            // The constraint of an array with no elements registered none to name
+            if (!m_vars.at(name)->countMatchingElements(m_arr_vars, name)) continue;
+            for (const UniqueDomain& domain : m_uniqueDomains.at(name)) {
+                warnUnsatConstraint(domain.constraint);
             }
         }
+        return true;
     }
+    return false;
+}
+
+// In the solve of the array sizes, a uniqueness group whose arrays each have values for them
+// from hard constraints, see uniqueDomainsUnsat, gets sizes for no more elements than values:
+// each array alone and all together. Picked larger, the final solve would fail, and could take
+// very long to (a pigeonhole problem).
+void VlRandomizer::addUniqueSizeBounds(std::vector<std::string>& exprs) const {
+    static constexpr uint64_t sumCap = 1ULL << 62;  // Values a 64-bit sum of sizes compares to
+    for (const auto& group : m_uniqueArrays) {
+        std::vector<std::string> names{group.second.begin(), group.second.end()};
+        std::sort(names.begin(), names.end());  // Assertions in a set order
+        std::vector<UniqueRanges> allowed;
+        if (!uniqueAllowed(names, allowed)) continue;
+        UniqueRanges values;  // Of the group
+        std::string sum;  // Of the group's elements, 64 bits
+        bool sized = false;
+        for (size_t i = 0; i < names.size(); ++i) {
+            values.insert(values.end(), allowed[i].begin(), allowed[i].end());
+            const std::string sizeName = "__V" + names[i] + "_size";
+            const auto sizeIt = m_vars.find(sizeName);
+            std::string term;
+            if (sizeIt == m_vars.end()) {
+                term = "(_ bv"
+                       + std::to_string(
+                           m_vars.at(names[i])->countMatchingElements(m_arr_vars, names[i]))
+                       + " 64)";
+            } else {
+                sized = true;
+                const uint32_t width = sizeIt->second->width();  // Of an int size, 32
+                const uint64_t count = uniqueCount(allowed[i], 1ULL << (width - 1));
+                if (count < (1ULL << (width - 1))) {
+                    exprs.push_back("(ite (bvule " + sizeName + " (_ bv" + std::to_string(count)
+                                    + " " + std::to_string(width) + ")) #b1 #b0)");
+                }
+                term = "((_ zero_extend " + std::to_string(64 - width) + ") " + sizeName + ")";
+            }
+            sum = sum.empty() ? term : "(bvadd " + sum + " " + term + ")";
+        }
+        if (!sized || names.size() < 2) continue;
+        std::sort(values.begin(), values.end());
+        const uint64_t count = uniqueCount(values, sumCap);
+        if (count < sumCap) {
+            exprs.push_back("(ite (bvule " + sum + " (_ bv" + std::to_string(count)
+                            + " 64)) #b1 #b0)");
+        }
+    }
+}
+
+// Warn that constraint n is not satisfied, with its source
+void VlRandomizer::warnUnsatConstraint(size_t n) const {
+    if (!Verilated::threadContextp()->warnUnsatConstr() || n >= m_constraints_line.size()) return;
+    const std::string& constraint_info = m_constraints_line[n];
+    // Parse "filename:linenum   source" format, parts optional
+    std::string filename;
+    int linenum = 0;
+    std::string source = constraint_info;
+    const size_t colon_pos = constraint_info.find(':');
+    if (colon_pos != std::string::npos) {
+        filename = constraint_info.substr(0, colon_pos);
+        const size_t space_pos = constraint_info.find("   ", colon_pos);
+        const size_t num_end = space_pos == std::string::npos ? constraint_info.size() : space_pos;
+        linenum
+            = std::atoi(constraint_info.substr(colon_pos + 1, num_end - colon_pos - 1).c_str());
+        source = space_pos == std::string::npos ? "" : constraint_info.substr(space_pos + 3);
+    }
+    std::string msg = "UNSATCONSTR: Unsatisfied constraint";
+    const size_t start = source.find_first_not_of(" \t");
+    if (start != std::string::npos) msg += ": '" + source.substr(start) + "'";
+    VL_WARN_MT(filename.c_str(), linenum, "", msg.c_str());
 }
 
 bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
@@ -4443,6 +4579,7 @@ void VlRandomizer::clearConstraints() {
     // handles may hold other objects for the merges that follow (see clear_nested())
     while (!m_nested.empty()) clear_nested(m_nested.begin()->first);
     m_uniqueArrays.clear();  // Re-registered by constraint setup
+    m_uniqueDomains.clear();  // Likewise
     m_frozenPins.clear();  // Likewise re-added
     m_elemVarsCleared.clear();
     m_tables.clear();
