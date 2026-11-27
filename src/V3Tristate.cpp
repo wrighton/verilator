@@ -2743,6 +2743,26 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstAssign* nodep) override { visitAssign(nodep); }
     void visit(AstAssignDly* nodep) override { visitAssign(nodep); }
 
+    // Whether a z constant in 'nodep' passes to its value: through the operands that select or
+    // place bits, not those that are tested or counted, like a z compared with ===
+    static bool zReachesValue(const AstNode* nodep) {
+        if (const AstConst* const constp = VN_CAST(nodep, Const)) return constp->num().hasZ();
+        if (const AstCond* const condp = VN_CAST(nodep, Cond)) {
+            return zReachesValue(condp->thenp()) || zReachesValue(condp->elsep());
+        }
+        if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+            return zReachesValue(concatp->lhsp()) || zReachesValue(concatp->rhsp());
+        }
+        if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+            return zReachesValue(repp->srcp());
+        }
+        if (const AstSel* const selp = VN_CAST(nodep, Sel)) return zReachesValue(selp->fromp());
+        if (const AstNodeUniop* const uniopp = VN_CAST(nodep, NodeUniop)) {
+            return (VN_IS(uniopp, Extend) || VN_IS(uniopp, ExtendS))
+                   && zReachesValue(uniopp->lhsp());
+        }
+        return false;
+    }
     // Whether a force value may be z. A two-state value, and the result of an operator that
     // turns z into x, never is. Z bits not lowered here (in functions), calls and class members
     // may be; any other node passes on the z of its operands.
@@ -3671,6 +3691,18 @@ public:
                 && !varp->declDirection().isWritable() && constp && constp->num().hasZ()) {
                 m_zInputs.emplace(varp);
             }
+        });
+        // A z written across hierarchy to an interface net makes it tristate for every module
+        // driving it, so record those nets before any module is processed; a module driving
+        // the net with a plain assign may come before the one writing the z
+        netlistp->foreach([&](const AstNodeAssign* assp) {
+            if (!zReachesValue(assp->rhsp())) return;
+            assp->lhsp()->foreach([&](const AstVarXRef* xrefp) {
+                if (xrefp->access().isWriteOrRW()
+                    && VN_IS(findParentModule(xrefp->varp()), Iface)) {
+                    m_varAux(xrefp->varp()).ifaceTristate = true;
+                }
+            });
         });
         // Process interface modules first, so an interface tristate net is recorded
         // (AuxAstVar::ifaceTristate) before any module that drives it across hierarchy is
