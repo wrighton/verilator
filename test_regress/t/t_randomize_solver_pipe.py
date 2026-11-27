@@ -104,9 +104,12 @@ test.file_grep(logfile, r'Solver died or replied unreadably')
 # A reply the unigen2 sampler can't read while it measures the solution space.
 # Falls back to the plain solve, so every randomize still succeeds
 logfile = test.obj_dir + '/sim_ug2_estimate.log'
+latch = test.obj_dir + '/ug2_estimate.latch'
+if os.path.exists(latch):
+    os.unlink(latch)
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=model_trunc TAMPER_AT=8 ')
+             'TAMPER=model_trunc TAMPER_AT=8 TAMPER_ONCE="' + latch + '" ')
 test.file_grep(logfile, r'NPASS=(\d+)', 12)
 
 # A value the sampler can't parse while it measures the solution space.

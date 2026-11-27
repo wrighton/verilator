@@ -285,9 +285,26 @@ class VlRandomizer VL_NOT_FINAL {
     bool m_checkOnly = false;  // Set for randomize(null)
     bool m_spreadFailed = false;  // A solver failure cut this call's spreading short
     bool m_warnedSpreadFailed = false;  // Warned of a spreading cut short
+    bool m_warnedSpreadBroke = false;  // Warned of a spreading that broke the solver
+    // The pause of spreading after it broke the solver. A copy of the object spreads afresh.
+    struct SpreadPause final {
+        uint32_t skips = 0;  // Later calls that do not spread
+        uint32_t length = 0;  // Calls the last break paused spreading for
+        bool now = false;  // This call does not spread
+        SpreadPause() = default;
+        SpreadPause(const SpreadPause&) {}
+        SpreadPause& operator=(const SpreadPause&) {
+            skips = 0;
+            length = 0;
+            now = false;
+            return *this;
+        }
+    };
+    SpreadPause m_spreadPause;
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
+    bool spreads() const;  // Whether this call spreads its solution
 
     // PRIVATE METHODS
     void randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
