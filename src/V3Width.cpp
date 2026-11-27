@@ -1308,7 +1308,8 @@ class WidthVisitor final : public VNVisitor {
             iterateCheckSelf(nodep, "LHS", nodep->lhsp(), SELF, BOTH);
             m_streamConcat = false;
             iterateCheckSelf(nodep, "RHS", nodep->rhsp(), SELF, BOTH);
-            V3Const::constifyParamsEdit(nodep->rhsp());  // rhsp may change
+            // A non-constant size is reported below, so without the generic error
+            V3Const::constifyParamsNoWarnEdit(nodep->rhsp());  // rhsp may change
             const AstConst* const constp = VN_CAST(nodep->rhsp(), Const);
             bool bad = false;
             if (!constp) {
