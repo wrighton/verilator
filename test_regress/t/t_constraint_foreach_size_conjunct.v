@@ -91,6 +91,8 @@ class InnerKept;
   rand bit [7:0] dd[][];
   rand bit [7:0] qq[$][$];
   constraint c {
+    dd.size() inside {[1 : 4]};
+    qq.size() inside {[1 : 4]};
     foreach (dd[i, j]) (dd.size() == 2) && (dd[i][j] < 9);
     foreach (qq[i, j]) (qq.size() == 2) && (qq[i][j] < 9);
   }
