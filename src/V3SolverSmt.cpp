@@ -2801,15 +2801,6 @@ private:
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
         return varp;
     }
-    // Copy of translated solver text 'textp'. A block building text in it, as of a held array
-    // (see newIndexedArrayp), only sets its own variables, so may run once for each copy, and
-    // is named anew, so its variables are declared in each.
-    AstNodeExpr* cloneTextp(AstNodeExpr* textp) {
-        AstNodeExpr* const clonep = textp->cloneTree(false);
-        clonep->foreach(
-            [this](AstBegin* const beginp) { beginp->name(m_uniqueNames.get(beginp->name())); });
-        return clonep;
-    }
     // Statement appending 'exprp' to the text in 'varp'
     static AstStmtExpr* newTextAppendp(FileLine* flp, AstVar* varp, AstNodeExpr* exprp) {
         AstCFuncHard* const callp = new AstCFuncHard{flp, VCFunction::STRING_APPEND,
@@ -6610,6 +6601,18 @@ private:
         }
         return new AstSFormatF{fl, fmt, false, argsp};
     }
+    // Bind 'name' to the solver term 'valuep' in the translated term 'termp'
+    static AstSFormatF* editLetBound(AstSFormatF* termp, const std::string& name,
+                                     AstNodeExpr* valuep) {
+        FileLine* const fl = termp->fileline();
+        VNRelinker handle;
+        termp->unlinkFrBack(&handle);
+        AstSFormatF* const newp
+            = new AstSFormatF{fl, "(let ((" + name + " %s)) %s)", false, valuep};
+        newp->addExprsp(termp);
+        handle.relink(newp);
+        return newp;
+    }
     // Make the translated element select 'selp' of 'width' bits read zero unless 'guardp', a
     // solver term, holds
     AstSFormatF* editSmtInRange(AstSFormatF* selp, AstNodeExpr* guardp, int width) {
@@ -6683,6 +6686,23 @@ private:
         }
         return condp;
     }
+    // Whether the random index of the select 'selp' may be out of range
+    static bool isGuardedRandIndex(const AstArraySel* selp) {
+        const uint32_t elements
+            = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+        const int width = selp->bitp()->width();
+        return isRandIndex(selp->bitp()) && (width >= 32 || (1U << width) > elements);
+    }
+    // Whether 'fromp', an array a random index selects from, can have rand_mode() off, which
+    // editHeldArraySel then reads as state
+    static bool isModeArray(const AstNodeExpr* fromp) {
+        const AstMemberRef* const memberRefp = VN_CAST(fromp, MemberRef);
+        const AstNodeVarRef* const varRefp = VN_CAST(fromp, NodeVarRef);
+        if (!(memberRefp && VN_IS(memberRefp->fromp(), NodeVarRef)) && !varRefp) return false;
+        const AstVar* const varp = memberRefp ? memberRefp->varp() : varRefp->varp();
+        const RandomizeMode randMode = {.asUQuad = varp->user1()};
+        return randMode.usesMode;
+    }
     // Return SMT condition that the rand indices of select chain 'nodep' are in range, or nullptr
     static AstNodeExpr* newIndexInRangep(const AstArraySel* nodep) {
         AstNodeExpr* condp = nullptr;
@@ -6690,7 +6710,7 @@ private:
             const uint32_t elements
                 = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
             const int width = selp->bitp()->width();
-            if (!isRandIndex(selp->bitp()) || (width < 32 && (1U << width) <= elements)) continue;
+            if (!isGuardedRandIndex(selp)) continue;
             FileLine* const fl = selp->fileline();
             AstNodeExpr* const gtep
                 = new AstGte{fl, new AstConst{fl, AstConst::WidthedValue{}, width, elements - 1},
@@ -6713,9 +6733,19 @@ private:
             return;
         }
         FileLine* const fl = nodep->fileline();
+        // Of an array of objects, or of arrays of them
+        const bool objectElem
+            = VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType);
         // An element selected by an out-of-range index reads the default value
-        // (IEEE 1800-2023 7.4.6); only an integral element has one to read instead
-        if (nodep != m_inRangeSelp && nodep->dtypep()->skipRefp()->isIntegralOrPacked()) {
+        // (IEEE 1800-2023 7.4.6); only an integral element has one to read instead. The random
+        // index of a select of a solved array is bound once then, as its text may be long, e.g.
+        // of a select by an index that is itself such a select (see editLetBound).
+        const bool inRangeSel
+            = nodep != m_inRangeSelp && nodep->dtypep()->skipRefp()->isIntegralOrPacked();
+        const bool letBound = inRangeSel && !m_structSel && !m_nestedAccessp && !objectElem
+                              && nodep->fromp()->user1() && !VN_IS(nodep->fromp(), ArraySel)
+                              && !isModeArray(nodep->fromp()) && isGuardedRandIndex(nodep);
+        if (inRangeSel && !letBound) {
             if (AstNodeExpr* const inRangep = newIndexInRangep(nodep)) {
                 VNRelinker condHandle;
                 nodep->unlinkFrBack(&condHandle);
@@ -6740,9 +6770,6 @@ private:
                       && (!indexIsRand || nodep->fromp()->user1())
                   ? newStateIndexInRangep(nodep)
                   : nullptr;
-        // Of an array of objects, or of arrays of them
-        const bool objectElem
-            = VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType);
         VNRelinker handle;
         const std::string elemFormat
             = m_structSel && !objectElem && !indexIsRand
@@ -6801,6 +6828,29 @@ private:
             unsupportedStateArraySel(nodep);
         } else if (indexIsRand && objectElem && m_structSel) {
             unsupportedObjectRandIndex(nodep);
+        } else if (indexIsRand && letBound) {
+            // The index, bound to a name, reads zero above the last element; a narrower index
+            // is zero extended into the index sort, and a wider one is in range in it there
+            const int width = nodep->bitp()->width();
+            const uint32_t elements
+                = VN_AS(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+            AstNodeExpr* const indexTextp
+                = VN_AS(iterateSubtreeReturnEdits(nodep->bitp()->unlinkFrBack(&handle)), NodeExpr);
+            const std::string keyName = m_uniqueNames.get("__Vk");
+            const std::string sortName
+                = width < VL_IDATASIZE
+                      ? "((_ zero_extend " + cvtToStr(VL_IDATASIZE - width) + ") " + keyName + ")"
+                  : width > VL_IDATASIZE ? "((_ extract 31 0) " + keyName + ")"
+                                         : keyName;
+            handle.relink(new AstSFormatF{fl, sortName, false, nullptr});
+            AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), nodep->bitp());
+            renameArrayExpr(newp, objectElem);
+            AstSFormatF* const lastp
+                = getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, elements - 1});
+            AstSFormatF* const guardedp = editSmtInRange(
+                newp, new AstSFormatF{fl, "(bvuge %s " + keyName + ")", false, lastp}, elemWidth);
+            AstSFormatF* const boundp = editLetBound(guardedp, keyName, indexTextp);
+            if (stateInRangep) editStateInRange(boundp, stateInRangep, elemWidth);
         } else if (indexIsRand) {
             // Index depends on rand variable -- keep as SMT symbol.
             // The offset from the low bound is unsigned, even when computed as signed
@@ -8191,6 +8241,7 @@ private:
                                      && !isForeachElement(nodep->fromp(), nodep->pinsp());
                 AstNodeExpr* sizeTextp = nullptr;  // For a solved index, after translation
                 AstNodeExpr* nullTextp = nullptr;  // Of the read through a null class handle
+                std::string keyName;  // Bound to a solved index, see editLetBound
                 if (guarded) {
                     AstNodeExpr* const arrayp = nodep->fromp();
                     AstNodeExpr* const indexp = nodep->pinsp();
@@ -8288,19 +8339,26 @@ private:
                     VL_DO_DANGLING(originalPinp->deleteTree(), originalPinp);
                     newp = new AstSFormatF{fl, "%s.%s", false, argsp};
                 } else {
+                    AstNodeExpr* indexTextp = pinp;
                     if (sizeTextp) {
-                        AstSFormatF* const guardp = new AstSFormatF{
-                            fl, "(bvult ((_ zero_extend 1) %s) %s)", false, cloneTextp(pinp)};
-                        guardp->addExprsp(sizeTextp);
-                        smtGuardp = guardp;
+                        // The index is bound once, as its text may be long, e.g. of a select
+                        // by an index that is itself a guarded select
+                        keyName = m_uniqueNames.get("__Vk");
+                        indexTextp = new AstSFormatF{fl, keyName, false, nullptr};
+                        smtGuardp
+                            = new AstSFormatF{fl, "(bvult ((_ zero_extend 1) " + keyName + ") %s)",
+                                              false, sizeTextp};
                     }
-                    newp = createSolverArrDerefp(fl, nodep->fromp()->unlinkFrBack(), pinp);
+                    newp = createSolverArrDerefp(fl, nodep->fromp()->unlinkFrBack(), indexTextp);
                 }
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(nodep->deleteTree(), nodep);
                 // The state guard is outermost, as the solver guard reads the array's size
-                AstSFormatF* const guardedp
-                    = smtGuardp ? editSmtInRange(newp, smtGuardp, elemWidth) : newp;
+                AstSFormatF* guardedp = newp;
+                if (smtGuardp) {
+                    guardedp = editSmtInRange(newp, smtGuardp, elemWidth);
+                    guardedp = editLetBound(guardedp, keyName, pinp);
+                }
                 if (stateGuardp) editStateInRange(guardedp, stateGuardp, elemWidth, nullTextp);
                 if (origp && !hoistRandModeOverSelectAndMember(newp, origp)) {
                     VL_DO_DANGLING(origp->deleteTree(), origp);
