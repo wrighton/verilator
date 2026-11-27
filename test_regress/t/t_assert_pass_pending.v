@@ -1,0 +1,128 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
+// The pass action of an implication with a sequence antecedent runs on a tick on which an attempt
+// succeeds: its antecedent ends without a match, a vacuous success, or its consequent matches; not
+// while every attempt is still pending (IEEE 1800-2023 16.12.7, 16.14.1). Its controls are in
+// t_assert_ctl_off_inflight and t_assert_ctl_pass_actions.
+module t;
+  bit clk = 0;
+  always #5 clk = ~clk;
+  int cyc = 0;
+  always @(posedge clk) cyc <= cyc + 1;
+
+  // Test: an antecedent matching over 3 ticks, which no attempt ends before
+  bit a = 1, b = 0;
+  int rep_passes = 0, rep_fails = 0;
+  assert property (@(posedge clk) a [*3] |-> b) ++rep_passes;
+  else ++rep_fails;
+
+  // Test: so also under a disable
+  bit rst = 0;
+  int dis_passes = 0, dis_fails = 0;
+  assert property (@(posedge clk) disable iff (rst) a [*3] |-> b) ++dis_passes;
+  else ++dis_fails;
+
+  // Test: the same over 7 ticks
+  int long_passes = 0;
+  assert property (@(posedge clk) a [*7] |-> b) ++long_passes;
+  else;
+
+  // Test: an antecedent ending without a match is a vacuous success, at that tick
+  bit odd;
+  always @(posedge clk) odd <= ~odd;
+  int seq_passes = 0, seq_fails = 0;
+  assert property (@(posedge clk) a ##1 odd |-> 1'b0) ++seq_passes;
+  else ++seq_fails;
+
+  // Test: so is a consequent matching
+  int match_passes = 0;
+  assert property (@(posedge clk) odd ##1 !odd |-> 1'b1) ++match_passes;
+
+  // Test: an antecedent of several threads, one ending while another goes on, does not pass
+  // once its attempts end, all failing
+  bit or_c = 1;
+  int or_late_passes = 0, or_fails = 0;
+  assert property (@(posedge clk) (a ##1 1'b0 or or_c ##2 a) |-> 1'b0) begin
+    if ($sampled(cyc) > 1) ++or_late_passes;
+  end
+  else ++or_fails;
+
+  // Test: an antecedent waiting for an occurrence passes once its attempts end, all succeeding
+  int goto_late_passes = 0, goto_fails = 0;
+  assert property (@(posedge clk) a [-> 2] |-> 1'b1) begin
+    if ($sampled(cyc) > 0) ++goto_late_passes;
+  end
+  else ++goto_fails;
+
+  // Test: an attempt of an antecedent with a range succeeds vacuously when it starts unmatched
+  bit z = 0;
+  int range_passes = 0;
+  assert property (@(posedge clk) z ##[1:2] a |-> b) ++range_passes;
+
+  // Test: two attempts ending without a match on one tick are two vacuous successes, from the
+  // start of the antecedent and from a fixed delay, or from the threads of a ring cleared
+  bit [15:0] lfsr = 16'hACE1;
+  always @(posedge clk) lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
+  wire x = lfsr[0], y = lfsr[5] | lfsr[9];
+  int delay_passes = 0, ring_passes = 0;
+  assert property (@(posedge clk) x ##1 y |-> 1'b1) ++delay_passes;
+  assert property (@(posedge clk) x ##1 y [*3] |-> 1'b1) ++ring_passes;
+  // Each attempt passes once, at the tick its antecedent ends or matches
+  bit xh[$], yh[$];
+  always @(posedge clk) begin
+    xh.push_back(x);
+    yh.push_back(y);
+  end
+  function automatic int endTick(int s, int n);
+    if (!xh[s]) return s;
+    for (int k = 1; k <= n; ++k) begin
+      if (k == n || !yh[s + k]) return s + k;
+    end
+    return 0;
+  endfunction
+  function automatic int passesBy(int n, int last);
+    int count = 0;
+    for (int s = 0; s <= last; ++s) count += int'(endTick(s, n) <= last);
+    return count;
+  endfunction
+
+  initial begin
+    repeat (10) @(posedge clk);
+    #1;
+    // a held for 3 ticks ends at the 3rd: attempts from ticks 1 to 8 fail, 9 and 10 pend
+    `checkd(rep_passes, 0);
+    `checkd(rep_fails, 8);
+    `checkd(dis_passes, 0);
+    `checkd(dis_fails, 8);
+    `checkd(long_passes, 0);
+    // odd alternates, so the attempt from the previous tick ends: without a match on the ticks
+    // odd is 0 (3, 5, 7, 9), failing on the others (2, 4, 6, 8, 10)
+    `checkd(seq_passes, 4);
+    `checkd(seq_fails, 5);
+    // An attempt from a tick odd holds matches at the next tick (3, 5, 7, 9), one from a tick
+    // it does not succeeds vacuously at once (1, 3, 5, 7, 9)
+    `checkd(match_passes, 9);
+    `checkd(range_passes, 10);
+    // Each attempt fails when its second branch matches, two ticks after it starts
+    `checkd(or_late_passes, 0);
+    `checkd(or_fails, 8);
+    // The second occurrence of a, at the tick after each attempt starts
+    `checkd(goto_late_passes, 9);
+    `checkd(goto_fails, 0);
+    repeat (190) @(posedge clk);
+    #1;
+    `checkd(delay_passes, passesBy(1, xh.size() - 1));
+    `checkd(ring_passes, passesBy(3, xh.size() - 1));
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule
