@@ -2022,6 +2022,7 @@ class AssertVisitor final : public VNVisitor {
     AstVar* m_actionEventp = nullptr;  // Current process's event to run queued PExpr actions
     AstAlwaysReactive* m_actionReactivep = nullptr;  // Block running them, beside the process
     std::vector<const AstBegin*> m_namedBeginps;  // Named blocks in the current process
+    std::vector<AstVar*> m_disableCountps;  // Disable counts of the blocks around (V3LinkJump)
     AstNode* m_containerp = nullptr;  // Current module or generate block
     bool m_procSuspends = false;  // Current procedure may suspend
     V3AssertReactive m_reactive;  // Makes concurrent assertion actions run in Reactive
@@ -2710,8 +2711,12 @@ class AssertVisitor final : public VNVisitor {
             m_obsFlushp,
             new AstAssign{flp, new AstVarRef{flp, killedp, VAccess::WRITE}, new AstConst{flp, 0}});
         const auto newKillCount = [&]() {
-            return V3AssertCommon::newAssertCtlGetp(flp, VAssertCtlQuery::KILL, assertType,
-                                                    directiveType, controlVarp);
+            AstNodeExpr* countp = V3AssertCommon::newAssertCtlGetp(
+                flp, VAssertCtlQuery::KILL, assertType, directiveType, controlVarp);
+            // A disable of a block around the call drops it as a kill does (IEEE 1800-2023 16.4.4)
+            for (AstVar* const varp : m_disableCountps)
+                countp = new AstAdd{flp, countp, new AstVarRef{flp, varp, VAccess::READ}};
+            return countp;
         };
         const auto newKillCheck = [&]() {
             AstNodeStmt* const stmtsp
@@ -5095,7 +5100,9 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_beginp);
         m_beginp = nodep;
         if (!nodep->name().empty()) m_namedBeginps.push_back(nodep);
+        if (nodep->disableCountp()) m_disableCountps.push_back(nodep->disableCountp());
         iterateChildren(nodep);
+        if (nodep->disableCountp()) m_disableCountps.pop_back();
         if (!nodep->name().empty()) m_namedBeginps.pop_back();
         // If the body is a single assertOn check, bubble it up for combining
         if (!nodep->declsp()) {

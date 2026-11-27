@@ -40,6 +40,10 @@ module t;
       assert #0 (1) $display("REPORT");
       cover #0 (1) $display("REPORT");
     endfunction
+    task disable_label();
+      lbl : assert #0 (1) $display("REPORT");
+      disable lbl;
+    endtask
   endclass
 
   initial begin
@@ -68,3 +72,10 @@ module t;
     $finish;
   end
 endmodule
+
+package p;
+  task automatic disable_label();
+    lbl : assert #0 (1) $display("REPORT");
+    disable lbl;
+  endtask
+endpackage
