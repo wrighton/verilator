@@ -1436,14 +1436,16 @@ class AssertVisitor final : public VNVisitor {
             } else {
                 ++m_statAsNotImm;
             }
-            if (!passsp && !failsp) {
+            if (!failsp) {
                 failsp = newFireAssertUnchecked(
                     nodep, VN_IS(nodep, AssertIntrinsic) ? "'$cast' failed." : "'assert' failed.");
                 defaultFailsp = failsp;
             }
             if (obsDeferred) {
                 if (passsp) passsp = newObservedDeferredAction(flp, passsp);
-                if (failsp) failsp = newObservedDeferredAction(flp, failsp);
+                // An empty block, as for an 'else' null statement, has nothing to defer
+                const AstBegin* const emptyp = VN_CAST(failsp, Begin);
+                if (!emptyp || emptyp->stmtsp()) failsp = newObservedDeferredAction(flp, failsp);
             }
             // V3AssertNfa made the actions of what it lowered pending already, except a default
             if (actionSenTreep) {

@@ -1,0 +1,10 @@
+[15] %Error: t_assert_pass_only_overlap.v:31: Assertion failed in t: implication failed
+-Info: t/t_assert_pass_only_overlap.v:31: Verilog $stop, ignored due to +verilator+error+limit
+[15] %Error: t_assert_pass_only_overlap.v:32: Assertion failed in t: 'assert' failed.
+[25] %Error: t_assert_pass_only_overlap.v:26: Assertion failed in t: sequence failed
+[25] %Error: t_assert_pass_only_overlap.v:26: Assertion failed in t: sequence failed
+[25] %Error: t_assert_pass_only_overlap.v:27: Assertion failed in t: 'assert' failed.
+[25] %Error: t_assert_pass_only_overlap.v:27: Assertion failed in t: 'assert' failed.
+[35] %Error: t_assert_pass_only_overlap.v:26: Assertion failed in t: sequence failed
+[35] %Error: t_assert_pass_only_overlap.v:27: Assertion failed in t: 'assert' failed.
+*-* All Finished *-*

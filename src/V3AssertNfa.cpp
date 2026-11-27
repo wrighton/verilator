@@ -3293,13 +3293,21 @@ class AssertNfaVisitor final : public VNVisitor {
     // to the fail action, once per assertion. The fail control applies to the fail action only
     // (IEEE 1800-2023 20.11), so it is gated here instead of by V3Assert.
     static void prependPassToFail(AstAssert* const assertp, AstNodeStmt* const stmtsp) {
-        if (AstNodeStmt* const failsp = assertp->failsp()) {
-            failsp->unlinkFrBackWithNext();
-            assertp->addFailsp(
-                newIfAssertFailOn(failsp, assertp->directive(), assertp->userType()));
-        }
+        // finishDirective gave an assertion with a pass action a fail action
+        AstNodeStmt* const failsp = assertp->failsp()->unlinkFrBackWithNext();
+        assertp->addFailsp(newIfAssertFailOn(failsp, assertp->directive(), assertp->userType()));
         assertp->failsGated(true);
         assertp->prependFailsp(stmtsp);
+    }
+    // The fail action of an assertion without one
+    AstNodeStmt* newDefaultFailp(FileLine* flp) const {
+        // V3Assert turns the DT_ERROR display into the standard "Assertion failed in %m"
+        AstDisplay* const dispp
+            = new AstDisplay{flp, VDisplayType::DT_ERROR, "'assert' failed.", nullptr, nullptr};
+        dispp->fmtp()->timeunit(m_modp->timeunit());
+        AstNodeStmt* const stmtsp = dispp;
+        if (v3Global.opt.stopFail()) stmtsp->addNext(new AstStop{flp, false});
+        return stmtsp;
     }
 
     AstNodeDType* u32DTypep() const { return m_modp->findBasicDType(VBasicDTypeKwd::UINT32); }
@@ -3519,6 +3527,12 @@ class AssertNfaVisitor final : public VNVisitor {
         FileLine* const flp = assertp->fileline();
         AstPropSpec* const propp = VN_AS(assertp->propp(), PropSpec);
         AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
+        // Without 'else', a failure calls $error (IEEE 1800-2023 16.14.1). V3Assert adds it only
+        // where the fail action is empty, and the pass actions of other attempts are put in the
+        // fail action below, so it is added here first.
+        if (assertAssertp && assertAssertp->passsp() && !assertAssertp->failsp()) {
+            assertAssertp->addFailsp(newDefaultFailp(flp));
+        }
         if (countsMatches(assertp)) {
             UASSERT_OBJ(matchCountp, assertp, "Cover sequence missing match count");
             VL_DO_DANGLING(outputExprp->deleteTree(), outputExprp);
@@ -3989,9 +4003,12 @@ class AssertNfaVisitor final : public VNVisitor {
         // The rejected threads of a negated property's operand are passes of the property,
         // vacuous when the antecedent of a followed-by does not match, and its matches and
         // vacuous successes failures
-        const bool replayFails
-            = assertAssertp && assertAssertp->failsp() && !parts.hasImplication && !negated;
-        const bool replaySuccesses = assertAssertp && assertAssertp->failsp() && negated;
+        // An assertion with a pass action and no 'else' gets the default fail action, see
+        // finishDirective, which is replayed like an explicit one
+        const bool failActions
+            = assertAssertp && (assertAssertp->failsp() || assertAssertp->passsp());
+        const bool replayFails = failActions && !parts.hasImplication && !negated;
+        const bool replaySuccesses = failActions && negated;
         const bool countPasses = needMatch && negated && !parts.hasImplication;
         const auto signals = m_loweringp->lower(
             assertp, graph, senTreep, result.finalCondp, disableExprp, replayFails || countPasses,
