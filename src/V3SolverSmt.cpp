@@ -2234,7 +2234,22 @@ private:
         // Replace computable expression with SMT constant
         VNRelinker handle;
         nodep->unlinkFrBack(&handle);
-        handle.relink(m_inGuardPredicate ? formatStateGuardValue(nodep) : getConstFormat(nodep));
+        if (m_inGuardPredicate) {
+            handle.relink(formatStateGuardValue(nodep));
+            return true;
+        }
+        // Nothing is read through a null class handle
+        AstNodeExpr* pathp = nullptr;
+        AstNodeExpr* const handlesp = nodep->dtypep()->skipRefp()->isIntegralOrPacked()
+                                          ? newReadHandlesNonNullp(nodep, pathp)
+                                          : nullptr;
+        AstSFormatF* const valuep = getConstFormat(nodep);
+        handle.relink(valuep);
+        if (handlesp) {
+            editStateInRange(
+                valuep, handlesp, nodep->width(),
+                newNullReadTextp(handlesp->cloneTreePure(false), pathp, nodep->width()));
+        }
         return true;
     }
     // The size proxy of 'memberRefp', an array of a member object, if this solve resizes it
@@ -2268,6 +2283,39 @@ private:
             = new AstMemberRef{fl, memberRefp->fromp()->cloneTreePure(false), sizeVarp};
         refp->access(VAccess::READ);
         return refp;
+    }
+    // Members that 'nodep' reads through class handles, outermost first, not below a ?:, &&
+    // or ||, whose operands may be kept from being read by the others
+    static void collectMemberReads(AstNode* nodep, std::vector<AstMemberRef*>& refps) {
+        if (VN_IS(nodep, Cond) || VN_IS(nodep, LogAnd) || VN_IS(nodep, LogOr)
+            || VN_IS(nodep, LogIf)) {
+            return;
+        }
+        if (AstMemberRef* const refp = VN_CAST(nodep, MemberRef)) refps.push_back(refp);
+        for (AstNode* const childp :
+             {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+            for (AstNode* itemp = childp; itemp; itemp = itemp->nextp()) {
+                collectMemberReads(itemp, refps);
+            }
+        }
+    }
+    // Condition that no class handle expression 'exprp' reads a member through is null, each
+    // path from the variable outwards, and in 'pathpr' its outermost member read; nullptr if
+    // it reads none (see collectMemberReads)
+    static AstNodeExpr* newReadHandlesNonNullp(AstNodeExpr* exprp, AstNodeExpr*& pathpr) {
+        std::vector<AstMemberRef*> refps;
+        collectMemberReads(exprp, refps);
+        if (refps.empty()) return nullptr;
+        pathpr = refps.front();
+        AstNodeExpr* condp = nullptr;
+        // A path's inner members follow its outer ones
+        for (size_t i = refps.size(); i > 0; --i) {
+            FileLine* const fl = refps[i - 1]->fileline();
+            AstNodeExpr* const neqp = new AstNeq{fl, refps[i - 1]->fromp()->cloneTreePure(false),
+                                                 new AstConst{fl, AstConst::Null{}}};
+            condp = condp ? new AstLogAnd{fl, condp, neqp} : neqp;
+        }
+        return condp;
     }
     // Make the current constraint hold only while a solver-sized array keeps its size
     void gateOnCurrentSize(AstNodeExpr* arrayp) {
@@ -2844,10 +2892,10 @@ private:
             return;
         }
     }
-    // The text 'resultp', after 'foreachp' built it in 'varp', starting from 'init', counting
-    // its terms in 'countVarp' if not nullptr
+    // The text 'resultp', after the loop 'loopp' built it in 'varp', starting from 'init',
+    // counting its terms in 'countVarp' if not nullptr
     AstSFormatF* newTextBuildp(FileLine* flp, AstVar* varp, const std::string& init,
-                               AstForeach* foreachp, AstNodeExpr* resultp,
+                               AstNodeStmt* loopp, AstNodeExpr* resultp,
                                AstVar* countVarp = nullptr) {
         AstBegin* const blockp
             = new AstBegin{flp, m_uniqueNames.get("__VrandBlock"), nullptr, true};
@@ -2859,7 +2907,7 @@ private:
             blockp->addStmtsp(new AstAssign{flp, new AstVarRef{flp, countVarp, VAccess::WRITE},
                                             new AstConst{flp, 0}});
         }
-        blockp->addStmtsp(foreachp);
+        blockp->addStmtsp(loopp);
         return new AstSFormatF{flp, "%s", false, new AstExprStmt{flp, blockp, resultp}};
     }
 
@@ -3166,7 +3214,12 @@ private:
                 static_cast<uint32_t>(textNeeds(valueTextp) | textNeeds(otherwisep))});
             blockp->addStmtsp(
                 newRandomizerCallp(fl, VCMethod::RANDOMIZER_TABLE_BEGIN, argsp)->makeStmt());
-            blockp->addStmtsp(new AstForeach{fl, headerp, bodyp});
+            // No element of an array through a null class handle exists (see editStateArraySel)
+            AstNodeStmt* foreachp = new AstForeach{fl, headerp, bodyp};
+            if (AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp)) {
+                foreachp = new AstIf{fl, handlesp, foreachp};
+            }
+            blockp->addStmtsp(foreachp);
             // Ended in the block, as a value the block builds may be another table's
             AstVar* const nameVarp = newTextVarp(selp);
             nameVarp->name(m_uniqueNames.get("__Vtable"));
@@ -3186,7 +3239,12 @@ private:
             blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE},
                                             new AstConst{fl, AstConst::String{}, ""}});
         }
-        blockp->addStmtsp(new AstForeach{fl, headerp, bodyp});
+        // No element of an array through a null class handle exists (see newNullReadTextp)
+        AstNodeStmt* foreachp = new AstForeach{fl, headerp, bodyp};
+        if (AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp)) {
+            foreachp = new AstIf{fl, handlesp, foreachp};
+        }
+        blockp->addStmtsp(foreachp);
         if (!baseName.empty()) {
             // An element not stored is out of range, so is not read
             VL_DO_DANGLING(pushDeletep(defaultp), defaultp);
@@ -3252,8 +3310,17 @@ private:
         // randomize(), so that other reads of the array, e.g. in a foreach, add no text
         AstSFormatF* const newp = new AstSFormatF{nodep->fileline(), "(%s %s)", false, valuep};
         newp->addExprsp(VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr));
+        // Nothing is read through a null class handle on the path to the array
+        AstNodeExpr* const arrayp = VN_IS(selp, CMethodHard) ? VN_AS(selp, CMethodHard)->fromp()
+                                                             : VN_AS(selp, NodeSel)->fromp();
+        AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp);
+        AstNodeExpr* const nullTextp
+            = handlesp ? newNullReadTextp(handlesp->cloneTreePure(false), arrayp, nodep->width())
+                       : nullptr;
+        const int width = nodep->width();
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        if (handlesp) editStateInRange(newp, handlesp, width, nullTextp);
         return true;
     }
     // Report a random index into a non-random array not read as an integral value
@@ -6370,39 +6437,105 @@ private:
         refp->access(VAccess::READ);
         return refp;
     }
-    // Number of elements of queue or dynamic array 'arrayp' when randomize() is called, zero if a
-    // class handle on the path to it is null
-    static AstNodeExpr* newArraySizep(AstNodeExpr* arrayp) {
-        FileLine* const fl = arrayp->fileline();
-        AstNodeExpr* nonNullp = nullptr;
-        for (const AstNodeExpr* pathp = arrayp; !VN_IS(pathp, VarRef);) {
+    // Condition that no class handle on the path to array 'arrayp' is null, from the variable
+    // outwards, so no member of a null handle is read; nullptr if the path has no handle
+    static AstNodeExpr* newHandlesNonNullp(const AstNodeExpr* arrayp) {
+        AstNodeExpr* condp = nullptr;
+        for (const AstNodeExpr* pathp = arrayp; pathp && !VN_IS(pathp, VarRef);) {
             if (const AstMemberRef* const refp = VN_CAST(pathp, MemberRef)) {
+                FileLine* const fl = refp->fileline();
                 AstNodeExpr* const neqp = new AstNeq{fl, refp->fromp()->cloneTreePure(false),
                                                      new AstConst{fl, AstConst::Null{}}};
-                // From the variable outwards, so no member of a null handle is read
-                nonNullp = nonNullp ? new AstLogAnd{fl, neqp, nonNullp} : neqp;
+                condp = condp ? new AstLogAnd{fl, neqp, condp} : neqp;
                 pathp = refp->fromp();
-            } else if (const AstAssocSel* const selp = VN_CAST(pathp, AssocSel)) {
-                // A key that does not exist has no elements, and is not read
+            } else {
+                pathp = V3Const::selectionFromp(pathp);
+            }
+        }
+        return condp;
+    }
+    // Condition that every key of an associative array on the path to array 'arrayp' exists,
+    // from the variable outwards, as a key that does not exist has no elements, and is not
+    // read; nullptr if the path selects no such key
+    static AstNodeExpr* newKeysExistp(const AstNodeExpr* arrayp) {
+        AstNodeExpr* condp = nullptr;
+        for (const AstNodeExpr* pathp = arrayp; pathp && !VN_IS(pathp, VarRef);) {
+            if (const AstAssocSel* const selp = VN_CAST(pathp, AssocSel)) {
+                FileLine* const fl = selp->fileline();
                 AstCMethodHard* const existsp = new AstCMethodHard{
                     fl, selp->fromp()->cloneTreePure(false), VCMethod::ASSOC_EXISTS,
                     selp->bitp()->cloneTreePure(false)};
                 existsp->dtypeSetBit();
-                nonNullp = nonNullp ? new AstLogAnd{fl, existsp, nonNullp}
-                                    : static_cast<AstNodeExpr*>(existsp);
+                condp = condp ? new AstLogAnd{fl, existsp, condp}
+                              : static_cast<AstNodeExpr*>(existsp);
                 pathp = selp->fromp();
+            } else if (const AstMemberRef* const refp = VN_CAST(pathp, MemberRef)) {
+                pathp = refp->fromp();
             } else {
-                // An element select, see countableArray
                 pathp = V3Const::selectionFromp(pathp);
             }
         }
-        AstCMethodHard* const sizep
-            = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
-        sizep->dtypeSetInt();
-        if (!nonNullp) return sizep;
-        AstCond* const condp = new AstCond{fl, nonNullp, sizep, new AstConst{fl, 0}};
-        condp->dtypeSetInt();
         return condp;
+    }
+    // Number of elements of queue or dynamic array 'arrayp' when randomize() is called, read
+    // when no class handle on the path to it is null (see newHandlesNonNullp)
+    static AstNodeExpr* newArraySizep(AstNodeExpr* arrayp) {
+        AstCMethodHard* const sizep = new AstCMethodHard{
+            arrayp->fileline(), arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
+        sizep->dtypeSetInt();
+        return sizep;
+    }
+    // Call recording, for the runtime, a read of 'pathp' through a null class handle: a
+    // constraint whose text has the name it returns is an evaluation error that fails
+    // randomize() (IEEE 1800-2023 18.5.12, see VlRandomizer::null_read)
+    AstCMethodHard* newNullReadp(AstNodeExpr* pathp) {
+        FileLine* const fl = pathp->fileline();
+        std::string fmt;
+        AstNodeExpr* argsp = nullptr;
+        addPathName(pathp, fmt, argsp);
+        AstSFormatF* const namep = new AstSFormatF{fl, fmt, false, argsp};
+        namep->dtypeSetString();
+        AstCMethodHard* const readp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_NULL_READ, namep};
+        // A name standing in for the read, which only the text of that constraint has
+        readp->addPinsp(new AstConst{fl, AstConst::String{}, m_uniqueNames.get("__Vnull")});
+        readp->dtypeSetString();
+        return readp;
+    }
+    // Text of a 'width' bit read of 'pathp' when the class handles on its path, 'handlesp', are
+    // null: zero, but an evaluation error if a constraint has the read, not kept out by a guard
+    // (see newNullReadp and newNullCheckedReadp)
+    AstNodeExpr* newNullReadTextp(AstNodeExpr* handlesp, AstNodeExpr* pathp, int width) {
+        FileLine* const fl = handlesp->fileline();
+        AstNodeExpr* const zerop
+            = getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, 0});
+        if (!m_valuePreparationp || m_inGuardCondition || m_inRandIndexElems) {
+            VL_DO_DANGLING(handlesp->deleteTree(), handlesp);
+            return zerop;
+        }
+        AstCMethodHard* const readp = newNullReadp(pathp);
+        AstNodeExpr* const tokenp = VN_AS(readp->pinsp()->nextp(), NodeExpr)->cloneTree(false);
+        // Only the text of a constraint having the read has its name, so the read of a
+        // nonexistent element, which is not in it (see m_conditionp), is not an error
+        m_valuePreparationp->addStmtsp(
+            new AstIf{fl, new AstLogNot{fl, handlesp->cloneTreePure(false)}, readp->makeStmt()});
+        AstCond* const condp = new AstCond{fl, handlesp, zerop, tokenp};
+        condp->dtypeSetString();
+        return condp;
+    }
+    // Statement making randomize() fail as an evaluation error, as a constraint at 'fl' reads
+    // 'pathp' through a null class handle (see newNullReadp)
+    AstNodeStmt* newNullReadFailp(FileLine* fl, AstNodeExpr* pathp) {
+        AstCMethodHard* const callp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_HARD, newNullReadp(pathp)};
+        callp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "{}"});
+        callp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "\"" + fl->filename() + "\""});
+        callp->addPinsp(new AstConst{fl, static_cast<uint32_t>(fl->lineno())});
+        callp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "\"\""});
+        callp->dtypeSetVoid();
+        return callp->makeStmt();
     }
     // Number of elements of queue or dynamic array 'arrayp', as a 'width' bit solver term: its
     // size variable 'solvedSizep' if not nullptr, as that is solved with the elements
@@ -6479,7 +6612,7 @@ private:
     }
     // Make the translated element select 'selp' of 'width' bits read zero unless 'guardp', a
     // solver term, holds
-    void editSmtInRange(AstSFormatF* selp, AstNodeExpr* guardp, int width) {
+    AstSFormatF* editSmtInRange(AstSFormatF* selp, AstNodeExpr* guardp, int width) {
         FileLine* const fl = selp->fileline();
         VNRelinker handle;
         selp->unlinkFrBack(&handle);
@@ -6487,17 +6620,19 @@ private:
         newp->addExprsp(selp);
         newp->addExprsp(getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, 0}));
         handle.relink(newp);
+        return newp;
     }
-    // Make the translated element select 'selp' of 'width' bits read zero unless 'condp',
-    // evaluated when randomize() is called, holds
-    void editStateInRange(AstSFormatF* selp, AstNodeExpr* condp, int width) {
+    // Make the translated element select 'selp' of 'width' bits read zero, or 'otherwisep' if not
+    // nullptr, unless 'condp', evaluated when randomize() is called, holds
+    void editStateInRange(AstSFormatF* selp, AstNodeExpr* condp, int width,
+                          AstNodeExpr* otherwisep = nullptr) {
         FileLine* const fl = selp->fileline();
+        if (!otherwisep) {
+            otherwisep = getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, 0});
+        }
         VNRelinker handle;
         selp->unlinkFrBack(&handle);
-        handle.relink(new AstSFormatF{
-            fl, "%s", false,
-            new AstCond{fl, condp, selp,
-                        getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, 0})}});
+        handle.relink(new AstSFormatF{fl, "%s", false, new AstCond{fl, condp, selp, otherwisep}});
     }
     // Condition, evaluated when randomize() is called, that the non-random indices of select
     // chain 'nodep' are in range, or nullptr
@@ -7243,6 +7378,9 @@ private:
             ++dim;
         }
 
+        // An array through a null class handle is not iterated: reading it is an evaluation
+        // error (see newNullReadp)
+        AstNodeExpr* const arrayp = nodep->headerp()->fromp();
         if (!nodep->bodyp()) {
             nodep->unlinkFrBack();
         } else if (m_wantSingle) {
@@ -7263,17 +7401,25 @@ private:
                 bodyp = AstNode::addNext(VN_AS(regsp->unlinkFrBackWithNext(), NodeStmt), bodyp);
             }
             VL_DO_DANGLING(regsHolderp->deleteTree(), regsHolderp);
-            nodep->replaceWith(newTextBuildp(
-                fl, textVarp, "", new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp},
-                newTextApplyp(fl, textVarp, countVarp, "bvand", "#b1"), countVarp));
+            AstNodeStmt* loopp = new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp};
+            if (AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp)) {
+                loopp = new AstIf{fl, handlesp, loopp,
+                                  newTermAppendp(fl, textVarp, countVarp, newNullReadp(arrayp))};
+            }
+            nodep->replaceWith(
+                newTextBuildp(fl, textVarp, "", loopp,
+                              newTextApplyp(fl, textVarp, countVarp, "bvand", "#b1"), countVarp));
         } else {
             AstBegin* const holderp
                 = SmtUtil::newItemsHolderp(fl, nodep->bodyp()->unlinkFrBackWithNext());
             m_foreachBodyp = holderp;
             AstNodeStmt* const bodyp = prependDistPreamble(nodep, holderp);
+            AstNodeStmt* loopp = new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp};
+            if (AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp)) {
+                loopp = new AstIf{fl, handlesp, loopp, newNullReadFailp(fl, arrayp)};
+            }
             AstBegin* const blockp
-                = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"),
-                               new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp}, true};
+                = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), loopp, true};
             nodep->replaceWith(blockp);
             iterateAndNextNull(holderp->declsp());
             if (!holderp->declsp()) {  // All items were ignored with a warning
@@ -8044,6 +8190,7 @@ private:
                                      && boundableArray(nodep->fromp())
                                      && !isForeachElement(nodep->fromp(), nodep->pinsp());
                 AstNodeExpr* sizeTextp = nullptr;  // For a solved index, after translation
+                AstNodeExpr* nullTextp = nullptr;  // Of the read through a null class handle
                 if (guarded) {
                     AstNodeExpr* const arrayp = nodep->fromp();
                     AstNodeExpr* const indexp = nodep->pinsp();
@@ -8073,6 +8220,18 @@ private:
                     if (AstNodeExpr* const outerInRangep = newOuterIndexInRangep(arrayp)) {
                         stateGuardp = stateGuardp ? new AstLogAnd{fl, outerInRangep, stateGuardp}
                                                   : outerInRangep;
+                    }
+                    // A key that does not exist selects no array, checked before its size
+                    if (AstNodeExpr* const existp = newKeysExistp(arrayp)) {
+                        stateGuardp
+                            = stateGuardp ? new AstLogAnd{fl, existp, stateGuardp} : existp;
+                    }
+                    // Checked first, as the checks above read through the handles
+                    if (AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp)) {
+                        nullTextp = newNullReadTextp(handlesp->cloneTreePure(false), arrayp,
+                                                     nodep->width());
+                        stateGuardp
+                            = stateGuardp ? new AstLogAnd{fl, handlesp, stateGuardp} : handlesp;
                     }
                     // In the solver's 32-bit index sort, in range when selected
                     if (!indexIsRand && indexp->width() > VL_IDATASIZE) {
@@ -8139,8 +8298,10 @@ private:
                 }
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(nodep->deleteTree(), nodep);
-                if (smtGuardp) editSmtInRange(newp, smtGuardp, elemWidth);
-                if (stateGuardp) editStateInRange(newp, stateGuardp, elemWidth);
+                // The state guard is outermost, as the solver guard reads the array's size
+                AstSFormatF* const guardedp
+                    = smtGuardp ? editSmtInRange(newp, smtGuardp, elemWidth) : newp;
+                if (stateGuardp) editStateInRange(guardedp, stateGuardp, elemWidth, nullTextp);
                 if (origp && !hoistRandModeOverSelectAndMember(newp, origp)) {
                     VL_DO_DANGLING(origp->deleteTree(), origp);
                 }
@@ -8830,7 +8991,10 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstVar* const arrVarp = selp ? selp->varp() : VN_AS(it->second.objp, VarRef)->varp();
         if (VN_IS(arrVarp->dtypep()->skipRefp(), ClassRefDType)) return;  // Cloned for an object
         AstNodeExpr* const objp = selp ? selp->fromp() : nullptr;
-        AstForeach* const foreachp = VN_AS(VN_AS(holderp->declsp(), Begin)->stmtsp(), Foreach);
+        AstNode* loopp = VN_AS(holderp->declsp(), Begin)->stmtsp();
+        // Under a check of the handles to the array, see visit(AstConstraintForeach)
+        if (AstIf* const ifp = VN_CAST(loopp, If)) loopp = ifp->thensp();
+        AstForeach* const foreachp = VN_AS(loopp, Foreach);
         FileLine* const fl = foreachp->fileline();
         std::vector<AstVar*> idxVarps;
         for (AstNode* nodep = foreachp->headerp()->elementsp(); nodep; nodep = nodep->nextp()) {
