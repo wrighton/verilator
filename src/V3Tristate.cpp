@@ -649,15 +649,12 @@ class TristateVisitor final : public TristateBaseVisitor {
     }
     // Return the path from the module to the instance a reference starts from, to group the
     // drivers of one instance. Like V3LinkDot's findInlinedDotsSym and findDotted, look up the
-    // first dotted component in the innermost block in inlinedDots, else in the module, else in
-    // the nearest enclosing block declaring it.
+    // first dotted component in the nearest enclosing scope declaring it, from the innermost
+    // block in inlinedDots outward to the module (IEEE 1800-2023 23.9).
     string ifaceInstancePath(const AstVarXRef* xrefp) const {
         const string dotted = xrefp->dotted();
         const string first = dotted.substr(0, dotted.find('.'));
         string scope = xrefp->inlinedDots();
-        if (!m_declNames.count(scope + "__DOT__" + first) && m_declNames.count(first)) {
-            return dotted;
-        }
         while (!scope.empty() && !m_declNames.count(scope + "__DOT__" + first)) {
             const size_t pos = scope.rfind("__DOT__");
             scope.resize(pos == string::npos ? 0 : pos);

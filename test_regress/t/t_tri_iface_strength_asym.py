@@ -18,8 +18,7 @@ if test.vlt_all:
     # Other source partitions: asymmetric 3, inverse 1, sole/pair modules 2+2,
     # packed module 2. Generated and flat specializations each drive one instance
     # with one occupied STRONG rank. The asymmetric mask domain adds two ranks.
-    test.file_grep(test.stats, r'Tristate, External interface rank pairs\s+(\d+)',
-                   10 + 2 + 2 + 2)
+    test.file_grep(test.stats, r'Tristate, External interface rank pairs\s+(\d+)', 10 + 2 + 2 + 2)
     test.execute(all_run_flags=['+verilator+rand+reset+2'])
 else:
     test.execute()
