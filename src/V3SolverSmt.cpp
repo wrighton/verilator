@@ -9075,9 +9075,9 @@ private:
             visitElementSel(nodep);
             return;
         }
-        if (nodep->fromp()->user1() && !isLastObjectSel(nodep)) {
-            // q[$ - k] of a random queue, the element k before its last: at the size this
-            // solve gives the queue if it solves it, else at the size the queue has
+        if ((nodep->fromp()->user1() || nodep->bitp()->user1()) && !isLastObjectSel(nodep)) {
+            // q[$ - k] of a random queue, or at a random k, the element k before its last: at
+            // the size this solve gives the queue if it solves it, else at the size it has
             FileLine* const fl = nodep->fileline();
             AstNodeExpr* const arrayp = nodep->fromp()->unlinkFrBack();
             AstNodeExpr* sizep = newSolvedSizeRefp(arrayp);
