@@ -3452,6 +3452,14 @@ class ConstVisitor final : public VNVisitor {
                 if (neededWidth > 0 && neededWidth < srcp->width()) {
                     srcp = new AstSel{srcp->fileline(), srcp, srcp->width() - neededWidth,
                                       neededWidth};
+                } else if (neededWidth > srcp->width()) {
+                    // A narrower source, an error that is warned (IEEE 1800-2023 11.4.14.3), is
+                    // zero-filled on the right to the bits needed before it is reordered, as a
+                    // dynamically sized one is
+                    FileLine* const flp = srcp->fileline();
+                    srcp = new AstConcat{flp, srcp,
+                                         new AstConst{flp, AstConst::WidthedValue{},
+                                                      neededWidth - srcp->width(), 0}};
                 }
             }
             const int sWidth = srcp->width();

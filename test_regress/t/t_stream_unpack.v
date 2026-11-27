@@ -619,6 +619,8 @@ module t;
       automatic logic [7:0] ub3[3];
       automatic logic [15:0] p16;
       automatic logic [3:0] q7[$];
+      automatic logic [11:0] s12 = 12'habc;
+      automatic logic [7:0] c2[2];
       automatic logic [7:0] b8;
       {<<4{b8}} = fa;
       `checkh(b8, 8'hba);
@@ -639,13 +641,18 @@ module t;
       `checkh(p16, 16'h1122);
       {<<8{p16}} = ub3;
       `checkh(p16, 16'h2211);
-      // A shorter source, an error that is warned, is zero-filled on the right, as a
-      // packed one is
+      // A shorter source, an error that is warned, is zero-filled on the right before the
+      // reordering, a dynamically sized one or a packed one
       q7 = '{4'h7};
       // verilator lint_off WIDTHEXPAND
       {<<4{b8}} = q7;
-      // verilator lint_on WIDTHEXPAND
       `checkh(b8, 8'h07);
+      {<<8{c2}} = s12;
+      `checkh(c2[0], 8'hc0);
+      `checkh(c2[1], 8'hab);
+      {<<8{p16}} = s12;
+      `checkh(p16, 16'hc0ab);
+      // verilator lint_on WIDTHEXPAND
     end
 
     $write("*-* All Finished *-*\n");
