@@ -8460,10 +8460,11 @@ class AssertNfaVisitor final : public VNVisitor {
 
         const bool splitImplicationPasssp = splitsImplicationPasssp(assertp, parts);
         // Without a split by its antecedent's value, an implication's vacuous successes are
-        // its antecedent's threads ending, when each attempt has one
+        // its antecedent's threads ending, when each attempt has one, also with a negated
+        // consequent, whose nonvacuous successes are its operand failing
         const bool trackAntecedentEnd = assertAssertp && assertAssertp->passsp()
                                         && parts.hasImplication && !parts.isFollowedBy
-                                        && !splitImplicationPasssp && !negated
+                                        && !splitImplicationPasssp
                                         && oneThreadPerAttempt(parts.triggerExprp, false);
         const bool needMatch = assertAssertp && assertAssertp->passsp();
 
