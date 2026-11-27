@@ -86,6 +86,9 @@ module t (
   bit odd = 0;
   always @(posedge clk) odd <= ~odd;
   event never;
+  // The procedure may suspend, so its assertion takes the default clock (IEEE 1800-2023 16.14.6)
+  default clocking @(posedge clk);
+  endclocking
   int split_n = 0;
   int split_done_n = 0;
   always @(posedge clk) begin
