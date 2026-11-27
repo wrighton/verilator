@@ -233,6 +233,22 @@ struct BuildResult final {
     static BuildResult failWithError() { return {nullptr, nullptr, {}, true}; }
 };
 
+// A sequence of bounded length in a property lowered per attempt, see
+// SvaNfaLowering::lowerAttemptSeq
+struct SvaAttemptSeq final {
+    enum class Kind : uint8_t { BOOL, CAT, REP, OR, AND, INTERSECT };
+    Kind kind = Kind::BOOL;
+    AstNodeExpr* condp = nullptr;  // Boolean
+    std::unique_ptr<SvaAttemptSeq> lhsp;  // Operand, first operand of a concatenation if any
+    std::unique_ptr<SvaAttemptSeq> rhsp;  // Second operand
+    int minCount = 0;  // Concatenation: least delay; repetition: least iterations
+    int maxCount = 0;  // Concatenation: most delay; repetition: most iterations
+    int minLen = 0;  // Ticks from its start to its earliest match
+    int maxLen = 0;  // Ticks from its start to its latest match
+    bool pairs = false;  // Has an 'and' or 'intersect'
+    bool varLenAnd = false;  // Has an 'and' or 'intersect' with an operand of variable length
+};
+
 // An operator tree of a property whose operands each resolve within a fixed number of ticks of
 // the attempt start, so the attempts in flight differ by their start tick, see
 // SvaNfaLowering::lowerAttempts
@@ -241,6 +257,7 @@ struct SvaAttemptNode final {
     Kind kind = Kind::SEQUENCE;
     AstNodeExpr* condp = nullptr;  // Antecedent of an implication, condition of an abort
     std::map<int, std::vector<AstNodeExpr*>> checks;  // Sequence: boolean checks by tick offset
+    std::unique_ptr<SvaAttemptSeq> seqp;  // Sequence not of fixed checks, instead of checks
     std::unique_ptr<SvaAttemptNode> lhsp;  // Operand, consequent of an implication
     std::unique_ptr<SvaAttemptNode> rhsp;  // Second operand of 'and' and 'or'
     int delay = 0;  // Implication: ticks from its start to the start of its consequent
@@ -496,6 +513,16 @@ class SvaNfaBuilder final {
             if (repp->unbounded() || repp->maxCountp()) return -1;
             const int count = static_cast<int>(getConstUInt(repp->countp()));
             return count * (fixedLength(repp->exprp()) + 1) - 1;
+        }
+        if (VN_IS(nodep, SAnd) || VN_IS(nodep, SIntersect)) {
+            // An 'and' matches when the longer operand does, an 'intersect' only if both
+            // operands have the same length (IEEE 1800-2023 16.9.5, 16.9.6)
+            const AstSAnd* const andp = VN_CAST(nodep, SAnd);
+            if (andp && andp->propertyControl()) return -1;
+            const int lhsLen = fixedLength(VN_AS(nodep, NodeBiop)->lhsp());
+            const int rhsLen = fixedLength(VN_AS(nodep, NodeBiop)->rhsp());
+            if (lhsLen < 0 || rhsLen < 0 || (!andp && lhsLen != rhsLen)) return -1;
+            return std::max(lhsLen, rhsLen);
         }
         if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
             // Alternatives must share one end cycle; buildSWithin relies on
@@ -2250,6 +2277,11 @@ class SvaNfaBuilder final {
             }
             return true;
         }
+        if (fixedLength(nodep) >= 0 && (VN_IS(nodep, SAnd) || VN_IS(nodep, SIntersect))) {
+            // Both operands of fixed length hold their checks (IEEE 1800-2023 16.9.5, 16.9.6)
+            return flattenFixedSeq(VN_AS(nodep, NodeBiop)->lhsp(), baseOffset, out)
+                   && flattenFixedSeq(VN_AS(nodep, NodeBiop)->rhsp(), baseOffset, out);
+        }
         if (AstSThroughout* const throughp = VN_CAST(nodep, SThroughout)) {
             // Over a single-cycle sequence, both conditions hold at that tick (IEEE 1800-2023
             // 16.9.9)
@@ -2839,6 +2871,102 @@ private:
         return {bodyResult.termVertexp, finalCondp, bodyResult.midSources};
     }
 
+    // The sequence of bounded length nodep, or nullptr. An 'and' or 'intersect' pairs the matches
+    // of its operands by attempt, so only one starting on a fixed tick of its attempt is built,
+    // as fixedStart says of nodep.
+    static std::unique_ptr<SvaAttemptSeq> buildAttemptSeq(AstNodeExpr* nodep, bool fixedStart) {
+        using Kind = SvaAttemptSeq::Kind;
+        // A count above the latency limit makes a sequence too long to lower so
+        bool tooLong = false;
+        const auto countOf = [&](AstNodeExpr* countp) {
+            const unsigned count = getConstUInt(countp);
+            if (count > SvaAttemptNode::MAX_LATENCY) tooLong = true;
+            return static_cast<int>(std::min(count, unsigned{SvaAttemptNode::MAX_LATENCY}));
+        };
+        std::unique_ptr<SvaAttemptSeq> seqp{new SvaAttemptSeq};
+        if (isPlainBoolean(nodep)) {
+            seqp->condp = nodep;
+            return nodep->isPure() ? std::move(seqp) : nullptr;
+        }
+        if (const AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
+            // IEEE 1800-2023 16.9.2
+            const AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
+            if (!delayp || !delayp->isCycleDelay() || delayp->isUnbounded()) return nullptr;
+            seqp->kind = Kind::CAT;
+            seqp->minCount = countOf(delayp->lhsp());
+            seqp->maxCount = delayp->isRangeDelay() ? countOf(delayp->rhsp()) : seqp->minCount;
+            if (AstNodeExpr* const prep = sexprp->preExprp()) {
+                seqp->lhsp = buildAttemptSeq(prep, fixedStart);
+                if (!seqp->lhsp) return nullptr;
+                seqp->minLen = seqp->lhsp->minLen;
+                seqp->maxLen = seqp->lhsp->maxLen;
+            }
+            const bool bodyFixedStart
+                = fixedStart && seqp->minLen == seqp->maxLen && seqp->minCount == seqp->maxCount;
+            seqp->rhsp = buildAttemptSeq(sexprp->exprp(), bodyFixedStart);
+            if (!seqp->rhsp) return nullptr;
+            seqp->minLen += seqp->minCount + seqp->rhsp->minLen;
+            seqp->maxLen += seqp->maxCount + seqp->rhsp->maxLen;
+        } else if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            // IEEE 1800-2023 16.9.2
+            if (repp->unbounded()) return nullptr;
+            seqp->kind = Kind::REP;
+            seqp->minCount = countOf(repp->countp());
+            seqp->maxCount = repp->maxCountp() ? countOf(repp->maxCountp()) : seqp->minCount;
+            if (!seqp->minCount) return nullptr;
+            seqp->lhsp = buildAttemptSeq(repp->exprp(), fixedStart);
+            if (!seqp->lhsp) return nullptr;
+            // A later iteration of a body of variable length starts on a variable tick
+            if (seqp->maxCount > 1 && seqp->lhsp->minLen != seqp->lhsp->maxLen
+                && seqp->lhsp->pairs) {
+                return nullptr;
+            }
+            seqp->minLen = seqp->minCount * (seqp->lhsp->minLen + 1) - 1;
+            seqp->maxLen = seqp->maxCount * (seqp->lhsp->maxLen + 1) - 1;
+        } else if (VN_IS(nodep, SAnd) || VN_IS(nodep, SIntersect) || VN_IS(nodep, SOr)) {
+            // IEEE 1800-2023 16.9.5-16.9.7
+            const AstSAnd* const andp = VN_CAST(nodep, SAnd);
+            if (andp && andp->propertyControl()) return nullptr;
+            seqp->kind = andp ? Kind::AND : VN_IS(nodep, SIntersect) ? Kind::INTERSECT : Kind::OR;
+            if (seqp->kind != Kind::OR && !fixedStart) return nullptr;
+            seqp->lhsp = buildAttemptSeq(VN_AS(nodep, NodeBiop)->lhsp(), fixedStart);
+            if (!seqp->lhsp) return nullptr;
+            seqp->rhsp = buildAttemptSeq(VN_AS(nodep, NodeBiop)->rhsp(), fixedStart);
+            if (!seqp->rhsp) return nullptr;
+            const SvaAttemptSeq& lhs = *seqp->lhsp;
+            const SvaAttemptSeq& rhs = *seqp->rhsp;
+            if (seqp->kind == Kind::OR) {
+                seqp->minLen = std::min(lhs.minLen, rhs.minLen);
+                seqp->maxLen = std::max(lhs.maxLen, rhs.maxLen);
+            } else if (seqp->kind == Kind::AND) {
+                seqp->minLen = std::max(lhs.minLen, rhs.minLen);
+                seqp->maxLen = std::max(lhs.maxLen, rhs.maxLen);
+            } else {
+                seqp->minLen = std::max(lhs.minLen, rhs.minLen);
+                seqp->maxLen = std::min(lhs.maxLen, rhs.maxLen);
+                // Without a common length the NFA lowering reports it never matching
+                if (seqp->minLen > seqp->maxLen) return nullptr;
+            }
+            seqp->pairs = seqp->kind != Kind::OR;
+            seqp->varLenAnd
+                = seqp->pairs && (lhs.minLen != lhs.maxLen || rhs.minLen != rhs.maxLen);
+        } else {
+            return nullptr;
+        }
+        seqp->minLen = std::min(seqp->minLen, SvaAttemptNode::MAX_LATENCY + 1);
+        seqp->maxLen = tooLong ? SvaAttemptNode::MAX_LATENCY + 1
+                               : std::min(seqp->maxLen, SvaAttemptNode::MAX_LATENCY + 1);
+        if (const SvaAttemptSeq* const lhsp = seqp->lhsp.get()) {
+            seqp->pairs |= lhsp->pairs;
+            seqp->varLenAnd |= lhsp->varLenAnd;
+        }
+        if (const SvaAttemptSeq* const rhsp = seqp->rhsp.get()) {
+            seqp->pairs |= rhsp->pairs;
+            seqp->varLenAnd |= rhsp->varLenAnd;
+        }
+        return seqp;
+    }
+
 public:
     // The attempt tree of a property, or nullptr if an operand of it does not resolve within a
     // fixed number of ticks
@@ -2873,9 +3001,16 @@ public:
             lhsp = VN_AS(nodep, NodeBiop)->lhsp();
             rhsp = VN_AS(nodep, NodeBiop)->rhsp();
         } else {
-            // A sequence of boolean checks on fixed ticks
-            if (!nodep->isPure() || !flattenFixedSeq(nodep, 0, treep->checks)) return nullptr;
-            treep->latency = treep->checks.rbegin()->first;
+            if (!nodep->isPure()) return nullptr;
+            // A sequence of boolean checks on fixed ticks, else of bounded length
+            if (flattenFixedSeq(nodep, 0, treep->checks)) {
+                treep->latency = treep->checks.rbegin()->first;
+                return treep;
+            }
+            treep->checks.clear();
+            treep->seqp = buildAttemptSeq(nodep, true);
+            if (!treep->seqp) return nullptr;
+            treep->latency = treep->seqp->maxLen;
             return treep;
         }
         treep->lhsp = buildAttemptTree(lhsp);
@@ -3802,6 +3937,189 @@ class SvaNfaLowering final {
             flp, failAtp,
             new AstAnd{flp, newAttemptBitp(a, k), newAttemptAllp(a, new AstLogNot{flp, condp})}};
     }
+    // Attempts of an event of a sequence on this tick: a vector, or a bit for the attempt of
+    // one age, as an event of an operand starting on a fixed tick of its attempt is
+    struct AttemptSet final {
+        AstVar* varp = nullptr;  // Null if none
+        int age = -1;  // The age of the attempt of a bit, or -1 for a vector
+    };
+    // The vector of the attempts of set, or null if none
+    AstVar* newAttemptVecp(AttemptCtx& a, const AttemptSet& set) {
+        if (!set.varp || set.age < 0) return set.varp;
+        return newAttemptTempp(
+            a, new AstAnd{a.c.flp, newAttemptBitp(a, set.age),
+                          newAttemptAllp(a, new AstVarRef{a.c.flp, set.varp, VAccess::READ})});
+    }
+    // The vector of the attempts of ages from minAge to maxAge
+    AstNodeExpr* newAttemptRangep(const AttemptCtx& a, int minAge, int maxAge) {
+        AstConst* const constp = new AstConst{a.c.flp, AstConst::DTyped{}, a.vecDTypep};
+        for (int age = minAge; age <= std::min(maxAge, a.width - 1); ++age) {
+            constp->num().setBit(age, 1);
+        }
+        return constp;
+    }
+    // The union of two sets of attempts
+    AttemptSet newAttemptUnion(AttemptCtx& a, const AttemptSet& lhs, const AttemptSet& rhs) {
+        if (!lhs.varp || !rhs.varp) return lhs.varp ? lhs : rhs;
+        if (lhs.age >= 0 && lhs.age == rhs.age) {
+            return {newAttemptTempp(a, new AstLogOr{a.c.flp, newAttemptRefp(a, lhs.varp),
+                                                    newAttemptRefp(a, rhs.varp)}),
+                    lhs.age};
+        }
+        return {newAttemptOrp(a, newAttemptVecp(a, lhs), newAttemptVecp(a, rhs)), -1};
+    }
+    // A register holding set on the next tick, when its attempts are one tick older
+    AttemptSet newAttemptDelayp(AttemptCtx& a, const AttemptSet& set) {
+        if (!set.varp) return {};
+        AstVar* const regp = newAttemptRegp(a, set.varp->dtypep());
+        setAttemptRegp(a, regp, newAttemptRefp(a, set.varp));
+        return {regp, set.age < 0 ? -1 : set.age + 1};
+    }
+
+    // The attempts with a match of seq on this tick, of those of start starting it now. Adds to
+    // livep the attempts with a thread of it left after this tick.
+    AttemptSet lowerAttemptSeq(AttemptCtx& a, const SvaAttemptSeq& seq, const AttemptSet& start,
+                               AstVar*& livep) {
+        using Kind = SvaAttemptSeq::Kind;
+        FileLine* const flp = a.c.flp;
+        switch (seq.kind) {
+        case Kind::BOOL: {
+            AstNodeExpr* const condp = newAttemptCondp(seq.condp->cloneTreePure(false));
+            if (start.age >= 0) {
+                return {
+                    newAttemptTempp(a, new AstLogAnd{flp, newAttemptRefp(a, start.varp), condp}),
+                    start.age};
+            }
+            return {newAttemptTempp(a, new AstAnd{flp, newAttemptRefp(a, start.varp),
+                                                  newAttemptAllp(a, condp)}),
+                    -1};
+        }
+        case Kind::CAT: return lowerAttemptCatSeq(a, seq, start, livep);
+        case Kind::REP: {
+            // An iteration starts on the tick after the previous one matched
+            // (IEEE 1800-2023 16.9.2)
+            AttemptSet match;
+            AttemptSet iterStart = start;
+            for (int i = 1; i <= seq.maxCount; ++i) {
+                const AttemptSet iter = lowerAttemptSeq(a, *seq.lhsp, iterStart, livep);
+                if (i >= seq.minCount) match = newAttemptUnion(a, match, iter);
+                if (i == seq.maxCount) break;
+                livep = newAttemptOrp(a, livep, newAttemptVecp(a, iter));
+                iterStart = newAttemptDelayp(a, iter);
+            }
+            return match;
+        }
+        case Kind::OR: {
+            const AttemptSet lhs = lowerAttemptSeq(a, *seq.lhsp, start, livep);
+            const AttemptSet rhs = lowerAttemptSeq(a, *seq.rhsp, start, livep);
+            return newAttemptUnion(a, lhs, rhs);
+        }
+        default: return {lowerAttemptAndSeq(a, seq, start, livep), -1};
+        }
+    }
+    // The second operand of a concatenation starts on each tick of the delay range after a match
+    // of the first one (IEEE 1800-2023 16.9.2)
+    AttemptSet lowerAttemptCatSeq(AttemptCtx& a, const SvaAttemptSeq& seq, const AttemptSet& start,
+                                  AstVar*& livep) {
+        FileLine* const flp = a.c.flp;
+        const AttemptSet lhs = seq.lhsp ? lowerAttemptSeq(a, *seq.lhsp, start, livep) : start;
+        AttemptSet rhsStart = seq.minCount ? AttemptSet{} : lhs;
+        if (lhs.age >= 0 && seq.minCount != seq.maxCount) {
+            // The attempts of the matches of a first operand of fixed length differ by the
+            // ticks since, so one vector holds the delay range
+            AstVar* const lhsVecp = newAttemptVecp(a, lhs);
+            AstVar* const regp = newAttemptRegp(a, a.vecDTypep);
+            AstVar* const delayedp = newAttemptTempp(
+                a, new AstAnd{flp, newAttemptRefp(a, regp),
+                              newAttemptRangep(a, lhs.age + 1, lhs.age + seq.maxCount)});
+            AstVar* const pendingp = newAttemptOrp(a, lhsVecp, delayedp);
+            setAttemptRegp(a, regp, newAttemptRefp(a, pendingp));
+            livep = newAttemptOrp(
+                a, livep,
+                newAttemptTempp(
+                    a, new AstAnd{flp, newAttemptRefp(a, pendingp),
+                                  newAttemptRangep(a, lhs.age, lhs.age + seq.maxCount - 1)}));
+            rhsStart = newAttemptUnion(
+                a, rhsStart,
+                {newAttemptTempp(
+                     a, new AstAnd{flp, newAttemptRefp(a, delayedp),
+                                   newAttemptRangep(a, lhs.age + std::max(seq.minCount, 1),
+                                                    lhs.age + seq.maxCount)}),
+                 -1});
+        } else {
+            AttemptSet delayed = lhs;
+            for (int k = 1; k <= seq.maxCount; ++k) {
+                livep = newAttemptOrp(a, livep, newAttemptVecp(a, delayed));
+                delayed = newAttemptDelayp(a, delayed);
+                if (k >= seq.minCount) rhsStart = newAttemptUnion(a, rhsStart, delayed);
+            }
+        }
+        if (!rhsStart.varp) return {};
+        return lowerAttemptSeq(a, *seq.rhsp, rhsStart, livep);
+    }
+    // 'and' matches when one operand matches and the other one has matched since the start of
+    // the attempt, 'intersect' when both match (IEEE 1800-2023 16.9.5, 16.9.6)
+    AstVar* lowerAttemptAndSeq(AttemptCtx& a, const SvaAttemptSeq& seq, const AttemptSet& start,
+                               AstVar*& livep) {
+        FileLine* const flp = a.c.flp;
+        AstVar* lhsLivep = nullptr;
+        AstVar* rhsLivep = nullptr;
+        AstVar* const lhsp = newAttemptVecp(a, lowerAttemptSeq(a, *seq.lhsp, start, lhsLivep));
+        AstVar* const rhsp = newAttemptVecp(a, lowerAttemptSeq(a, *seq.rhsp, start, rhsLivep));
+        const auto newAndp = [&](AstVar* xp, AstVar* yp) {
+            return new AstAnd{flp, newAttemptRefp(a, xp), newAttemptRefp(a, yp)};
+        };
+        if (seq.kind == SvaAttemptSeq::Kind::INTERSECT) {
+            livep = newAttemptOrp(a, livep, newAttemptTempp(a, newAndp(lhsLivep, rhsLivep)));
+            return newAttemptTempp(a, newAndp(lhsp, rhsp));
+        }
+        AstVar* const lhsDoneRegp = newAttemptRegp(a, a.vecDTypep);
+        AstVar* const rhsDoneRegp = newAttemptRegp(a, a.vecDTypep);
+        AstVar* const lhsDonep = newAttemptOrp(a, lhsDoneRegp, lhsp);
+        AstVar* const rhsDonep = newAttemptOrp(a, rhsDoneRegp, rhsp);
+        setAttemptRegp(a, lhsDoneRegp, newAttemptRefp(a, lhsDonep));
+        setAttemptRegp(a, rhsDoneRegp, newAttemptRefp(a, rhsDonep));
+        // A thread of an operand is live while the other operand can match or has matched
+        livep = newAttemptOrp(
+            a, livep,
+            newAttemptTempp(a, new AstOr{flp, newAndp(lhsLivep, rhsLivep),
+                                         new AstOr{flp, newAndp(lhsLivep, rhsDonep),
+                                                   newAndp(rhsLivep, lhsDonep)}}));
+        return newAttemptTempp(
+            a, new AstOr{flp, newAndp(lhsp, rhsDonep), newAndp(rhsp, lhsDoneRegp)});
+    }
+    // A sequence of variable length succeeds on its first match, and fails on the tick its
+    // last thread ends without one (IEEE 1800-2023 16.12.2)
+    AttemptEvents lowerAttemptVarSeq(AttemptCtx& a, const SvaAttemptNode& node, int startOffset,
+                                     AstVar* startVarp) {
+        FileLine* const flp = a.c.flp;
+        AttemptEvents events;
+        events.nonvacp = newAttemptTempp(a, newAttemptStartp(a, startOffset, startVarp));
+        AstVar* livep = nullptr;
+        AstVar* const matchp
+            = newAttemptVecp(a, lowerAttemptSeq(a, *node.seqp, {startVarp, startOffset}, livep));
+        // The attempts started and not resolved
+        AstVar* pendingp = events.nonvacp;
+        AstVar* pendingRegp = nullptr;
+        if (livep) {
+            pendingRegp = newAttemptRegp(a, a.vecDTypep);
+            pendingp = newAttemptOrp(a, pendingp, pendingRegp);
+        }
+        events.succp = newAttemptTempp(
+            a, new AstAnd{flp, newAttemptRefp(a, pendingp), newAttemptRefp(a, matchp)});
+        events.failp = newAttemptTempp(
+            a, new AstAnd{flp, newAttemptRefp(a, pendingp),
+                          new AstNot{flp, new AstOr{flp, newAttemptRefp(a, matchp),
+                                                    newAttemptRefp(a, livep)}}});
+        if (pendingRegp) {
+            setAttemptRegp(a, pendingRegp,
+                           new AstAnd{flp,
+                                      new AstAnd{flp, newAttemptRefp(a, pendingp),
+                                                 new AstNot{flp, newAttemptRefp(a, matchp)}},
+                                      newAttemptRefp(a, livep)});
+        }
+        return events;
+    }
     // A sequence fails on its first check that does not hold, else succeeds on its last
     AttemptEvents lowerAttemptSequence(AttemptCtx& a, const SvaAttemptNode& node, int startOffset,
                                        AstVar* startVarp) {
@@ -3999,7 +4317,9 @@ class SvaNfaLowering final {
             startVarp = newAttemptTempp(a, startp);
         }
         switch (node.kind) {
-        case Kind::SEQUENCE: return lowerAttemptSequence(a, node, startOffset, startVarp);
+        case Kind::SEQUENCE:
+            return node.seqp ? lowerAttemptVarSeq(a, node, startOffset, startVarp)
+                             : lowerAttemptSequence(a, node, startOffset, startVarp);
         case Kind::IMPLICATION: return lowerAttemptImplication(a, node, startOffset, startVarp);
         case Kind::NOT: {
             // Swaps success and failure, keeping the vacuity (IEEE 1800-2023 16.12.3, 16.14.8 d)
@@ -4729,7 +5049,7 @@ class SvaNfaLowering final {
 public:
     // Lower a property per attempt: each operand of it resolves within a fixed number of ticks
     // of the attempt start, so its attempts in flight are kept as vectors by start tick.
-    SignalSet lowerAttempts(AstAssert* const assertp, const SvaAttemptNode& tree,
+    SignalSet lowerAttempts(const AstNodeCoverOrAssert* const assertp, const SvaAttemptNode& tree,
                             AstSenTree* const senTreep, AstNodeExpr* const disableExprp) {
         FileLine* const flp = assertp->fileline();
         const std::string baseName = m_names.get("");
@@ -7417,33 +7737,55 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     // Count the implications of the tree, and find whether it has another property operator
-    static void findAttemptKinds(const SvaAttemptNode& node, int& implications, bool& other) {
+    // and a sequence not of fixed checks
+    static void findAttemptKinds(const SvaAttemptNode& node, int& implications, bool& other,
+                                 bool& varSeq) {
         using Kind = SvaAttemptNode::Kind;
         if (node.kind == Kind::IMPLICATION) {
             ++implications;
         } else if (node.kind != Kind::SEQUENCE) {
             other = true;
         }
-        if (node.lhsp) findAttemptKinds(*node.lhsp, implications, other);
-        if (node.rhsp) findAttemptKinds(*node.rhsp, implications, other);
+        if (node.seqp) varSeq = true;
+        if (node.lhsp) findAttemptKinds(*node.lhsp, implications, other, varSeq);
+        if (node.rhsp) findAttemptKinds(*node.rhsp, implications, other, varSeq);
+    }
+    // True if the tree has an 'and' or 'intersect' with an operand of variable length, whose
+    // matches the NFA lowering pairs across attempts
+    static bool hasVarLenAnd(const SvaAttemptNode& node) {
+        if (node.seqp) return node.seqp->varLenAnd;
+        const auto varLen = [](const SvaAttemptNode& opNode) {
+            return opNode.seqp && opNode.seqp->minLen != opNode.seqp->maxLen;
+        };
+        if (node.kind == SvaAttemptNode::Kind::AND && (varLen(*node.lhsp) || varLen(*node.rhsp))) {
+            return true;
+        }
+        return (node.lhsp && hasVarLenAnd(*node.lhsp)) || (node.rhsp && hasVarLenAnd(*node.rhsp));
     }
     // The tree to lower per attempt of an asserted property with an implication and another
-    // property operator, which may be another implication, if each operand of it resolves
-    // within a fixed number of ticks
+    // property operator, which may be another implication, over sequences of fixed checks, or
+    // of a property with an 'and' of an operand of variable length, if each operand of it
+    // resolves within a fixed number of ticks
     static std::unique_ptr<SvaAttemptNode> attemptTree(const AstNodeCoverOrAssert* assertp,
                                                        AstNodeExpr* bodyp, bool localValues) {
-        // A match item or future value is not on a tick of the attempt
-        if (!VN_IS(assertp, Assert) || localValues || bodyp->exists([](const AstNode* np) {
-                return VN_IS(np, ExprStmt) || isFutureValueFn(np);
-            })) {
+        // A match item or future value is not on a tick of the attempt, and a cover sequence
+        // counts each match
+        const bool cover = VN_IS(assertp, Cover);
+        if ((!cover && !VN_IS(assertp, Assert)) || (cover && countsMatches(assertp)) || localValues
+            || bodyp->exists(
+                [](const AstNode* np) { return VN_IS(np, ExprStmt) || isFutureValueFn(np); })) {
             return nullptr;
         }
         std::unique_ptr<SvaAttemptNode> treep = SvaNfaBuilder::buildAttemptTree(bodyp);
         if (!treep) return nullptr;
         int implications = 0;
         bool other = false;
-        findAttemptKinds(*treep, implications, other);
-        if (!implications || (!other && implications < 2)) return nullptr;
+        bool varSeq = false;
+        findAttemptKinds(*treep, implications, other, varSeq);
+        if (!hasVarLenAnd(*treep)
+            && (cover || !implications || (!other && implications < 2) || varSeq)) {
+            return nullptr;
+        }
         if (treep->latency > SvaAttemptNode::MAX_LATENCY) {
             V3Stats::addStatSum("Assertions, NFA per-attempt properties over width limit", 1);
             return nullptr;
@@ -7589,16 +7931,31 @@ class AssertNfaVisitor final : public VNVisitor {
         if (const std::unique_ptr<SvaAttemptNode> treep
             = attemptTree(assertp, propp->propp(), !localValueps.empty())) {
             const auto signals
-                = m_loweringp->lowerAttempts(assertAssertp, *treep, senTreep, disableExprp);
+                = m_loweringp->lowerAttempts(assertp, *treep, senTreep, disableExprp);
             AstNodeExpr* failCountp = signals.threadFailCountp;
-            if (!assertAssertp->failsp()) VL_DO_DANGLING(failCountp->deleteTree(), failCountp);
-            finishDirective(
-                assertp, PropertyParts{}, senTreep,
-                SvaNfaLowering::assembleResult(assertp, false, nullptr, signals, nullptr), nullptr,
-                nullptr, failCountp, nullptr, nullptr);
-            // After the replays, which clone the fail action without the pass action prefix
-            attachAttemptPassActions(assertAssertp, senTreep, signals.attemptPassCountp,
-                                     signals.attemptNonvacuousPassCountp);
+            if (!assertAssertp || !assertAssertp->failsp()) {
+                VL_DO_DANGLING(failCountp->deleteTree(), failCountp);
+            }
+            if (coverp) {
+                // A cover counts the attempts succeeding nonvacuously
+                AstNodeExpr* rejectp = signals.requiredStepRejectp;
+                AstNodeExpr* passCountp = signals.attemptPassCountp;
+                VL_DO_DANGLING(rejectp->deleteTree(), rejectp);
+                VL_DO_DANGLING(passCountp->deleteTree(), passCountp);
+                AstNodeExpr* const countp = signals.attemptNonvacuousPassCountp;
+                finishDirective(assertp, PropertyParts{}, senTreep,
+                                new AstNeq{flp, countp->cloneTreePure(false),
+                                           newTypedConstp(flp, countp->dtypep(), 0)},
+                                nullptr, countp, nullptr, nullptr, nullptr);
+            } else {
+                finishDirective(
+                    assertp, PropertyParts{}, senTreep,
+                    SvaNfaLowering::assembleResult(assertp, false, nullptr, signals, nullptr),
+                    nullptr, nullptr, failCountp, nullptr, nullptr);
+                // After the replays, which clone the fail action without the pass action prefix
+                attachAttemptPassActions(assertAssertp, senTreep, signals.attemptPassCountp,
+                                         signals.attemptNonvacuousPassCountp);
+            }
             VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
             UINFO(4, "Per-attempt converted assertion at " << flp << endl);
             return;

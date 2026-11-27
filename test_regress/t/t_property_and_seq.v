@@ -98,7 +98,9 @@ module t (
       `checkd(fail4, ref_fail4);
       `checkd(fail5, ref_fail5);
       `checkd(fail6, ref_fail5);
-      `checkd(fail7, ref_fail7);
+      // Two attempts of fail7 fail on one tick, and each runs the action
+      // (IEEE 1800-2023 16.14.1), but ref_fail7 runs it once
+      `checkd(fail7, 23);
       `checkd(ref_fail7, 22);
       `checkd(ref_cov8, 23);
       `checkd(cov8, ref_cov8);

@@ -1,18 +1,18 @@
-%Error-UNSUPPORTED: t/t_sequence_intersect_range_unsup.v:16:44: Unsupported: intersect with this variable-length operand
+%Error-UNSUPPORTED: t/t_sequence_intersect_range_unsup.v:16:43: Unsupported: intersect with this variable-length operand
                                                               : ... note: In instance 't'
-   16 |   assert property ((a ##[1:3] b ##[1:2] c) intersect (d ##2 e));
-      |                                            ^~~~~~~~~
+   16 |   cover sequence ((a ##[1:3] b ##[1:2] c) intersect (d ##2 e));
+      |                                           ^~~~~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error-UNSUPPORTED: t/t_sequence_intersect_range_unsup.v:19:45: Unsupported: intersect operand is not a plain boolean sequence
                                                               : ... note: In instance 't'
    19 |   assert property ((a throughout (b ##1 c)) intersect (d ##[0:2] e));
       |                                             ^~~~~~~~~
-%Error-UNSUPPORTED: t/t_sequence_intersect_range_unsup.v:22:42: Unsupported: intersect of two sequences that each vary in length over a range with internal structure
+%Error-UNSUPPORTED: t/t_sequence_intersect_range_unsup.v:22:41: Unsupported: intersect of two sequences that each vary in length over a range with internal structure
                                                               : ... note: In instance 't'
-   22 |   assert property ((a ##[1:3] (b ##1 c)) intersect (d ##[2:4] e));
-      |                                          ^~~~~~~~~
-%Error-UNSUPPORTED: t/t_sequence_intersect_range_unsup.v:25:42: Unsupported: intersect of two sequences that each vary in length over a range with internal structure
+   22 |   cover sequence ((a ##[1:3] (b ##1 c)) intersect (d ##[2:4] e));
+      |                                         ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_sequence_intersect_range_unsup.v:25:41: Unsupported: intersect of two sequences that each vary in length over a range with internal structure
                                                               : ... note: In instance 't'
-   25 |   assert property ((a ##2 (b ##[1:3] c)) intersect (d ##[3:5] e));
-      |                                          ^~~~~~~~~
+   25 |   cover sequence ((a ##2 (b ##[1:3] c)) intersect (d ##[3:5] e));
+      |                                         ^~~~~~~~~
 %Error: Exiting due to
