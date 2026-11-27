@@ -36,6 +36,19 @@ module t;
     v = data;
     o = $past(v);
   endtask
+  // The result variable of a static function is static too (IEEE 1800-2023 13.4.1, 13.4.2)
+  function static bit [6:0] past_result(input bit [6:0] data, output bit [6:0] o);
+    past_result = data;
+    o = $past(past_result);
+  endfunction
+  function static bit [6:0] past_return(input bit [6:0] data, output bit [6:0] o);
+    o = $past(past_return);
+    return data;
+  endfunction
+  // Never called
+  function static bit [6:0] past_uncalled(input bit [6:0] data);
+    past_uncalled = $past(past_uncalled) + data;
+  endfunction
   // Argument in the clocking event
   task static rose_on(input bit c, output bit o);
     o = $rose(cnt[0], c);
@@ -65,6 +78,11 @@ module t;
     `checkd(o2a, cnt >= 2 ? cnt + 7'd48 : 7'd0);
     `checkd(o2b, o2a);
     `checkd(past_fn(cnt), cnt >= 2 ? cnt - 7'd2 : 7'd0);
+    // Test: the result variable's previous sampled value, from the previous call
+    `checkd(past_result(cnt, o5), cnt);
+    `checkd(o5, cnt >= 2 ? cnt - 7'd2 : 7'd0);
+    `checkd(past_return(cnt, o5), cnt);
+    `checkd(o5, cnt >= 2 ? cnt - 7'd2 : 7'd0);
     // Test: the past value of an automatic argument is its current value
     past_auto(cnt, o3);
     `checkd(o3, cnt);

@@ -199,7 +199,6 @@ protected:
         , m_unelaborated{false} {
         cname(name);  // Might be overridden by dpi import/export
     }
-    void fvarp(AstVar* varp) { m_fvarp = varp; }
 
 public:
     ASTGEN_MEMBERS_AstNodeFTask;
@@ -214,6 +213,7 @@ public:
     string cname() const { return m_cname; }
     void cname(const string& cname) { m_cname = cname; }
     AstVar* fvarp() const { return m_fvarp; }
+    void fvarp(AstVar* varp) { m_fvarp = varp; }  // A variable under declsp
     bool isFunction() const { return fvarp() != nullptr; }
     // MORE ACCESSORS
     void dpiOpenParentInc() { ++m_dpiOpenParent; }
