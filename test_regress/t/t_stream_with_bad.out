@@ -7,34 +7,18 @@
                                    : ... note: In instance 't'
    14 |     p = {>>{two with [0:0]}};
       |                 ^~~~
-%Error: t/t_stream_with_bad.v:16:19: Expecting expression to be constant, but can't convert a 'array or queue element selection' to constant.
-                                   : ... note: In instance 't'
-   16 |     p = {<<q with [0]{q}};
-      |                   ^
 %Error: t/t_stream_with_bad.v:16:10: Slice size isn't a constant or basic data type.
                                    : ... note: In instance 't'
    16 |     p = {<<q with [0]{q}};
       |          ^~
-%Error: t/t_stream_with_bad.v:17:19: Expecting expression to be constant, but can't convert a 'slicePlusPad' to constant.
-                                   : ... note: In instance 't'
-   17 |     p = {<<q with [0:1]{q}};
-      |                   ^
 %Error: t/t_stream_with_bad.v:17:10: Slice size isn't a constant or basic data type.
                                    : ... note: In instance 't'
    17 |     p = {<<q with [0:1]{q}};
       |          ^~
-%Error: t/t_stream_with_bad.v:18:19: Expecting expression to be constant, but can't convert a 'slicePlusPad' to constant.
-                                   : ... note: In instance 't'
-   18 |     p = {<<q with [0+:1]{q}};
-      |                   ^
 %Error: t/t_stream_with_bad.v:18:10: Slice size isn't a constant or basic data type.
                                    : ... note: In instance 't'
    18 |     p = {<<q with [0+:1]{q}};
       |          ^~
-%Error: t/t_stream_with_bad.v:19:19: Expecting expression to be constant, but can't convert a 'slicePlusPad' to constant.
-                                   : ... note: In instance 't'
-   19 |     p = {<<q with [1-:1]{q}};
-      |                   ^
 %Error: t/t_stream_with_bad.v:19:10: Slice size isn't a constant or basic data type.
                                    : ... note: In instance 't'
    19 |     p = {<<q with [1-:1]{q}};

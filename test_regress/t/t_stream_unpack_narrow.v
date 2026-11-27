@@ -24,8 +24,9 @@ module t;
     `checkh(i3[0], s70[69:38]);
     `checkh(i3[1], s70[37:6]);
     `checkh(i3[2], {s70[5:0], 26'h0});
-    `checkh(c2[0], 8'hbc);
-    `checkh(c2[1], 8'ha0);
+    // Zero-filled on the right before the reordering
+    `checkh(c2[0], 8'hc0);
+    `checkh(c2[1], 8'hab);
     $write("*-* All Finished *-*\n");
     $finish;
   end
