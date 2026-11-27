@@ -3080,8 +3080,10 @@ public:
     // Most lengths of an antecedent of variable length an implication is split by
     static constexpr int MAX_ANTECEDENT_LENGTHS = 16;
     // Most ticks of latency summed over the implications an antecedent is split into, as the
-    // lowering of each is about as large as its latency
+    // lowering of each is about as large as its latency, a tick of its consequent costing
+    // about an eighth of one of its antecedent
     static constexpr int MAX_ANTECEDENT_BRANCH_TICKS = 256;
+    static constexpr int CONSEQUENT_TICKS_PER_BRANCH_TICK = 8;
     // An implication with an antecedent of variable length as an 'and' of one for each length of
     // a match of it, the antecedent restricted to that length, and a followed-by as an 'or' of
     // them (IEEE 1800-2023 16.12.7, 16.12.9). Each starts its consequent on one tick of the
@@ -3107,11 +3109,13 @@ public:
         if (antSeqp->maxLen > SvaAttemptNode::MAX_LATENCY) {
             overLimit = true;
             limit = OverLimit::LATENCY;
-        } else if (antSeqp->maxLen - antSeqp->minLen >= MAX_ANTECEDENT_LENGTHS) {
+        } else if (static_cast<int>(lens.count()) > MAX_ANTECEDENT_LENGTHS) {
             overLimit = true;
         } else {
+            const int consTicks = (consp->latency + CONSEQUENT_TICKS_PER_BRANCH_TICK - 1)
+                                  / CONSEQUENT_TICKS_PER_BRANCH_TICK;
             for (int len = antSeqp->minLen; len <= antSeqp->maxLen; ++len) {
-                if (lens.test(len)) ticks += len + delay + consp->latency;
+                if (lens.test(len)) ticks += len + delay + consTicks;
             }
             overLimit = ticks > MAX_ANTECEDENT_BRANCH_TICKS;
             limit = OverLimit::TICKS;
@@ -8078,7 +8082,8 @@ class AssertNfaVisitor final : public VNVisitor {
                 } else if (limitp->overLimit == SvaAttemptNode::OverLimit::TICKS) {
                     limit = "whose match lengths make implications of more than "
                             + std::to_string(SvaNfaBuilder::MAX_ANTECEDENT_BRANCH_TICKS)
-                            + " cycles in all";
+                            + " cycles in all, a consequent cycle counting 1/"
+                            + std::to_string(SvaNfaBuilder::CONSEQUENT_TICKS_PER_BRANCH_TICK);
                 }
                 implp->lhsp()->v3warn(
                     E_UNSUPPORTED,

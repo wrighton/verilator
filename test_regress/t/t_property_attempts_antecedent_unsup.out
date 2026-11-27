@@ -19,7 +19,7 @@
                                                                   : ... note: In instance 't'
    22 |   assert property (@(posedge clk) ((a ##[250:260] b) |-> c) and (d |-> e));
       |                                       ^~
-%Error-UNSUPPORTED: t/t_property_attempts_antecedent_unsup.v:24:39: Unsupported: implication in another property operator with an antecedent whose match lengths make implications of more than 256 cycles in all (IEEE 1800-2023 16.12.7).
+%Error-UNSUPPORTED: t/t_property_attempts_antecedent_unsup.v:24:39: Unsupported: implication in another property operator with an antecedent whose match lengths make implications of more than 256 cycles in all, a consequent cycle counting 1/8 (IEEE 1800-2023 16.12.7).
                                                                   : ... note: In instance 't'
    24 |   assert property (@(posedge clk) ((a ##[127:128] b) |=> c) and (d |-> e));
       |                                       ^~
