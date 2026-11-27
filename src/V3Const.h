@@ -58,7 +58,7 @@ public:
     // Unpacked struct member declaration initializers take precedence (7.2.2).
     // Return nullptr for types without a representable value in this builder.
     static AstNodeExpr* newDTypeDefaultp(AstNode* nodep, AstNodeDType* dtypep) VL_MT_DISABLED;
-    // Borrow the from operand of NodeSel/Sel/StructSel or ARRAY_AT/ARRAY_AT_BACK/DYN_SIZE.
+    // Borrow the from operand of NodeSel/Sel/StructSel or DYN_SIZE.
     // Return nullptr for other node kinds/methods. The caller retains ownership and checks purity.
     static AstNodeExpr* selectionFromp(const AstNodeExpr* exprp) VL_MT_DISABLED;
     // Default of a pure read-selection/getter path rooted at boundedElementp, using

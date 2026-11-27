@@ -79,6 +79,13 @@ class Holder;
     b = b + 1;
     return a + b;
   endfunction
+  // A queue element only read, by a const ref, is an outdated reference once removed
+  function int peek_delete(const ref int r);
+    fill();
+    q[3000] = -5;
+    q[N - 1] = -6;
+    return r;
+  endfunction
   function int bump_pop_back(ref int r);
     void'(q.pop_back());
     q.push_back(-7);
@@ -393,6 +400,35 @@ module t;
     mb.put(v);
     mb.get(h.w[3000]);
     `checkh(h.w[3000], v);
+  end
+
+  initial begin  // Queue element passed by const ref, the queue deleted and refilled
+    automatic Holder h = new;
+    automatic int seen;
+    automatic int back;
+    h.fill();
+    h.q[3000] = 20;
+    `checkd(h.peek_delete(h.q[3000]), 20);
+    `checkd(h.q[3000], -5);
+    h.fill();
+    `checkd(h.peek_delete(h.q[$]), N - 1);
+    `checkd(h.q[N - 1], -6);
+    // One past the end, counted from it, only read, reads the default value and appends nothing
+    h.fill();
+    back = -1;
+    seen = h.peek(h.q[$-back]);
+    `checkd(seen, 0);
+    `checkd(h.q.size(), N);
+    h.fill();
+    h.q[3000] = 20;
+    fork
+      h.peek_later(h.q[3000], seen);
+      begin
+        h.q.delete();
+        for (int j = 0; j < N; ++j) h.q.push_back(66);
+      end
+    join
+    `checkd(seen, 20);
   end
 
   initial begin  // Associative array element deleted, or another deleted

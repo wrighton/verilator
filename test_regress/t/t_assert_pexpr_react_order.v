@@ -157,6 +157,7 @@ module t;
   int seen_l = -1;
   int seen_b2 = -1;
   int dfk2 = 0;
+  int rb = 0;
   // Test: a class member event waited for in the action itself
   assert property (@(posedge clk) p until q)
   else if (cyc == 2) begin
@@ -181,7 +182,6 @@ module t;
   // An action that would wait forever
   assert property (@(posedge clk) p until q)
   else if (cyc == 99) wait (0);
-  int rb = 0;
   int seen_b = -1;
   assert property (@(posedge clk) p until q)
   else begin

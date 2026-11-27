@@ -19,6 +19,9 @@ module t (
   bit rst = 1;
   bit [6:0] v = 7'd5;
 
+  int rose_count = 0;
+  int past_fails = 0;
+  int disable_fails = 0;
   always @(posedge clk) begin
     cyc <= cyc + 1;
     a <= cyc[1];
@@ -64,16 +67,13 @@ module t (
     `checkd($past($rose(a), 1, , @(posedge clk)), tick_a && !tick2_a);
   end
 
-  int rose_count = 0;
   assert property (@(negedge clk) !$rose(a, @(posedge clk)))
   else rose_count++;
 
-  int past_fails = 0;
   assert property (@(negedge clk) $past(v, 1, , @(posedge clk)) == tick_v)
   else past_fails++;
 
   // A sampled value function in a disable condition shall be explicitly clocked
-  int disable_fails = 0;
   assert property (@(posedge clk) disable iff ($fell(rst, @(posedge clk))) cyc != 4)
   else disable_fails++;
 

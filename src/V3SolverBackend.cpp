@@ -149,14 +149,11 @@ AstNodeExpr* RandomizeUtil::newIdxSelp(FileLine* const fl, AstNodeExpr* const ar
     // foreach gives the declared index, a select takes the offset
     AstNodeExpr* const offsetp
         = RandomizeUtil::newElemOffsetp(fl, arrDtp, new AstVarRef{fl, idxVarp, VAccess::READ});
-    AstNodeExpr* selp;
-    if (VN_IS(arrDtp, UnpackArrayDType)) {
-        selp = new AstArraySel{fl, arrp, offsetp};
-    } else {
-        selp = new AstCMethodHard{fl, arrp, VCMethod::ARRAY_AT, offsetp};
-    }
-    selp->dtypep(arrDtp->subDTypep());
-    return selp;
+    if (VN_IS(arrDtp, UnpackArrayDType)) return new AstArraySel{fl, arrp, offsetp};
+    if (VN_IS(arrDtp, QueueDType)) return new AstQueueSel{fl, arrp, offsetp};
+    if (VN_IS(arrDtp, AssocArrayDType)) return new AstAssocSel{fl, arrp, offsetp};
+    if (VN_IS(arrDtp, WildcardArrayDType)) return new AstWildcardSel{fl, arrp, offsetp};
+    return new AstDynArraySel{fl, arrp, offsetp};
 }
 
 AstNodeExpr* RandomizeUtil::newElemSelp(FileLine* const fl, AstNodeExpr* arrp,
@@ -185,9 +182,14 @@ randIndexSelImpp(AstNodeExpr* exprp, bool randArray,
         } else if (AstAssocSel* const assocSelp = VN_CAST(curp, AssocSel)) {
             fromp = assocSelp->fromp();
             indexp = assocSelp->bitp();
+        } else if (AstDynArraySel* const selp = VN_CAST(curp, DynArraySel)) {
+            fromp = selp->fromp();
+            indexp = selp->bitp();
+        } else if (AstQueueSel* const selp = VN_CAST(curp, QueueSel)) {
+            fromp = selp->fromp();
+            if (!selp->fromBack()) indexp = selp->bitp();
         } else if (AstCMethodHard* const methodp = VN_CAST(curp, CMethodHard)) {
             fromp = methodp->fromp();
-            if (methodp->method() == VCMethod::ARRAY_AT) indexp = methodp->pinsp();
         } else if (AstStructSel* const structSelp = VN_CAST(curp, StructSel)) {
             fromp = structSelp->fromp();
         } else if (AstMemberRef* const memberRefp = VN_CAST(curp, MemberRef)) {
@@ -211,10 +213,10 @@ AstNodeExpr* RandomizeUtil::randArrayIndexSelp(
 }
 
 AstNodeExpr* RandomizeUtil::newElemModeOffp(AstNodeExpr* const modesp, AstNodeExpr* const indexp) {
-    AstCMethodHard* const atp = new AstCMethodHard{indexp->fileline(), modesp, VCMethod::ARRAY_AT,
-                                                   indexp->cloneTree(false)};
-    atp->dtypeSetBit();
-    return atp;
+    AstAssocSel* const selp
+        = new AstAssocSel{indexp->fileline(), modesp, indexp->cloneTree(false)};
+    selp->dtypeSetBit();
+    return selp;
 }
 
 AstNodeExpr* RandomizeUtil::newMemberRefp(FileLine* const fl, AstNodeExpr* const objp,

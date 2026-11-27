@@ -3762,10 +3762,8 @@ class AssertVisitor final : public VNVisitor {
         }
         // Begin the matured instances whose leading clock occurred since they matured, in
         // their order
-        AstCMethodHard* const frontp
-            = new AstCMethodHard{flp, rd(clkQp), VCMethod::ARRAY_AT,
-                                 new AstConst{flp, AstConst::WidthedValue{}, 32, 0}};
-        frontp->dtypeFrom(u64p);
+        AstQueueSel* const frontp
+            = new AstQueueSel{flp, rd(clkQp), new AstConst{flp, AstConst::WidthedValue{}, 32, 0}};
         AstLoop* const beginLoopp = new AstLoop{flp};
         beginLoopp->addStmtsp(new AstLoopTest{
             flp, beginLoopp,

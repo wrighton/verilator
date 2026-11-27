@@ -44,6 +44,8 @@ module t (
     #2;
     @(negedge b iff h.en) cnt_neg_h = cnt_neg_h + 1;
   end
+  int cnt_neg_h0 = 0;
+  int cnt_const_h0 = 0;
   initial begin
     #1 h = new;
     #2 b = 1'b1;
@@ -56,8 +58,6 @@ module t (
   // The same at initialization, where the handle stays null
   localparam logic ONE = 1'b1;
   H h0;
-  int cnt_neg_h0 = 0;
-  int cnt_const_h0 = 0;
   always @(negedge a iff h0.en) cnt_neg_h0 = cnt_neg_h0 + 1;
   always @(ONE iff h0.en) cnt_const_h0 = cnt_const_h0 + 1;
 `endif

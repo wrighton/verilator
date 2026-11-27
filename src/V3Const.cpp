@@ -3511,25 +3511,8 @@ class ConstVisitor final : public VNVisitor {
                 }
                 srcp = new AstCvtPackedToArray{nodep->fileline(), srcp, dstDTypep};
             } else {
-                const AstNodeDType* const srcDTypep = srcp->dtypep()->skipRefp();
                 if (dWidth == 0) {
                     srcp = new AstCvtPackedToArray{nodep->fileline(), srcp, dstDTypep};
-                } else if ((VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType))
-                           && srcDTypep->subDTypep()->skipRefp()->isIntegralOrPacked()) {
-                    // Pack only the first elements covering the target, as the bits of a
-                    // longer source beyond the target are ignored (IEEE 1800-2023 11.4.14.3)
-                    FileLine* const flp = srcp->fileline();
-                    const AstNodeDType* const elemDTypep = srcDTypep->subDTypep();
-                    const int elems = (dWidth + elemDTypep->width() - 1) / elemDTypep->width();
-                    const int packedWidth = elems * elemDTypep->width();
-                    AstCMethodHard* const slicep
-                        = new AstCMethodHard{flp, srcp, VCMethod::DYN_SLICE, new AstConst{flp, 0}};
-                    slicep->addPinsp(new AstConst{flp, static_cast<uint32_t>(elems - 1)});
-                    slicep->dtypeFrom(srcp);
-                    AstNodeDType* const packedDTypep = srcp->findBitOrLogicDType(
-                        packedWidth, packedWidth, VSigning::UNSIGNED, elemDTypep->isFourstate());
-                    srcp = new AstSel{flp, new AstCvtArrayToPacked{flp, slicep, packedDTypep},
-                                      packedWidth - dWidth, dWidth};
                 } else if (sWidth >= dWidth) {
                     srcp = new AstSel{streamp->fileline(), srcp, sWidth - dWidth, dWidth};
                 } else {
@@ -3608,27 +3591,10 @@ class ConstVisitor final : public VNVisitor {
                     }
                     nodep->rhsp(srcp);
                     VL_DO_DANGLING(pushDeletep(streamp), streamp);
-                } else if (VN_IS(srcDTypep, UnpackArrayDType)) {
+                } else {
                     streamp->lhsp(new AstCvtArrayToPacked{srcp->fileline(), srcp->unlinkFrBack(),
                                                           dstDTypep});
                     streamp->dtypeFrom(dstDTypep);
-                } else {
-                    // Reverse the blocks of the stream of its run-time size, then left-justify
-                    // it in the target (IEEE 1800-2023 11.4.14)
-                    FileLine* const flp = srcp->fileline();
-                    const int elemWidth = srcDTypep->subDTypep()->width();
-                    AstNodeDType* const queueDTypep = srcp->dtypep();
-                    AstNodeExpr* const reversedp
-                        = new AstCvtArrayToArray{flp,
-                                                 srcp->unlinkFrBack(),
-                                                 queueDTypep,
-                                                 true,
-                                                 VN_AS(streamp->rhsp(), Const)->toSInt(),
-                                                 elemWidth,
-                                                 elemWidth};
-                    streamp->unlinkFrBack();
-                    nodep->rhsp(new AstCvtArrayToPacked{flp, reversedp, dstDTypep});
-                    VL_DO_DANGLING(pushDeletep(streamp), streamp);
                 }
             }
         } else if (m_doV && replaceAssignMultiSel(nodep)) {

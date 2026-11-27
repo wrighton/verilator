@@ -119,8 +119,10 @@ static AstVar* randModeElemArrayp(AstNodeExpr* fromp) {
     AstNodeExpr* arrayp = nullptr;
     if (const AstArraySel* const arraySelp = VN_CAST(fromp, ArraySel)) {
         arrayp = arraySelp->fromp();
-    } else if (const AstCMethodHard* const atp = VN_CAST(fromp, CMethodHard)) {
-        if (atp->method() == VCMethod::ARRAY_AT) arrayp = atp->fromp();
+    } else if (const AstDynArraySel* const selp = VN_CAST(fromp, DynArraySel)) {
+        arrayp = selp->fromp();
+    } else if (const AstQueueSel* const selp = VN_CAST(fromp, QueueSel)) {
+        if (!selp->fromBack()) arrayp = selp->fromp();
     }
     AstVar* varp = nullptr;
     if (const AstVarRef* const varrefp = VN_CAST(arrayp, VarRef)) {
@@ -156,9 +158,6 @@ static AstClass* randModeObjectClassp(const AstNodeExpr* const fromp) {
         if (VN_IS(basep, StructSel)) return nullptr;
         if (const AstNodeSel* const selp = VN_CAST(basep, NodeSel)) {
             basep = selp->fromp();
-        } else if (const AstCMethodHard* const methodp = VN_CAST(basep, CMethodHard)) {
-            if (!methodp->method().isDynElementAccess()) break;
-            basep = methodp->fromp();
         } else {
             break;
         }
@@ -181,8 +180,11 @@ struct RandModeTarget final {
     static RandModeTarget get(AstNodeExpr* fromp, AstNodeModule* modp) {
         if (!fromp) return {nullptr, nullptr, VN_AS(modp, Class)};
         if (AstClass* const classp = randModeObjectClassp(fromp)) return {nullptr, fromp, classp};
-        if (AstCMethodHard* const methodHardp = VN_CAST(fromp, CMethodHard)) {
-            return RandModeTarget::get(methodHardp->fromp(), modp);
+        if (AstDynArraySel* const selp = VN_CAST(fromp, DynArraySel)) {
+            return RandModeTarget::get(selp->fromp(), modp);
+        }
+        if (AstQueueSel* const selp = VN_CAST(fromp, QueueSel)) {
+            return RandModeTarget::get(selp->fromp(), modp);
         }
         if (AstArraySel* const arraySelp = VN_CAST(fromp, ArraySel)) {
             return RandModeTarget::get(arraySelp->fromp(), modp);
@@ -299,10 +301,6 @@ static bool dependsOnRandValue(const AstNode* opp) {
     for (const AstNode* curp = opp; curp; curp = curp->op1p()) {
         if (const AstNodeSel* const selp = VN_CAST(curp, NodeSel)) {
             if (selp->bitp()->user1()) return true;
-        } else if (const AstCMethodHard* const methodp = VN_CAST(curp, CMethodHard)) {
-            if (methodp->method() == VCMethod::ARRAY_AT && methodp->pinsp()->user1()) {
-                return true;
-            }
         } else if (!VN_IS(curp, MemberRef) && !VN_IS(curp, StructSel)) {
             return false;
         }
@@ -399,10 +397,9 @@ class ElementIndexVisitor final : public VNVisitorConst {
     }
     void visit(AstMemberRef* nodep) override {
         ++m_statNodesr;
-        if (const AstArraySel* const selp = VN_CAST(nodep->fromp(), ArraySel)) {
-            classify(selp->bitp());
-        } else if (const AstCMethodHard* const methodp = VN_CAST(nodep->fromp(), CMethodHard)) {
-            if (methodp->pinsp()) classify(methodp->pinsp());
+        if (VN_IS(nodep->fromp(), ArraySel) || VN_IS(nodep->fromp(), DynArraySel)
+            || VN_IS(nodep->fromp(), QueueSel)) {
+            classify(VN_AS(nodep->fromp(), NodeSel)->bitp());
         }
         iterateChildrenConst(nodep);
     }
@@ -945,8 +942,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
     }
     // The array an element member select selects an element of
     static const AstNodeExpr* elemArrayp(const AstMemberRef* refp) {
-        return VN_IS(refp->fromp(), ArraySel) ? VN_AS(refp->fromp(), ArraySel)->fromp()
-                                              : VN_AS(refp->fromp(), CMethodHard)->fromp();
+        return VN_AS(refp->fromp(), NodeSel)->fromp();
     }
     // The variable a variable reference, as of the class's own array, selects, else nullptr
     static const AstVar* selectedVarp(const AstNodeExpr* exprp) {
@@ -963,10 +959,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
     // Whether refp selects a member of an element of an array of class handles
     static bool isHandleElemMember(const AstMemberRef* refp) {
         const AstNodeExpr* arrp = nullptr;
-        if (const AstArraySel* const selp = VN_CAST(refp->fromp(), ArraySel)) {
-            arrp = selp->fromp();
-        } else if (const AstCMethodHard* const methodp = VN_CAST(refp->fromp(), CMethodHard)) {
-            arrp = methodp->fromp();
+        if (VN_IS(refp->fromp(), ArraySel) || VN_IS(refp->fromp(), DynArraySel)
+            || VN_IS(refp->fromp(), QueueSel)) {
+            arrp = VN_AS(refp->fromp(), NodeSel)->fromp();
         }
         return arrp && VN_IS(RandomizeUtil::arrayElementDTypep(arrp->dtypep()), ClassRefDType);
     }
@@ -985,7 +980,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
     // What a member or element select selects from, else nullptr
     static const AstNodeExpr* selectFromp(const AstNodeExpr* exprp) {
         if (const AstMemberRef* const refp = VN_CAST(exprp, MemberRef)) return refp->fromp();
-        if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) return selp->fromp();
+        if (VN_IS(exprp, ArraySel) || VN_IS(exprp, DynArraySel) || VN_IS(exprp, QueueSel)) {
+            return VN_AS(exprp, NodeSel)->fromp();
+        }
         if (const AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
             return methodp->fromp();
         }
@@ -1503,15 +1500,17 @@ class RandomizeMarkVisitor final : public VNVisitor {
             } else if (VN_IS(fromp, Sel)) {
                 nodep->v3error("Cannot call 'rand_mode()' on packed array element");
                 valid = false;
-            } else if (AstCMethodHard* const atp = VN_CAST(fromp, CMethodHard)) {
-                if (atp->method() == VCMethod::ARRAY_AT) {
-                    nodep->v3warn(E_UNSUPPORTED,
-                                  "Unsupported: 'rand_mode()' on dynamic array element");
-                } else {
-                    nodep->v3warn(E_UNSUPPORTED,
-                                  "Unsupported: 'rand_mode()' on queue element indexed from '$'");
-                }
+            } else if (VN_IS(fromp, DynArraySel)) {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: 'rand_mode()' on dynamic array element");
                 valid = false;
+            } else if (const AstQueueSel* const selp = VN_CAST(fromp, QueueSel)) {
+                // Other queue elements of a rand array have their own modes (elemMode)
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: 'rand_mode()' on queue element"
+                                                 << (selp->fromBack() ? " indexed from '$'" : ""));
+                valid = false;
+            } else if (VN_IS(fromp, CMethodHard)) {
+                fromp->v3fatalSrc("Unknown rand_mode() receiver");
             }
             if (!nodep->argsp() && VN_IS(nodep->backp(), StmtExpr)
                 && !nodep->backp()->fileline()->warnIsOff(V3ErrorCode::IGNOREDRETURN)) {
@@ -2782,7 +2781,6 @@ class RandomizeVisitor final : public VNVisitor {
             } else if (VN_IS(tempDTypep, QueueDType)) {
                 tempElementp = new AstQueueSel{fl, tempExprp, tempRefp};
             }
-            tempElementp->dtypep(tempDTypep->subDTypep());
             if (!firstIndexp) {
                 firstIndexp = VN_IS(tempElementp, ArraySel) ? VN_AS(tempElementp, ArraySel)->bitp()
                                                             : tempRefp;
@@ -3663,17 +3661,21 @@ class RandomizeVisitor final : public VNVisitor {
             indexp = arraySelp->bitp()->unlinkFrBack();
             modesp = arraySelp->fromp()->unlinkFrBack();
         } else {
-            AstCMethodHard* const atp = VN_AS(fromp, CMethodHard);
-            indexp = atp->pinsp()->unlinkFrBack();
-            modesp = atp->fromp()->unlinkFrBack();
+            AstNodeSel* const selp = VN_AS(fromp, NodeSel);  // DynArraySel or QueueSel
+            indexp = selp->bitp()->unlinkFrBack();
+            modesp = selp->fromp()->unlinkFrBack();
         }
         retargetMemberRef(modesp, elemModeVarp(arrVarp));
         if (nodep->argsp()) {
             UASSERT_OBJ(VN_IS(nodep->backp(), StmtExpr), nodep, "Should be a statement");
-            modesp->foreach([](AstVarRef* varrefp) { varrefp->access(VAccess::WRITE); });
+            // The modes are written, the handles leading to them are only read
+            if (AstMemberRef* const memberRefp = VN_CAST(modesp, MemberRef)) {
+                memberRefp->access(VAccess::WRITE);
+            } else {
+                VN_AS(modesp, VarRef)->access(VAccess::WRITE);
+            }
             AstNodeExpr* const onp = nodep->argsp()->exprp()->unlinkFrBack();
-            AstCMethodHard* const setp
-                = new AstCMethodHard{fl, modesp, VCMethod::ARRAY_AT_WRITE, indexp};
+            AstAssocSel* const setp = new AstAssocSel{fl, modesp, indexp};
             setp->dtypeSetBit();
             AstNodeExpr* const offp
                 = new AstEq{fl, onp, new AstConst{fl, AstConst::WidthedValue{}, onp->width(), 0}};
@@ -3683,14 +3685,14 @@ class RandomizeVisitor final : public VNVisitor {
         }
         const RandomizeMode randMode = {.asUQuad = arrVarp->user1()};
         AstNodeExpr* const slotsp = randMode.usesMode ? modesp->cloneTreePure(false) : nullptr;
-        AstCMethodHard* const atp = new AstCMethodHard{fl, modesp, VCMethod::ARRAY_AT, indexp};
+        AstAssocSel* const atp = new AstAssocSel{fl, modesp, indexp};
         atp->dtypeSetUInt32();
         AstNodeExpr* onp = new AstXor{fl, new AstConst{fl, 1}, atp};
         onp->dtypeSetUInt32();
         if (slotsp) {  // Also off while the whole array is
             retargetMemberRef(slotsp, RandModeVars::randModeVarp(VN_AS(arrVarp->user2p(), Class)));
-            AstCMethodHard* const slotp = new AstCMethodHard{fl, slotsp, VCMethod::ARRAY_AT,
-                                                             new AstConst{fl, randMode.index}};
+            AstDynArraySel* const slotp
+                = new AstDynArraySel{fl, slotsp, new AstConst{fl, randMode.index}};
             slotp->dtypeSetUInt32();
             onp = new AstAnd{fl, slotp, onp};
             onp->dtypeSetUInt32();

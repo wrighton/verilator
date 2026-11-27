@@ -3,20 +3,14 @@
       |               ^~~~
                         ... For warning description see https://verilator.org/warn/CONSTRAINTIGN?v=latest
                         ... Use "/* verilator lint_off CONSTRAINTIGN */" and lint_on around source to disable this message.
-%Warning-CONSTRAINTIGN: t/t_randomize_method_types_unsup.v:30:6: Unsupported: randomizing this expression, treating as state
-   30 |     q[$] == 1;
-      |      ^
-%Warning-CONSTRAINTIGN: t/t_randomize_method_types_unsup.v:31:6: Unsupported: randomizing this expression, treating as state
-   31 |     q[$ - 1] == 2;
-      |      ^
 %Error-UNSUPPORTED: t/t_randomize_method_types_unsup.v:15:12: Unsupported: random member variable with the type of the containing class
    15 |   rand Cls cls;
       |            ^~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Warning-CONSTRAINTIGN: t/t_randomize_method_types_unsup.v:38:33: Unsupported: randomizing this expression, treating as state
-   38 |   constraint c_ignored { soft q.unique()[0].y == 4'h5; }
+%Warning-CONSTRAINTIGN: t/t_randomize_method_types_unsup.v:42:33: Unsupported: randomizing this expression, treating as state
+   42 |   constraint c_ignored { soft q.unique()[0].y == 4'h5; }
       |                                 ^~~~~~
-%Error-UNSUPPORTED: t/t_randomize_method_types_unsup.v:44:14: Unsupported: random member variable with the type of the containing class
-   44 |   rand SList next;
+%Error-UNSUPPORTED: t/t_randomize_method_types_unsup.v:48:14: Unsupported: random member variable with the type of the containing class
+   48 |   rand SList next;
       |              ^~~~
 %Error: Exiting due to

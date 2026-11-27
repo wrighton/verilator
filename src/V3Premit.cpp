@@ -384,16 +384,7 @@ class PremitVisitor final : public VNVisitor {
         checkNode(nodep);
     }
     void visit(AstCMethodHard* nodep) override {
-        if (nodep->method().isDynElementAccess()) {
-            iterateAndNextNull(nodep->fromp());
-            {  // Only the 'from' is part of the assignment LHS, not the index
-                VL_RESTORER(m_assignLhs);
-                m_assignLhs = false;
-                iterateAndNextNull(nodep->pinsp());
-            }
-        } else {
-            iterateChildren(nodep);
-        }
+        iterateChildren(nodep);
         // An element passed by reference must not be copied
         if (nodep->method().isRefElementAccess()) return;
         checkNode(nodep);
@@ -447,13 +438,15 @@ class PremitVisitor final : public VNVisitor {
         // ArraySel are just pointer arithmetic and should never be replaced
     }
     void visit(AstNodeSel* nodep) override {
-        // Associative, wildcard and word selects
+        // Associative, dynamic array, queue, wildcard and word selects
         iterateAndNextNull(nodep->fromp());
         {  // Only the 'from' is part of the assignment LHS
             VL_RESTORER(m_assignLhs);
             m_assignLhs = false;
             iterateAndNextNull(nodep->bitp());
         }
+        // An element passed by reference must not be copied
+        if (nodep->refPin()) return;
         checkNode(nodep);
     }
     void visit(AstNodeCons* nodep) override {
