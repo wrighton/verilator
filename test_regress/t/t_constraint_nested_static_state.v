@@ -197,6 +197,8 @@ module t;
       ok = a.randomize() with {x == 70;};
       `checkd(ok, 1);
       `checkd(leaf_t::shared, 70);
+      // Break the cycle, so that its objects are freed and runtime leak checking stays clean
+      a.b.a = null;
     end
 
     $display("*-* All Finished *-*");
