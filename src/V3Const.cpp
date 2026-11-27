@@ -2692,6 +2692,27 @@ class ConstVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(cvtp), cvtp);
             replaceAssignToFixedAggregate(nodep, nodep->lhsp()->unlinkFrBack(), srcp);
             return true;
+        } else if (m_doV && VN_IS(nodep->rhsp(), CvtPackedToArray)
+                   && VN_IS(nodep->rhsp()->dtypep()->skipRefp(), UnpackArrayDType)
+                   && VN_AS(nodep->rhsp(), CvtPackedToArray)->fromp()->width()
+                          < nodep->rhsp()->width()
+                                * static_cast<int>(nodep->rhsp()
+                                                       ->dtypep()
+                                                       ->skipRefp()
+                                                       ->arrayUnpackedElements())) {
+            // A source narrower than a fixed-size unpacked array is left-aligned in it, and
+            // filled with zero bits on the right (IEEE 1800-2023 11.4.14)
+            AstCvtPackedToArray* const cvtp = VN_AS(nodep->rhsp(), CvtPackedToArray);
+            AstNodeExpr* const srcp = cvtp->fromp()->unlinkFrBack();
+            FileLine* const flp = srcp->fileline();
+            const int width
+                = cvtp->width()
+                  * static_cast<int>(cvtp->dtypep()->skipRefp()->arrayUnpackedElements());
+            AstNodeExpr* const extendp = new AstExtend{flp, srcp, width};
+            cvtp->fromp(new AstShiftL{
+                flp, extendp, new AstConst{flp, static_cast<uint32_t>(width - srcp->width())},
+                width});
+            return true;
         } else if (m_doV && VN_IS(nodep->rhsp(), StreamR)
                    && !VN_IS(nodep->lhsp()->dtypep()->skipRefp(), QueueDType)) {
             // The right-streaming operator on rhs of assignment does not

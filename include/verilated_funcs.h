@@ -3160,6 +3160,35 @@ inline VlUnpacked<T_Value, N_Depth> VL_PACK_REVERSED(const VlUnpacked<T_Value, N
     return ret;
 }
 
+// Reverse the dimensions of an unpacked array set in 'levels', bit 0 for the outermost, as the
+// emitter does for its descending dimensions after VL_UNPACK_*
+// An element ends the recursion: only instantiated, as 'levels' has no bit past the dimensions
+template <typename T_Value>
+inline void VL_UNPACK_REVERSED(T_Value&, uint64_t) {}  // LCOV_EXCL_LINE
+template <typename T_Value, std::size_t N_Depth>
+inline void VL_UNPACK_REVERSED(VlUnpacked<T_Value, N_Depth>& q, uint64_t levels) {
+    if (levels & 1) VL_UNPACK_REVERSED(q);
+    if (levels > 1) {
+        for (size_t i = 0; i < N_Depth; ++i) VL_UNPACK_REVERSED(q[i], levels >> 1);
+    }
+}
+
+// Return a copy of an unpacked array with the dimensions set in 'levels' reversed, bit 0 for
+// the outermost, as the emitter does for its descending dimensions before VL_PACK_*
+template <typename T_Value>
+inline T_Value VL_PACK_REVERSED(const T_Value& v, uint64_t) {
+    return v;
+}
+template <typename T_Value, std::size_t N_Depth>
+inline VlUnpacked<T_Value, N_Depth> VL_PACK_REVERSED(const VlUnpacked<T_Value, N_Depth>& q,
+                                                     uint64_t levels) {
+    VlUnpacked<T_Value, N_Depth> ret;
+    for (size_t i = 0; i < N_Depth; ++i) {
+        ret[i] = VL_PACK_REVERSED(q[(levels & 1) ? N_Depth - 1 - i : i], levels >> 1);
+    }
+    return ret;
+}
+
 // Overloads for VlUnpacked source -> VlQueue destination
 template <typename T, std::size_t N_Depth>
 inline void VL_COPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int lbits,

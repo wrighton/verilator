@@ -538,6 +538,18 @@ public:
         emitVarDecl(nodep);
     }
 
+    // Bit n set when unpacked dimension n of 'dtypep', 0 for the outermost, is descending; a
+    // dimension past the 64th is taken as ascending
+    static uint64_t descendingLevels(const AstNodeDType* dtypep) {
+        uint64_t levels = 0;
+        int level = 0;
+        for (const AstUnpackArrayDType* adtypep = VN_CAST(dtypep->skipRefp(), UnpackArrayDType);
+             adtypep && level < 64;
+             adtypep = VN_CAST(adtypep->subDTypep()->skipRefp(), UnpackArrayDType), ++level) {
+            if (!adtypep->declRange().ascending()) levels |= 1ULL << level;
+        }
+        return levels;
+    }
     void visit(AstCvtArrayToArray* nodep) override {
         if (nodep->reverse()) {
             puts("VL_REVCLONE_Q(");
@@ -557,11 +569,7 @@ public:
     void visit(AstCvtArrayToPacked* nodep) override {
         AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefp();
         AstNodeDType* const elemDtp = fromDtp->subDTypep()->skipRefp();
-        const bool descending = [&]() {
-            if (const AstUnpackArrayDType* const unpackDtp = VN_CAST(fromDtp, UnpackArrayDType))
-                return !unpackDtp->declRange().ascending();
-            return false;
-        }();
+        const uint64_t descending = descendingLevels(fromDtp);
         puts("VL_PACK_");
         emitIQW(nodep);
         puts("_");
@@ -574,7 +582,9 @@ public:
         const string packedWidth = cvtToStr(nodep->packedWidth());
         if (descending) {
             // Wrap source in VL_PACK_REVERSED so VL_PACK sees ascending order
-            emitOpName(nodep, "(" + packedWidth + ", %rw, %P, VL_PACK_REVERSED(%li))",
+            const string levels = descending == 1 ? "" : ", " + cvtToStr(descending) + "ULL";
+            emitOpName(nodep,
+                       "(" + packedWidth + ", %rw, %P, VL_PACK_REVERSED(%li" + levels + "))",
                        nodep->fromp(), elemDtp, nullptr);
         } else {
             emitOpName(nodep, "(" + packedWidth + ", %rw, %P, %li)", nodep->fromp(), elemDtp,
@@ -683,7 +693,7 @@ public:
         bool paren = true;
         bool decind = false;
         bool rhs = true;
-        bool reverseUnpack = false;  // Set for descending CvtPackedToArray
+        uint64_t reverseUnpack = 0;  // Descending dimensions of a CvtPackedToArray
         const AstUnpackArrayDType* const unpackDtp
             = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
         if (AstSel* const selp = VN_CAST(nodep->lhsp(), Sel)) {
@@ -755,7 +765,7 @@ public:
             rhs = false;
             iterateAndNextConstNull(castp->fromp());
             // Descending unpacked dest: reverse after unpack
-            if (unpackDtp && !unpackDtp->declRange().ascending()) reverseUnpack = true;
+            if (unpackDtp) reverseUnpack = descendingLevels(unpackDtp);
         } else if (const AstCvtArrayToArray* const castp
                    = VN_CAST(nodep->rhsp(), CvtArrayToArray)) {
             if (castp->reverse()) {
@@ -818,6 +828,7 @@ public:
         if (reverseUnpack) {
             puts("VL_UNPACK_REVERSED(");
             iterateAndNextConstNull(nodep->lhsp());
+            if (reverseUnpack != 1) puts(", " + cvtToStr(reverseUnpack) + "ULL");
             puts(");\n");
         }
     }
