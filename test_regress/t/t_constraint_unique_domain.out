@@ -1,0 +1,11 @@
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:17: Unsatisfied constraint: 'foreach (q[i]) q[i] inside {[0 : 29]};'
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:31: Unsatisfied constraint: 'foreach (a[i]) a[i] inside {[250 : 255]};'
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:32: Unsatisfied constraint: 'foreach (b[i]) b[i] inside {[3 : 5], 7, 250, 251};'
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:33: Unsatisfied constraint: 'foreach (b[i]) b[i] != 9;'
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:44: Unsatisfied constraint: 'constraint lo {foreach (q[i]) q[i] >= -2;}'
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:45: Unsatisfied constraint: 'constraint hi {foreach (q[i]) q[i] < 0 || q[i] == 5;}'
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:46: Unsatisfied constraint: 'constraint nonpos {foreach (q[i]) q[i] <= 0;}'
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:100: Unsatisfied constraint: 'constraint d {foreach (b[i]) b[i] < 3;}'
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:107: Unsatisfied constraint: 'foreach (a[i]) a[i] inside {-64, -63, 63};'
+%Warning-UNSATCONSTR: t/t_constraint_unique_domain.v:108: Unsatisfied constraint: 'foreach (a[i]) a[i] != 63;'
+*-* All Finished *-*
