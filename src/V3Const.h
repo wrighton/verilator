@@ -52,6 +52,9 @@ public:
     // Only the current node and lower, with special SenTree optimization
     // Return new node that may have replaced nodep
     static AstNode* constifyExpensiveEdit(AstNode* nodep) VL_MT_DISABLED;
+    // Expression unpacking the source of the left stream 'streamp' into its target, as the
+    // inverse of the stream's packing (IEEE 1800-2023 11.4.14.2, 11.4.14.3)
+    static AstNodeExpr* unpackStreamL(AstStreamL* streamp) VL_MT_DISABLED;
     // Append the leaves of a value to 'termps' leftmost first: the elements and members of an
     // unpacked array or struct, selected from copies of it that warn if impure and 'warnImpure',
     // else the value itself, as its 64 bits if a real and 'packReal'

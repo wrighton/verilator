@@ -2085,8 +2085,8 @@ inline void VL_STREAMR_RRI(int lbits, VlQueue<T_Value>& to_q,
 // Regular "slow" streaming operators
 inline IData VL_STREAML_III(int lbits, IData ld, IData rd) VL_PURE {
     IData ret = 0;
-    // Slice size should never exceed the lhs width
-    const IData mask = VL_MASK_I(rd);
+    // A slice wider than the lhs takes all of it
+    const IData mask = VL_MASK_I(rd < static_cast<IData>(lbits) ? rd : lbits);
     for (int istart = 0; istart < lbits; istart += rd) {
         int ostart = lbits - rd - istart;
         ostart = ostart > 0 ? ostart : 0;
@@ -2161,8 +2161,8 @@ inline void VL_STREAML_RII(int lbits, int queueBits, VlQueue<T>& q, IData ld,
 
     IData ret = 0;
     if (lbits < queueBits) lbits = queueBits;
-    // Slice size should never exceed the lhs width
-    const IData mask = VL_MASK_I(rd);
+    // A slice wider than the lhs takes all of it
+    const IData mask = VL_MASK_I(rd < static_cast<IData>(lbits) ? rd : lbits);
     for (int istart = 0; istart < lbits; istart += rd) {
         int ostart = lbits - rd - istart;
         ostart = ostart > 0 ? ostart : 0;
@@ -2186,10 +2186,12 @@ inline void VL_STREAML_RII(int lbits, int queueBits, VlQueue<T>& q, IData ld,
 template <std::size_t N_Words>
 inline void VL_STREAML_RII(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q, IData ld,
                            IData rd) VL_MT_SAFE {
+    // Not generated as of writing: a packed stream assigned to a queue is converted with
+    // VL_UNPACK_* instead
     if (lbits < queueBits) lbits = queueBits;
     IData ret = 0;
-    // Slice size should never exceed the lhs width
-    const IData mask = VL_MASK_I(rd);
+    // A slice wider than the lhs takes all of it
+    const IData mask = VL_MASK_I(rd < static_cast<IData>(lbits) ? rd : lbits);
     for (int istart = 0; istart < lbits; istart += rd) {
         int ostart = lbits - rd - istart;
         ostart = ostart > 0 ? ostart : 0;
@@ -2204,8 +2206,8 @@ inline void VL_STREAML_RII(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q
 
 inline QData VL_STREAML_QQI(int lbits, QData ld, IData rd) VL_PURE {
     QData ret = 0;
-    // Slice size should never exceed the lhs width
-    const QData mask = VL_MASK_Q(rd);
+    // A slice wider than the lhs takes all of it
+    const QData mask = VL_MASK_Q(rd < static_cast<IData>(lbits) ? rd : lbits);
     for (int istart = 0; istart < lbits; istart += rd) {
         int ostart = lbits - rd - istart;
         ostart = ostart > 0 ? ostart : 0;
