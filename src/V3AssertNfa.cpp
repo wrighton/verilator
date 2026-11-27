@@ -3126,12 +3126,24 @@ class SvaNfaLowering final {
             AstNodeExpr* srcSigp = fromVtxp->datap()->stateSigp->cloneTreePure(false);
             srcSigp = andCond(c.flp, srcSigp, tedgep->m_condp);
             if (needMatchThreadCount) {
-                // Attempts reaching the match vertex together each match, as each has one thread
-                UASSERT_OBJ(c.exactCounts && fromVtxp->datap()->stateCountSigp, fromVtxp,
-                            "Terminal-link source missing exact stateCountSig");
+                // Attempts reaching the match vertex together each match: each thread of an
+                // exact count, each live thread of a ranged delay ring, which its first match
+                // clears, or else the one attempt of the source
+                AstNodeExpr* countp;
+                if (fromVtxp->m_delayRingSize && !fromVtxp->m_isFixedDelayRing) {
+                    countp = new AstVarRef{c.flp, fromVtxp->datap()->delayRingLiveCountVarp,
+                                           VAccess::READ};
+                } else if (c.exactCounts) {
+                    UASSERT_OBJ(fromVtxp->datap()->stateCountSigp, fromVtxp,
+                                "Terminal-link source missing exact stateCountSig");
+                    countp = fromVtxp->datap()->stateCountSigp->cloneTreePure(false);
+                } else {
+                    countp
+                        = new AstExtend{c.flp, fromVtxp->datap()->stateSigp->cloneTreePure(false),
+                                        m_u32DTypep->width()};
+                }
                 sigs.matchThreadCountp
-                    = addCountp(c.flp, sigs.matchThreadCountp,
-                                fromVtxp->datap()->stateCountSigp->cloneTreePure(false),
+                    = addCountp(c.flp, sigs.matchThreadCountp, countp,
                                 tedgep->m_condp ? tedgep->m_condp->cloneTreePure(false) : nullptr);
             }
             if (needMatchCount) {
@@ -3582,9 +3594,10 @@ class SvaNfaLowering final {
                                                  notKillActive(c));
         }
         if (sigs.matchThreadCountp) {
-            // Only operand-set lowerings count matching threads, and they end with no final
-            // condition
-            UASSERT_OBJ(!c.matchCondp, c.matchCondp, "Matching threads with a final condition");
+            if (c.matchCondp) {
+                sigs.matchThreadCountp = addCountp(c.flp, nullptr, sigs.matchThreadCountp,
+                                                   sampled(c.matchCondp->cloneTreePure(false)));
+            }
             sigs.matchThreadCountp
                 = addCountp(c.flp, nullptr, sigs.matchThreadCountp, notKillActive(c));
         }
@@ -4979,6 +4992,18 @@ class AssertNfaVisitor final : public VNVisitor {
         return propp;
     }
 
+    // Whether a node makes a sequence of variable length, with several threads of an attempt
+    static bool isVariableLength(const AstNode* nodep) {
+        if (const AstDelay* const delayp = VN_CAST(nodep, Delay)) {
+            return delayp->isCycleDelay() && delayp->isRangeDelay();
+        }
+        if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            // cppcheck-suppress knownConditionTrueFalse
+            return repp->maxCountp() || repp->unbounded();
+        }
+        return VN_IS(nodep, SGotoRep) || VN_IS(nodep, SNonConsRep);
+    }
+
     // True if an evaluation attempt of a property has at most one thread at a time
     static bool oneThreadPerAttempt(AstNodeExpr* nodep, bool top) {
         // Only a top-level synchronous abort keeps each live thread one whole attempt
@@ -5072,6 +5097,38 @@ class AssertNfaVisitor final : public VNVisitor {
 
         FileLine* const flp = assertp->fileline();
 
+        // An asserted sequence passes on the first match of an attempt (IEEE 1800-2023
+        // 16.12.2, 16.14.1)
+        AstAssert* const varLenAssertp = parts.hasImplication ? nullptr : VN_CAST(assertp, Assert);
+        bool varLenTrailingRange = false;
+        if (varLenAssertp) {
+            // The later ends of a trailing repetition range never decide an attempt
+            AstNodeExpr* lastp = seqBodyp;
+            AstSExpr* lastSExprp = nullptr;
+            while (AstSExpr* const sexprp = VN_CAST(lastp, SExpr)) {
+                lastSExprp = sexprp;
+                lastp = sexprp->exprp();
+            }
+            const AstSConsRep* const repp = VN_CAST(lastp, SConsRep);
+            const AstConst* const countp = repp ? VN_CAST(repp->countp(), Const) : nullptr;
+            if (countp && repp->maxCountp() && countp->toUInt() > 0) {
+                pushDeletep(repp->maxCountp()->unlinkFrBack());
+            }
+            int varLens = 0;
+            seqBodyp->foreach([&varLens](const AstNode* np) {
+                if (isVariableLength(np)) ++varLens;
+            });
+            // The attempts in the ring of a trailing range of a boolean each match once. The
+            // threads of other ranges, as of one followed by another step, share their states
+            // with those of other attempts, so the attempts matching on one tick count once
+            // there: telling them apart needs a per-attempt evaluation.
+            const AstDelay* const lastDelayp
+                = lastSExprp ? VN_CAST(lastSExprp->delayp(), Delay) : nullptr;
+            varLenTrailingRange = varLens == 1 && lastDelayp && isVariableLength(lastDelayp)
+                                  && !lastDelayp->isUnbounded()
+                                  && !hasMultiCycleExpr(lastSExprp->exprp());
+        }
+
         SvaGraph graph;
         // A vacuous success fails a negated assertion (IEEE 1800-2023 16.12.3); a cover has no
         // failures, and a property if/case is reported below instead
@@ -5151,7 +5208,8 @@ class AssertNfaVisitor final : public VNVisitor {
               && (SvaNfaBuilder::isFixedSeqOr(rootOrp, &mixedLengths)
                   || SvaNfaBuilder::isBoolOrImplication(rootOrp, &mixedLengths))
               && mixedLengths;
-        const bool replayMatches = needMatch && !negated && matchesTogether;
+        const bool replayMatches
+            = needMatch && !negated && (matchesTogether || varLenTrailingRange);
         // Counting threads counts the attempts failing, and matching, when each attempt has one
         // thread. Counting each state's threads evaluates the conditions of its incoming
         // transitions whether or not a thread takes them, so a sequence match item would run
@@ -5166,7 +5224,8 @@ class AssertNfaVisitor final : public VNVisitor {
             assertp, graph, senTreep, result.finalCondp, disableExprp, replayFails || countPasses,
             replayFails || countPasses, trackAntecedentEnd, replaySuccesses, countPasses,
             exactCounts, exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr,
-            exactCounts && matchesTogether && (replaySuccesses || replayMatches),
+            ((exactCounts && matchesTogether) || varLenTrailingRange)
+                && (replaySuccesses || replayMatches),
             coverp && !isCoverSeq && !negated && v3Global.opt.coverageUser());
         AstNodeExpr* matchExprp = nullptr;
         AstNodeExpr* const outputExprp = m_loweringp->assembleResult(
