@@ -5152,8 +5152,32 @@ public:
 //######################################################################
 // Top entry point
 
+// The sequence match items of an expression run only if the expression matches (IEEE 1800-2023
+// 16.10, 16.11), so evaluate it first. Copies the lowering evaluates again do not have them, see
+// withoutMatchItemsp. The antecedent of an implication V3AssertPre lowers is left to it.
+static void runMatchItemsOnMatch(AstNetlist* nodep) {
+    std::vector<AstExprStmt*> itemps;
+    nodep->foreach([&](AstExprStmt* itemp) {
+        if (!itemp->isMatchItem()) return;
+        const AstImplication* const implp = VN_CAST(itemp->backp(), Implication);
+        if (implp && implp->lhsp() == itemp) return;
+        itemps.push_back(itemp);
+    });
+    for (AstExprStmt* const itemp : itemps) {
+        FileLine* const flp = itemp->fileline();
+        AstNodeExpr* const resultp = itemp->resultp()->unlinkFrBack();
+        VNRelinker relinker;
+        itemp->unlinkFrBack(&relinker);
+        AstConst* const truep = new AstConst{flp, AstConst::BitTrue{}};
+        itemp->dtypeFrom(truep);
+        itemp->resultp(truep);
+        relinker.relink(new AstLogAnd{flp, resultp, itemp});
+    }
+}
+
 void V3AssertNfa::assertNfaAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":" << endl);
     { AssertNfaVisitor{nodep}; }
+    runMatchItemsOnMatch(nodep);
     V3Global::dumpCheckGlobalTree("assertnfa", 0, dumpTreeEitherLevel() >= 3);
 }
