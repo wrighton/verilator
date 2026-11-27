@@ -192,6 +192,12 @@ class ClassVisitor final : public VNVisitor {
         iterateChildren(nodep);
         if (m_packageScopep) m_toScopeMoves.emplace_back(nodep, m_packageScopep);
     }
+    void visit(AstAlwaysPostponed* nodep) override {
+        // Made for a class to display at the end of the time step, as for $strobe, so it reads
+        // no property of an object (V3Assert reports those unsupported)
+        iterateChildren(nodep);
+        if (m_packageScopep) m_toScopeMoves.emplace_back(nodep, m_packageScopep);
+    }
     void visit(AstInitialStatic* nodep) override {
         // But not AstInitialAutomatic, which remains under the class
         iterateChildren(nodep);
@@ -248,8 +254,8 @@ public:
                 vscp->scopep(scopep);
                 vscp->unlinkFrBack();
                 scopep->addVarsp(vscp);
-            } else if (VN_IS(nodep, Initial) || VN_IS(nodep, InitialStatic)
-                       || VN_IS(nodep, Always)) {
+            } else if (VN_IS(nodep, Initial) || VN_IS(nodep, InitialStatic) || VN_IS(nodep, Always)
+                       || VN_IS(nodep, AlwaysPostponed)) {
                 nodep->unlinkFrBack();
                 scopep->addBlocksp(nodep);
             } else {

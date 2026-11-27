@@ -1,0 +1,23 @@
+%Error-UNSUPPORTED: t/t_sys_strobe_class_unsup.v:28:27: Unsupported: $strobe of non-static class method call 'constraint_mode'.
+   28 |     $strobe("%0d %0d", cx.constraint_mode(), x.rand_mode());   
+      |                           ^~~~~~~~~~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_sys_strobe_class_unsup.v:28:48: Unsupported: $strobe of non-static class method call 'rand_mode'.
+   28 |     $strobe("%0d %0d", cx.constraint_mode(), x.rand_mode());   
+      |                                                ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_sys_strobe_class_unsup.v:10:22: Unsupported: $strobe of non-static class property 'v'.
+   10 |     $strobe("v=%0d", v);   
+      |                      ^
+%Error-UNSUPPORTED: t/t_sys_strobe_class_unsup.v:13:23: Unsupported: $monitor of non-static class property 'v'.
+   13 |     $monitor("v=%0d", v);   
+      |                       ^
+%Error-UNSUPPORTED: t/t_sys_strobe_class_unsup.v:22:32: Unsupported: $strobe of non-static class method call 'get'.
+   22 |     $strobe("get=%0d one=%0d", get(), one());   
+      |                                ^~~
+%Error-UNSUPPORTED: t/t_sys_strobe_class_unsup.v:22:39: Unsupported: $strobe of non-static class method call 'one'.
+   22 |     $strobe("get=%0d one=%0d", get(), one());   
+      |                                       ^~~
+%Error-UNSUPPORTED: t/t_sys_strobe_class_unsup.v:23:24: Unsupported: $strobe of 'this'.
+   23 |     $strobe("this=%p", this);   
+      |                        ^~~~
+%Error: Exiting due to
