@@ -3715,6 +3715,7 @@ class SvaNfaLowering final {
     V3UniqueNames m_names{"__Vnfa"};  // Unique names for generated variables
     V3UniqueNames& m_actionNames;  // Automatics of cloned actions
     const bool m_mayKill;  // An $assertkill may end the attempts of the assertions
+    bool m_acksKill = false;  // The last assertion lowered ends its attempts on a kill
     // The count of the $assertkill calls, if the design has one, see LowerCtx
     AstVar* const m_killEpochp;
     size_t m_statDelayRingEdgeVisits = 0;  // Delay-ring incoming edges visited
@@ -4291,6 +4292,7 @@ class SvaNfaLowering final {
     // call after it, as by a procedure on the same event, ends the attempts on the next one.
     void emitKillAckNba(LowerCtx& c) {
         if (!c.killCountp && !(c.inlineKill && c.killVarp)) return;
+        m_acksKill = true;
         AstNodeExpr* const countp
             = c.inlineKill ? newKillCountp(c) : new AstVarRef{c.flp, c.killCountp, VAccess::READ};
         AstAssignDly* const ackp
@@ -5929,6 +5931,9 @@ public:
         return resultExprp;
     }
 
+    // Whether the assertion lowered since the last resetAcksKill ends its attempts on a kill
+    bool acksKill() const { return m_acksKill; }
+    void resetAcksKill() { m_acksKill = false; }
     SvaNfaLowering(AstNodeModule* modp, V3UniqueNames& actionNames, bool mayKill,
                    AstVar* killEpochp)
         : m_modp{modp}
@@ -8261,7 +8266,10 @@ class AssertNfaVisitor final : public VNVisitor {
         if (m_procSuspends) return;
         std::string scope;
         for (const AstBegin* const beginp : m_namedBeginps) scope += "__DOT__" + beginp->name();
-        const V3AssertReactive::Site site{assertp, m_modp, m_containerp, senTreep, scope};
+        // An assertion ending its attempts on a kill, on the clock event after it, runs the
+        // actions of those ended before, as a kill on the event comes after its evaluation
+        const V3AssertReactive::Site site{assertp,  m_modp, m_containerp,
+                                          senTreep, scope,  m_loweringp->acksKill()};
         if (AstNodeStmt* const passsp = assertp->passsp()) {
             passsp->unlinkFrBackWithNext();
             assertp->addPasssp(m_reactive.newPending(site, passsp, m_actionNames));
@@ -8825,6 +8833,7 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     void processAssertion(AstNodeCoverOrAssert* assertp) {
+        m_loweringp->resetAcksKill();
         if (assertp->immediate()) return;
 
         AstPropSpec* const propp = prepareAssertionProp(assertp);

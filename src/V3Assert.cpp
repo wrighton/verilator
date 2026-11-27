@@ -1108,7 +1108,8 @@ AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actions
     Runner& runnerr = runnerFor(site, names);
     AstVar* const pendingp = newReactiveTemp(site, names, "Pending");
     // The $assertkill count at the first evaluation making an action pending, if one may kill
-    AstVar* const killCountp = m_killChecks ? newReactiveTemp(site, names, "KillCount") : nullptr;
+    AstVar* const killCountp
+        = m_killChecks && !site.evalKills ? newReactiveTemp(site, names, "KillCount") : nullptr;
     const auto newKilledp = [&]() {
         return new AstNeq{flp, new AstVarRef{flp, killCountp, VAccess::READ}, newKillCountp(site)};
     };
@@ -1121,12 +1122,15 @@ AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actions
         // runs, which may call one too
         ++m_statKillChecks;
         AstIf* const checkp = new AstIf{flp, newKilledp(), newDropp()};
-        // Each assertion adds its check before its loop, so the first comes after the flush
-        AstNode* const afterp = runnerr.lastCheckp ? runnerr.lastCheckp : runnerr.bodyp->thensp();
+        // The checks come before the actions of all assertions, after the flush, as an assertion
+        // ending its attempts itself on a kill adds no check
+        AstNode* afterp = runnerr.lastCheckp;
+        AstNode* const firstp = runnerr.bodyp->thensp();
+        if (!afterp && VN_IS(firstp, CStmt)) afterp = firstp;
         if (afterp) {
-            UASSERT_OBJ(afterp == runnerr.lastCheckp || VN_IS(afterp, CStmt), afterp,
-                        "Action before the first $assertkill check");
             afterp->addNextHere(checkp);
+        } else if (firstp) {
+            firstp->addHereThisAsNext(checkp);
         } else {
             runnerr.bodyp->addThensp(checkp);
         }
