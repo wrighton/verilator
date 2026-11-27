@@ -1671,6 +1671,10 @@ public:
     }
     // Return slice q[lsb+:width]
     VlQueue slicePlus(int32_t lsb, int32_t width) const { return slice(lsb, plusMsb(lsb, width)); }
+    // Return slice q[$-offset+:width]
+    VlQueue slicePlusBack(int32_t offset, int32_t width) const {
+        return slicePlus(backIndex(offset), width);
+    }
     // Return count items from lsb, an index outside the array reading the default value, as a
     // dynamic array slice does (IEEE 1800-2023 7.4.5). The result is unbounded: the bound of a
     // queue limits the variable, not the values selected from it.
@@ -1755,6 +1759,10 @@ public:
     // Assign src elements to q[lsb+:width]
     void sliceAssignPlus(int32_t lsb, int32_t width, const VlQueue& src, bool stream) {
         sliceAssignRange(lsb, static_cast<int64_t>(lsb) + width - 1, src, stream);
+    }
+    // Assign src elements to q[$-offset+:width]
+    void sliceAssignPlusBack(int32_t offset, int32_t width, const VlQueue& src, bool stream) {
+        sliceAssignPlus(backIndex(offset), width, src, stream);
     }
     // Assign src elements to q[lsb+:width], a slice of width elements, skipping an index outside
     // the array, as writing a dynamic array slice does (IEEE 1800-2023 7.4.5)

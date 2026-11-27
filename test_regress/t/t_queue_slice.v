@@ -30,6 +30,11 @@ module t;
   longint wide_lo = -64'sd6442450943;
   bit [31:0] u31 = 32'h8000_0000;
   longint wide_one = 1;
+  localparam longint K0 = 0;
+  localparam longint K1 = 1;
+  localparam longint KHI = 64'sd6442450943;
+  localparam bit [63:0] KU1 = '1;
+  localparam bit [63:0] KU2 = 64'hffff_ffff_ffff_fffe;
   int calls = 0;
   function int pos_call();
     ++calls;
@@ -329,6 +334,112 @@ module t;
       ri = iq[$-big:$];
       `checkp(ri, "'{'ha, 'hb, 'hc}");
       `checkh(iq[$-big], 0);
+      // An indexed part-select may have a base relative to '$': 'q[$-k+:w]' is
+      // 'q[$-k:$-k+w-1]', and 'q[$-k-:w]' is 'q[$-k-w+1:$-k]'
+      iq = '{10, 11, 12, 13};
+      ri = iq[$-:2];
+      `checkp(ri, "'{'hc, 'hd}");
+      ri = iq[$+:1];
+      `checkp(ri, "'{'hd}");
+      ri = iq[$+:2];
+      `checkp(ri, "'{'hd}");
+      ri = iq[$-1+:2];
+      `checkp(ri, "'{'hc, 'hd}");
+      ri = iq[$-2+:2];
+      `checkp(ri, "'{'hb, 'hc}");
+      ri = iq[$-1-:2];
+      `checkp(ri, "'{'hb, 'hc}");
+      ri = iq[$-pos-:3];
+      `checkp(ri, "'{'ha, 'hb, 'hc}");
+      begin
+        int k;
+        k = 3;
+        ri = iq[$-k+:2];
+        `checkp(ri, "'{'ha, 'hb}");
+        k = 4;
+        ri = iq[$-k+:2];
+        `checkp(ri, "'{'ha}");
+        k = 10;
+        ri = iq[$-k+:2];
+        `checkp(ri, "'{}");
+        k = -1;
+        ri = iq[$-k-:2];
+        `checkp(ri, "'{'hd}");
+        ri = iq[$-k+:2];
+        `checkp(ri, "'{}");
+      end
+      // verilator lint_off WIDTHEXPAND
+      ri = iq[$-wide_one+:2];
+      `checkp(ri, "'{'hc, 'hd}");
+      ri = iq[$-wide_one-:2];
+      `checkp(ri, "'{'hb, 'hc}");
+      ri = iq[$-wide+:2];
+      `checkp(ri, "'{}");
+      ri = iq[$-wide_hi+:2];
+      `checkp(ri, "'{}");
+      ri = iq[$-wide_lo-:2];
+      `checkp(ri, "'{}");
+      // verilator lint_on WIDTHEXPAND
+      // A constant offset of 64 bits
+      // verilator lint_off WIDTHEXPAND
+      ri = iq[$-K0+:2];
+      `checkp(ri, "'{'hd}");
+      ri = iq[$-K0-:2];
+      `checkp(ri, "'{'hc, 'hd}");
+      ri = iq[$-K1+:2];
+      `checkp(ri, "'{'hc, 'hd}");
+      ri = iq[$-K1-:3];
+      `checkp(ri, "'{'ha, 'hb, 'hc}");
+      ri = iq[$-KHI+:2];
+      `checkp(ri, "'{}");
+      ri = iq[$-KHI-:2];
+      `checkp(ri, "'{}");
+      // An unsigned offset near 2**64 is far past the front, also adding the width of '-:'
+      ri = iq[$-KU1-:3];
+      `checkp(ri, "'{}");
+      ri = iq[$-KU1+:2];
+      `checkp(ri, "'{}");
+      ri = iq[$-KU2-:3];
+      `checkp(ri, "'{}");
+      ri = iq[$-KU2+:2];
+      `checkp(ri, "'{}");
+      // verilator lint_on WIDTHEXPAND
+      // The base is evaluated once
+      ri = iq[$-pos_call()+:2];
+      `checkp(ri, "'{'hc, 'hd}");
+      `checkh(calls, 1);
+      ri = iq[$-pos_call()-:2];
+      `checkp(ri, "'{'hb, 'hc}");
+      `checkh(calls, 2);
+      // A write follows the rules of the slice it is equivalent to
+      iq[$-1+:2] = '{7, 8};
+      `checkp(iq, "'{'ha, 'hb, 'h7, 'h8}");
+      iq[$-:2] = '{5, 6};
+      `checkp(iq, "'{'ha, 'hb, 'h5, 'h6}");
+      iq[$-pos_call()-:2] = '{3, 4};
+      `checkp(iq, "'{'ha, 'h3, 'h4, 'h6}");
+      `checkh(calls, 3);
+      // verilator lint_off WIDTHEXPAND
+      iq[$-K1-:3] = '{1, 2, 3};
+      `checkp(iq, "'{'h1, 'h2, 'h3, 'h6}");
+      iq[$-K0-:2] = '{4, 5};
+      `checkp(iq, "'{'h1, 'h2, 'h4, 'h5}");
+      iq[$-K1+:2] = '{6, 7};
+      `checkp(iq, "'{'h1, 'h2, 'h6, 'h7}");
+      iq[$-K0+:1] = '{3};
+      `checkp(iq, "'{'h1, 'h2, 'h6, 'h3}");
+      // verilator lint_on WIDTHEXPAND
+      iq = '{10, 3, 4, 6};
+      begin
+        int k;
+        // Ending at $+1 with all elements assigned appends the last
+        k = -1;
+        iq[$-k+:1] = '{9};
+        `checkp(iq, "'{'ha, 'h3, 'h4, 'h6, 'h9}");
+        iq[$+:2] = '{1, 2};
+        `checkp(iq, "'{'ha, 'h3, 'h4, 'h6, 'h1, 'h2}");
+      end
+      calls = 0;
       iq = '{10, 11, 12};
       // A slice with an X or Z position selects no element
       ri = iq[4'bx000:1];
