@@ -4937,12 +4937,18 @@ class SvaNfaLowering final {
                                    new AstLogAnd{c.flp, stateExprp->cloneTreePure(false),
                                                  rejectCondp->cloneTreePure(false)});
             } else if (needThreadFailCount) {
-                AstNodeExpr* countCondp = rejectCondp->cloneTreePure(false);
+                AstVar* const liveCountVarp = vtxp->datap()->delayRingLiveCountVarp;
+                AstNodeExpr* countp = new AstVarRef{c.flp, liveCountVarp, VAccess::READ};
+                // A thread a rejectOnFail Link rejects, one leaving the ring at its head, is
+                // counted by that Link, so the guard counts the other threads of the ring then
                 if (AstNodeExpr* const holdp = newRequiredStepsHoldp(c, vtxp)) {
-                    countCondp = new AstLogAnd{c.flp, countCondp, holdp};
+                    countp = new AstCond{
+                        c.flp, holdp, countp,
+                        new AstSub{c.flp, new AstVarRef{c.flp, liveCountVarp, VAccess::READ},
+                                   vtxp->datap()->stateCountSigp->cloneTreePure(false)}};
                 }
-                AstNodeExpr* const contributionp = newThroughoutThreadFailCountp(
-                    c, vtxp->datap()->delayRingLiveCountVarp, stateExprp, countCondp);
+                AstNodeExpr* const contributionp
+                    = addCountp(c.flp, nullptr, countp, rejectCondp->cloneTreePure(false));
                 sigs.threadFailCountp = addCountp(c.flp, sigs.threadFailCountp, contributionp);
                 if (vtxp->m_abortRejectp && vtxp->m_delayRingAdvanceCondp) {
                     // An advancing ring thread also occupies its same-tick match vertex in the
