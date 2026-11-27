@@ -88,6 +88,33 @@ module t;
     off_ant = 0;
   end
 
+  // Test: two attempts ending without a match on one tick are two vacuous successes, from the
+  // start of the antecedent and from a fixed delay, or from the threads of a ring cleared
+  bit [15:0] lfsr = 16'hACE1;
+  always @(posedge clk) lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
+  wire x = lfsr[0], y = lfsr[5] | lfsr[9];
+  int delay_passes = 0, ring_passes = 0;
+  assert property (@(posedge clk) x ##1 y |-> 1'b1) ++delay_passes;
+  assert property (@(posedge clk) x ##1 y [*3] |-> 1'b1) ++ring_passes;
+  // Each attempt passes once, at the tick its antecedent ends or matches
+  bit xh[$], yh[$];
+  always @(posedge clk) begin
+    xh.push_back(x);
+    yh.push_back(y);
+  end
+  function automatic int endTick(int s, int n);
+    if (!xh[s]) return s;
+    for (int k = 1; k <= n; ++k) begin
+      if (k == n || !yh[s + k]) return s + k;
+    end
+    return 0;
+  endfunction
+  function automatic int passesBy(int n, int last);
+    int count = 0;
+    for (int s = 0; s <= last; ++s) count += int'(endTick(s, n) <= last);
+    return count;
+  endfunction
+
   initial begin
     repeat (10) @(posedge clk);
     #1;
@@ -115,6 +142,10 @@ module t;
     // The attempt of the first tick, at the second
     `checkd(off_passes, 1);
     `checkd(off_pass_cyc, 2);
+    repeat (190) @(posedge clk);
+    #1;
+    `checkd(delay_passes, passesBy(1, xh.size() - 1));
+    `checkd(ring_passes, passesBy(3, xh.size() - 1));
     $write("*-* All Finished *-*\n");
     $finish;
   end
