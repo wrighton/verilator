@@ -1053,7 +1053,9 @@ V3AssertReactive::Runner& V3AssertReactive::runnerFor(const Site& site, V3Unique
     if (v3Global.opt.mtasks()) {
         bodyp->addThensp(new AstCStmt{flp, "Verilated::endOfEval(vlSymsp->__Vm_evalMsgQp);"});
     }
-    // Clear the note for the next evaluation, which the edge already took
+    // Clear the note for the next evaluation, which the edge already took. No note is lost: the
+    // Reactive region does not overlap the threads of the model's evaluation, so no evaluation
+    // sets it while this runs, and one setting it later in the time step triggers this again.
     AstAlwaysReactive* const runnerp = new AstAlwaysReactive{
         flp, senTreep,
         new AstCStmt{
