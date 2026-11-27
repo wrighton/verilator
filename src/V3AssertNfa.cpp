@@ -3157,6 +3157,8 @@ class AssertNfaVisitor final : public VNVisitor {
             = newPassOnIf(flp, nonvacuousMatchp, passsp, assertp->userType(), assertp->directive(),
                           /*vacuous=*/false);
         splitsp = AstNode::addNextNull<AstNodeStmt>(splitsp, nonvacuousp);
+        // Another attempt failing on the same tick runs the fail action instead
+        assertp->prependFailsp(V3AssertCommon::cloneAction(splitsp, m_actionNames));
         assertp->addPasssp(splitsp);
     }
 
@@ -3237,9 +3239,7 @@ class AssertNfaVisitor final : public VNVisitor {
             assertp->addPasssp(ifp);
             // Fail-handler prefix for overlapping instances (IEEE 16.12):
             // fires when reject=1 && match=1 in the same cycle.
-            if (assertp->failsp()) {
-                assertp->prependFailsp(V3AssertCommon::cloneAction(ifp, m_actionNames));
-            }
+            assertp->prependFailsp(V3AssertCommon::cloneAction(ifp, m_actionNames));
         }
 
         if (threadFailCountp) {
@@ -3378,6 +3378,8 @@ class AssertNfaVisitor final : public VNVisitor {
                     = new AstIf{flp, new AstLogOr{flp, vacuousp, nonvacuousp}, stmtsp};
                 ifp->isBoundsCheck(true);
                 ifp->user1(true);
+                // Another attempt failing on the same tick runs the fail action instead
+                assertAssertp->prependFailsp(V3AssertCommon::cloneAction(ifp, m_actionNames));
                 assertAssertp->addPasssp(ifp);
             } else if (matchp && parts.hasImplication) {
                 // Without a match per attempt, the pass of a delayed antecedent follows from no
