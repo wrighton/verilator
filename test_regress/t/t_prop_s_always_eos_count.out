@@ -10,4 +10,3 @@ EOS_DELAY_RING
 [115] %Error: t_prop_s_always_eos_count.v:90: Assertion failed in top.t
 EOS_NBA=1
 EOS_UNTIL
-[115] %Error: t_prop_s_always_eos_count.v:105: Assertion failed in top.t
