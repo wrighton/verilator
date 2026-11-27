@@ -38,6 +38,7 @@
 //  AstConstraint::user3p() -> AstTask*. Pointer to resize procedure
 //  AstConstraintForeach::user3p() -> AstNodeStmt*. Dist bucket preamble stmts (foreach case)
 //  AstVar::user4p()        -> AstVar*.  Size variable for constrained queues
+//  AstVarRef::user3p()     -> AstVar*.  Array whose '.size()' this size variable replaced
 //
 //*************************************************************************
 
@@ -109,6 +110,14 @@ public:
         return false;
     }
 
+    // Set up a new logical operator exprp on lhsp and rhsp, and return it
+    static AstNodeExpr* logicOp(AstNodeExpr* exprp, const AstNodeExpr* lhsp,
+                                const AstNodeExpr* rhsp = nullptr) {
+        exprp->dtypeSetBit();
+        exprp->user1(lhsp->user1() || (rhsp && rhsp->user1()));  // Solver-dependent if either
+        return exprp;
+    }
+
     // Look through unpacked array dimensions to the element type
     static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) {
         dtypep = dtypep->skipRefp();
@@ -145,6 +154,166 @@ public:
             holderp->addNextHere(VN_AS(stmtsp->unlinkFrBackWithNext(), NodeStmt));
         }
         VL_DO_DANGLING(holderp->unlinkFrBack()->deleteTree(), holderp);
+    }
+};
+
+//######################################################################
+// Visitor that finds the conditions under which each reference to the size of a
+// size-constrained array in constraint items is in force: those of the enclosing 'if's,
+// implications and conditional operator branches, and the array of each enclosing 'foreach'
+// not being empty. A condition reading a loop variable is taken as holding.
+// A function called with a random argument, or with side effects, is called only as part of
+// its constraint, so a reference under a condition calling one is taken as always in force.
+// A reference in a soft constraint is in force only while the soft constraint also holds: one
+// discarded, as incompatible with the constraints kept, then holds in no solution
+// (IEEE 1800-2023 18.5.13).
+
+struct ConstraintSizeRef final {
+    AstVar* arrVarp;  // The array
+    AstNodeExpr* guardp;  // Conjunction of the conditions, nullptr if always in force
+};
+
+class ConstraintSizeGuardVisitor final : public VNVisitor {
+    // NODE STATE
+    // AstVarRef::user3p() -> AstVar*. Array whose '.size()' this size variable replaced
+    // VNuser3InUse m_inuser3; (Allocated for use in RandomizeVisitor)
+
+    // STATE
+    struct Cond final {
+        AstNodeExpr* condp;  // The condition
+        bool negate;  // Holds where condp is false
+        // cppcheck-suppress unusedStructMember  // Read by the std::any_of in visit(AstVarRef)
+        bool uncopiable;  // condp cannot be copied, see uncopiable()
+    };
+    std::vector<Cond> m_conds;  // Enclosing conditions reading no loop variable
+    std::unordered_set<const AstVar*> m_loopVarps;  // Loop variables of the enclosing 'foreach'es
+    AstNodeExpr* m_softExprp = nullptr;  // Expression of the enclosing soft constraint, if any
+    std::vector<ConstraintSizeRef> m_refs;  // Found references, in order
+    VNDeleter* const m_deleterp;  // Deletes the guards later, if any
+
+    // METHODS
+    // Whether exprp cannot be copied into another constraint: it calls a function with a random
+    // argument or side effects, or has a 'dist'
+    static bool uncopiable(AstNodeExpr* exprp) {
+        return exprp->exists([](AstNode* np) {
+            if (VN_IS(np, Dist)) return true;
+            AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef);
+            return refp && (refp->user1() || !refp->isPure());
+        });
+    }
+    // Whether exprp reads a loop variable of an enclosing 'foreach'
+    bool readsLoopVar(AstNodeExpr* exprp) const {
+        return exprp->exists(
+            [this](const AstVarRef* refp) { return m_loopVarps.count(refp->varp()) != 0; });
+    }
+    // A condition holding where the array that a 'foreach' iterates is not empty, nullptr if
+    // never empty
+    static AstNodeExpr* newNotEmptyp(AstNodeExpr* fromp) {
+        const AstNodeDType* const dtypep = fromp->dtypep()->skipRefp();
+        VCMethod method;
+        if (VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType)) {
+            method = VCMethod::DYN_SIZE;
+        } else if (VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, WildcardArrayDType)) {
+            method = VCMethod::ASSOC_SIZE;
+        } else {
+            return nullptr;
+        }
+        FileLine* const fl = fromp->fileline();
+        AstCMethodHard* const sizep = new AstCMethodHard{fl, fromp->cloneTree(false), method};
+        sizep->dtypeSetUInt32();
+        return SmtUtil::logicOp(
+            new AstNeq{fl, sizep, new AstConst{fl, AstConst::WidthedValue{}, 32, 0}}, sizep);
+    }
+    // Conjunction of lhsp, if any, and rhsp
+    static AstNodeExpr* newAndp(AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
+        if (!lhsp) return rhsp;
+        return SmtUtil::logicOp(new AstLogAnd{rhsp->fileline(), lhsp, rhsp}, lhsp, rhsp);
+    }
+    // A condition holding where cond does
+    static AstNodeExpr* newCondp(const Cond& cond) {
+        AstNodeExpr* const condp = cond.condp->cloneTree(false);
+        if (!cond.negate) return condp;
+        return SmtUtil::logicOp(new AstLogNot{condp->fileline(), condp}, condp);
+    }
+    void iterateUnder(AstNode* nodep, const Cond& cond) {
+        if (readsLoopVar(cond.condp)) {
+            iterateAndNextNull(nodep);
+            return;
+        }
+        m_conds.push_back(cond);
+        iterateAndNextNull(nodep);
+        m_conds.pop_back();
+    }
+
+    // VISITORS
+    void visit(AstConstraintIf* nodep) override {
+        iterateAndNextNull(nodep->condp());
+        const bool fixed = uncopiable(nodep->condp());
+        iterateUnder(nodep->thensp(), {nodep->condp(), false, fixed});
+        iterateUnder(nodep->elsesp(), {nodep->condp(), true, fixed});
+    }
+    void visit(AstLogIf* nodep) override {
+        iterateAndNextNull(nodep->lhsp());
+        iterateUnder(nodep->rhsp(), {nodep->lhsp(), false, uncopiable(nodep->lhsp())});
+    }
+    void visit(AstCond* nodep) override {
+        iterateAndNextNull(nodep->condp());
+        const bool fixed = uncopiable(nodep->condp());
+        iterateUnder(nodep->thenp(), {nodep->condp(), false, fixed});
+        iterateUnder(nodep->elsep(), {nodep->condp(), true, fixed});
+    }
+    void visit(AstConstraintExpr* nodep) override {
+        // A 'disable soft' constrains nothing
+        if (nodep->isDisableSoft()) return;
+        VL_RESTORER(m_softExprp);
+        // A soft constraint that cannot be copied is taken as a hard one
+        if (nodep->isSoft() && !readsLoopVar(nodep->exprp()) && !uncopiable(nodep->exprp())) {
+            m_softExprp = nodep->exprp();
+        }
+        iterateChildren(nodep);
+    }
+    void visit(AstConstraintForeach* nodep) override {
+        AstNodeExpr* const fromp = nodep->headerp()->fromp();
+        iterateAndNextNull(fromp);
+        AstNodeExpr* const notEmptyp = newNotEmptyp(fromp);
+        VL_RESTORER_COPY(m_loopVarps);
+        for (AstNode* const elemp : nodep->headerp()->elementspList()) {
+            if (const AstVar* const varp = VN_CAST(elemp, Var)) m_loopVarps.insert(varp);
+        }
+        if (notEmptyp) {
+            iterateUnder(nodep->bodyp(), {notEmptyp, false, uncopiable(fromp)});
+            VL_DO_DANGLING(notEmptyp->deleteTree(), notEmptyp);
+        } else {
+            iterateAndNextNull(nodep->bodyp());
+        }
+    }
+    void visit(AstVarRef* nodep) override {
+        AstVar* const arrVarp = VN_CAST(nodep->user3p(), Var);
+        if (!arrVarp) return;
+        if (std::any_of(m_conds.begin(), m_conds.end(),
+                        [](const Cond& cond) { return cond.uncopiable; })) {
+            m_refs.push_back({arrVarp, nullptr});
+            return;
+        }
+        AstNodeExpr* guardp = nullptr;
+        for (const Cond& cond : m_conds) guardp = newAndp(guardp, newCondp(cond));
+        if (m_softExprp) guardp = newAndp(guardp, m_softExprp->cloneTree(false));
+        if (m_deleterp && guardp) m_deleterp->pushDeletep(guardp);
+        m_refs.push_back({arrVarp, guardp});
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+    // CONSTRUCTORS
+    ConstraintSizeGuardVisitor(AstNode* nodep, VNDeleter* deleterp)
+        : m_deleterp{deleterp} {
+        iterateAndNextNull(nodep);
+    }
+
+public:
+    // The size references in the constraint items from nodep on, in order; their guards are
+    // deleted by deleterp if any, else owned by the caller
+    static std::vector<ConstraintSizeRef> apply(AstNode* nodep, VNDeleter* deleterp) {
+        return ConstraintSizeGuardVisitor{nodep, deleterp}.m_refs;
     }
 };
 
@@ -3106,6 +3275,25 @@ class SolverSmtLowering final : public V3SolverLowering {
         bool sizePhase = false;  // Sizes are solved and arrays resized before the final solve
     };
     std::map<const AstClass*, ClassSolve> m_classSolves;  // Per class
+    // Array size references of each class constraint, in order
+    std::unordered_map<const AstConstraint*, std::vector<ConstraintSizeRef>> m_sizeRefs;
+    // Of each array with size references, whether one is always in force, else the
+    // conditions under which each is
+    struct SizeTerms final {
+        bool always = false;
+        std::vector<AstNodeExpr*> termps;
+    };
+    // The size references of the constraints of a randomize(), by array
+    struct SizeRefTerms final {
+        VInsertionSet<AstVar*> arrVars;  // Arrays whose size is referenced, in order
+        std::unordered_map<const AstVar*, SizeTerms> terms;  // Their terms
+    };
+    // Constraint items keeping the sizes of arrays, made by newSizeDefaults()
+    struct SizeDefaults final {
+        AstNode* itemsp = nullptr;  // The constraint items, nullptr if none needed
+        AstNodeStmt* snapshotsp = nullptr;  // Statements saving the sizes they keep
+        AstTask* taskp = nullptr;  // Task adding the items, for a class's randomize()
+    };
 
     // METHODS
     AstVar* getStaticRandModeVar(AstClass* const classp) {
@@ -3339,6 +3527,161 @@ class SolverSmtLowering final : public V3SolverLowering {
 
         resExprp->user1(true);
         return resExprp;
+    }
+
+    // The size of a dynamic array or queue whose size is not constrained shall not change
+    // (IEEE 1800-2023 18.4). So keep the size of an array unless a reference to its size is in
+    // force: one under conditions that hold, in a constraint not switched off.
+    static void addSizeRef(AstVar* arrVarp, AstNodeExpr* termp, SizeRefTerms& refs) {
+        refs.arrVars.insert(arrVarp);
+        SizeTerms& arrTerms = refs.terms[arrVarp];
+        if (termp) {
+            arrTerms.termps.push_back(termp);
+        } else {
+            arrTerms.always = true;
+        }
+    }
+    void addClassSizeRefs(AstClass* classp, SizeRefTerms& refs) {
+        std::vector<AstConstraint*> constrps;
+        classp->foreachMember(
+            [&](AstClass*, AstConstraint* constrp) { constrps.push_back(constrp); });
+        // A constraint of a derived class overrides one of the same name of a base class
+        std::unordered_map<std::string, const AstConstraint*> namedps;
+        for (const AstConstraint* const constrp : constrps) namedps[constrp->name()] = constrp;
+        for (AstConstraint* const constrp : constrps) addSizeRefs(classp, constrp, namedps, refs);
+    }
+    // Add the size references of constrp of classp
+    void addSizeRefs(AstClass* classp, AstConstraint* constrp,
+                     const std::unordered_map<std::string, const AstConstraint*>& namedps,
+                     SizeRefTerms& refs) {
+        const auto it = m_sizeRefs.find(constrp);
+        if (it != m_sizeRefs.end())
+            addRefTerms(it->second, newRefOnp(classp, constrp, namedps), refs);
+    }
+    // Whether constrp of classp is switched on, nullptr if always; a false constant if overridden,
+    // as never in force, though its arrays' sizes are still solved. Deleted later.
+    AstNodeExpr* newRefOnp(AstClass* classp, AstConstraint* constrp,
+                           const std::unordered_map<std::string, const AstConstraint*>& namedps) {
+        AstNodeExpr* const onp = namedps.at(constrp->name()) != constrp
+                                     ? new AstConst{constrp->fileline(), AstConst::BitFalse{}}
+                                     : newConstraintOnp(classp, constrp);
+        if (onp) pushDeletep(onp);  // Copied into each term
+        return onp;
+    }
+    // Add the terms of size references sizeRefs of a constraint switched on where onp holds
+    static void addRefTerms(const std::vector<ConstraintSizeRef>& sizeRefs, AstNodeExpr* onp,
+                            SizeRefTerms& refs) {
+        for (const auto& ref : sizeRefs) addSizeRef(ref.arrVarp, newRefTermp(ref, onp), refs);
+    }
+    // The term of size reference ref of a constraint switched on where onp holds, nullptr if
+    // always in force
+    static AstNodeExpr* newRefTermp(const ConstraintSizeRef& ref, AstNodeExpr* onp) {
+        AstNodeExpr* const guardp = ref.guardp ? ref.guardp->cloneTree(false) : nullptr;
+        if (!onp) return guardp;
+        AstNodeExpr* const thisOnp = onp->cloneTree(false);
+        if (!guardp) return thisOnp;
+        return SmtUtil::logicOp(new AstLogAnd{thisOnp->fileline(), thisOnp, guardp}, thisOnp,
+                                guardp);
+    }
+    // Whether constrp of classp is switched on, nullptr if constraint_mode() never switches it
+    AstNodeExpr* newConstraintOnp(AstClass* classp, const AstConstraint* constrp) {
+        const RandomizeMode rmode = {.asUQuad = constrp->user1()};
+        if (!rmode.usesMode) return nullptr;
+        FileLine* const fl = constrp->fileline();
+        AstVar* const modeVarp = constrp->isStatic() ? getStaticConstraintModeVar(classp)
+                                                     : getConstraintModeVar(classp);
+        AstDynArraySel* const bitp = new AstDynArraySel{
+            fl, new AstVarRef{fl, VN_AS(modeVarp->user2p(), NodeModule), modeVarp, VAccess::READ},
+            new AstConst{fl, rmode.index}};
+        bitp->dtypeSetUInt32();
+        return SmtUtil::logicOp(
+            new AstNeq{fl, bitp, new AstConst{fl, AstConst::WidthedValue{}, 32, 0}}, bitp);
+    }
+    // Delete the terms of an array always in force
+    static void deleteTerms(const SizeTerms& arrTerms) {
+        for (AstNodeExpr* termp : arrTerms.termps) VL_DO_DANGLING(termp->deleteTree(), termp);
+    }
+    // Disjunction of lhsp, if any, and rhsp
+    static AstNodeExpr* newOrp(AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
+        if (!lhsp) return rhsp;
+        return SmtUtil::logicOp(new AstLogOr{rhsp->fileline(), lhsp, rhsp}, lhsp, rhsp);
+    }
+    // Constraints keeping the size of each array in arrVars unless one of its terms holds. The
+    // size kept is the one at the start of randomize(), saved into a new member of classp if
+    // any, else into a new variable of funcp, so the solve after resizing arrays keeps the
+    // sizes the first solve kept.
+    SizeDefaults newSizeDefaults(FileLine* fl, AstClass* classp, AstFunc* funcp,
+                                 const SizeRefTerms& refs) {
+        SizeDefaults defaults;
+        for (AstVar* const arrVarp : refs.arrVars) {
+            const SizeTerms& arrTerms = refs.terms.at(arrVarp);
+            if (arrTerms.always) {
+                deleteTerms(arrTerms);
+                continue;
+            }
+            AstVar* const sizeVarp = VN_AS(arrVarp->user4p(), Var);
+            AstVarRef* const sizeRefp = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule),
+                                                      sizeVarp, VAccess::READ};
+            sizeRefp->user1(true);
+            AstCMethodHard* const currentp = new AstCMethodHard{
+                fl,
+                new AstVarRef{fl, VN_AS(arrVarp->user2p(), NodeModule), arrVarp, VAccess::READ},
+                VCMethod::DYN_SIZE};
+            currentp->dtypep(sizeVarp->dtypep());
+            const std::string startName = m_uniqueNames.get("__Vsize_start");
+            AstVar* const startVarp
+                = new AstVar{fl, classp ? VVarType::MEMBER : VVarType::BLOCKTEMP, startName,
+                             sizeVarp->dtypep()};
+            if (classp) {
+                classp->addMembersp(startVarp);
+                startVarp->user2p(classp);
+            } else {
+                startVarp->funcLocal(true);
+                funcp->addDeclsp(startVarp);
+            }
+            defaults.snapshotsp = AstNode::addNext(
+                defaults.snapshotsp,
+                new AstAssign{fl, new AstVarRef{fl, classp, startVarp, VAccess::WRITE}, currentp});
+            AstVarRef* const startRefp = new AstVarRef{fl, classp, startVarp, VAccess::READ};
+            AstNodeExpr* exprp
+                = SmtUtil::logicOp(new AstEq{fl, sizeRefp, startRefp}, sizeRefp, startRefp);
+            // Not always, so has a term
+            AstNodeExpr* anyp = nullptr;
+            for (AstNodeExpr* const termp : arrTerms.termps) anyp = newOrp(anyp, termp);
+            AstNodeExpr* const nonep = SmtUtil::logicOp(new AstLogNot{fl, anyp}, anyp);
+            exprp = SmtUtil::logicOp(new AstLogIf{fl, nonep, exprp}, nonep, exprp);
+            defaults.itemsp = AstNode::addNext(defaults.itemsp, new AstConstraintExpr{fl, exprp});
+        }
+        return defaults;
+    }
+    // Add the constraints keeping the sizes of the arrays of classp, in a task the solve after
+    // resizing arrays calls again
+    SizeDefaults addClassSizeDefaults(AstClass* classp, AstFunc* randomizep, AstVar* genp,
+                                      AstVar* randModeVarp) {
+        SizeRefTerms refs;
+        addClassSizeRefs(classp, refs);
+        FileLine* const fl = classp->fileline();
+        SizeDefaults defaults = newSizeDefaults(fl, classp, randomizep, refs);
+        if (!defaults.itemsp) return defaults;
+        randomizep->addStmtsp(defaults.snapshotsp);
+        defaults.snapshotsp = nullptr;
+        defaults.taskp = new AstTask{fl, m_uniqueNames.get("__Vsize_defaults")};
+        defaults.taskp->classMethod(true);
+        classp->addMembersp(defaults.taskp);
+        AstBegin* const holderp = SmtUtil::newItemsHolderp(fl, defaults.itemsp);
+        defaults.itemsp = nullptr;
+        defaults.taskp->addStmtsp(holderp);
+        ConstraintExprVisitor{
+            classp,       m_memberMap,   holderp->declsp(),     nullptr,       genp,
+            randModeVarp, m_writtenVars, &m_uniqueConstraintId, m_uniqueNames, randomizep};
+        SmtUtil::replaceWithLowered(holderp);
+        addSizeDefaultsCall(randomizep, defaults);
+        return defaults;
+    }
+    // Call the task adding the constraints keeping sizes
+    static void addSizeDefaultsCall(AstFunc* randomizep, const SizeDefaults& defaults) {
+        FileLine* const fl = defaults.taskp->fileline();
+        randomizep->addStmtsp((new AstTaskRef{fl, defaults.taskp})->makeStmt());
     }
 
     static void addUpdateRandVarsStmts(AstFunc* const updatep, AstNode* const stmtsp) {
@@ -4186,6 +4529,7 @@ public:
             }
             AstNodeExpr* const sizeRefp = newSizeRefp();
             sizeRefp->user1(true);
+            if (!memberSelp) sizeRefp->user3p(queueVarp);
             nodep->replaceWith(sizeRefp);
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         }
@@ -4218,7 +4562,12 @@ public:
                         wrapIfConstraintMode(nodep, constrp, resizeTaskRefp->makeStmt()));
                 }
 
-                if (constrp->itemsp()) expandUniqueElementList(constrp->itemsp());
+                if (constrp->itemsp()) {
+                    // The guards are cloned for each randomize(), so deleted later
+                    m_sizeRefs[constrp]
+                        = ConstraintSizeGuardVisitor::apply(constrp->itemsp(), &m_deleter);
+                    expandUniqueElementList(constrp->itemsp());
+                }
                 if (constrp->itemsp()) {
                     lowerDistConstraints(taskp, constrp->itemsp(), randModeVarp);
                 }
@@ -4312,10 +4661,11 @@ public:
             }
             AstTaskRef* const setupTaskRefp = new AstTaskRef{fl, setupAllTaskp};
             randomizep->addStmtsp(setupTaskRefp->makeStmt());
-
             VInsertionSet<AstVar*> pinnedArrays = sizeArrayVars;
             MemberArrays memberArrays;
             addResizedArrays(nodep, pinnedArrays, memberArrays);
+            const SizeDefaults sizeDefaults
+                = addClassSizeDefaults(nodep, randomizep, genp, randModeVarp);
             addFrozenSizePins(pinnedArrays, memberArrays, randomizep, genp, randModeVarp);
 
             // A member object array is randomized with the outer object, after its resize
@@ -4337,6 +4687,9 @@ public:
                 addConstraintRebuild(randomizep, genp, genp, sizeArrayVars, pinnedArrays,
                                      memberArrays, writtenVars,
                                      (new AstTaskRef{fl, setupAllTaskp})->makeStmt());
+                // The solve after resizing keeps the sizes the first solve kept, their arrays
+                // being resized, so pinned
+                if (sizeDefaults.taskp) addSizeDefaultsCall(randomizep, sizeDefaults);
 
                 AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
                                                        nodep->findBasicDType(VBasicDTypeKwd::BIT)};
@@ -4456,6 +4809,8 @@ public:
                     sizeMethodps.push_back(methodp);
                 }
             });
+            SizeRefTerms sizeRefs;  // Size references
+            addClassSizeRefs(classp, sizeRefs);
             for (AstCMethodHard* const methodp : sizeMethodps) {
                 // Extract array variable from fromp (VarRef or MemberRef after capture)
                 AstVar* arrVarp = nullptr;
@@ -4512,8 +4867,23 @@ public:
                     resizeStmtsp = AstNode::addNext(resizeStmtsp, new AstStmtExpr{fl, resizep});
                 }
                 AstNodeExpr* const sizeNodeExprp = buildMemberRefExprp(rootExprp, sizeVarp);
+                if (VN_IS(rootExprp, MemberRef)) {
+                    // Of another object, so always taken as constrained
+                    addSizeRef(arrVarp, nullptr, sizeRefs);
+                } else {
+                    sizeNodeExprp->user3p(arrVarp);
+                }
                 methodp->replaceWith(sizeNodeExprp);
                 VL_DO_DANGLING(methodp->deleteTree(), methodp);
+            }
+            for (const auto& ref : ConstraintSizeGuardVisitor::apply(capturedTreep, nullptr)) {
+                addSizeRef(ref.arrVarp, ref.guardp, sizeRefs);
+            }
+            const SizeDefaults defaults
+                = newSizeDefaults(nodep->fileline(), nullptr, randomizeFuncp, sizeRefs);
+            if (defaults.itemsp) {
+                capturedTreep->addNext(defaults.itemsp);
+                setupBlockp->addHereThisAsNext(defaults.snapshotsp);
             }
         }
 
