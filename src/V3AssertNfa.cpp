@@ -2559,6 +2559,23 @@ static bool countsMatches(const AstNodeCoverOrAssert* assertp) {
 //######################################################################
 // NFA Lowering (converts NFA graph to synthesizable AstAlways blocks)
 
+// exprp, a copy of conditions of a property the lowering evaluates again, without their sequence
+// match items (IEEE 1800-2023 16.10), so that evaluating it does not run them again. A copy is
+// never a bare match item. Takes ownership.
+static AstNodeExpr* withoutMatchItemsp(AstNodeExpr* exprp) {
+    std::vector<AstExprStmt*> itemps;
+    exprp->foreach([&](AstExprStmt* itemp) {
+        if (itemp->isMatchItem()) itemps.push_back(itemp);
+    });
+    // Inner ones first, as an outer one's statements are deleted with it
+    for (auto it = itemps.rbegin(); it != itemps.rend(); ++it) {
+        AstExprStmt* const itemp = *it;
+        itemp->replaceWith(itemp->resultp()->unlinkFrBack());
+        VL_DO_DANGLING(itemp->deleteTree(), itemp);
+    }
+    return exprp;
+}
+
 class SvaNfaLowering final {
     AstNodeModule* const m_modp;  // Module to add state vars and always blocks to
     AstNodeDType* const m_u32DTypep;  // Shared unsigned counter dtype
@@ -2785,8 +2802,13 @@ class SvaNfaLowering final {
         const bool asyncDisable = isAsyncDisable(c.disableExprp);
         AstNodeStmt* bodyp = nullptr;
         AstNodeStmt* clearp = nullptr;
-        for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
-            const SvaStateVertex* const vtxp = static_cast<const SvaStateVertex*>(&vtxr);
+        // Later states first, so that an earlier attempt's match items read the local
+        // variables before a later attempt's assign them (IEEE 1800-2023 16.10)
+        std::vector<const SvaStateVertex*> vtxps;
+        for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices())
+            vtxps.push_back(static_cast<const SvaStateVertex*>(&vtxr));
+        for (auto it = vtxps.rbegin(); it != vtxps.rend(); ++it) {
+            const SvaStateVertex* const vtxp = *it;
             if (!vtxp->datap()->stateVarp) continue;
 
             const bool counts = vtxp->datap()->stateCounts;
@@ -3135,14 +3157,15 @@ class SvaNfaLowering final {
         return new AstLogAnd{c.flp, basep,
                              new AstLogNot{c.flp, sampled(c.matchCondp->cloneTreePure(false))}};
     }
-    // Condition under which a rejectOnFail Link keeps its source threads
+    // Condition under which a rejectOnFail Link keeps its source threads, without the match
+    // items of the step, which run where its threads advance
     static AstNodeExpr* newRequiredStepCondp(LowerCtx& c, const SvaTransEdge& tedge) {
-        if (!tedge.m_condVtxp) return tedge.m_condp->cloneTreePure(false);
+        if (!tedge.m_condVtxp) return withoutMatchItemsp(tedge.m_condp->cloneTreePure(false));
         UASSERT_OBJ(tedge.m_condVtxp->datap()->stateSigp, tedge.m_condVtxp,
                     "rejectOnFail condVtxp missing stateSig");
         AstNodeExpr* const condp = tedge.m_condVtxp->datap()->stateSigp->cloneTreePure(false);
         if (!tedge.m_condp) return condp;
-        return new AstLogOr{c.flp, condp, tedge.m_condp->cloneTreePure(false)};
+        return new AstLogOr{c.flp, condp, withoutMatchItemsp(tedge.m_condp->cloneTreePure(false))};
     }
     // Condition under which every rejectOnFail Link leaving a vertex keeps its threads
     static AstNodeExpr* newRequiredStepsHoldp(LowerCtx& c, const SvaStateVertex* const vtxp) {
@@ -3290,7 +3313,8 @@ class SvaNfaLowering final {
             AstNodeExpr* continuesp = new AstConst{c.flp, AstConst::BitFalse{}};
             for (const V3GraphEdge& edger : vtxp->outEdges()) {
                 const SvaTransEdge& tedger = static_cast<const SvaTransEdge&>(edger);
-                continuesp = new AstLogOr{c.flp, continuesp, tedger.m_condp->cloneTreePure(false)};
+                continuesp = new AstLogOr{
+                    c.flp, continuesp, withoutMatchItemsp(tedger.m_condp->cloneTreePure(false))};
             }
             AstNodeExpr* const statep = vtxp->datap()->stateSigp->cloneTreePure(false);
             endps.push_back(
@@ -3665,7 +3689,8 @@ class SvaNfaLowering final {
                           ? fromVtxp->datap()->stateCountOverflowSigp->cloneTreePure(false)
                           : nullptr;
                 if (te.m_condp) {
-                    AstNodeExpr* const enablep = te.m_condp->cloneTreePure(false);
+                    AstNodeExpr* const enablep
+                        = withoutMatchItemsp(te.m_condp->cloneTreePure(false));
                     countContributionp = gateCheckedCountp(c.flp, countContributionp,
                                                            countContributionOverflowp, enablep);
                 }
@@ -4232,23 +4257,6 @@ class AssertNfaVisitor final : public VNVisitor {
     }
     // Run the pass action once for each of countp attempts succeeding on this tick, from a
     // count taken before the action, which may suspend
-    // countp, a count of outcomes the lowering of the property evaluates, without the sequence
-    // match items of its conditions (IEEE 1800-2023 16.10), so that counting them does not
-    // assign the local variables again. A count is never a bare match item. Takes ownership.
-    static AstNodeExpr* withoutMatchItemsp(AstNodeExpr* countp) {
-        std::vector<AstExprStmt*> itemps;
-        countp->foreach([&](AstExprStmt* itemp) {
-            if (itemp->isMatchItem()) itemps.push_back(itemp);
-        });
-        // Inner ones first, as an outer one's statements are deleted with it
-        for (auto it = itemps.rbegin(); it != itemps.rend(); ++it) {
-            AstExprStmt* const itemp = *it;
-            itemp->replaceWith(itemp->resultp()->unlinkFrBack());
-            VL_DO_DANGLING(itemp->deleteTree(), itemp);
-        }
-        return countp;
-    }
-
     void addCountedPassActions(AstAssert* const assertp, AstNodeExpr* countp) {
         FileLine* const flp = assertp->fileline();
         countp = withoutMatchItemsp(countp);
