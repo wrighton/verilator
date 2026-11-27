@@ -7290,7 +7290,9 @@ class WidthVisitor final : public VNVisitor {
         return nodep->argsp()->exprp();
     }
     AstNodeExpr* methodCallWildcardIndexExpr(AstMethodCall* nodep) {
-        convertWildcardKey(nodep->argsp()->exprp());
+        // An index with X or Z bits has no key form; V3Unknown reads it as invalid
+        const AstConst* const constp = VN_CAST(nodep->argsp()->exprp(), Const);
+        if (!constp || !constp->num().isFourState()) convertWildcardKey(nodep->argsp()->exprp());
         return nodep->argsp()->exprp();
     }
     // Convert widthed wildcard associative array index 'keyp' to the key string

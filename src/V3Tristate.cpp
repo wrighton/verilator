@@ -3561,7 +3561,9 @@ class TristateVisitor final : public TristateBaseVisitor {
         visitDynElement(nodep, nodep->fromp(), nodep->bitp());
     }
     void visit(AstCMethodHard* nodep) override {
-        if (!nodep->method().isDynElementAccess()) {
+        // Likewise a constant key of an associative array method
+        if (!nodep->method().isDynElementAccess() && nodep->method() != VCMethod::ASSOC_EXISTS
+            && nodep->method() != VCMethod::ASSOC_ERASE) {
             iterateChildren(nodep);
             checkUnhandled(nodep);
             return;
