@@ -1826,8 +1826,55 @@ public:
     static AstNodeExpr* split(AstPast* pastp) { return AssertPastSplitVisitor{pastp}.m_splitp; }
 };
 
+//######################################################################
+// Default sampled values of checker formal arguments
+
+class AssertCheckerFormals final {
+    // A checker formal argument stands for its actual (IEEE 1800-2023 17.3), so its default
+    // sampled value is that of the actual of each instance. The instances of a checker share its
+    // module, so each other set of defaults gets a copy of the module.
+    // STATE
+    std::unordered_map<const AstVar*, AstConst*> m_defaults;  // Constant default of a formal
+    size_t m_statCopies = 0;  // Statistic tracking
+    // Copies of a checker for other defaults of its formals, beyond which they are unsupported
+    static constexpr size_t MAX_COPIES = 16;
+
+    // METHODS
+    static AstNodeExpr* initialValuep(const AstVar* varp);
+    static bool replaceByConstant(AstNodeExpr* nodep, AstNodeExpr* valuep);
+    static void replaceElementByInitializer(AstArraySel* selp);
+    static bool replaceByInitializer(AstNodeVarRef* refp);
+    static void deleteDefaults(const std::vector<AstConst*>& defaults) {
+        for (AstConst* const constp : defaults)
+            if (constp) constp->deleteTree();
+    }
+    AstConst* newActualDefault(const AstPin* pinp, const AstVar* portp) const;
+    AstConst* newInstanceDefault(const AstCell* cellp, const AstVar* formalp) const;
+    AstNodeModule* newCopy(AstNodeModule* modp, size_t group, const std::vector<AstCell*>& cellps);
+    std::vector<AstCell*> specializeChecker(AstNodeModule* modp,
+                                            const std::vector<AstCell*>& cellps);
+
+public:
+    // CONSTRUCTORS
+    AssertCheckerFormals() = default;
+    ~AssertCheckerFormals() {
+        for (const auto& itr : m_defaults) itr.second->deleteTree();
+    }
+    // Give each set of the defaults of the formals of a checker read by $past its own copy of
+    // the checker module, and record those defaults
+    void specialize(AstNetlist* netlistp);
+    // The default sampled value of a checker formal read by $past, if constant, else nullptr
+    AstConst* defaultOf(const AstVar* varp) const {
+        const auto it = m_defaults.find(varp);
+        return it == m_defaults.end() ? nullptr : it->second;
+    }
+};
+
 // Prepare one default sampled expression.
 class DefaultSampledValueVisitor final : public VNVisitor {
+    // STATE
+    const AssertCheckerFormals* const m_formalsp;  // Defaults of checker formals
+
     // METHODS
     static AstNodeExpr* newTypeDefault(FileLine* flp, AstNodeDType* dtypep) {
         AstNodeDType* const skipDtp = dtypep->skipRefp();
@@ -1883,7 +1930,8 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         AstNodeExpr* basep = selectFromp(nodep);
         while (AstNodeExpr* const fromp = selectFromp(basep)) basep = fromp;
         const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
-        bool isDefault = refp && hasDefaultValue(refp->varp());
+        bool isDefault
+            = refp && hasDefaultValue(refp->varp()) && !m_formalsp->defaultOf(refp->varp());
         // As for a whole variable, a selection with no constant keeps reading the variable
         if (isDefault && !hasConstant(nodep->dtypep())) return;
         if (!isDefault) {
@@ -1919,6 +1967,13 @@ class DefaultSampledValueVisitor final : public VNVisitor {
     void visit(AstStructSel* nodep) override { visitSelect(nodep); }
     void visit(AstNodeVarRef* nodep) override {
         AstVar* const varp = nodep->varp();
+        if (AstConst* const constp = m_formalsp->defaultOf(varp)) {
+            AstConst* const newp = constp->cloneTree(false);
+            newp->dtypeFrom(nodep);
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         if (!hasDefaultValue(varp)) {
             // The value of its declaration initializer, not of a later write during
             // initialization (IEEE 1800-2023 16.5.1). V3LinkParse placed that initialization
@@ -1956,8 +2011,180 @@ class DefaultSampledValueVisitor final : public VNVisitor {
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:
-    explicit DefaultSampledValueVisitor(AstNode* nodep) { iterate(nodep); }
+    DefaultSampledValueVisitor(AstNode* nodep, const AssertCheckerFormals* formalsp)
+        : m_formalsp{formalsp} {
+        iterate(nodep);
+    }
 };
+
+AstNodeExpr* AssertCheckerFormals::initialValuep(const AstVar* varp) {
+    // A parameter's value, or the declaration initializer that V3LinkParse placed just after
+    // the variable
+    if (varp->isParam()) return VN_CAST(varp->valuep(), NodeExpr);
+    const AstInitialStatic* const initp = VN_CAST(varp->nextp(), InitialStatic);
+    const AstAssign* const assignp = initp ? VN_CAST(initp->stmtsp(), Assign) : nullptr;
+    return assignp ? assignp->rhsp() : nullptr;
+}
+
+bool AssertCheckerFormals::replaceByConstant(AstNodeExpr* nodep, AstNodeExpr* valuep) {
+    AstConst* const constp = VN_CAST(valuep, Const);
+    if (constp) {
+        AstConst* const newp = constp->cloneTree(false);
+        newp->dtypeFrom(nodep);
+        nodep->replaceWith(newp);
+        nodep->deleteTree();
+    }
+    return constp != nullptr;
+}
+
+void AssertCheckerFormals::replaceElementByInitializer(AstArraySel* selp) {
+    // An element of an unpacked array variable with a constant index
+    const AstNodeVarRef* const refp = VN_CAST(selp->fromp(), NodeVarRef);
+    const AstConsArray* const consp
+        = refp ? VN_CAST(initialValuep(refp->varp()), ConsArray) : nullptr;
+    const AstConst* const indexp = VN_CAST(selp->bitp(), Const);
+    if (consp && indexp) replaceByConstant(selp, consp->valuep(indexp->toUInt()));
+}
+
+bool AssertCheckerFormals::replaceByInitializer(AstNodeVarRef* refp) {
+    return replaceByConstant(refp, initialValuep(refp->varp()));
+}
+
+AstConst* AssertCheckerFormals::newActualDefault(const AstPin* pinp, const AstVar* portp) const {
+    // The default sampled value of the actual, in its own module
+    AstNodeExpr* const actualp = VN_CAST(pinp->exprp(), NodeExpr);
+    if (!actualp) return nullptr;
+    AstNodeExpr* const exprp = actualp->cloneTreePure(false);
+    AstSampled* const holderp = new AstSampled{exprp->fileline(), exprp, exprp->dtypep()};
+    { DefaultSampledValueVisitor{holderp->exprp(), this}; }
+    // A variable, or an element of one, keeps a constant initial value (16.5.1). Anything else
+    // is not known to be constant.
+    std::vector<AstArraySel*> selps;
+    holderp->exprp()->foreach([&](AstArraySel* selp) { selps.push_back(selp); });
+    for (AstArraySel* const selp : selps) replaceElementByInitializer(selp);
+    std::vector<AstNodeVarRef*> refps;
+    holderp->exprp()->foreach([&](AstNodeVarRef* refp) { refps.push_back(refp); });
+    const bool constant = std::all_of(refps.begin(), refps.end(), replaceByInitializer);
+    if (constant) V3Const::constifyEdit(holderp->exprp());
+    AstConst* const constp = constant ? VN_CAST(holderp->exprp(), Const) : nullptr;
+    // Only an actual of the width of the formal, which needs no conversion
+    if (constp && constp->width() == portp->width()) {
+        constp->unlinkFrBack();
+        VL_DO_DANGLING(holderp->deleteTree(), holderp);
+        return constp;
+    }
+    VL_DO_DANGLING(holderp->deleteTree(), holderp);
+    return nullptr;
+}
+
+AstConst* AssertCheckerFormals::newInstanceDefault(const AstCell* cellp,
+                                                   const AstVar* formalp) const {
+    // An unconnected formal has its own default
+    const AstPin* pinp = cellp->pinsp();
+    while (pinp && pinp->modVarp() != formalp) pinp = VN_AS(pinp->nextp(), Pin);
+    AstConst* const constp = pinp ? newActualDefault(pinp, formalp) : nullptr;
+    if (pinp && !constp) {
+        cellp->v3warn(EC_INFO, "Default sampled value of checker formal "
+                                   << formalp->prettyNameQ() << " of instance "
+                                   << cellp->prettyNameQ()
+                                   << " is that of its type, as its actual has no constant one"
+                                      " (IEEE 1800-2023 16.5.1).");
+    }
+    return constp;
+}
+
+AstNodeModule* AssertCheckerFormals::newCopy(AstNodeModule* modp, size_t group,
+                                             const std::vector<AstCell*>& cellps) {
+    // A copy of the checker module for these instances, which connect to its ports. The nodes
+    // of the module point to their copies until the next clone.
+    AstNodeModule* const copyp = modp->cloneTree(false);
+    copyp->name(modp->name() + "__Vdef" + cvtToStr(group));
+    modp->addNextHere(copyp);  // At the same level, to keep V3LinkLevel's order
+    ++m_statCopies;
+    for (AstCell* const cellp : cellps) {
+        cellp->modp(copyp);
+        for (AstPin* pinp = cellp->pinsp(); pinp; pinp = VN_AS(pinp->nextp(), Pin))
+            if (pinp->modVarp()) pinp->modVarp(pinp->modVarp()->clonep());
+    }
+    return copyp;
+}
+
+std::vector<AstCell*>
+AssertCheckerFormals::specializeChecker(AstNodeModule* modp, const std::vector<AstCell*>& cellps) {
+    // Return the cells in the copies made
+    std::vector<AstCell*> newCellps;
+    // The formals read by $past, in the order of their first read
+    std::vector<const AstVar*> formalps;
+    std::unordered_set<const AstVar*> seen;
+    modp->foreach([&](const AstPast* pastp) {
+        pastp->exprp()->foreach([&](const AstNodeVarRef* refp) {
+            const AstVar* const varp = refp->varp();
+            if (varp->isIO() && varp->isNonOutput() && seen.emplace(varp).second) {
+                formalps.push_back(varp);
+            }
+        });
+    });
+    // Group the instances by the defaults of those formals, in the order of first instance
+    std::vector<std::vector<AstConst*>> groupDefaults;
+    std::vector<std::vector<AstCell*>> groupCellps;
+    std::unordered_map<std::string, size_t> groups;  // Group of each set of defaults
+    for (AstCell* const cellp : cellps) {
+        std::vector<AstConst*> defaults;
+        std::string key;
+        for (const AstVar* const formalp : formalps) {
+            AstConst* const constp = newInstanceDefault(cellp, formalp);
+            defaults.push_back(constp);
+            key += (constp ? constp->num().ascii() : "-") + ",";
+        }
+        const auto pair = groups.emplace(key, groupCellps.size());
+        if (pair.second) {
+            groupDefaults.push_back(defaults);
+            groupCellps.emplace_back();
+        } else {
+            deleteDefaults(defaults);
+        }
+        groupCellps[pair.first->second].push_back(cellp);
+    }
+    // The first group keeps the checker module, each other one gets a copy
+    for (size_t group = 0; group < groupCellps.size(); ++group) {
+        const std::vector<AstConst*>& defaults = groupDefaults[group];
+        if (group > MAX_COPIES) {
+            // Reported at the first instance with these defaults
+            groupCellps[group].front()->v3warn(
+                E_UNSUPPORTED, "Unsupported: instance of checker "
+                                   << modp->prettyNameQ() << " with more than " << MAX_COPIES
+                                   << " other sets of default sampled values of its formals,"
+                                      " such as "
+                                   << formalps.front()->prettyNameQ() << ".");
+            deleteDefaults(defaults);
+            continue;
+        }
+        AstNodeModule* const ownerp = group ? newCopy(modp, group, groupCellps[group]) : modp;
+        if (group) ownerp->foreach([&](AstCell* cellp) { newCellps.push_back(cellp); });
+        for (size_t i = 0; i < formalps.size(); ++i) {
+            const AstVar* const varp = group ? formalps[i]->clonep() : formalps[i];
+            if (defaults[i]) m_defaults.emplace(varp, defaults[i]);
+        }
+    }
+    return newCellps;
+}
+
+void AssertCheckerFormals::specialize(AstNetlist* netlistp) {
+    // V3LinkLevel sorted the modules by level, so a checker comes after the ones instantiating it,
+    // whose copies are then already made. Copies have no instances recorded, so need no copies.
+    std::unordered_map<const AstNodeModule*, std::vector<AstCell*>> cellps;
+    const auto addCell = [&](AstCell* cellp) {
+        const AstModule* const modp = VN_CAST(cellp->modp(), Module);
+        if (modp && modp->isChecker()) cellps[modp].push_back(cellp);
+    };
+    netlistp->foreach(addCell);
+    for (AstNodeModule* const modp : netlistp->modulespList()) {
+        const auto it = cellps.find(modp);
+        if (it == cellps.end() || modp->hierBlock()) continue;
+        for (AstCell* const cellp : specializeChecker(modp, it->second)) addCell(cellp);
+    }
+    V3Stats::addStat("Assertions, checker copies for formal defaults", m_statCopies);
+}
 
 //######################################################################
 // AssertTaskRunnersVisitor
@@ -2050,6 +2277,7 @@ class AssertVisitor final : public VNVisitor {
 
     // STATE
     AstNodeModule* m_modp = nullptr;  // Last module
+    AssertCheckerFormals m_checkerFormals;  // Defaults of checker formals
     const AstNode* m_beginp = nullptr;  // Last AstBegin/AstGenBlock
     std::string m_genScope;  // Scope names of the named AstGenBlocks around, as V3Begin adds them
     unsigned m_modMonitorNum = 0;  // Module $monitor numbering
@@ -4375,7 +4603,7 @@ class AssertVisitor final : public VNVisitor {
             }
             m_inPast = true;
             nodep->initp(nodep->exprp()->cloneTreePure(false));
-            { DefaultSampledValueVisitor{nodep->initp()}; }
+            { DefaultSampledValueVisitor{nodep->initp(), &m_checkerFormals}; }
         }
         AstNodeExpr* const initp = nodep->initp() ? nodep->initp()->unlinkFrBack() : nullptr;
         iterateChildren(nodep);
@@ -5187,6 +5415,7 @@ class AssertVisitor final : public VNVisitor {
 public:
     // CONSTRUCTORS
     explicit AssertVisitor(AstNetlist* nodep) {
+        m_checkerFormals.specialize(nodep);
         if (v3Global.opt.timing().isSetTrue() && nodep->stdPackageProcessp()) {
             AssertTaskRunnersVisitor{nodep, m_taskRunnerps};
         }
