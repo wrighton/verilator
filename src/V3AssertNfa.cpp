@@ -8290,8 +8290,10 @@ class AssertNfaVisitor final : public VNVisitor {
         int implications = 0;
         bool other = false;
         findAttemptKinds(*treep, implications, other);
+        // An implication split by the lengths of its antecedent has a pass of each attempt
+        const bool lengthsSplit = treep->lengthsJoin || treep->antSeqp;
         if (!hasVarLenAnd(*treep) && (cover || !implications || (!other && implications < 2))
-            && (cover || !isVarLenSequence(*treep))) {
+            && (cover || (!isVarLenSequence(*treep) && !lengthsSplit))) {
             return nullptr;
         }
         if (const SvaAttemptNode* const limitp = findOverLimit(*treep)) {

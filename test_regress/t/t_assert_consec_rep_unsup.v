@@ -9,10 +9,7 @@ module t (
 );
   logic a, b;
 
-  // Unsupported: multi-cycle sequence expression inside ranged repetition
-  assert property (@(posedge clk) (a ##1 b) [* 1:2] |-> a);
-
-  // Unsupported: the same operand restriction applies to unbounded repetition
+  // Unsupported: multi-cycle sequence expression inside unbounded repetition
   assert property (@(posedge clk) (a ##1 b) [* 2:$] |-> a);
 
 endmodule
