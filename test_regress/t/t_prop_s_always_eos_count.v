@@ -33,7 +33,7 @@ module t (
   assert property (@(posedge clk) s_always[1: 3] 1'b1)
   else $display("EOS_FAIL");
 
-  // s_always [2:2]: two distinct unfinished attempts, not one RedOr.
+  // s_always [2:2]: two unfinished attempts at $finish, not one RedOr.
   assert property (@(posedge clk) s_always[2: 2] 1'b1)
   else $display("EOS_RING");
 
@@ -51,10 +51,14 @@ module t (
   // Large lower bounds use bit-vector pending rings and age-indexed resolution.
   assert property (@(posedge clk) (s_always[300: 300] 1'b1) or(s_always[300: 300] 1'b1))
   else $display("EOS_DELAY_RING");
+  assert property (@(posedge clk) s_always[300: 300] 1'b1)
+  else $display("EOS_DELAY_ALONE");
 
   // Attempts resolved by the immediate sibling are not EOS failures
   assert property (@(posedge clk) 1'b1 or(s_always[1: 3] 1'b1))
   else $display("EOS_RESOLVED_BAD");
+  assert property (@(posedge clk) 1'b1 or(s_always[2: 2] 1'b1))
+  else $display("EOS_RESOLVED_RING_BAD");
 
   assert property (@(posedge clk) disable iff (disable_now) s_always[1: 3] 1'b1)
   else $display("EOS_DISABLE_BAD");
