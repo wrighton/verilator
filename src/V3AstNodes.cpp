@@ -1856,6 +1856,14 @@ const char* AstDynArraySel::broken() const {
     BROKEN_RTN(!VN_IS(fromp()->dtypep()->skipRefp(), DynArrayDType));
     return nullptr;
 }
+void AstDynArraySel::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (refPin()) str << " [REFPIN]";
+}
+void AstDynArraySel::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, refPin);
+    dumpJsonGen(str);
+}
 void AstElabDisplay::dump(std::ostream& str) const {
     Super::dump(str);
     str << " [" << displayType() << "]";
@@ -3791,9 +3799,11 @@ const char* AstQueueSel::broken() const {
 void AstQueueSel::dump(std::ostream& str) const {
     Super::dump(str);
     if (fromBack()) str << " [BACK]";
+    if (refPin()) str << " [REFPIN]";
 }
 void AstQueueSel::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, fromBack);
+    dumpJsonBoolFuncIf(str, refPin);
     dumpJsonGen(str);
 }
 void AstRSProdList::dump(std::ostream& str) const {

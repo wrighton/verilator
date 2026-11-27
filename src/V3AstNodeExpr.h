@@ -5054,6 +5054,8 @@ public:
 };
 class AstDynArraySel final : public AstNodeSel {
     // Element of a dynamic array
+    bool m_refPin = false;  // Passed by reference as a pin, keeping the element for the call
+
 public:
     AstDynArraySel(FileLine* fl, AstNodeExpr* fromp, AstNodeExpr* bitp)
         : ASTGEN_SUPER_DynArraySel(fl, fromp, bitp) {
@@ -5061,6 +5063,8 @@ public:
     }
     ASTGEN_MEMBERS_AstDynArraySel;
     const char* broken() const override;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     void numberOperate(V3Number&, const V3Number&, const V3Number&) override { V3ERROR_NA; }
     string emitVerilog() override { return "%k(%l%f[%r])"; }
     string emitC() override { V3ERROR_NA_RETURN(""); }  // Special cased
@@ -5071,11 +5075,17 @@ public:
     bool sizeMattersRhs() const override { return false; }
     bool isGateOptimizable() const override { return true; }
     bool isPredictOptimizable() const override { return false; }
+    bool sameNode(const AstNode* samep) const override {
+        return m_refPin == VN_DBG_AS(samep, DynArraySel)->m_refPin;
+    }
     int instrCount() const override { return widthInstrs(); }
+    bool refPin() const { return m_refPin; }
+    void refPin(bool flag) { m_refPin = flag; }
 };
 class AstQueueSel final : public AstNodeSel {
     // Element of a queue
     const bool m_fromBack;  // Index counts back from the last element, as in 'q[$ - index]'
+    bool m_refPin = false;  // Passed by reference as a pin, keeping the element for the call
 
 public:
     AstQueueSel(FileLine* fl, AstNodeExpr* fromp, AstNodeExpr* bitp, bool fromBack = false)
@@ -5100,10 +5110,13 @@ public:
     // Writing one past the end appends
     bool isPure() override { return AstNodeSel::isPure() && !isLValue(); }
     bool sameNode(const AstNode* samep) const override {
-        return m_fromBack == VN_DBG_AS(samep, QueueSel)->m_fromBack;
+        return m_fromBack == VN_DBG_AS(samep, QueueSel)->m_fromBack
+               && m_refPin == VN_DBG_AS(samep, QueueSel)->m_refPin;
     }
     int instrCount() const override { return widthInstrs(); }
     bool fromBack() const { return m_fromBack; }
+    bool refPin() const { return m_refPin; }
+    void refPin(bool flag) { m_refPin = flag; }
 };
 class AstWildcardSel final : public AstNodeSel {
 public:

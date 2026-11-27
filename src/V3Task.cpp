@@ -640,6 +640,26 @@ class TaskVisitor final : public VNVisitor {
         return assp;
     }
 
+    // Pass the element of a queue or dynamic array that ref argument 'pinp' is, or selects a
+    // member or element within, as a pin, which keeps a removed element alive while the call
+    // runs (IEEE 1800-2023 13.5.2)
+    static void pinElement(AstNodeExpr* pinp) {
+        while (true) {
+            if (const AstArraySel* const selp = VN_CAST(pinp, ArraySel)) {
+                pinp = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(pinp, StructSel)) {
+                pinp = selp->fromp();
+            } else {
+                break;
+            }
+        }
+        if (AstDynArraySel* const selp = VN_CAST(pinp, DynArraySel)) {
+            if (selp->isLValue()) selp->refPin(true);
+        } else if (AstQueueSel* const selp = VN_CAST(pinp, QueueSel)) {
+            if (selp->isLValue()) selp->refPin(true);
+        }
+    }
+
     void connectPort(const AstNodeFTaskRef* refp, AstVar* portp, AstArg* argp, AstNode* beginp,
                      bool inlineTask) {
         AstNodeExpr* pinp = argp->exprp();
@@ -681,6 +701,7 @@ class TaskVisitor final : public VNVisitor {
                     if (AstVarRef* const varrefp = VN_CAST(pinp, VarRef)) {
                         varrefp->access(VAccess::READWRITE);
                     }
+                    pinElement(pinp);
                 } else {
                     pinp->v3error("Function/task ref argument is not of allowed type");
                 }

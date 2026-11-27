@@ -831,19 +831,23 @@ public:
     void visit(AstDynArraySel* nodep) override {
         iterateAndNextConstNull(nodep->fromp());
         // Out of range writes go to a temporary (IEEE 1800-2023 7.4.6)
-        const std::string atFunc = nodep->isLValue() ? ".atWrite(" : ".at(";
-        putns(nodep, atFunc);
+        std::string atFunc = nodep->isLValue() ? ".atWrite" : ".at";
+        // A pin, a temporary of the call's full-expression, keeps the element passed by
+        // reference while the call runs (IEEE 1800-2023 13.5.2)
+        if (nodep->refPin()) atFunc = ".atWriteRef";
+        putns(nodep, atFunc + "(");
         iterateAndNextConstNull(nodep->bitp());
-        puts(")");
+        puts(nodep->refPin() ? ").elem()" : ")");
     }
     void visit(AstQueueSel* nodep) override {
         iterateAndNextConstNull(nodep->fromp());
         // Writing one past the last element appends (IEEE 1800-2023 7.10.1)
         std::string atFunc = nodep->isLValue() ? ".atWriteAppend" : ".at";
         if (nodep->fromBack()) atFunc += "Back";
+        if (nodep->refPin()) atFunc += "Ref";
         putns(nodep, atFunc + "(");
         iterateAndNextConstNull(nodep->bitp());
-        puts(")");
+        puts(nodep->refPin() ? ").elem()" : ")");
     }
     void visit(AstWildcardSel* nodep) override {
         iterateAndNextConstNull(nodep->fromp());

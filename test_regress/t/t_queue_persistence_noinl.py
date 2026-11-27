@@ -15,7 +15,12 @@ test.top_filename = "t/t_queue_persistence.v"
 if not test.have_coroutines:
     test.skip("No coroutine support")
 
-test.compile(verilator_flags2=["--binary --fno-inline +define+TEST_NOINLINE"])
+test.compile(verilator_flags2=["--binary --fno-inline +define+TEST_NOINLINE", "--dump-tree"])
+
+# Elements passed by reference are pins
+task_tree = test.glob_one(test.obj_dir + "/V*_task.tree")
+test.file_grep(task_tree, r"DYNARRAYSEL.*\[REFPIN\]")
+test.file_grep(task_tree, r"QUEUESEL.*\[REFPIN\]")
 
 test.execute()
 
