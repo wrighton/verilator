@@ -4358,6 +4358,16 @@ private:
         }
     }
 
+    // Text exprp of the size variable of an array of the member object memberRefp selects from:
+    // through a null handle, a read of the array's size (see newNullCheckedReadp)
+    AstNodeExpr* newNullCheckedSizep(AstMemberRef* memberRefp, AstNodeExpr* exprp) {
+        const AstVar* arrVarp = nullptr;  // Named by the read, if found
+        for (const auto& arrSize : m_memberSizeVars)
+            if (arrSize.second == memberRefp->varp()) arrVarp = arrSize.first;
+        return newNullCheckedReadp(
+            memberRefp, newHandlesActivep(m_memberMap, memberRefp->fromp(), false, true), exprp,
+            arrVarp);
+    }
     AstNodeExpr* createVarExprp(AstNodeVarRef* nodep, const RandomizeMode randMode,
                                 const std::string& smtName, const bool isGlobalConstrained,
                                 AstMemberRef* memberRefp, AstVar* const varp) {
@@ -4377,7 +4387,8 @@ private:
         if ((!randMode.usesMode || classHandleArray) && !handlesActivep) {
             // Global constraints keep nodep alive for write_var processing
             if (!isGlobalConstrained) VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return exprp;
+            return memberRefp && varp->isRandSizeVar() ? newNullCheckedSizep(memberRefp, exprp)
+                                                       : exprp;
         }
 
         // Get const format, using memberRefp if available for correct width/value
@@ -7766,7 +7777,7 @@ private:
     // expression, as an evaluation error that fails randomize() if a constraint has the read,
     // not kept out by a guard (IEEE 1800-2023 18.5.12)
     AstNodeExpr* newNullCheckedReadp(AstMemberRef* nodep, AstNodeExpr* nonNullp,
-                                     AstNodeExpr* textp) {
+                                     AstNodeExpr* textp, const AstVar* sizeOfp = nullptr) {
         if (!nonNullp) return textp;
         // An object handle is read by the read of its member, which checks it. Guards sift
         // their reads themselves, and an array of a null object reads as empty.
@@ -7778,7 +7789,9 @@ private:
         FileLine* const fl = nodep->fileline();
         std::string fmt;
         AstNodeExpr* argsp = nullptr;
-        addPathName(nodep, fmt, argsp);
+        // Of the size variable of array sizeOfp, named as the array's size
+        addPathName(sizeOfp ? nodep->fromp() : nodep, fmt, argsp);
+        if (sizeOfp) fmt += "." + sizeOfp->prettyName() + ".size()";
         AstSFormatF* const namep = new AstSFormatF{fl, fmt, false, argsp};
         namep->dtypeSetString();
         AstCMethodHard* const readp = new AstCMethodHard{
@@ -10613,9 +10626,11 @@ class SolverSmtLowering final : public V3SolverLowering {
         return paths;
     }
     // Build a size >= 0 constraint expression (signed int size must be non-negative).
-    // Returns a new AstConstraintExpr with user1 bits set for solver visibility.
-    AstConstraintExpr* createSizeGteZeroConstraint(FileLine* const fl, AstVar* const sizeVarp,
-                                                   AstNodeExpr* derefFromp = nullptr) {
+    // Returns a new AstConstraintExpr with user1 bits set for solver visibility, under a guard
+    // that the handles to the array's object are not null if it is of a member object, as
+    // reading its size through a null handle is an error (see newNullCheckedSizep)
+    AstNodeConstraintItem* createSizeGteZeroConstraint(FileLine* const fl, AstVar* const sizeVarp,
+                                                       AstNodeExpr* derefFromp = nullptr) {
         AstNodeExpr* sizeNodeExprp = nullptr;
         if (derefFromp) {
             sizeNodeExprp = buildMemberRefExprp(derefFromp, sizeVarp);
@@ -10625,7 +10640,13 @@ class SolverSmtLowering final : public V3SolverLowering {
         sizeNodeExprp->user1(true);
         AstGteS* const sizeGtep = new AstGteS{fl, sizeNodeExprp, new AstConst{fl, 0}};
         sizeGtep->user1(true);
-        return new AstConstraintExpr{fl, sizeGtep};
+        AstConstraintExpr* const exprp = new AstConstraintExpr{fl, sizeGtep};
+        const AstMemberRef* const memberRefp = VN_CAST(derefFromp, MemberRef);
+        AstNodeExpr* const nonNullp
+            = memberRefp ? newHandlesActivep(m_memberMap, memberRefp->fromp(), false, true)
+                         : nullptr;
+        if (!nonNullp) return exprp;
+        return new AstConstraintIf{fl, nonNullp, exprp, nullptr};
     }
     // Returns MemberRef chain, with deepest VarRef being reference to deepestVarp
     AstNodeExpr* buildMemberRefExprp(AstNodeExpr* exprp, AstVar* deepestVarp) {
@@ -13241,15 +13262,22 @@ public:
                     AstNodeExpr* const sizeExprp = buildMemberRefExprp(rootExprp, sizeVarp);
                     // Append size >= 0 constraint so ConstraintExprVisitor processes it
                     capturedTreep->addNext(createSizeGteZeroConstraint(fl, sizeVarp, rootExprp));
+                    // An array of a member object is checked and resized only through non-null
+                    // handles, as a guard may keep its size out of the solve
+                    const AstMemberRef* const mselp = VN_CAST(resizeVarRefp, MemberRef);
                     checkStmtsp = AstNode::addNext(
                         checkStmtsp,
-                        new AstStmtExpr{
+                        newIfNonNullp(
                             fl,
-                            newArraySizeOkp(fl, arrVarp, sizeExprp->cloneTree(false), localGenp)});
+                            new AstStmtExpr{fl, newArraySizeOkp(fl, arrVarp,
+                                                                sizeExprp->cloneTree(false),
+                                                                localGenp)},
+                            mselp));
                     AstCMethodHard* const resizep
                         = new AstCMethodHard{fl, resizeVarRefp, VCMethod::DYN_RESIZE, sizeExprp};
                     resizep->dtypep(methodp->findVoidDType());
-                    resizeStmtsp = AstNode::addNext(resizeStmtsp, new AstStmtExpr{fl, resizep});
+                    resizeStmtsp = AstNode::addNext(
+                        resizeStmtsp, newIfNonNullp(fl, new AstStmtExpr{fl, resizep}, mselp));
                 }
                 AstNodeExpr* const sizeNodeExprp = buildMemberRefExprp(rootExprp, sizeVarp);
                 if (viaMember) {
