@@ -124,17 +124,11 @@ public:
     };
 
 private:
-    struct KillCheck final {  // Dropping what is pending, if an $assertkill came after it
-        AstVar* armedp;  // Something is pending, and countp holds the count at its evaluation
-        AstVar* countp;  // The $assertkill count at the first evaluation making it pending
-        AstIf* ifp;  // Dropping it, if the count changed
-    };
     struct Runner final {  // Process running the pending actions
         AstAlwaysReactive* runnerp;  // The process
         AstIf* bodyp;  // Its statements, run when something is pending
-        const AstSenTree* clockp;  // Clock of the assertions it runs the actions of
-        // By assertion type and directive
-        std::map<std::pair<int, int>, KillCheck> killChecks;
+        AstSenTree* clockp;  // Clock of the assertions it runs the actions of, owned
+        AstNode* lastCheckp;  // Last $assertkill check, before the actions, or nullptr
     };
     // Runners by the module or generate block holding them
     std::unordered_map<const AstNode*, std::vector<Runner>> m_runners;
@@ -145,7 +139,6 @@ private:
     static bool mayKill() VL_MT_DISABLED;
 
     Runner& runnerFor(const Site& site, V3UniqueNames& names) VL_MT_DISABLED;
-    KillCheck& killCheck(const Site& site, Runner& runner, V3UniqueNames& names) VL_MT_DISABLED;
     static AstNodeExpr* newKillCountp(const Site& site) VL_MT_DISABLED;
 
 public:
