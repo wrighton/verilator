@@ -222,6 +222,14 @@ public:
         }
         m_portInheritDTypep = dtypep;
     }
+    // Report a checker output port of type typeName, which it shall not have (IEEE 1800-2023
+    // 17.2); true if reported
+    bool checkerOutputTypeCheck(FileLine* fl, const char* typeName) const {
+        if (m_varIO != VDirection::OUTPUT) return false;
+        fl->v3error("Checker output port cannot be of type " << typeName
+                                                             << " (IEEE 1800-2023 17.2).");
+        return true;
+    }
     AstNodeDType* portDType(AstNodeDType* dtypep) {
         if (dtypep) {
             setPortInheritDType(dtypep->cloneTree(false));
