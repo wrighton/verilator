@@ -1,4 +1,4 @@
-%Warning-CONSTRAINTIGN: t/t_randomize_method_types_unsup.v:23:15: Unsupported: randomizing this expression, treating as state
+%Warning-CONSTRAINTIGN: t/t_randomize_method_types_unsup.v:23:15: Unsupported: size of an element of an array in a constraint, treating as state, so randomize() fails unless the element's size satisfies the constraint.
    23 |     dynarr[1].size < 10;
       |               ^~~~
                         ... For warning description see https://verilator.org/warn/CONSTRAINTIGN?v=latest
