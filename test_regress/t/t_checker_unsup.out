@@ -14,4 +14,10 @@
 %Error-UNSUPPORTED: t/t_checker_unsup.v:68:11: Unsupported: recursive 'checker'
    68 |   checker ChkChk;   
       |           ^~~~~~
+%Error-UNSUPPORTED: t/t_checker_unsup.v:87:26: Unsupported: sequence argument data type
+   87 | checker ChkSeqProp(input sequence s, property p);
+      |                          ^~~~~~~~
+%Error-UNSUPPORTED: t/t_checker_unsup.v:87:38: Unsupported: property argument data type
+   87 | checker ChkSeqProp(input sequence s, property p);
+      |                                      ^~~~~~~~
 %Error: Exiting due to

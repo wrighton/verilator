@@ -82,3 +82,7 @@ checker Chk(input bit defaulted = 1'b0);
 
   a1: assert property (@(posedge clk) counter == in);
 endchecker
+
+// An input may be a sequence or a property, which is unsupported; an output may not
+checker ChkSeqProp(input sequence s, property p);
+endchecker
