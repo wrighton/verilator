@@ -19,52 +19,176 @@
 #include "V3Hasher.h"
 
 #include <functional>
+#include <unordered_map>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 //######################################################################
 // Visitor that computes node hashes
 
+// A function (AstCFunc or AstNodeFTask) is hashed where first reached, and its hash is part of the
+// hash of what reaches it, e.g. a call. The functions reached from a node are hashed before the
+// node, depth first with an explicit stack, as call chains can be deeper than recursion can go on
+// the C++ stack. A first walk of each node records the functions it reaches that are not hashed
+// yet, in the order hashing reaches them, and the node is walked again once they are hashed. The
+// first walk hashes the node, except for what reaches those functions, so a node reaching only
+// hashed functions is walked once.
+
 class HasherVisitor final : public VNVisitorConst {
     // NODE STATE
     //  AstNode::user4() -> V3Hash.  Hash value of this node (hash of 0 is illegal)
     // VNUser4InUse     in V3Hasher.h
 
+    // TYPES
+    // Functions reached in order, and whether first reached there
+    using Reaches = std::vector<std::pair<AstNode*, bool>>;
+
     // STATE
     V3Hash m_hash;  // Hash value accumulator
     const bool m_cacheInUser4;  // Use user4 to cache each V3Hash?
-    std::set<AstNode*> m_visited;  // Keeps track of some visited nodes to prevent
-                                   // infinite recursion
+    std::set<AstNode*> m_visited;  // Functions reached, if not caching
+    bool m_finding = false;  // In the first walk of a node, see above
+    bool m_incomplete = false;  // Node being hashed reaches a function not hashed yet
+    Reaches* m_reachesp = nullptr;  // Functions reached by the node being walked
+    size_t m_reachIdx = 0;  // Index in 'm_reachesp' of next function reached, if not caching
+    std::unordered_map<const AstNode*, V3Hash> m_funcHashes;  // Function hashes, if not caching
 
     // METHODS
 
-    void guardRecursion(AstNode* const nodep, std::function<void()>&& f) {
-        // Guard against infinite recursion if there's no caching
-        // Otherwise caching does the same but faster
-        if (!m_cacheInUser4) {
-            if (m_visited.find(nodep) != m_visited.end()) {
-                m_hash += V3Hash{nodep->name()};
-                return;
+    static bool isFunc(const AstNode* nodep) {
+        return VN_IS(nodep, CFunc) || VN_IS(nodep, NodeFTask);
+    }
+
+    // Hash 'nodep', the start node, after the functions it reaches, see above
+    void hashDepthFirst(AstNode* nodep) {
+        struct Frame final {
+            AstNode* nodep;  // Start node or function to hash
+            Reaches reaches;  // Functions it reaches, see 'firstWalk'
+            V3Hash hash;  // Its hash from the first walk, if 'reaches' is empty
+            size_t next;  // Index of next function in 'reaches' to consider
+        };
+        std::vector<Frame> stack;
+        if (!m_cacheInUser4 && isFunc(nodep)) m_visited.emplace(nodep);
+        stack.emplace_back();
+        stack.back().nodep = nodep;
+        stack.back().hash = firstWalk(nodep, stack.back().reaches);
+        stack.back().next = 0;
+        while (!stack.empty()) {
+            Frame& frame = stack.back();
+            if (frame.next < frame.reaches.size()) {
+                std::pair<AstNode*, bool>& reach = frame.reaches[frame.next++];
+                AstNode* const funcp = reach.first;
+                // Skip a function hashed already, or being hashed. The first walk marks it as
+                // being hashed if caching.
+                if (m_cacheInUser4 ? funcp->user4() != 0 : !m_visited.emplace(funcp).second) {
+                    continue;
+                }
+                reach.second = true;
+                stack.emplace_back();
+                stack.back().nodep = funcp;
+                stack.back().hash = firstWalk(funcp, stack.back().reaches);
+                stack.back().next = 0;
+                continue;
             }
-            m_visited.insert(nodep);
+            Frame done = std::move(frame);
+            stack.pop_back();
+            V3Hash hash = done.hash;
+            if (!done.reaches.empty()) {
+                VL_RESTORER(m_reachesp);
+                m_reachesp = &done.reaches;
+                m_reachIdx = 0;
+                if (isFunc(done.nodep)) {
+                    // Not marked as being hashed while hashing itself
+                    if (m_cacheInUser4) done.nodep->user4(0);
+                    hash = hashFunc(done.nodep);
+                } else {
+                    VL_RESTORER(m_hash);
+                    iterateConst(done.nodep);
+                    hash = m_hash;
+                }
+                UASSERT_OBJ(m_cacheInUser4 ? !m_incomplete : m_reachIdx == done.reaches.size(),
+                            done.nodep, "Should reach only the functions found by the first walk");
+            }
+            if (!m_cacheInUser4 && isFunc(done.nodep)) m_funcHashes.emplace(done.nodep, hash);
+            if (stack.empty()) {
+                if (isFunc(done.nodep)) {
+                    m_hash += hash;
+                } else {
+                    m_hash = hash;
+                }
+            }
         }
-        f();
+    }
+
+    // First walk of 'nodep', returning its hash if it reaches only hashed functions, and adding
+    // the functions it reaches not hashed yet to 'reaches', see above
+    V3Hash firstWalk(AstNode* nodep, Reaches& reaches) {
+        VL_RESTORER(m_hash);
+        VL_RESTORER(m_finding);
+        VL_RESTORER(m_reachesp);
+        VL_RESTORER(m_incomplete);
+        m_finding = true;
+        m_reachesp = &reaches;
+        if (isFunc(nodep)) return hashFunc(nodep);
+        iterateConst(nodep);
+        return m_hash;
+    }
+
+    // Hash function 'nodep' itself
+    V3Hash hashFunc(AstNode* nodep) {
+        // When caching, a recursive call reaches a function being hashed with hash 1, set below.
+        // A constant in the hash just ends the recursion; the function still has its own hash.
+        if (AstCFunc* const funcp = VN_CAST(nodep, CFunc)) {
+            return hashNodeAndIterate(funcp, HASH_DTYPE, HASH_CHILDREN, [this, funcp]() {  //
+                if (m_cacheInUser4) funcp->user4(V3Hash{1}.value());
+                m_hash += funcp->isLoose();
+            });
+        }
+        AstNodeFTask* const ftaskp = VN_AS(nodep, NodeFTask);
+        return hashNodeAndIterate(ftaskp, HASH_DTYPE, HASH_CHILDREN, [this, ftaskp]() {  //
+            m_hash += ftaskp->name();
+            if (m_cacheInUser4) ftaskp->user4(V3Hash{1}.value());
+        });
+    }
+
+    // Reach function 'nodep' from the node being walked
+    void reachFunc(AstNode* nodep) {
+        if (m_cacheInUser4) {
+            if (!nodep->user4()) {
+                m_reachesp->emplace_back(nodep, false);
+                m_incomplete = true;
+            }
+            m_hash += V3Hash{static_cast<uint32_t>(nodep->user4())};
+            return;
+        }
+        if (m_finding) {
+            m_reachesp->emplace_back(nodep, false);
+            return;
+        }
+        // Without caching, a function hashes by name where reached again
+        const std::pair<AstNode*, bool>& reach = m_reachesp->at(m_reachIdx++);
+        UASSERT_OBJ(reach.first == nodep, nodep, "Should reach functions in the order found");
+        m_hash += reach.second ? m_funcHashes.at(nodep) : V3Hash{nodep->name()};
     }
 
     V3Hash hashNodeAndIterate(AstNode* nodep, bool hashDType, bool hashChildren,
                               std::function<void()>&& f) {
-        // See comments in visit(AstCFunc) about this breaking recursion
+        // See comments in hashFunc about this breaking recursion
         if (m_cacheInUser4 && nodep->user4()) {
             return V3Hash{static_cast<uint32_t>(nodep->user4())};
         } else {
             VL_RESTORER(m_hash);
+            const bool outerIncomplete = m_incomplete;
+            m_incomplete = false;
             // Reset accumulator
             m_hash = V3Hash{nodep->type().hash()};  // Node type
             f();  // Node-specific hash
             if (hashDType && nodep != nodep->dtypep())
                 iterateConstNull(nodep->dtypep());  // Node dtype
             if (hashChildren) iterateChildrenConst(nodep);  // Children
-            if (m_cacheInUser4) nodep->user4(m_hash.value());
+            // Not cached when reaching a function not hashed yet, to hash again later
+            if (m_cacheInUser4 && !m_incomplete) nodep->user4(m_hash.value());
+            m_incomplete |= outerIncomplete;
             return m_hash;
         }
     }
@@ -430,19 +554,7 @@ class HasherVisitor final : public VNVisitorConst {
             m_hash += nodep->name();
         });
     }
-    void visit(AstCFunc* nodep) override {
-        guardRecursion(nodep, [this, nodep]() {  //
-            m_hash += hashNodeAndIterate(nodep, HASH_DTYPE, HASH_CHILDREN, [this, nodep]() {  //
-                // We might be in a recursive function, if so on *second* call
-                // here we need to break what would be an infinite loop.
-                if (m_cacheInUser4) nodep->user4(V3Hash{1}.value());  // Set this "first" call
-                // So that a second call will then exit hashNodeAndIterate
-                // Having a constant in the hash just means the recursion will
-                // end, it shouldn't change the CFunc having a unique hash itself.
-                m_hash += nodep->isLoose();
-            });
-        });
-    }
+    void visit(AstCFunc* nodep) override { reachFunc(nodep); }
     void visit(AstVar* nodep) override {
         m_hash += hashNodeAndIterate(nodep, HASH_DTYPE, HASH_CHILDREN, [this, nodep]() {
             m_hash += nodep->name();
@@ -491,15 +603,7 @@ class HasherVisitor final : public VNVisitorConst {
         m_hash += hashNodeAndIterate(nodep, HASH_DTYPE, HASH_CHILDREN,
                                      [this, nodep]() { m_hash += nodep->name(); });
     }
-    void visit(AstNodeFTask* nodep) override {
-        guardRecursion(nodep, [this, nodep]() {  //
-            m_hash += hashNodeAndIterate(nodep, HASH_DTYPE, HASH_CHILDREN, [this, nodep]() {  //
-                m_hash += nodep->name();
-                // See comments in AstCFunc
-                if (m_cacheInUser4) nodep->user4(V3Hash{1}.value());
-            });
-        });
-    }
+    void visit(AstNodeFTask* nodep) override { reachFunc(nodep); }
     void visit(AstModport* nodep) override {
         m_hash += hashNodeAndIterate(nodep, HASH_DTYPE, HASH_CHILDREN, [this, nodep]() {  //
             m_hash += nodep->name();
@@ -634,12 +738,12 @@ public:
     // CONSTRUCTORS
     explicit HasherVisitor(AstNode* nodep)
         : m_cacheInUser4{true} {
-        iterateConst(nodep);
+        hashDepthFirst(nodep);
     }
     class Uncached {};
     HasherVisitor(const AstNode* nodep, Uncached)
         : m_cacheInUser4{false} {
-        iterateConst(const_cast<AstNode*>(nodep));
+        hashDepthFirst(const_cast<AstNode*>(nodep));
     }
     V3Hash finalHash() const { return m_hash; }
     ~HasherVisitor() override = default;
