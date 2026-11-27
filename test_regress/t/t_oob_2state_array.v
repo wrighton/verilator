@@ -177,4 +177,25 @@ module t;
     qrow = q2[idx + 1];
     `checkh(qrow[1].q.size(), idx == 0 ? 2 : 1);
   end
+
+  // A constant index wider than 32 bits into a range with a negative low bound
+  // verilator lint_off WIDTH
+  bit [3:-4] nv = 8'b1010_0110;
+  int na[-2:2] = '{10, 11, 12, 13, 14};
+  bit [7:-8] nw = 16'ha5c3;
+  initial begin
+    `checkh(nv[64'sd2], 1'b0);
+    `checkh(nv[64'sd1], 1'b1);
+    `checkh(na[64'sd0], 12);
+    `checkh(nw[64'sd0+:4], 4'h5);
+    `checkh(nw[64'sd3-:4], 4'h5);
+    `checkh(nw[64'sd7-:4], 4'ha);
+    na[64'sd1] = 21;
+    `checkh(na[1], 21);
+    nw[64'sd3-:4] = 4'h9;
+    `checkh(nw, 16'ha9c3);
+    nv[64'sd1] = 1'b0;
+    `checkh(nv, 8'b1000_0110);
+  end
+  // verilator lint_on WIDTH
 endmodule
