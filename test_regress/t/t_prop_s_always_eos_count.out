@@ -40,13 +40,15 @@ EOS_DISABLE_MID
 EOS_DISABLE_MID
 EOS_DISABLE_MID_RING
 EOS_DISABLE_MID_RING
-[115] %Error: t_prop_s_always_eos_count.v:112: Assertion failed in top.t: EOS_ERROR
--Info: t/t_prop_s_always_eos_count.v:112: Verilog $stop, ignored due to +verilator+error+limit
-[115] %Error: t_prop_s_always_eos_count.v:112: Assertion failed in top.t: EOS_ERROR
-[115] %Error: t_prop_s_always_eos_count.v:112: Assertion failed in top.t: EOS_ERROR
-[115] %Error: t_prop_s_always_eos_count.v:115: Assertion failed in top.t
-[115] %Error: t_prop_s_always_eos_count.v:115: Assertion failed in top.t
-[115] %Error: t_prop_s_always_eos_count.v:115: Assertion failed in top.t
+EOS_KILL
+EOS_KILL_RING
+[115] %Error: t_prop_s_always_eos_count.v:113: Assertion failed in top.t: EOS_ERROR
+-Info: t/t_prop_s_always_eos_count.v:113: Verilog $stop, ignored due to +verilator+error+limit
+[115] %Error: t_prop_s_always_eos_count.v:113: Assertion failed in top.t: EOS_ERROR
+[115] %Error: t_prop_s_always_eos_count.v:113: Assertion failed in top.t: EOS_ERROR
+[115] %Error: t_prop_s_always_eos_count.v:116: Assertion failed in top.t
+[115] %Error: t_prop_s_always_eos_count.v:116: Assertion failed in top.t
+[115] %Error: t_prop_s_always_eos_count.v:116: Assertion failed in top.t
 EOS_NBA=1
 EOS_NBA=1
 EOS_NBA=1

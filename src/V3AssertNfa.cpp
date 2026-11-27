@@ -3696,6 +3696,9 @@ class SvaNfaLowering final {
     AstNodeDType* const m_u32DTypep;  // Shared unsigned counter dtype
     V3UniqueNames m_names{"__Vnfa"};  // Unique names for generated variables
     V3UniqueNames& m_actionNames;  // Automatics of cloned actions
+    const bool m_mayKill;  // An $assertkill may end the attempts of the assertions
+    // The count of the $assertkill calls, if the design has one, see LowerCtx
+    AstVar* const m_killEpochp;
     size_t m_statDelayRingEdgeVisits = 0;  // Delay-ring incoming edges visited
     size_t m_statLinkEdgeVisits = 0;  // Incoming edges visited while resolving Links
     size_t m_statVertices = 0;  // NFA state vertices lowered
@@ -3721,6 +3724,18 @@ class SvaNfaLowering final {
         bool trackAntecedentEnd;  // Compute SignalSet::antecedentEndCountp
         bool countAttemptPasses;  // Compute the attempt pass counts of SignalSet, if possible
         AstNodeExpr* vacuousTriggerp;  // With countAttemptPasses, a boolean antecedent, if any
+        // With killVarp, the $unit count of the $assertkill calls of the design, see
+        // AssertNfaVisitor::visit(AstAssertCtl*)
+        AstVar* killEpochp = nullptr;
+        AstNodeModule* modp = nullptr;  // Module of the reads of the registers, see regRead
+        std::unordered_map<const AstVar*, AstVar*> regReads{};  // Register -> its read
+        // The count of the $assertkill calls the reads saw, which the clock event acknowledges
+        AstVar* killCountp = nullptr;
+        // An $assertkill of another model may end the attempts, which then read its count
+        // inline, as its calls do not run the reads again
+        bool inlineKill = false;
+        AstVar* killedp = nullptr;  // Whether an $assertkill came, computed with the reads
+        AstNodeStmt* regReadsp = nullptr;  // Statements computing the reads
     };
 
     // Build a match-now expression: stateSig[i] && $sampled(condp)
@@ -3786,14 +3801,95 @@ class SvaNfaLowering final {
         ifp->branchPred(VBranchPred::BP_UNLIKELY);
         return ifp;
     }
-    static AstNodeExpr* killActive(LowerCtx& c) {
-        return new AstNeq{c.flp, new AstVarRef{c.flp, c.killVarp, VAccess::READ},
-                          assertKillGet(c.controlVarp, c.flp, c.assertType, c.directiveType)};
+    // The last count of $assertkill calls an assertion saw, if the design has one
+    AstVar* newKillVarp(FileLine* flp, const std::string& baseName) {
+        if (!m_mayKill) return nullptr;
+        AstVar* const varp
+            = new AstVar{flp, VVarType::MODULETEMP, baseName + "__kill", m_u32DTypep};
+        varp->lifetime(VLifetime::STATIC_EXPLICIT);
+        m_modp->addStmtsp(varp);
+        return varp;
     }
-    static AstNodeExpr* notKillActive(LowerCtx& c) { return new AstLogNot{c.flp, killActive(c)}; }
-    static AstNodeExpr* gateNotKill(LowerCtx& c, AstNodeExpr* exprp) {
-        if (!exprp) return nullptr;
-        return new AstLogAnd{c.flp, exprp, notKillActive(c)};
+    // The count of the $assertkill calls. Reading their count in the design makes the logic
+    // computing it run again on a call.
+    static AstNodeExpr* newKillCountp(LowerCtx& c) {
+        AstNodeExpr* const getp
+            = assertKillGet(c.controlVarp, c.flp, c.assertType, c.directiveType);
+        if (!c.killEpochp) return getp;
+        AstCExpr* const countp = new AstCExpr{c.flp, AstCExpr::Pure{}, "((void)", 32};
+        AstVarRef* const epochRefp = new AstVarRef{c.flp, c.killEpochp, VAccess::READ};
+        epochRefp->classOrPackagep(v3Global.rootp()->dollarUnitPkgp());
+        countp->add(epochRefp);
+        countp->add(", ");
+        countp->add(getp);
+        countp->add(")");
+        return countp;
+    }
+    // Whether an $assertkill came since the last clock event, of a count the clock event
+    // acknowledges
+    static AstNodeExpr* newKilledp(LowerCtx& c, AstVar* countp) {
+        return new AstNeq{c.flp, new AstVarRef{c.flp, c.killVarp, VAccess::READ},
+                          new AstVarRef{c.flp, countp, VAccess::READ}};
+    }
+    // A register of the attempts in flight, empty on the tick after an $assertkill, which so
+    // ends them, but not an attempt starting on that tick (IEEE 1800-2023 20.11)
+    static AstNodeExpr* newKilledReadp(LowerCtx& c, AstVar* killedp, AstVar* varp) {
+        AstCond* const condp = new AstCond{c.flp, new AstVarRef{c.flp, killedp, VAccess::READ},
+                                           newTypedConstp(c.flp, varp->dtypep(), 0),
+                                           new AstVarRef{c.flp, varp, VAccess::READ}};
+        condp->dtypeFrom(varp);
+        return condp;
+    }
+    // Whether an $assertkill came since the last clock event
+    static AstNodeExpr* newKilledNowp(LowerCtx& c) {
+        if (c.inlineKill) {
+            return new AstNeq{c.flp, new AstVarRef{c.flp, c.killVarp, VAccess::READ},
+                              newKillCountp(c)};
+        }
+        return new AstVarRef{c.flp, killedVarp(c), VAccess::READ};
+    }
+    // Whether an $assertkill came since the last clock event, computed once per evaluation
+    static AstVar* killedVarp(LowerCtx& c) {
+        if (c.killedp) return c.killedp;
+        c.killCountp = new AstVar{c.flp, VVarType::MODULETEMP, c.killVarp->name() + "count",
+                                  c.killVarp->dtypep()};
+        c.killCountp->lifetime(VLifetime::STATIC_EXPLICIT);
+        c.modp->addStmtsp(c.killCountp);
+        c.killedp = new AstVar{c.flp, VVarType::MODULETEMP, c.killVarp->name() + "ed",
+                               c.modp->findBitDType()};
+        c.killedp->lifetime(VLifetime::STATIC_EXPLICIT);
+        c.modp->addStmtsp(c.killedp);
+        c.regReadsp = AstNode::addNextNull<AstNodeStmt>(
+            c.regReadsp, new AstAssign{c.flp, new AstVarRef{c.flp, c.killCountp, VAccess::WRITE},
+                                       newKillCountp(c)});
+        c.regReadsp = AstNode::addNextNull<AstNodeStmt>(
+            c.regReadsp, new AstAssign{c.flp, new AstVarRef{c.flp, c.killedp, VAccess::WRITE},
+                                       newKilledp(c, c.killCountp)});
+        return c.killedp;
+    }
+    // The read of a register, computed once per evaluation when the design may kill
+    static AstNodeExpr* regRead(LowerCtx& c, AstVar* varp) {
+        if (!c.killVarp) return new AstVarRef{c.flp, varp, VAccess::READ};
+        if (c.inlineKill) {
+            AstCond* const condp
+                = new AstCond{c.flp, newKilledNowp(c), newTypedConstp(c.flp, varp->dtypep(), 0),
+                              new AstVarRef{c.flp, varp, VAccess::READ}};
+            condp->dtypeFrom(varp);
+            return condp;
+        }
+        killedVarp(c);
+        const auto pair = c.regReads.emplace(varp, nullptr);
+        if (pair.second) {
+            AstVar* const readp = new AstVar{c.flp, VVarType::MODULETEMP, varp->name() + "__Vread",
+                                             varp->dtypep()};
+            readp->lifetime(VLifetime::STATIC_EXPLICIT);
+            c.modp->addStmtsp(readp);
+            c.regReadsp = AstNode::addNextNull<AstNodeStmt>(
+                c.regReadsp, new AstAssign{c.flp, new AstVarRef{c.flp, readp, VAccess::WRITE},
+                                           newKilledReadp(c, c.killedp, varp)});
+            pair.first->second = readp;
+        }
+        return new AstVarRef{c.flp, pair.first->second, VAccess::READ};
     }
     static AstNodeExpr* nextRingIndex(FileLine* flp, AstNodeExpr* idxExprp, uint32_t size) {
         const auto u32Const = [flp](uint32_t value) {
@@ -3820,35 +3916,35 @@ class SvaNfaLowering final {
         if (vtxp->datap()->delayRingCounts) return new AstArraySel{flp, refp, idxExprp};
         return new AstSel{flp, refp, idxExprp, 1};
     }
-    static AstNodeExpr* delayRingHeadCount(FileLine* flp, SvaStateVertex* vtxp) {
-        AstNodeExpr* const headp
-            = new AstVarRef{flp, vtxp->datap()->delayRingHeadVarp, VAccess::READ};
+    static AstNodeExpr* delayRingHeadCount(LowerCtx& c, SvaStateVertex* vtxp) {
+        FileLine* const flp = c.flp;
+        AstNodeExpr* const headp = regRead(c, vtxp->datap()->delayRingHeadVarp);
         if (vtxp->datap()->delayRingCounts) return headp;
         return new AstExtend{flp, headp, vtxp->datap()->delayRingLiveCountVarp->dtypep()->width()};
     }
-    static AstNodeExpr* delayRingAtLastIndex(FileLine* const flp, AstVar* const idxp,
+    static AstNodeExpr* delayRingAtLastIndex(LowerCtx& c, AstVar* const idxp,
                                              const uint32_t size) {
-        return new AstEq{flp, new AstVarRef{flp, idxp, VAccess::READ},
+        FileLine* const flp = c.flp;
+        return new AstEq{flp, regRead(c, idxp),
                          new AstConst{flp, AstConst::WidthedValue{}, 32, size - 1}};
     }
-    static AstNodeExpr* delayRingOutputCount(FileLine* const flp, SvaStateVertex* const vtxp) {
+    static AstNodeExpr* delayRingOutputCount(LowerCtx& c, SvaStateVertex* const vtxp) {
+        FileLine* const flp = c.flp;
         AstVar* const idxp = vtxp->datap()->delayRingIdxVarp;
         const uint32_t size = vtxp->m_delayRingSize;
-        AstNodeExpr* outgoingValidp
-            = new AstVarRef{flp, vtxp->datap()->delayRingWrappedVarp, VAccess::READ};
+        AstNodeExpr* outgoingValidp = regRead(c, vtxp->datap()->delayRingWrappedVarp);
         if (!vtxp->m_isFixedDelayRing) {
             outgoingValidp
-                = new AstLogOr{flp, outgoingValidp, delayRingAtLastIndex(flp, idxp, size)};
+                = new AstLogOr{flp, outgoingValidp, delayRingAtLastIndex(c, idxp, size)};
         }
         AstVar* const liveCountVarp = vtxp->datap()->delayRingLiveCountVarp;
-        return new AstCond{flp, outgoingValidp, delayRingHeadCount(flp, vtxp),
+        return new AstCond{flp, outgoingValidp, delayRingHeadCount(c, vtxp),
                            newTypedConstp(flp, liveCountVarp->dtypep(), 0)};
     }
-    static AstNodeExpr* delayRingHasLiveThreadsp(FileLine* const flp,
-                                                 AstVar* const liveCountVarp) {
+    static AstNodeExpr* delayRingHasLiveThreadsp(LowerCtx& c, AstVar* const liveCountVarp) {
         // active = live_count != 0;
-        return new AstNeq{flp, new AstVarRef{flp, liveCountVarp, VAccess::READ},
-                          newTypedConstp(flp, liveCountVarp->dtypep(), 0)};
+        return new AstNeq{c.flp, regRead(c, liveCountVarp),
+                          newTypedConstp(c.flp, liveCountVarp->dtypep(), 0)};
     }
 
     // Phase 3 output signals
@@ -3941,8 +4037,6 @@ class SvaNfaLowering final {
 
             UASSERT_OBJ(nextStatep, vtxp,
                         "Registered vertex has no clocked incoming contribution");
-            nextStatep = counts ? addCountp(c.flp, nullptr, nextStatep, notKillActive(c))
-                                : gateNotKill(c, nextStatep);
 
             AstAssignDly* const assignp = new AstAssignDly{
                 c.flp, new AstVarRef{c.flp, vtxp->datap()->stateVarp, VAccess::WRITE}, nextStatep};
@@ -4016,15 +4110,12 @@ class SvaNfaLowering final {
             // Only this block accesses the storage. Other processes read the cached head, so
             // the ring can be updated in place without an NBA shadow copy.
             AstAssign* const writeIncomingp = new AstAssign{
-                c.flp,
-                delayRingSlot(c.flp, vtxp, new AstVarRef{c.flp, idxp, VAccess::READ},
-                              VAccess::WRITE),
-                incomingp};
+                c.flp, delayRingSlot(c.flp, vtxp, regRead(c, idxp), VAccess::WRITE), incomingp};
             AstNodeStmt* updateBodyp = writeIncomingp;
             // live_count <= live_count - outgoing_count + incoming_count;
-            AstNodeExpr* const outgoingp = delayRingOutputCount(c.flp, vtxp);
+            AstNodeExpr* const outgoingp = delayRingOutputCount(c, vtxp);
             AstNodeExpr* const afterOutgoingp
-                = new AstSub{c.flp, new AstVarRef{c.flp, liveCountVarp, VAccess::READ}, outgoingp};
+                = new AstSub{c.flp, regRead(c, liveCountVarp), outgoingp};
             AstNodeExpr* const oldAfterOutgoingp = afterOutgoingp->cloneTreePure(false);
             AstAdd* const nextLiveCountp = new AstAdd{c.flp, afterOutgoingp, incomingCountp};
             if (storesCounts && countMatches) {
@@ -4042,8 +4133,7 @@ class SvaNfaLowering final {
             }
             // Cache the outgoing slot for the next index after the write. Reading after
             // writing also handles one-slot rings and two-slot range rings without alias cases.
-            AstNodeExpr* nextHeadIdxp
-                = nextRingIndex(c.flp, new AstVarRef{c.flp, idxp, VAccess::READ}, size);
+            AstNodeExpr* nextHeadIdxp = nextRingIndex(c.flp, regRead(c, idxp), size);
             if (!vtxp->m_isFixedDelayRing) {
                 nextHeadIdxp = nextRingIndex(c.flp, nextHeadIdxp, size);
             }
@@ -4053,20 +4143,19 @@ class SvaNfaLowering final {
             updateBodyp->addNext(new AstAssignDly{
                 c.flp, new AstVarRef{c.flp, liveCountVarp, VAccess::WRITE}, nextLiveCountp});
             // wrapped <= wrapped || idx == size - 1;
-            updateBodyp->addNext(
-                new AstAssignDly{c.flp, new AstVarRef{c.flp, wrappedp, VAccess::WRITE},
-                                 new AstLogOr{c.flp, new AstVarRef{c.flp, wrappedp, VAccess::READ},
-                                              delayRingAtLastIndex(c.flp, idxp, size)}});
-            // idx <= next_idx;
             updateBodyp->addNext(new AstAssignDly{
-                c.flp, new AstVarRef{c.flp, idxp, VAccess::WRITE},
-                nextRingIndex(c.flp, new AstVarRef{c.flp, idxp, VAccess::READ}, size)});
+                c.flp, new AstVarRef{c.flp, wrappedp, VAccess::WRITE},
+                new AstLogOr{c.flp, regRead(c, wrappedp), delayRingAtLastIndex(c, idxp, size)}});
+            // idx <= next_idx;
+            updateBodyp->addNext(new AstAssignDly{c.flp,
+                                                  new AstVarRef{c.flp, idxp, VAccess::WRITE},
+                                                  nextRingIndex(c.flp, regRead(c, idxp), size)});
             if (vtxp->m_delayRingAdvanceCondp) {
                 updateBodyp
                     = new AstIf{c.flp, sampledClone(vtxp->m_delayRingAdvanceCondp), updateBodyp};
             }
 
-            AstNodeExpr* clearCondp = killActive(c);
+            AstNodeExpr* clearCondp = nullptr;
             if (vtxp->m_delayRingClearCondp) {
                 clearCondp = orExprs(c.flp, clearCondp, sampledClone(vtxp->m_delayRingClearCondp));
             }
@@ -4095,9 +4184,13 @@ class SvaNfaLowering final {
                                                       new AstVarRef{c.flp, headp, VAccess::WRITE},
                                                       newTypedConstp(c.flp, headp->dtypep(), 0)});
             }
-            updateBodyp = new AstIf{c.flp, clearCondp, clearCountp, updateBodyp};
-
-            addStateAlways(c, updateBodyp, asyncDisable ? clearCountp->cloneTree(true) : nullptr);
+            AstNodeStmt* const asyncClearp = asyncDisable ? clearCountp->cloneTree(true) : nullptr;
+            if (clearCondp) {
+                updateBodyp = new AstIf{c.flp, clearCondp, clearCountp, updateBodyp};
+            } else {
+                VL_DO_DANGLING(clearCountp->deleteTree(), clearCountp);
+            }
+            addStateAlways(c, updateBodyp, asyncClearp);
         }
     }
 
@@ -4146,20 +4239,36 @@ class SvaNfaLowering final {
             AstIf* const setRIfp = new AstIf{c.flp, gateRp, setRp, nullptr};
             setLIfp->addNext(setRIfp);
 
-            AstNodeExpr* clearCondp = new AstLogOr{c.flp, killActive(c),
-                                                   avp->datap()->stateSigp->cloneTreePure(false)};
+            AstNodeExpr* clearCondp = avp->datap()->stateSigp->cloneTreePure(false);
             if (c.disableExprp) {
                 clearCondp = orExprs(c.flp, clearCondp, c.disableExprp->cloneTreePure(false));
             }
-            AstIf* const topp = new AstIf{c.flp, clearCondp, clearLp, setLIfp};
+            // After an $assertkill, only the matches of the attempts starting now are kept
+            AstNodeStmt* const killLp = new AstAssignDly{
+                c.flp, new AstVarRef{c.flp, avp->datap()->doneLVarp, VAccess::WRITE},
+                gateLp->cloneTreePure(false)};
+            killLp->addNext(new AstAssignDly{
+                c.flp, new AstVarRef{c.flp, avp->datap()->doneRVarp, VAccess::WRITE},
+                gateRp->cloneTreePure(false)});
+            AstNodeStmt* elsep = setLIfp;
+            if (c.killVarp) {
+                elsep = new AstIf{c.flp, newKilledNowp(c), killLp, setLIfp};
+            } else {
+                VL_DO_DANGLING(killLp->deleteTree(), killLp);
+            }
+            AstIf* const topp = new AstIf{c.flp, clearCondp, clearLp, elsep};
             addStateAlways(c, topp, asyncDisable ? clearLp->cloneTree(true) : nullptr);
         }
     }
 
+    // Acknowledge the count of the $assertkill calls that the logic of this clock event saw. A
+    // call after it, as by a procedure on the same event, ends the attempts on the next one.
     void emitKillAckNba(LowerCtx& c) {
+        if (!c.killCountp && !(c.inlineKill && c.killVarp)) return;
+        AstNodeExpr* const countp
+            = c.inlineKill ? newKillCountp(c) : new AstVarRef{c.flp, c.killCountp, VAccess::READ};
         AstAssignDly* const ackp
-            = new AstAssignDly{c.flp, new AstVarRef{c.flp, c.killVarp, VAccess::WRITE},
-                               assertKillGet(c.controlVarp, c.flp, c.assertType, c.directiveType)};
+            = new AstAssignDly{c.flp, new AstVarRef{c.flp, c.killVarp, VAccess::WRITE}, countp};
         m_modp->addStmtsp(
             newAssertAlways(c.flp, VAlwaysKwd::ALWAYS, c.senTreep->cloneTree(false), ackp));
     }
@@ -4206,6 +4315,9 @@ class SvaNfaLowering final {
         // Matches and threads left of each antecedent split by length, by it and its start;
         // only looked up, so the order of the pointers does not matter
         std::map<SharedSeqKey, std::pair<AstVar*, AstVar*>> sharedSeqs{};
+        // The register of each value read of a register, see newAttemptRegp
+        std::unordered_map<const AstVar*, AstVar*> regps{};
+        AstVar* killedp = nullptr;  // Whether an $assertkill came, if the design has one
     };
     AstVar* newAttemptVar(AttemptCtx& a, AstNodeDType* dtypep) {
         AstVar* const varp = new AstVar{a.c.flp, VVarType::MODULETEMP,
@@ -4252,7 +4364,7 @@ class SvaNfaLowering final {
         return newAttemptTempp(
             a, new AstAnd{a.c.flp, newAttemptRefp(a, eventp), newAttemptRefp(a, maskp)});
     }
-    // A register holding the attempts in flight on this tick, to be set by setAttemptRegp
+    // The attempts in flight on this tick, of a register to be set by setAttemptRegp
     AstVar* newAttemptRegp(AttemptCtx& a, AstNodeDType* dtypep) {
         AstVar* const varp = newAttemptVar(a, dtypep);
         a.regBits += dtypep->width();
@@ -4261,7 +4373,14 @@ class SvaNfaLowering final {
                 a.clearsp, new AstAssignDly{a.c.flp, new AstVarRef{a.c.flp, varp, VAccess::WRITE},
                                             newAttemptConstp(a.c.flp, dtypep, -1)});
         }
-        return varp;
+        if (a.c.killVarp && !a.killedp) {
+            a.c.killCountp = newAttemptTempp(a, newKillCountp(a.c));
+            a.killedp = newAttemptTempp(a, newKilledp(a.c, a.c.killCountp));
+        }
+        AstVar* const readp
+            = a.c.killVarp ? newAttemptTempp(a, newKilledReadp(a.c, a.killedp, varp)) : varp;
+        a.regps.emplace(readp, varp);
+        return readp;
     }
     // Set a register to nextp on the next tick, a vector being one tick older then
     void setAttemptRegp(AttemptCtx& a, AstVar* regp, AstNodeExpr* nextp) {
@@ -4269,15 +4388,14 @@ class SvaNfaLowering final {
         if (regp->width() == a.width) {
             nextp = new AstShiftL{flp, nextp, new AstConst{flp, 1}, a.width};
         }
-        // Disabled and killed attempts are not in flight
-        AstNodeExpr* okp = notKillActive(a.c);
+        // Disabled attempts are not in flight
         if (a.c.disableExprp) {
-            okp = new AstLogAnd{flp, okp,
-                                new AstLogNot{flp, a.c.disableExprp->cloneTreePure(false)}};
+            nextp = new AstCond{flp, new AstLogNot{flp, a.c.disableExprp->cloneTreePure(false)},
+                                nextp, newAttemptConstp(flp, regp->dtypep(), -1)};
         }
-        nextp = new AstCond{flp, okp, nextp, newAttemptConstp(flp, regp->dtypep(), -1)};
         a.regsp = AstNode::addNextNull<AstNodeStmt>(
-            a.regsp, new AstAssignDly{flp, new AstVarRef{flp, regp, VAccess::WRITE}, nextp});
+            a.regsp,
+            new AstAssignDly{flp, new AstVarRef{flp, a.regps.at(regp), VAccess::WRITE}, nextp});
     }
     // The sampled boolean value of the expression condp, which it takes
     static AstNodeExpr* newAttemptCondp(AstNodeExpr* condp) {
@@ -4825,7 +4943,7 @@ class SvaNfaLowering final {
                 // reject |= (wrapped || idx == size - 1) && head && final_condition;
                 // Only a range creates such a ring, and a range has several threads
                 UASSERT_OBJ(!c.exactCounts, fromVtxp, "Range ring with exact counts");
-                AstNodeExpr* expireContribp = delayRingOutputCount(c.flp, fromVtxp);
+                AstNodeExpr* expireContribp = delayRingOutputCount(c, fromVtxp);
                 if (terminalCountpp) {
                     addTerminalCount(c, *terminalCountpp, *tedgep,
                                      expireContribp->cloneTreePure(false));
@@ -4860,8 +4978,7 @@ class SvaNfaLowering final {
                                                AstNodeExpr* const enablep) {
         AstNodeExpr* const activeThreadCountp
             = delayRingLiveCountVarp
-                  ? static_cast<AstNodeExpr*>(
-                        new AstVarRef{c.flp, delayRingLiveCountVarp, VAccess::READ})
+                  ? regRead(c, delayRingLiveCountVarp)
                   : new AstExtend{c.flp, stateExprp->cloneTreePure(false), m_u32DTypep->width()};
         return addCountp(c.flp, nullptr, activeThreadCountp, enablep);
     }
@@ -4934,10 +5051,9 @@ class SvaNfaLowering final {
             if (vtxp->m_isAndCombiner) continue;
             AstNodeExpr* stateExprp = nullptr;
             if (vtxp->datap()->stateVarp) {
-                stateExprp = new AstVarRef{c.flp, vtxp->datap()->stateVarp, VAccess::READ};
+                stateExprp = regRead(c, vtxp->datap()->stateVarp);
             } else if (vtxp->datap()->delayRingVarp && vtxp->m_isFixedDelayRing) {
-                stateExprp
-                    = delayRingHasLiveThreadsp(c.flp, vtxp->datap()->delayRingLiveCountVarp);
+                stateExprp = delayRingHasLiveThreadsp(c, vtxp->datap()->delayRingLiveCountVarp);
             } else {
                 UASSERT_OBJ(vtxp->datap()->stateSigp, vtxp,
                             "Throughout-conds vertex missing state representation");
@@ -4951,13 +5067,13 @@ class SvaNfaLowering final {
                                                  rejectCondp->cloneTreePure(false)});
             } else if (needThreadFailCount) {
                 AstVar* const liveCountVarp = vtxp->datap()->delayRingLiveCountVarp;
-                AstNodeExpr* countp = new AstVarRef{c.flp, liveCountVarp, VAccess::READ};
+                AstNodeExpr* countp = regRead(c, liveCountVarp);
                 // A thread a rejectOnFail Link rejects, one leaving the ring at its head, is
                 // counted by that Link, so the guard counts the other threads of the ring then
                 if (AstNodeExpr* const holdp = newRequiredStepsHoldp(c, vtxp)) {
                     countp = new AstCond{
                         c.flp, holdp, countp,
-                        new AstSub{c.flp, new AstVarRef{c.flp, liveCountVarp, VAccess::READ},
+                        new AstSub{c.flp, regRead(c, liveCountVarp),
                                    vtxp->datap()->stateCountSigp->cloneTreePure(false)}};
                 }
                 AstNodeExpr* const contributionp
@@ -4997,9 +5113,8 @@ class SvaNfaLowering final {
                 liveCountp = addCountp(c.flp, liveCountp,
                                        vtxp->datap()->stateCountSigp->cloneTreePure(false));
             } else if (vtxp->datap()->delayRingLiveCountVarp) {
-                liveCountp = addCountp(
-                    c.flp, liveCountp,
-                    new AstVarRef{c.flp, vtxp->datap()->delayRingLiveCountVarp, VAccess::READ});
+                liveCountp = addCountp(c.flp, liveCountp,
+                                       regRead(c, vtxp->datap()->delayRingLiveCountVarp));
             }
         }
         if (c.disableExprp) {
@@ -5078,10 +5193,9 @@ class SvaNfaLowering final {
             AstNodeExpr* clearp = nullptr;
             if (vtxp->m_delayRingSize && vtxp->m_delayRingClearCondp) {
                 clearp = sampled(vtxp->m_delayRingClearCondp->cloneTreePure(false));
-                countp = addCountp(
-                    c.flp, countp,
-                    new AstVarRef{c.flp, vtxp->datap()->delayRingLiveCountVarp, VAccess::READ},
-                    clearp->cloneTreePure(false));
+                countp
+                    = addCountp(c.flp, countp, regRead(c, vtxp->datap()->delayRingLiveCountVarp),
+                                clearp->cloneTreePure(false));
             }
             AstNodeExpr* continuesp = nullptr;
             bool alwaysContinues = false;
@@ -5116,7 +5230,7 @@ class SvaNfaLowering final {
             countp = addCountp(c.flp, nullptr, countp,
                                new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
         }
-        return addCountp(c.flp, nullptr, countp, notKillActive(c));
+        return countp;
     }
 
     // The passes of the attempts of an assertion on this tick, if its threads tell attempts
@@ -5135,7 +5249,6 @@ class SvaNfaLowering final {
                 vacuousp = addCountp(c.flp, nullptr, vacuousp,
                                      new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
             }
-            vacuousp = addCountp(c.flp, nullptr, vacuousp, notKillActive(c));
         } else if (c.trackAntecedentEnd) {
             if (!sigs.antecedentEndCountp) return;
             vacuousp = sigs.antecedentEndCountp->cloneTreePure(false);
@@ -5153,7 +5266,6 @@ class SvaNfaLowering final {
             nonvacuousp = addCountp(c.flp, nullptr, nonvacuousp,
                                     new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
         }
-        nonvacuousp = addCountp(c.flp, nullptr, nonvacuousp, notKillActive(c));
         sigs.attemptNonvacuousPassCountp = nonvacuousp;
         sigs.attemptPassCountp = addCountp(c.flp, vacuousp, nonvacuousp->cloneTreePure(false));
     }
@@ -5328,7 +5440,7 @@ class SvaNfaLowering final {
                 AstNodeExpr*& keyFailp = failps[failKey(offsets, fromVtxp)];
                 keyFailp = orExprs(c.flp, keyFailp, rawFailp->cloneTreePure(false));
             }
-            rejectps.push_back(gateNotKill(c, rawFailp));
+            rejectps.push_back(rawFailp);
         }
         sigs.requiredStepRejectp = newOrTree(c.flp, rejectps.cbegin(), rejectps.cend());
 
@@ -5340,19 +5452,12 @@ class SvaNfaLowering final {
         }
         if (c.exactAbortp)
             sigs.threadFailCountp = newExactAbortFailCountp(c, sigs.threadFailCountp);
-        if (sigs.threadFailCountp) {
-            sigs.threadFailCountp
-                = addCountp(c.flp, nullptr, sigs.threadFailCountp, notKillActive(c));
-        }
         if (sigs.matchCountp) {
             if (c.matchCondp) {
                 sigs.matchCountp = gateCheckedCountp(
                     c.flp, sigs.matchCountp, sigs.matchCountOverflowp, sampledClone(c.matchCondp));
             }
-            sigs.matchCountp = gateCheckedCountp(c.flp, sigs.matchCountp, sigs.matchCountOverflowp,
-                                                 notKillActive(c));
         }
-        sigs.terminalActivep = gateNotKill(c, sigs.terminalActivep);
         AstNodeExpr* vacuousCountp = nullptr;  // Vacuous successes this tick, before gating
         for (const SvaStateVertex* const vtxp : c.graph.m_vacuousVertices) {
             AstNodeExpr* const sigp = vtxp->datap()->stateSigp;
@@ -5363,9 +5468,6 @@ class SvaNfaLowering final {
                     new AstExtend{c.flp, sigp->cloneTreePure(false), m_u32DTypep->width()});
             }
         }
-        sigs.vacuousp = gateNotKill(c, sigs.vacuousp);
-        sigs.rejectBasep = gateNotKill(c, sigs.rejectBasep);
-        sigs.throughoutRejectp = gateNotKill(c, sigs.throughoutRejectp);
 
         if (c.trackAntecedentEnd) sigs.antecedentEndCountp = newAntecedentEndCountp(c);
         if (c.countAttemptPasses) setAttemptPassCounts(c, sigs);
@@ -5529,10 +5631,8 @@ class SvaNfaLowering final {
                 // Both operands matched since the attempt started. The done latches are
                 // cleared once this holds, so they are never both set and one operand
                 // matches now.
-                matchLp = new AstLogOr{
-                    c.flp, new AstVarRef{c.flp, vtxp->datap()->doneLVarp, VAccess::READ}, matchLp};
-                matchRp = new AstLogOr{
-                    c.flp, new AstVarRef{c.flp, vtxp->datap()->doneRVarp, VAccess::READ}, matchRp};
+                matchLp = new AstLogOr{c.flp, regRead(c, vtxp->datap()->doneLVarp), matchLp};
+                matchRp = new AstLogOr{c.flp, regRead(c, vtxp->datap()->doneRVarp), matchRp};
             }
             vtxp->datap()->stateSigp = new AstLogAnd{c.flp, matchLp, matchRp};
             vtxp->datap()->stateCountSigp = new AstExtend{
@@ -5594,29 +5694,26 @@ class SvaNfaLowering final {
         for (V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
             SvaStateVertex* const vtxp = static_cast<SvaStateVertex*>(&vtxr);
             if (vtxp->datap()->stateVarp && vtxp->datap()->stateCounts) {
-                vtxp->datap()->stateCountSigp
-                    = new AstVarRef{c.flp, vtxp->datap()->stateVarp, VAccess::READ};
+                vtxp->datap()->stateCountSigp = regRead(c, vtxp->datap()->stateVarp);
                 vtxp->datap()->stateSigp
                     = new AstNeq{c.flp, vtxp->datap()->stateCountSigp->cloneTreePure(false),
                                  newTypedConstp(c.flp, m_u32DTypep, 0)};
             } else if (vtxp->datap()->stateVarp) {
-                vtxp->datap()->stateSigp
-                    = new AstVarRef{c.flp, vtxp->datap()->stateVarp, VAccess::READ};
+                vtxp->datap()->stateSigp = regRead(c, vtxp->datap()->stateVarp);
                 vtxp->datap()->stateCountSigp = new AstExtend{
-                    c.flp, new AstVarRef{c.flp, vtxp->datap()->stateVarp, VAccess::READ},
-                    m_u32DTypep->width()};
+                    c.flp, regRead(c, vtxp->datap()->stateVarp), m_u32DTypep->width()};
             } else if (vtxp->datap()->delayRingVarp) {
                 if (vtxp->m_isFixedDelayRing) {
                     // state_count = wrapped ? head : 0; state = state_count != 0;
-                    AstNodeExpr* const countp = delayRingOutputCount(c.flp, vtxp);
+                    AstNodeExpr* const countp = delayRingOutputCount(c, vtxp);
                     vtxp->datap()->stateSigp = new AstNeq{c.flp, countp->cloneTreePure(false),
                                                           newTypedConstp(c.flp, m_u32DTypep, 0)};
                     vtxp->datap()->stateCountSigp = countp;
                 } else {
                     vtxp->datap()->stateSigp
-                        = delayRingHasLiveThreadsp(c.flp, vtxp->datap()->delayRingLiveCountVarp);
-                    vtxp->datap()->stateCountSigp = new AstVarRef{
-                        c.flp, vtxp->datap()->delayRingLiveCountVarp, VAccess::READ};
+                        = delayRingHasLiveThreadsp(c, vtxp->datap()->delayRingLiveCountVarp);
+                    vtxp->datap()->stateCountSigp
+                        = regRead(c, vtxp->datap()->delayRingLiveCountVarp);
                 }
             }
         }
@@ -5656,10 +5753,7 @@ public:
                             AstSenTree* const senTreep, AstNodeExpr* const disableExprp) {
         FileLine* const flp = assertp->fileline();
         const std::string baseName = m_names.get("");
-        AstVar* const killVarp
-            = new AstVar{flp, VVarType::MODULETEMP, baseName + "__kill", m_u32DTypep};
-        killVarp->lifetime(VLifetime::STATIC_EXPLICIT);
-        m_modp->addStmtsp(killVarp);
+        AstVar* const killVarp = newKillVarp(flp, baseName);
         SvaGraph graph;  // None
         LowerCtx c{flp,
                    senTreep,
@@ -5675,16 +5769,17 @@ public:
                    false,
                    false,
                    nullptr};
+        c.killEpochp = m_killEpochp;
+        c.modp = m_modp;
         // One bit more than the latency, and two at least, as a register of a bit is not a vector
         const int width = std::max(tree.latency + 1, 2);
         AttemptCtx a{c, width, m_modp->findBitDType(width, width, VSigning::UNSIGNED),
                      baseName + "__t"};
-        // Attempts start while the assertion is on, and not killed or disabled
-        AstNodeExpr* okp = notKillActive(c);
-        if (disableExprp) {
-            okp = new AstLogAnd{flp, okp, new AstLogNot{flp, disableExprp->cloneTreePure(false)}};
-        }
-        AstVar* const okVarp = newAttemptTempp(a, okp);
+        // Attempts start while the assertion is on, and not disabled
+        AstVar* const okVarp
+            = newAttemptTempp(a, disableExprp ? static_cast<AstNodeExpr*>(new AstLogNot{
+                                                    flp, disableExprp->cloneTreePure(false)})
+                                              : new AstConst{flp, AstConst::BitTrue{}});
         const AttemptEvents events = lowerAttempt(
             a, tree, 0,
             new AstLogAnd{flp, assertOnCond(c.controlVarp, flp, c.assertType, c.directiveType),
@@ -5799,10 +5894,13 @@ public:
         return resultExprp;
     }
 
-    SvaNfaLowering(AstNodeModule* modp, V3UniqueNames& actionNames)
+    SvaNfaLowering(AstNodeModule* modp, V3UniqueNames& actionNames, bool mayKill,
+                   AstVar* killEpochp)
         : m_modp{modp}
         , m_u32DTypep{modp->findBasicDType(VBasicDTypeKwd::UINT32)}
-        , m_actionNames{actionNames} {}
+        , m_actionNames{actionNames}
+        , m_mayKill{mayKill}
+        , m_killEpochp{killEpochp} {}
     ~SvaNfaLowering() {
         V3Stats::addStatSum("Assertions, NFA delay ring edge visits", m_statDelayRingEdgeVisits);
         V3Stats::addStatSum("Assertions, NFA link edge visits", m_statLinkEdgeVisits);
@@ -5848,8 +5946,7 @@ public:
     // Return failp run once for each thread pending in the strong vertices at end of
     // simulation, where each thread is one attempt (LowerCtx::exactCounts) and the states count
     // them, or nullptr if a delay ring holds some, as their slots cannot tell attempts apart
-    AstNodeStmt* newPendingThreadsFailp(const LowerCtx& c,
-                                        const std::vector<SvaStateVertex*>& vtxps,
+    AstNodeStmt* newPendingThreadsFailp(LowerCtx& c, const std::vector<SvaStateVertex*>& vtxps,
                                         AstNodeStmt* failp) {
         FileLine* const flp = c.flp;
         for (size_t i = 0; i < vtxps.size(); ++i) {
@@ -5857,8 +5954,7 @@ public:
         }
         AstNodeExpr* countp = nullptr;
         for (size_t i = 0; i < vtxps.size(); ++i) {
-            countp = addCountp(flp, countp,
-                               new AstVarRef{flp, vtxps[i]->datap()->stateVarp, VAccess::READ});
+            countp = addCountp(flp, countp, regRead(c, vtxps[i]->datap()->stateVarp));
         }
         // for (remaining = count; remaining != 0; --remaining) failp;
         AstVar* const remainingp
@@ -5886,8 +5982,7 @@ public:
     // fixed offset from the attempt start belongs to the attempt that started that many ticks
     // ago, so the attempts pending are the ages of the threads, each counted once however
     // many vertices hold it. Threads of a vertex without a fixed offset may merge attempts.
-    AstNodeStmt* newPendingAttemptsFailp(const LowerCtx& c,
-                                         const std::vector<SvaStateVertex*>& vtxps,
+    AstNodeStmt* newPendingAttemptsFailp(LowerCtx& c, const std::vector<SvaStateVertex*>& vtxps,
                                          AstNodeStmt* failp) {
         const std::vector<int> offsets = vertexOffsets(c.graph);
         int maxAge = 0;
@@ -5945,15 +6040,13 @@ public:
                 flp,
                 new AstSub{
                     flp,
-                    new AstAdd{flp,
-                               new AstVarRef{flp, vtxp->datap()->delayRingIdxVarp, VAccess::READ},
-                               u32Const(size)},
+                    new AstAdd{flp, regRead(c, vtxp->datap()->delayRingIdxVarp), u32Const(size)},
                     new AstVarRef{flp, kp, VAccess::READ}},
                 u32Const(size)};
-            AstNodeExpr* const heldp = new AstLogOr{
-                flp, new AstVarRef{flp, vtxp->datap()->delayRingWrappedVarp, VAccess::READ},
-                new AstLte{flp, new AstVarRef{flp, kp, VAccess::READ},
-                           new AstVarRef{flp, vtxp->datap()->delayRingIdxVarp, VAccess::READ}}};
+            AstNodeExpr* const heldp
+                = new AstLogOr{flp, regRead(c, vtxp->datap()->delayRingWrappedVarp),
+                               new AstLte{flp, new AstVarRef{flp, kp, VAccess::READ},
+                                          regRead(c, vtxp->datap()->delayRingIdxVarp)}};
             AstNodeExpr* const slotp
                 = new AstLogAnd{flp, heldp, new AstRedOr{flp, delayRingSlot(flp, vtxp, idxp)}};
             AstNodeExpr* const agep = new AstAdd{flp, new AstVarRef{flp, kp, VAccess::READ},
@@ -6076,10 +6169,7 @@ public:
         FileLine* const regFlp = asyncDisable ? new FileLine{flp} : flp;
         if (asyncDisable) regFlp->warnOff(V3ErrorCode::MULTIDRIVEN, true);
 
-        AstVar* const killVarp
-            = new AstVar{flp, VVarType::MODULETEMP, baseName + "__kill", m_u32DTypep};
-        killVarp->lifetime(VLifetime::STATIC_EXPLICIT);
-        m_modp->addStmtsp(killVarp);
+        AstVar* const killVarp = newKillVarp(flp, baseName);
         for (int i = 0; i < N; ++i) {
             if (vtx[i]->m_isAndCombiner) {
                 if (vtx[i]->m_andAligned) continue;
@@ -6161,6 +6251,9 @@ public:
             flp,           senTreep,           disableExprp,           matchCondp,     assertType,
             directiveType, killVarp,           assertp->controlVarp(), graph,          exactCounts,
             exactAbortp,   trackAntecedentEnd, countAttemptPasses,     vacuousTriggerp};
+        c.killEpochp = m_killEpochp;
+        c.modp = m_modp;
+        c.inlineKill = killVarp && (v3Global.opt.hierChild() || !v3Global.opt.libCreate().empty());
 
         // Phase 1: Resolve combinational Links.
         AstNodeExpr* const triggerExprp
@@ -6174,7 +6267,6 @@ public:
         emitStateRegisterNba(c);
         emitDelayRingUpdates(c, countMatches);
         emitAndCombinerDoneLatchNba(c);
-        emitKillAckNba(c);
 
         // Phase 3/3a/3b: Compute terminal match/reject signals (cleans up stateSig).
         const SignalSet sigs = computeSignals(c, needThreadFailCount, needRejectCount,
@@ -6191,10 +6283,10 @@ public:
             if (!vtx[i]->m_strongPending) continue;
             AstNodeExpr* pendingExprp = nullptr;
             if (vtx[i]->datap()->stateVarp) {
-                pendingExprp = new AstVarRef{flp, vtx[i]->datap()->stateVarp, VAccess::READ};
+                pendingExprp = regRead(c, vtx[i]->datap()->stateVarp);
             } else if (vtx[i]->m_delayRingSize) {
                 pendingExprp
-                    = delayRingHasLiveThreadsp(flp, vtx[i]->datap()->delayRingLiveCountVarp);
+                    = delayRingHasLiveThreadsp(c, vtx[i]->datap()->delayRingLiveCountVarp);
             } else {
                 continue;
             }
@@ -6214,6 +6306,11 @@ public:
             if (!stmtsp) stmtsp = failp;
             m_modp->addStmtsp(new AstFinal{flp, new AstIf{flp, condp, stmtsp}});
         }
+
+        if (c.regReadsp) {
+            m_modp->addStmtsp(newAssertAlways(flp, VAlwaysKwd::ALWAYS_COMB, nullptr, c.regReadsp));
+        }
+        emitKillAckNba(c);
 
         // Clear userp on every vertex before vertexData is destroyed.
         for (int i = 0; i < N; ++i) vtx[i]->userp(nullptr);
@@ -7712,6 +7809,13 @@ class AssertNfaVisitor final : public VNVisitor {
     std::vector<const AstBegin*> m_namedBeginps;  // Named blocks around the current assertion
     AstNode* m_containerp = nullptr;  // Current module or generate block
     bool m_procSuspends = false;  // Current procedure may suspend
+    // The count of the calls that may kill assertions, in $unit, if the design has one: the
+    // logic of the assertions reads it, so it runs again on a call
+    AstVar* m_killEpochp = nullptr;
+    // An $assertkill may end the attempts of the assertions. One of another model may end
+    // those of a hierarchical block or library, but they then read its count only as their
+    // inputs or state change, as on their clock.
+    bool m_mayKill = v3Global.opt.hierChild() || !v3Global.opt.libCreate().empty();
     V3AssertReactive m_reactive;  // Makes the actions run in the Reactive region
 
     template <typename T_Node>
@@ -8969,7 +9073,7 @@ class AssertNfaVisitor final : public VNVisitor {
             m_defaultClockingp = V3AssertCommon::moduleDefaultClockingp(nodep);
         }
         m_defaultDisablep = nodep->defaultDisablep();
-        SvaNfaLowering lowering{nodep, m_actionNames};
+        SvaNfaLowering lowering{nodep, m_actionNames, m_mayKill, m_killEpochp};
         m_loweringp = &lowering;
         iterateChildren(nodep);
     }
@@ -9034,8 +9138,37 @@ class AssertNfaVisitor final : public VNVisitor {
     void visit(AstAssertIntrinsic* nodep) override {}
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
+    static bool mayKill(const AstAssertCtl* ctlp) {
+        return ctlp->ctlType() == VAssertCtlType::KILL
+               || ctlp->ctlType() == VAssertCtlType::_TO_BE_EVALUATED;
+    }
+    void visit(AstAssertCtl* nodep) override {
+        iterateChildren(nodep);
+        if (!mayKill(nodep)) return;
+        FileLine* const flp = nodep->fileline();
+        AstPackage* const unitp = v3Global.rootp()->dollarUnitPkgp();
+        AstVarRef* const writep = new AstVarRef{flp, m_killEpochp, VAccess::WRITE};
+        writep->classOrPackagep(unitp);
+        AstVarRef* const readp = new AstVarRef{flp, m_killEpochp, VAccess::READ};
+        readp->classOrPackagep(unitp);
+        nodep->addNextHere(new AstAssignDly{
+            flp, writep,
+            new AstAdd{flp, readp, new AstConst{flp, AstConst::WidthedValue{}, 32, 1}}});
+    }
+
 public:
-    explicit AssertNfaVisitor(AstNetlist* nodep) { iterate(nodep); }
+    explicit AssertNfaVisitor(AstNetlist* nodep) {
+        if (nodep->exists([](const AstAssertCtl* ctlp) { return mayKill(ctlp); })) {
+            AstVar* const epochp = new AstVar{nodep->fileline(), VVarType::MODULETEMP,
+                                              "__VassertKillEpoch", nodep->findUInt32DType()};
+            epochp->isInternal(true);
+            epochp->lifetime(VLifetime::STATIC_EXPLICIT);
+            nodep->dollarUnitPkgp()->addStmtsp(epochp);
+            m_killEpochp = epochp;
+            m_mayKill = true;
+        }
+        iterate(nodep);
+    }
     ~AssertNfaVisitor() override {
         V3Stats::addStatSum("Assertions, local variable state summaries over limit",
                             m_ftaskInfo.statStateVarsUnknown);
