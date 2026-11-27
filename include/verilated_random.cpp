@@ -3035,7 +3035,8 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
         fits = keptFits;
         const auto check = [&](size_t n) VL_REQUIRES(sess.m_mutex) {
             --checksLeftr;
-            os << "(check-sat-assuming (" << keep;
+            // Marked in the solver's log as checks of a prefix
+            os << "; prefix\n(check-sat-assuming (" << keep;
             for (size_t i = 0; i < n; ++i) os << " __Va" << first + order[i];
             os << "))\n";
             // Not counted as a satisfied check: a prefix fitting is no part of the result
