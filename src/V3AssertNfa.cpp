@@ -4148,7 +4148,7 @@ class SvaNfaLowering final {
         size_t regBits = 0;  // Register bits, for statistics
         // Matches and threads left of each antecedent split by length, by it and its start;
         // only looked up, so the order of the pointers does not matter
-        std::map<SharedSeqKey, std::pair<AstVar*, AstVar*>> sharedSeqs;
+        std::map<SharedSeqKey, std::pair<AstVar*, AstVar*>> sharedSeqs{};
     };
     AstVar* newAttemptVar(AttemptCtx& a, AstNodeDType* dtypep) {
         AstVar* const varp = new AstVar{a.c.flp, VVarType::MODULETEMP,
