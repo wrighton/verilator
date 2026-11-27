@@ -94,6 +94,18 @@ class TwoSolve;
   constraint c_d {if (x) d.size() == 3;}
 endclass
 
+// Only in a soft constraint under a condition, discarded
+class NestedSoft;
+  rand bit [7:0] q[];
+  rand bit x;
+  bit condition = 1;
+  constraint c_nested {
+    if (condition) soft (q.size() == 4 && x == 1);
+    x == 0;
+    foreach (q[i]) q[i] == 17;
+  }
+endclass
+
 class Base;
   rand bit [6:0] q[$];
   constraint c_over {q.size() == 4;}
@@ -110,6 +122,7 @@ module t;
     automatic Cls c = new;
     automatic Derived derived = new;
     automatic TwoSolve two = new;
+    automatic NestedSoft nested = new;
     automatic int dsize = 0;
     automatic int ones = 0;
     automatic int randomize_result;
@@ -176,6 +189,13 @@ module t;
       `checkd(randomize_result, 1);
       `checkd(two.d.size(), two.x ? 3 : 1);
     end
+
+    // Test: a discarded soft constraint under a condition leaves the size
+    nested.q = '{1, 2, 3};
+    randomize_result = nested.randomize();
+    `checkd(randomize_result, 1);
+    `checkd(nested.q.size(), 3);
+    foreach (nested.q[i]) `checkd(nested.q[i], 17);
 
     // Test: an overridden constraint is not in force
     derived.q = '{1, 2};
