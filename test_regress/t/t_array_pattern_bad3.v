@@ -45,6 +45,10 @@ module t (
       with_dflt = '{dflt, 32'hEE};  // Bad
       all_addrs = '{base_addrs[0:N-1], 32'hAA, 32'hBB};  // Bad
     end
+    begin
+      int q[$];
+      arr = '{q, '0, '1};  // Bad, a queue is not an element
+    end
   end
 
 endmodule

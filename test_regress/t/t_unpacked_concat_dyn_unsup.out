@@ -1,0 +1,20 @@
+%Error-UNSUPPORTED: t/t_unpacked_concat_dyn_unsup.v:21:11: Unsupported: Unpacked array concatenation item of dynamic size for a fixed-size target
+   21 |     i2 = {q};
+      |           ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_unpacked_concat_dyn_unsup.v:22:11: Unsupported: Unpacked array concatenation item of dynamic size for a fixed-size target
+   22 |     i3 = {q, 3};
+      |           ^
+%Error-UNSUPPORTED: t/t_unpacked_concat_dyn_unsup.v:23:11: Unsupported: Unpacked array concatenation item of dynamic size for a fixed-size target
+   23 |     i2 = {d};
+      |           ^
+%Error-UNSUPPORTED: t/t_unpacked_concat_dyn_unsup.v:24:11: Unsupported: Unpacked array concatenation item of dynamic size for a fixed-size target
+   24 |     s3 = {sq, "x"};
+      |           ^~
+%Error-UNSUPPORTED: t/t_unpacked_concat_dyn_unsup.v:25:11: Unsupported: Unpacked array concatenation item of dynamic size for a fixed-size target
+   25 |     qa = {qq};
+      |           ^~
+%Error-UNSUPPORTED: t/t_unpacked_concat_dyn_unsup.v:27:11: Unsupported: Unpacked array concatenation item of dynamic size for a fixed-size target
+   27 |     i2 = {tq};
+      |           ^~
+%Error: Exiting due to
