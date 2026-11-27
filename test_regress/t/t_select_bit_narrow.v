@@ -1818,6 +1818,23 @@ module t;
       `checkh(arr[2], 4'h0);
     end
 
+    begin
+      // Test: bits above a signed 2-state value read as zeros, not as copies of its sign bit
+      bit signed [15:0] sv;
+      bit signed [14:1] so;
+      int k;
+      sv = 16'shf2b7 ^ 16'(pos[0] - 9);
+      so = 14'sh32b7 ^ 14'(pos[0] - 9);
+      k = pos[0] - 1;
+      // verilator lint_off SELRANGE
+      `checkh(sv[8+:16], 16'h00f2);
+      `checkh(sv[23:8], 16'h00f2);
+      `checkh(sv[k+:16], 16'h00f2);
+      `checkh(so[8+:15], 15'h0065);
+      `checkh(so[22:8], 15'h0065);
+      // verilator lint_on SELRANGE
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
