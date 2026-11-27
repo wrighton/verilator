@@ -66,7 +66,7 @@
    72 |   assert property (@(posedge clk) ((a ##1 b) and (c ##1 d)) or (not (a ##1 b) and not (c ##1 d)));
       |                                                                                   ^~~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:75:37: Unsupported: property 'or' with an operand ending in a ranged delay
-   75 |   assert property (@(posedge clk) a or (b ##[1:2] c));
+   75 |   assert property (@(posedge clk) a or (b [* 1:$] ##[1:2] c));
       |                                     ^~
 %Error: t/t_property_nfa_msgs_unsup.v:49:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
                                           : ... note: In instance 't'

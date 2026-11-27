@@ -72,6 +72,6 @@ module t (
   assert property (@(posedge clk) ((a ##1 b) and (c ##1 d)) or (not (a ##1 b) and not (c ##1 d)));
 
   // A ranged end of the non-boolean operand of a property 'or'
-  assert property (@(posedge clk) a or (b ##[1:2] c));
+  assert property (@(posedge clk) a or (b [* 1:$] ##[1:2] c));
 
 endmodule
