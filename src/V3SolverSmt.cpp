@@ -2843,14 +2843,26 @@ private:
         }
         return condp;
     }
+    // Whether exprp reads an element a foreach selects of an array solved for its size
+    bool hasGatedElement(AstNode* const exprp) const {
+        return exprp->exists([&](const AstNodeSel* selp) {
+            if (!isFrontElementSel(selp)) return false;
+            const AstVarRef* const arrRefp = VN_CAST(selp->fromp(), VarRef);
+            return arrRefp && arrRefp->varp()->user4p()
+                   && selp->bitp()->exists([&](const AstVarRef* refp) {
+                          return m_foreachIdxVars.count(refp->varp()) != 0;
+                      });
+        });
+    }
     // Make the current constraint hold only while a solver-sized array keeps its size
     void gateOnCurrentSize(AstNodeExpr* arrayp) {
-        // A reduction of the array, or an 'inside' it, is expanded over the elements the array
-        // has when the constraints are set up. A dynamic array or queue with a size constraint
-        // is solved twice: first for its new size (IEEE 1800-2023 18.5.8.1: size constraints
-        // are solved before iterative ones) while it still has its previous size, then resized
-        // and solved with the size pinned. So the expansion is only right in the first solve
-        // if that keeps the previous size, and must not constrain any other.
+        // A reduction of the array, an 'inside' it, or a foreach over it, is expanded over the
+        // elements the array has when the constraints are set up. A dynamic array or queue
+        // with a size constraint is solved twice: first for its new size (IEEE 1800-2023
+        // 18.5.8.1: size constraints are solved before iterative ones) while it still has its
+        // previous size, then resized and solved with the size pinned. So the expansion is
+        // only right in the first solve if that keeps the previous size, and must not
+        // constrain any other.
         if (VN_IS(arrayp->dtypep()->skipRefp(), AssocArrayDType)) return;
         FileLine* const fl = arrayp->fileline();
         AstVar* sizeVarp = nullptr;
@@ -4479,6 +4491,14 @@ private:
         }
         if (editHeldArraySel(nodep, nodep->fromp(), nodep->bitp())) return;
         if (nodep->fromp()->user1()) {
+            // An element a foreach selects is of the array as it is when the constraints are
+            // set up, so constrains the size solve only where that keeps the size (see
+            // gateOnCurrentSize)
+            if (nodep->bitp()->exists([&](const AstVarRef* refp) {
+                    return m_foreachIdxVars.count(refp->varp()) != 0;
+                })) {
+                gateOnCurrentSize(nodep->fromp());
+            }
             // Queue/dynamic element: pre-edit clone for the rand_mode hoist, non-rand index
             // only. A std::randomize() with-clause argument carries no rand qualifier of its
             // own but is still part of the solve.
@@ -8908,6 +8928,18 @@ private:
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             return;
         }
+        // A conjunction holding an element a foreach selects of an array solved for its size is
+        // split, so only the conjuncts holding the element are gated (see gateOnCurrentSize)
+        if (!m_wantSingle && nodep != m_foldTakerp && !nodep->isSoft()) {
+            AstLogAnd* const andp = VN_CAST(nodep->exprp(), LogAnd);
+            if (andp && hasGatedElement(andp)) {
+                andp->unlinkFrBack();
+                nodep->addNextHere(
+                    new AstConstraintExpr{nodep->fileline(), andp->rhsp()->unlinkFrBack()});
+                nodep->exprp(andp->lhsp()->unlinkFrBack());
+                VL_DO_DANGLING(pushDeletep(andp), andp);
+            }
+        }
         // IEEE 1800-2023 18.5.1: A bare expression used as a constraint is
         // implicitly treated as "expr != 0" when wider than 1 bit.
         // Must wrap before iterateChildren, which converts to SMT format.
@@ -12356,6 +12388,16 @@ class SolverSmtLowering final : public V3SolverLowering {
             new AstLtS{fl, retryRefp(VAccess::READ), retriesp()}};
         randomizep->addStmtsp(
             new AstIf{fl, reportCondp, newGenTextCallp(genp, ".report_unsat()")});
+        // A last try failing for another reason, after quiet tries, reports the failure too
+        randomizep->addStmtsp(new AstIf{
+            fl,
+            new AstLogAnd{
+                fl,
+                new AstLogAnd{fl, new AstLogNot{fl, new AstVarRef{fl, finalOkVarp, VAccess::READ}},
+                              new AstVarRef{fl, sizeOkVarp, VAccess::READ}},
+                new AstLogAnd{fl, new AstLtS{fl, new AstConst{fl, 0}, retryRefp(VAccess::READ)},
+                              new AstLogNot{fl, newGenTextExprp(genp, ".unsat()")}}},
+            newGenTextCallp(genp, ".report_retry_failure()")});
         randomizep->addStmtsp(newGenTextCallp(genp, ".quiet_unsat(false)"));
         randomizep->addStmtsp(newGenTextCallp(genp, ".clear_size_exclusions()"));
     }
@@ -12391,8 +12433,11 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
         randomizep->addStmtsp(implementConstraintsClear(fl, setupGenp));
         randomizep->addStmtsp(setupStmtsp);
-        // The arrays are resized once, so their sizes must not change in the final solve
+        // The arrays are resized once, so their sizes must not change in the final solve. An
+        // array a disabled constraint did not resize keeps its size, as the constraints on its
+        // elements see (see gateOnCurrentSize)
         for (AstVar* const arrVarp : resizedArrayVars) {
+            randomizep->addStmtsp(newSizeVarAssign(fl, arrVarp));
             randomizep->addStmtsp(newPinSizeVariable(fl, arrVarp, solveGenp));
         }
         for (const auto& pathMsel : memberArrays) {
@@ -13151,6 +13196,12 @@ public:
                 checkStmtsp = nullptr;
             }
 
+            // The sizes the final solve is pinned to are those the arrays have after the resize:
+            // one a disabled constraint did not resize keeps its size (see gateOnCurrentSize).
+            // Not as callbacks of the elements below may leave them.
+            for (AstVar* const arrVarp : sizedArrays) {
+                resizeStmtsp = AstNode::addNextNull(resizeStmtsp, newSizeVarAssign(fl, arrVarp));
+            }
             // Resize constrained arrays before rebuilding constraints: both any
             // class-wide resize task (class-level size constraints) and this
             // with-block's own inline-size resize statements.
