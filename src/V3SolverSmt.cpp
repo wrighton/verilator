@@ -6276,6 +6276,14 @@ private:
         }
         return !isRandIndex(indexp) && countableArray(fromp);
     }
+    // Whether the elements of queue or dynamic array 'arrayp' can be counted as a solver term: it
+    // is countable, or an element of a fixed-size array of such arrays, also selected by a random
+    // index
+    static bool boundableArray(const AstNodeExpr* arrayp) {
+        if (countableArray(arrayp)) return true;
+        const AstArraySel* const selp = VN_CAST(arrayp, ArraySel);
+        return selp && boundableArray(selp->fromp());
+    }
     // The solver size variable of queue or dynamic array 'arrayp' if this solve solves its size,
     // a member array's only for the instances it resizes (see gateOnCurrentSize), else nullptr
     AstNodeExpr* newSolvedSizeRefp(AstNodeExpr* arrayp) const {
@@ -6340,6 +6348,7 @@ private:
     // size variable 'solvedSizep' if not nullptr, as that is solved with the elements
     AstNodeExpr* newArraySizeTextp(AstNodeExpr* arrayp, AstNodeExpr* solvedSizep, int width) {
         FileLine* const fl = arrayp->fileline();
+        if (!countableArray(arrayp)) return newSelectedSizeTextp(arrayp, width);
         if (solvedSizep) {
             solvedSizep->user1(true);
             AstExtend* const extendp = new AstExtend{fl, solvedSizep, width};
@@ -6347,6 +6356,66 @@ private:
             return VN_AS(iterateSubtreeReturnEdits(extendp), NodeExpr);
         }
         return getConstFormat(new AstExtend{fl, newArraySizep(arrayp), width});
+    }
+    // Append to 'fmt' a test of the bits of '?o' from 'bit' down, choosing among positions 'lo'
+    // and above, below 'elements'. Each position chosen is a '%s', recorded in 'leavesr'.
+    static void appendBitTests(std::string& fmt, std::vector<uint32_t>& leavesr, uint32_t lo,
+                               int bit, uint32_t elements) {
+        while (bit >= 0 && lo + (1U << bit) >= elements) --bit;  // No upper half
+        if (bit < 0) {
+            fmt += "%s";
+            leavesr.push_back(lo);
+            return;
+        }
+        fmt += "(ite (= ((_ extract " + cvtToStr(bit) + " " + cvtToStr(bit) + ") ?o) #b1) ";
+        appendBitTests(fmt, leavesr, lo + (1U << bit), bit - 1, elements);
+        fmt += ' ';
+        appendBitTests(fmt, leavesr, lo, bit - 1, elements);
+        fmt += ')';
+    }
+    // Number of elements of the queue or dynamic array 'arrayp' selected from fixed-size arrays of
+    // them by a random index, as a 'width' bit solver term: a lookup, by the first such index
+    // from the variable on, of the number of elements of each array it may select. The lookup
+    // tests the bits of the index, so a solve splits on those rather than on each position.
+    AstNodeExpr* newSelectedSizeTextp(AstNodeExpr* arrayp, int width) {
+        FileLine* const fl = arrayp->fileline();
+        // The select by that index, and its depth below 'arrayp'
+        int depth = 0;
+        AstArraySel* selp = nullptr;
+        for (AstNodeExpr* pathp = arrayp; !countableArray(pathp); ++depth) {
+            selp = VN_AS(pathp, ArraySel);
+            pathp = selp->fromp();
+        }
+        --depth;
+        const uint32_t elements
+            = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+        const int indexWidth = guardedIndexWidth(selp->bitp()->width());
+        AstNodeExpr* const indexp = newGuardedIndexp(selp->bitp()->cloneTree(false));
+        indexp->user1(true);
+        int bits = 0;
+        while ((uint64_t{1} << bits) < elements) ++bits;
+        // The index, bound once as '?o'
+        std::string fmt = "(let ((?o %s)) (ite (bvult ?o (_ bv" + cvtToStr(elements) + " "
+                          + cvtToStr(indexWidth) + ")) ";
+        std::vector<uint32_t> leaves;
+        appendBitTests(fmt, leaves, 0, bits - 1, elements);
+        fmt += " (_ bv0 " + cvtToStr(width) + ")))";
+        AstNodeExpr* const argsp = VN_AS(iterateSubtreeReturnEdits(indexp), NodeExpr);
+        for (size_t leaf = 0; leaf < leaves.size(); ++leaf) {
+            const uint32_t i = leaves[leaf];
+            // The array with the index replaced by the element's
+            AstNodeExpr* const elemArrayp = arrayp->cloneTree(false);
+            AstNode* levelp = elemArrayp;
+            for (int level = 0; level < depth; ++level) {
+                levelp = VN_AS(levelp, NodeExpr)->op1p();
+            }
+            AstNodeExpr* const oldIndexp = VN_AS(levelp, ArraySel)->bitp()->unlinkFrBack();
+            VL_DO_DANGLING(pushDeletep(oldIndexp), oldIndexp);
+            VN_AS(levelp, ArraySel)->bitp(new AstConst{fl, i});
+            argsp->addNext(newArraySizeTextp(elemArrayp, newSolvedSizeRefp(elemArrayp), width));
+            VL_DO_DANGLING(pushDeletep(elemArrayp), elemArrayp);
+        }
+        return new AstSFormatF{fl, fmt, false, argsp};
     }
     // Make the translated element select 'selp' of 'width' bits read zero unless 'guardp', a
     // solver term, holds
@@ -7871,7 +7940,7 @@ private:
                 AstNodeExpr* stateGuardp = nullptr;
                 const bool guarded = !m_structSel && !m_nestedAccessp
                                      && nodep->dtypep()->skipRefp()->isIntegralOrPacked()
-                                     && countableArray(nodep->fromp())
+                                     && boundableArray(nodep->fromp())
                                      && !isForeachElement(nodep->fromp(), nodep->pinsp());
                 AstNodeExpr* sizeTextp = nullptr;  // For a solved index, after translation
                 if (guarded) {
@@ -7879,9 +7948,10 @@ private:
                     AstNodeExpr* const indexp = nodep->pinsp();
                     const int guardWidth = guardedIndexWidth(indexp->width());
                     AstNodeExpr* const solvedSizep = newSolvedSizeRefp(arrayp);
-                    if (indexIsRand || solvedSizep) {
+                    if (indexIsRand || solvedSizep || !countableArray(arrayp)) {
                         // A solved size is a solver term, and the index may be one with it:
-                        // below the size in the solver's 32-bit index sort, see newSmtIndexp
+                        // below the size in the solver's 32-bit index sort, see newSmtIndexp.
+                        // So is the size of an array selected by a random index.
                         sizeTextp = newArraySizeTextp(arrayp, solvedSizep,
                                                       guardedIndexWidth(VL_IDATASIZE));
                         if (!indexIsRand && indexp->width() > VL_IDATASIZE) {
