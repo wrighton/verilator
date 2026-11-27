@@ -679,6 +679,12 @@ static bool solverSamples() {
     return Verilated::threadContextp()->randSampler() == VerilatedRandSampler::SAMPLER_SOLVER;
 }
 
+// Whether the solver needs (set-option :arrays-exp true) for constant arrays, as cvc5 does;
+// known once it starts (see VlRandomizer::emitSetLogic). Every randomizer in the process
+// shares the one solver session, s_solverSession, which spawns its solver command once, so
+// this is the same for all of them.
+static std::atomic<bool> s_takesArraysExp{false};
+
 // Owns the solver process; serializes transactions and replaces a solver that
 // died or was left out of step with the reply stream
 class VlSolverSession final {
@@ -803,6 +809,20 @@ public:
     }
 
 private:
+    // Skip queued replies up to an echoed marker, as resync(), and tell whether one was the
+    // reply to (get-info :name) of the solver 'namep'
+    bool repliesName(const char* namep) VL_REQUIRES(m_mutex) {
+        m_proc << "(echo \"vl_resync\")\n";
+        const std::string quoted = std::string{"\""} + namep + "\"";
+        std::string line;
+        bool named = false;
+        while (readLine(m_proc, line) && line != "vl_resync" && line != "\"vl_resync\"") {
+            named |= line.find(":name") != std::string::npos
+                     && line.find(quoted) != std::string::npos;
+            if (isSolverError(line)) finishErrorReply(m_proc, line);
+        }
+        return named && !m_proc.fail();
+    }
     // Skip queued replies up to an echoed marker, and tell whether all were print-success
     // echoes; a solver that went away stays out of step
     bool resync() VL_REQUIRES(m_mutex) {
@@ -842,6 +862,11 @@ private:
         m_proc << "(reset)\n";
         if (readStatus() == VlSolverStatus::SAT) {
             m_takesLimit = resync();
+            // cvc5 has constant arrays only in its experimental arrays solver (see
+            // takesArraysExp). Asked by name, as z3 also writes to its standard error, which is
+            // the simulation's, when asked for an option it lacks.
+            m_proc << "(get-info :name)\n";
+            s_takesArraysExp = repliesName("cvc5");
             m_state = State::LIVE;
             m_dirty = false;
             return;
@@ -2563,8 +2588,19 @@ static bool constraintsUseConstArray(const std::vector<std::string>& constraints
     return false;
 }
 
+bool VlRandomizer::usesConstArrays() const {
+    return constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)
+           || tablesNeed(TABLE_CONST_ARRAY);
+}
+
+void VlRandomizer::emitSetLogic(std::ostream& os, const char* logicp, bool constArrays) {
+    // Options come before the logic, which a (reset) took back
+    if (constArrays && s_takesArraysExp) os << "(set-option :arrays-exp true)\n";
+    os << "(set-logic " << logicp << ")\n";
+}
+
 void VlRandomizer::emitFlat(std::ostream& os, const std::vector<std::string>& uniqueExprs) const {
-    os << "(set-logic " << solverLogic() << ")\n";
+    emitSetLogic(os, solverLogic(), usesConstArrays());
     emitDefines(os);
     emitDeclares(os, m_checkOnly);
     emitAsserts(os, uniqueExprs, false);
@@ -2686,7 +2722,7 @@ bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
         std::iostream& solver = sess.os();
 
         solver << "(set-option :produce-models true)\n";
-        solver << "(set-logic " << solverLogic() << ")\n";
+        emitSetLogic(solver, solverLogic(), usesConstArrays());
         emitDefines(solver);
         emitDeclares(solver, false);
         emitAsserts(solver, uniqueExprs, false);
@@ -3612,10 +3648,9 @@ void VlRandomizer::reportUnsatSetup(VlSolverSession& sess,
     VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     os << "(set-option :produce-unsat-cores true)\n";
-    os << "(set-logic "
-       << (constraintsUseConstArray(m_constraints) || tablesNeed(TABLE_CONST_ARRAY) ? "ALL"
-                                                                                    : "QF_ABV")
-       << ")\n";
+    const bool constArrays
+        = constraintsUseConstArray(m_constraints) || tablesNeed(TABLE_CONST_ARRAY);
+    emitSetLogic(os, constArrays ? "ALL" : "QF_ABV", constArrays);
     emitDefines(os);
     emitDeclares(os, false);
     emitAsserts(os, uniqueExprs, true);
@@ -4586,10 +4621,7 @@ bool VlRandomizer::tablesNeed(uint8_t needs) const {
 }
 
 const char* VlRandomizer::solverLogic() const {
-    if (constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)
-        || tablesNeed(TABLE_CONST_ARRAY)) {
-        return "ALL";
-    }
+    if (usesConstArrays()) return "ALL";
     // Without arrays, QF_BV lets z3 answer the incremental checks of the sampling with
     // its bit-blasting SAT solver, which is several times faster than the SMT core it
     // uses for QF_ABV, but many times slower once a product or quotient of variables has
@@ -4611,10 +4643,7 @@ const char* VlRandomizer::solverLogic() const {
 }
 
 const char* VlRandomizer::phasedLogic() const {
-    if (constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)
-        || tablesNeed(TABLE_CONST_ARRAY)) {
-        return "ALL";
-    }
+    if (usesConstArrays()) return "ALL";
     for (const auto& var : m_vars) {
         if (var.second->dimension() == 0) continue;
         if (!var.second->hasMatchingElements(m_arr_vars, var.second->name())) return "ALL";
@@ -4688,7 +4717,7 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
                 // Every phase's variables are spread (solvePhaseValues, solveDiversity)
                 os << "(set-option :produce-unsat-assumptions true)\n";
             }
-            os << "(set-logic " << logicp << ")\n";
+            emitSetLogic(os, logicp, usesConstArrays());
             emitDefines(os);
             emitDeclares(os, false);
 
