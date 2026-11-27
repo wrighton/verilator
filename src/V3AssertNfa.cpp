@@ -344,6 +344,7 @@ static AstIf* newPassOnIf(AstVar* statep, FileLine* flp, AstNodeExpr* firep, Ast
         = new AstLogAnd{flp, firep, assertPassOnCond(statep, flp, type, directiveType, vacuous)};
     AstIf* const ifp = new AstIf{flp, condp, bodyp};
     ifp->isBoundsCheck(true);
+    ifp->isAssertPassGate(true);
     ifp->user1(true);
     return ifp;
 }
@@ -7563,6 +7564,7 @@ class AssertNfaVisitor final : public VNVisitor {
                                            assertp->directive(), /*vacuous=*/true)};
         AstIf* const ifp = new AstIf{flp, passOnp, passsp};
         ifp->isBoundsCheck(true);
+        ifp->isAssertPassGate(true);
         ifp->user1(true);
         return ifp;
     }
@@ -7778,6 +7780,7 @@ class AssertNfaVisitor final : public VNVisitor {
                             newPassOnp(true)}},
             passsp};
         firstp->isBoundsCheck(true);
+        firstp->isAssertPassGate(true);
         firstp->user1(true);
         addActionReplay(senTreep, attemptNonvacuousPassCountp, newReplayp(false));
         // The vacuous count, one more when the assertion ran a nonvacuous pass
