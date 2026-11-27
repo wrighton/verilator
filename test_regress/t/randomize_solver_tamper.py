@@ -41,6 +41,7 @@
 #         | value_lead | value_narrow | value_wide | whole_asarray | whole_chain
 #         | whole_cycle | whole_dup_let | whole_error | whole_fail | whole_lambda
 #         | whole_let_alias | whole_let_scalar | whole_lets | whole_narrow | whole_twice
+#         | wide_core | wide_core_cut
 #   bad_base         - replace the Nth model reply with a base character that is not b, o, x or h
 #   bad_digits       - replace the Nth model reply with one value holding digits outside its base
 #   bad_index        - replace the first array model reply with a bad select index
@@ -186,6 +187,9 @@
 #   whole_lets       - as whole_asarray, with stores in lets as z3 writes them
 #   whole_narrow     - as whole_asarray, with a store index narrower than the index sort
 #   whole_twice      - answer d twice in the Nth reply asking d whole
+#   wide_core        - answer every unsat assumptions reply with all the literals assumed, as
+#                      a solver may (cvc5 nearly does)
+#   wide_core_cut    - as wide_core, and answer the status after the first such reply unknown
 # TAMPER_AT: reply index to act on (default 3)
 # TAMPER_ONCE: file marking that the tamper already acted. The runtime restarts
 #   a solver that died, which starts this wrapper again, so without the file a
@@ -352,9 +356,9 @@ ASSUME_MODES = ("err_assume", "garbage_assume", "oor_assume", "stale_assume")
 CORE_MODES = ("core_junk", "err_core")
 # Modes rewriting every line, so they never consume the index
 STREAM_MODES = ("bin_literals", "bv_literals", "bv_spaced", "crlf", "csa_unsupported", "indent",
-                "limit_unsupported", "multiline", "success")
-# Modes that change commands on their way to the solver
-INPUT_MODES = ("csa_unsupported", "err_cell", "limit_unsupported")
+                "limit_unsupported", "multiline", "success", "wide_core", "wide_core_cut")
+# Modes that read or change the commands on their way to the solver
+INPUT_MODES = ("csa_unsupported", "err_cell", "limit_unsupported", "wide_core", "wide_core_cut")
 # Echoed in place of a command, to mark where in the replies its answer belongs
 TAMPER_MARK = "vl_tamper"
 
@@ -377,6 +381,8 @@ proc = subprocess.Popen(real_solver(),
 # whether the last of them was a push, and cell_after the scope the estimate
 # ended in, once known
 scopes = types.SimpleNamespace(count=0, pushed=False, cell_after=None)
+# wide_core: the literals of the last check-sat-assuming sent
+assumed = types.SimpleNamespace(literals=[])
 
 
 def feed():
@@ -397,6 +403,8 @@ def feed():
             scopes.pushed = text.startswith("(push")
         if text.startswith("(reset)"):
             scopes.cell_after = None
+        if text.startswith("(check-sat-assuming"):
+            assumed.literals = re.findall(r"__Va\d+", text)
         proc.stdin.write(cmd)
         proc.stdin.flush()
     proc.stdin.close()
@@ -485,6 +493,7 @@ seen_unsat = False
 done = bool(once) and os.path.exists(once)
 marker_next = False  # err_marker: the next status follows an error holding the marker
 junk_next = False  # whole_fail: the next reply is replaced too
+cut_next = False  # wide_core_cut: the next status is answered unknown
 whole_seen = 0  # Replies asking d whole
 sat_scope = None  # err_cell: the scope of the last sat
 depth = 0  # Paren depth of the reply being forwarded, so wrapped ones stay intact
@@ -565,6 +574,18 @@ for line in proc.stdout:
             entry = "(d " + WHOLE_MODES[mode] + ")"
         emit(whole_text[:start] + entry + whole_text[end + 1:])
         junk_next = mode == "whole_fail"
+        continue
+    # wide_core: an unsat assumptions reply names every literal assumed
+    if mode in ("wide_core", "wide_core_cut") and at_reply_start and line.startswith("(__Va"):
+        swallow(line)
+        depth, inside = 0, False
+        emit("(" + " ".join(assumed.literals) + ")")
+        cut_next = mode == "wide_core_cut" and not done
+        continue
+    if cut_next and is_status:
+        cut_next = False
+        done = True
+        emit("unknown")
         continue
     # whole_fail: the reply asking d by element after the one replaced
     if junk_next and at_reply_start and line.startswith("(("):
