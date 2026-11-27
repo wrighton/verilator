@@ -190,8 +190,11 @@ class UnknownVisitor final : public VNVisitor {
 
     // Return dynamic array or queue element index 'indexp', which is signed and narrower, or
     // wider, than 32 bits, converted to the runtime's 32-bit signed index, which selects no
-    // element when negative or past the end
-    AstNodeExpr* newDynIndexp(AstNodeExpr* indexp) {
+    // element when negative or past the end. With 'saturate', for a slice position, also an
+    // unsigned 32-bit one, one that does not fit becomes the most negative or most positive index
+    // instead, so a queue slice bound past either end is limited to the queue (IEEE 1800-2023
+    // 7.10.1), and every position of a padded slice stays outside the array.
+    AstNodeExpr* newDynIndexp(AstNodeExpr* indexp, bool saturate = false) {
         FileLine* const flp = indexp->fileline();
         const int width = indexp->width();
         if (width < VL_IDATASIZE) return new AstExtendS{flp, indexp, VL_IDATASIZE};
@@ -207,37 +210,100 @@ class UnknownVisitor final : public VNVisitor {
                                         : newExprStmtTemp(indexp);
         const int highWidth = width - (VL_IDATASIZE - 1);
         AstNodeExpr* const highp = new AstSel{flp, indexp, VL_IDATASIZE - 1, highWidth};
+        AstNodeExpr* const lowp = new AstSel{flp, valuep, 0, VL_IDATASIZE};
+        if (saturate && !indexp->isSigned()) {
+            // An unsigned position fits only if bits 31 and above are all clear
+            AstNodeExpr* const fitsp
+                = new AstEq{flp, highp, new AstConst{flp, AstConst::WidthedValue{}, highWidth, 0}};
+            return new AstCond{flp, fitsp, lowp, newMaxDynIndexp(flp)};
+        }
         // All equal, i.e. all clear or all set, if adding one leaves at most one
         AstNodeExpr* const fitsp = new AstLt{
             flp, new AstAdd{flp, highp, new AstConst{flp, AstConst::WidthedValue{}, highWidth, 1}},
             new AstConst{flp, AstConst::WidthedValue{}, highWidth, 2}};
-        AstNodeExpr* const lowp = new AstSel{flp, valuep, 0, VL_IDATASIZE};
-        return new AstCond{flp, fitsp, lowp, newInvalidDynIndexp(flp)};
+        AstNodeExpr* elsep = newInvalidDynIndexp(flp);
+        if (saturate) {
+            AstNodeExpr* const signp = new AstSel{flp, valuep->cloneTreePure(false), width - 1, 1};
+            elsep = new AstCond{flp, signp, elsep, newMaxDynIndexp(flp)};
+        }
+        return new AstCond{flp, fitsp, lowp, elsep};
     }
     // The most negative index, which selects no element, also as an offset from the back
     static AstConst* newInvalidDynIndexp(FileLine* flp) {
         return new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE, 1U << (VL_IDATASIZE - 1)};
     }
-    // Convert the index of dynamic array or queue element 'nodep' as newDynIndexp describes
-    void visitDynElement(AstNodeSel* nodep) {
-        // An index with X or Z bits selects no element: a read gives the default value and a
-        // write is ignored (IEEE 1800-2023 7.4.6)
-        if (AstConst* const constp = VN_CAST(nodep->bitp(), Const)) {
-            if (constp->num().isFourState()) {
-                constp->replaceWith(newInvalidDynIndexp(constp->fileline()));
-                VL_DO_DANGLING(pushDeletep(constp), constp);
-            }
-        }
-        iterateChildren(nodep);
-        AstNodeExpr* const indexp = nodep->bitp();
-        // A narrower unsigned index is zero extended by the C++ conversion
-        if (indexp->width() < VL_IDATASIZE ? !indexp->isSigned()
-                                           : indexp->width() == VL_IDATASIZE) {
+    // The most positive index, past the end, also as a first position of a slice
+    static AstConst* newMaxDynIndexp(FileLine* flp) {
+        return new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE,
+                            (1U << (VL_IDATASIZE - 1)) - 1};
+    }
+    // Replace a constant index with X or Z bits, which selects no element: a read gives the
+    // default value and a write is ignored (IEEE 1800-2023 7.4.6); 'high' to replace it with
+    // the most positive index instead
+    bool replaceFourStateIndex(AstNodeExpr* indexp, bool high = false) {
+        AstConst* const constp = VN_CAST(indexp, Const);
+        if (!constp || !constp->num().isFourState()) return false;
+        FileLine* const flp = constp->fileline();
+        constp->replaceWith(high ? newMaxDynIndexp(flp) : newInvalidDynIndexp(flp));
+        VL_DO_DANGLING(pushDeletep(constp), constp);
+        return true;
+    }
+    // Convert dynamic array or queue index 'indexp' as newDynIndexp describes
+    void convertDynIndex(AstNodeExpr* indexp, bool saturate = false) {
+        // A narrower unsigned index is zero extended by the C++ conversion. A 32-bit unsigned one
+        // past the int range wraps to negative, which as an element index or offset from the back
+        // selects no element, as it should, but a slice position saturates.
+        if (indexp->width() < VL_IDATASIZE
+                ? !indexp->isSigned()
+                : indexp->width() == VL_IDATASIZE && (indexp->isSigned() || !saturate)) {
             return;
         }
         VNRelinker relinkHandle;
         indexp->unlinkFrBack(&relinkHandle);
-        relinkHandle.relink(newDynIndexp(indexp));
+        relinkHandle.relink(newDynIndexp(indexp, saturate));
+    }
+    // Convert the index of dynamic array or queue element 'nodep'
+    void visitDynElement(AstNodeSel* nodep) {
+        replaceFourStateIndex(nodep->bitp());
+        iterateChildren(nodep);
+        convertDynIndex(nodep->bitp());
+    }
+    // Number of leading arguments of a dynamic array or queue slice method that are positions
+    static int slicePositions(VCMethod method) {
+        switch (method) {
+        case VCMethod::DYN_SLICE:
+        case VCMethod::DYN_SLICE_BACK_BACK:
+        case VCMethod::DYN_SLICE_FRONT_BACK:
+        case VCMethod::DYN_SLICE_PAD_BACK_BACK:
+        case VCMethod::DYN_SLICE_PAD_FRONT_BACK:
+        case VCMethod::DYN_SLICE_ASSIGN:
+        case VCMethod::DYN_SLICE_ASSIGN_BACK_BACK:
+        case VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK: return 2;
+        case VCMethod::DYN_SLICE_PLUS:
+        case VCMethod::DYN_SLICE_PLUS_PAD:
+        case VCMethod::DYN_SLICE_ASSIGN_PLUS:
+        case VCMethod::DYN_SLICE_ASSIGN_PLUS_PAD: return 1;  // Then the constant width
+        default: return 0;
+        }
+    }
+    // Whether X or Z in argument 'n' of slice method 'method' becomes the most positive index,
+    // rather than the most negative one, so the slice selects no element (IEEE 1800-2023
+    // 7.10.1): a first position, or a last position counted from the back
+    static bool sliceArgHigh(VCMethod method, int n) {
+        switch (method) {
+        case VCMethod::DYN_SLICE:
+        case VCMethod::DYN_SLICE_ASSIGN: return n == 0;
+        case VCMethod::DYN_SLICE_FRONT_BACK:
+        case VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK: return true;
+        case VCMethod::DYN_SLICE_BACK_BACK:
+        case VCMethod::DYN_SLICE_ASSIGN_BACK_BACK: return n == 1;
+        default: return false;
+        }
+    }
+    static AstNodeExpr* slicePinp(AstCMethodHard* nodep, int n) {
+        AstNodeExpr* pinp = nodep->pinsp();
+        for (; n > 0; --n) pinp = VN_AS(pinp->nextp(), NodeExpr);
+        return pinp;
     }
 
     // VISITORS
@@ -616,6 +682,24 @@ class UnknownVisitor final : public VNVisitor {
     //--------------------
     void visit(AstDynArraySel* nodep) override { visitDynElement(nodep); }
     void visit(AstQueueSel* nodep) override { visitDynElement(nodep); }
+    void visit(AstCMethodHard* nodep) override {
+        // The positions of a slice are converted like an element index, except that one that
+        // does not fit saturates, and one with X or Z bits makes the slice select no element
+        const AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefp();
+        const int positions = (VN_IS(fromDtp, DynArrayDType) || VN_IS(fromDtp, QueueDType))
+                                  ? slicePositions(nodep->method())
+                                  : 0;
+        // Positions replaced as unknown, which need no conversion
+        std::array<bool, 2> unknown{};
+        for (int n = 0; n < positions; ++n) {
+            unknown[n]
+                = replaceFourStateIndex(slicePinp(nodep, n), sliceArgHigh(nodep->method(), n));
+        }
+        iterateChildren(nodep);
+        for (int n = 0; n < positions; ++n) {
+            if (!unknown[n]) convertDynIndex(slicePinp(nodep, n), true);
+        }
+    }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:

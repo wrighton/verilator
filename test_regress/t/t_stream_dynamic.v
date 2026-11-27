@@ -18,6 +18,7 @@ typedef enum bit [5:0] {
 
 module t;
   int big = 32'sh7fff_ffff;
+  longint wide = 64'sh1_0000_0000;
   task test1;
     bit arr[];
     bit [1:0] arr2[$];
@@ -238,6 +239,22 @@ module t;
     `checkp(data, "'{'h0, 'h0}");
     data = {>>{q with [big-1+:2]}};
     `checkp(data, "'{'h0, 'h0}");
+    data = {>>{q with [wide+:2]}};
+    `checkp(data, "'{'h0, 'h0}");
+    data = {>>{q with [64'sh1_0000_0000:64'sh1_0000_0001]}};
+    `checkp(data, "'{'h0, 'h0}");
+    // A range with an unknown position selects no element
+    data = {>>{q with [4'bx000:$]}};
+    `checkp(data, "'{}");
+    // verilator lint_off WIDTHEXPAND
+    data = {>>{q with [$:$-4'bx001]}};
+    // verilator lint_on WIDTHEXPAND
+    `checkp(data, "'{}");
+    // Too large to read padded, so the whole array
+    data = {>>{q with [0:64'sh1_0000_0000]}};
+    `checkp(data, "'{'h11, 'h22}");
+    data = {>>{q with [0:wide]}};
+    `checkp(data, "'{'h11, 'h22}");
     // A range of variable size is limited to the array
     data = {>>{q with [0:n+999999999]}};
     `checkp(data, "'{'h11, 'h22}");
