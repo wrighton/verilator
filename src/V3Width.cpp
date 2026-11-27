@@ -5656,11 +5656,8 @@ class WidthVisitor final : public VNVisitor {
         pushDeletep(nodep->itemsp()->unlinkFrBackWithNext());
         nodep->addItemsp(prelimp->itemsp()->unlinkFrBackWithNext());
         VL_DO_DANGLING(prelimp->deleteTree(), prelimp);
-        nodep->foreach([](AstNode* np) {
-            np->fileline(new FileLine{np->fileline()});
-            np->fileline()->modifyWarnOff(V3ErrorCode::WIDTHEXPAND, true);
-            np->fileline()->modifyWarnOff(V3ErrorCode::WIDTHTRUNC, true);
-        });
+        waiveCopyWidth(nodep->exprp());
+        for (AstDistItem* const ditemp : nodep->itemspList()) waiveCopyWidth(ditemp);
         nodep->dtypeSetBit();
 
         // Inside a constraint, V3Randomize handles dist lowering with proper weights,
@@ -5864,7 +5861,7 @@ class WidthVisitor final : public VNVisitor {
             if (!inewp) continue;
             // The replacement is not always iterated, so type the comparisons now
             if (perItem) {
-                waiveInsideWidth(inewp);
+                waiveCopyWidth(inewp);
                 inewp = VN_AS(userIterateSubtreeReturnEdits(inewp, WidthVP{SELF, BOTH}.p()),
                               NodeExpr);
             }
@@ -5955,17 +5952,14 @@ class WidthVisitor final : public VNVisitor {
             }
         }
     }
-    // Width warnings of an inside come from its common type; turn them off on the
-    // comparisons of an item
-    static void waiveInsideWidth(AstNodeExpr* nodep) {
-        if (AstLogAnd* const andp = VN_CAST(nodep, LogAnd)) {
-            waiveInsideWidth(andp->lhsp());
-            waiveInsideWidth(andp->rhsp());
-        } else if (VN_IS(nodep, NodeBiop)) {
-            nodep->fileline(new FileLine{nodep->fileline()});
-            nodep->fileline()->modifyWarnOff(V3ErrorCode::WIDTHEXPAND, true);
-            nodep->fileline()->modifyWarnOff(V3ErrorCode::WIDTHTRUNC, true);
-        }
+    // Width warnings of an inside come from the common type of its operands; turn them off on
+    // a tree built from copies of the operands
+    static void waiveCopyWidth(AstNode* nodep) {
+        nodep->foreach([](AstNode* np) {
+            np->fileline(new FileLine{np->fileline()});
+            np->fileline()->modifyWarnOff(V3ErrorCode::WIDTHEXPAND, true);
+            np->fileline()->modifyWarnOff(V3ErrorCode::WIDTHTRUNC, true);
+        });
     }
     // Whether an inside item or range bound is integral, by element for an unpacked array
     static bool insideOperandIntegral(const AstNode* valuep) {
