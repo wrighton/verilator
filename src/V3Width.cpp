@@ -16890,7 +16890,7 @@ public:
                     streamp->dtypeSetBitOrLogicUnsized(
                         srcp->width(), srcp->widthMin(), VSigning::UNSIGNED,
                         AstNodeExpr::isFourstateOrNoDtype(streamExprp, srcp));
-                    srcp = streamExprp;
+                    srcp = V3Const::unpackStreamL(VN_AS(streamExprp, StreamL));
                 } else {
                     if (srcp->width() > lwidth) {
                         srcp = new AstSel{streamp->fileline(), srcp, srcp->width() - lwidth,

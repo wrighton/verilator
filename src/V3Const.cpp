@@ -3441,6 +3441,7 @@ class ConstVisitor final : public VNVisitor {
                 streamp->dtypeSetBitOrLogicUnsized(srcp->width(), srcp->widthMin(),
                                                    VSigning::UNSIGNED,
                                                    srcp->isFourstateOrNoDtype());
+                streamp = V3Const::unpackStreamL(VN_AS(streamp, StreamL));
             }
             if (VN_IS(dstDTypep, UnpackArrayDType)) {
                 streamp = new AstCvtPackedToArray{nodep->fileline(), streamp, dstDTypep};
@@ -6236,6 +6237,24 @@ AstNodeExpr* V3Const::newSelectedDefaultp(AstNodeExpr* const readp,
     VNDeleter deleter;
     deleter.pushDeletep(prefixCopyp);
     return constifyEdit(defaultReadp);
+}
+
+AstNodeExpr* V3Const::unpackStreamL(AstStreamL* const streamp) {
+    // Packing slices from the right, so the short slice, if any, is the leftmost of the target and
+    // the rightmost of the stream. Its inverse slices the stream from the left, which reversing
+    // the bits around the left stream does.
+    const AstConst* const sizep = VN_CAST(streamp->rhsp(), Const);
+    const int width = streamp->width();
+    if (!sizep || sizep->toSInt() <= 1 || width % sizep->toSInt() == 0) return streamp;
+    const auto newReversep = [](AstNodeExpr* const exprp) {
+        FileLine* const flp = exprp->fileline();
+        AstStreamL* const reversep = new AstStreamL{flp, exprp, new AstConst{flp, 1}};
+        reversep->dtypeSetBitOrLogicUnsized(exprp->width(), exprp->widthMin(), VSigning::UNSIGNED,
+                                            exprp->isFourstateOrNoDtype());
+        return reversep;
+    };
+    streamp->lhsp(newReversep(streamp->lhsp()->unlinkFrBack()));
+    return newReversep(streamp);
 }
 
 void V3Const::collectFixedAggregateTerms(VNDeleter& deleter, AstNodeExpr* const fromp,
