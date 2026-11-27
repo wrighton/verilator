@@ -516,10 +516,17 @@ class WidthSelVisitor final : public VNVisitor {
         }
     }
 
+    // Return if 'nodep' is '$', also when extended to the width of a wider index
+    static bool isUnbounded(const AstNode* nodep) {
+        while (VN_IS(nodep, Extend) || VN_IS(nodep, ExtendS)) {
+            nodep = VN_AS(nodep, NodeUniop)->lhsp();
+        }
+        return VN_IS(nodep, Unbounded);
+    }
     AstNodeExpr* selQueueBackness(AstNode* nodep) {
-        if (VN_IS(nodep, Unbounded)) {  // e.g. "[$]"
+        if (isUnbounded(nodep)) {  // e.g. "[$]"
             return new AstConst{nodep->fileline(), AstConst::Signed32{}, 0};
-        } else if (VN_IS(nodep, Sub) && VN_IS(VN_CAST(nodep, Sub)->lhsp(), Unbounded)) {
+        } else if (VN_IS(nodep, Sub) && isUnbounded(VN_CAST(nodep, Sub)->lhsp())) {
             // e.g. "q[$ - 1]", where 1 is subnodep
             AstNodeExpr* subrhsp = VN_CAST(nodep, Sub)->rhsp()->unlinkFrBack();
             return subrhsp;
