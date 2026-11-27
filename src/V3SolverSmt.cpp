@@ -12481,6 +12481,61 @@ class SolverSmtLowering final : public V3SolverLowering {
         addGatedOnlyPins(fl, randomizep, solveGenp, gatedOnlyArrays);
     }
 
+    // Classes whose own constraints call a function that is not pure (see
+    // impureConstraintCalls), found on the first prepareClass, before any is lowered
+    std::unordered_set<const AstClass*> m_impureCallClasses;
+    bool m_impureCallsFound = false;
+    void findImpureConstraintCalls() {
+        if (m_impureCallsFound) return;
+        m_impureCallsFound = true;
+        v3Global.rootp()->foreach([&](AstClass* classp) {
+            classp->foreach([&](AstConstraint* constrp) {
+                if (hasImpureCalls(constrp)) m_impureCallClasses.insert(classp);
+            });
+        });
+    }
+    // Whether nodep calls a function or system function that is not pure, so would have
+    // another effect when called again. $random and $urandom, which isPure() takes as pure,
+    // advance the random state, also in a function nodep calls.
+    static bool hasImpureCalls(AstNode* const nodep) {
+        std::unordered_set<const AstNodeFTask*> visited;
+        return hasImpureCalls(nodep, visited, true);
+    }
+    static bool hasImpureCalls(AstNode* const nodep,
+                               std::unordered_set<const AstNodeFTask*>& visited,
+                               const bool exprs) {
+        bool impure = false;
+        nodep->foreach([&](AstNode* np) {
+            if (impure) return;
+            if (VN_IS(np, Rand)) {
+                impure = true;
+            } else if (AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef)) {
+                if (!refp->isPure()) {
+                    impure = true;
+                } else if (AstNodeFTask* const taskp = refp->taskp()) {
+                    if (visited.insert(taskp).second && hasImpureCalls(taskp, visited, false)) {
+                        impure = true;
+                    }
+                }
+            } else if (exprs) {
+                if (AstNodeExpr* const exprp = VN_CAST(np, NodeExpr)) {
+                    if (!exprp->isPure()) impure = true;
+                }
+            }
+        });
+        return impure;
+    }
+    // Whether the constraints of classp or of a base call a function that is not pure, which
+    // a retry of the size solve would call again, so the sizes are not retried. A pure
+    // function may be called any number of times (IEEE 1800-2023 18.5.12).
+    bool impureConstraintCalls(const AstClass* classp) const {
+        while (classp) {
+            if (m_impureCallClasses.count(classp)) return true;
+            classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr;
+        }
+        return false;
+    }
+
 public:
     // CONSTRUCTORS
     SolverSmtLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
@@ -12510,6 +12565,7 @@ public:
 
     // V3SolverLowering
     void prepareClass(AstClass* classp) override {
+        findImpureConstraintCalls();
         if (!m_scalarsDecided && v3Global.opt.fConstraintScalar()) {
             m_scalarsDecided = true;
             SolverScalarArrayVisitor{v3Global.rootp(), m_elemModes, m_dispatch};
@@ -12805,6 +12861,7 @@ public:
                 // A size the elements cannot be solved with is excluded and the sizes solved
                 // again, except where the setup is not one run of statements
                 const bool retry = !priorPhasep && !regp && undoResizep
+                                   && !impureConstraintCalls(nodep)
                                    && !ConstraintFuncRounds{classFuncCalls(nodep)}.lastRound();
                 AstVar* const sizeOkVarp = addSizeSolvep(randomizep, genp);
                 if (priorPhasep) setStagedPhase(randomizep, staged, staged.phasep);
