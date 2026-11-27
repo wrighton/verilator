@@ -10,14 +10,16 @@ module t (  /*AUTOARG*/
 );
   input clk;
 
-  wire [31:0] a, b;
+  wire [31:0] a, b, c, d;
 
   integer cyc = 0;
   assign a = cyc;
 
   sub s (
       .a(a),
-      .b(b)
+      .b(b),
+      .c(c),
+      .d(d)
   );
 
   always @(posedge clk) begin
@@ -33,7 +35,10 @@ endmodule
 
 module sub (
     inout wire [31:0] a,
-    inout wire [31:0] b
+    inout wire [31:0] b,
+    inout [31:0] c,  // Port kind omitted, so is a net (IEEE 1800-2023 23.2.2.3)
+    inout [31:0] d
 );
   alias a = b;
+  alias c = d;
 endmodule
