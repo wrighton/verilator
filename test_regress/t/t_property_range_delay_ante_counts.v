@@ -27,6 +27,13 @@ module t (
   int dpass = 0, dfail = 0;
   assert property (@(posedge clk) disable iff (cyc > 5) (da ##[1:2] db) |-> 1'b0) ++dpass;
   else ++dfail;
+  // Directed: the antecedent matches on both ends of the range, ticks 6 and 7, and each match
+  // fails the consequent, also a strong 'always' over later ticks
+  int dfail2 = 0, dfail3 = 0;
+  assert property (@(posedge clk) (cyc == 5) ##[1:2] 1'b1 |-> (cyc == 100))
+  else ++dfail2;
+  assert property (@(posedge clk) (cyc == 5) ##[1:2] 1'b1 |-> s_always [2:3] (cyc == 100))
+  else ++dfail3;
 
   // Random
   wire a = crc[0] & crc[3];
@@ -56,6 +63,10 @@ module t (
     if (cyc == 8) begin
       `checkd(dpass, 5);
       `checkd(dfail, 1);
+    end
+    if (cyc == 12) begin
+      `checkd(dfail2, 2);
+      `checkd(dfail3, 2);
     end
     if (cyc == END + 3) begin
       automatic int expFails = 0, expGFails = 0;
