@@ -3946,10 +3946,14 @@ private:
                                       randMode, memberRefp, smtName, classOrPackagep, classp,
                                       initp);
                 AstNodeDType* dtp = varp->dtypep()->skipRefp();
+                const bool fixedArray = VN_IS(dtp, UnpackArrayDType);
                 while (VN_IS(dtp, UnpackArrayDType)) dtp = dtp->subDTypep()->skipRefp();
-                if (VN_IS(dtp, AssocArrayDType) && !inRandomize && !m_inlineInitBlockp) {
-                    // Keys can be added to an associative array (also one in a fixed-size array)
-                    // after new(), so randomize() registers it again for its current elements.
+                if ((VN_IS(dtp, AssocArrayDType)
+                     || (fixedArray && (VN_IS(dtp, DynArrayDType) || VN_IS(dtp, QueueDType))))
+                    && !inRandomize && !m_inlineInitBlockp) {
+                    // Keys can be added to an associative array (also one in a fixed-size array),
+                    // and the arrays of a fixed-size array resized, after new(), so randomize()
+                    // registers it again for its current elements.
                     // new() still registers it for a randomize() of a base class, which does not
                     // run this one.
                     createSolverVarHandle(varp, false, isGlobalConstrained, false, randMode,
