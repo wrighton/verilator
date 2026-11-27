@@ -3875,7 +3875,7 @@ bool VlRandomizer::report_unsat() {
 bool VlRandomizer::report_retry_failure() {
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
-    std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    std::vector<std::string> uniqueExprs = buildUniqueExprs(nullptr);
     addAliasExprs(uniqueExprs);
     uniqueExprs.insert(uniqueExprs.end(), m_sizeExclusions.begin(), m_sizeExclusions.end());
     // Like a solve, in a transaction, so the next solve starts afresh
