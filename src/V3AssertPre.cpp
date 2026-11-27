@@ -94,6 +94,51 @@ public:
 };
 
 //######################################################################
+// Sampled reads of checker procedures
+
+class AssertPreCheckerReadsVisitor final : public VNVisitorConst {
+    // Collects the reads of variables sampled in an always_ff of a checker: all, except of the
+    // variables of its event control, of automatic variables, whose sampled value is their
+    // current value, and in concurrent assertions and sampled value functions, which sample by
+    // their own rules (IEEE 1800-2023 16.5.1, 17.5)
+    // STATE
+    std::unordered_set<const AstVar*> m_eventVarps;  // Variables of the event control
+    std::vector<AstNodeVarRef*> m_refps;  // Reads found
+
+    // VISITORS
+    void visit(AstNodeVarRef* nodep) override {
+        const AstVar* const varp = nodep->varp();
+        if (nodep->access().isReadOnly() && !varp->lifetime().isAutomatic()
+            && !m_eventVarps.count(varp)) {
+            m_refps.push_back(nodep);
+        }
+    }
+    void visit(AstSenTree* nodep) override {
+        // Its variables are read with their current values, also in the statements
+        nodep->foreach([&](const AstNodeVarRef* refp) { m_eventVarps.emplace(refp->varp()); });
+    }
+    void visit(AstSampled*) override {}
+    void visit(AstPast*) override {}
+    void visit(AstNodeCoverOrAssert* nodep) override {
+        if (nodep->immediate()) iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+    // CONSTRUCTORS
+    explicit AssertPreCheckerReadsVisitor(const AstAlways* alwaysp) {
+        iterateAndNextConstNull(alwaysp->sentreep());
+        iterateAndNextConstNull(alwaysp->stmtsp());
+    }
+
+public:
+    ~AssertPreCheckerReadsVisitor() override = default;
+    // The sampled reads of the statements of the always_ff
+    static std::vector<AstNodeVarRef*> reads(const AstAlways* alwaysp) {
+        return AssertPreCheckerReadsVisitor{alwaysp}.m_refps;
+    }
+};
+
+//######################################################################
 // Assert class functions
 
 class AssertPreVisitor final : public VNVisitor {
@@ -959,6 +1004,16 @@ private:
         m_alwaysWarned = false;
         iterateAndNextNull(nodep->stmtsp());
         m_seniAlwaysp = nullptr;
+        // Except for its event control, the expressions of an always_ff in a checker are
+        // sampled, also in its immediate and deferred assertions (IEEE 1800-2023 17.5)
+        const AstModule* const modp = VN_CAST(m_modp, Module);
+        if (modp && modp->isChecker() && nodep->keyword() == VAlwaysKwd::ALWAYS_FF) {
+            for (AstNodeVarRef* const refp : AssertPreCheckerReadsVisitor::reads(nodep)) {
+                VNRelinker relinker;
+                refp->unlinkFrBack(&relinker);
+                relinker.relink(new AstSampled{refp->fileline(), refp, refp->dtypep(), true});
+            }
+        }
     }
 
     void visit(AstNodeCoverOrAssert* nodep) override {
