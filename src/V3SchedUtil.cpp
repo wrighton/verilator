@@ -257,19 +257,22 @@ void splitCheck(AstCFunc* const ofuncp) {
 
 class SchedLogicAccessVisitor final : public VNVisitorConst {
     // STATE
-    const LogicAccessFunc& m_f;  // Called on each access
+    const LogicActionAccessFunc& m_f;  // Called on each access
     std::unordered_set<const AstCFunc*> m_calledps;  // Functions already followed
+    std::unordered_set<const AstCFunc*> m_calledActionps;  // Followed only from action blocks
     bool m_inCallee = false;  // Under a called function
     bool m_readsOnly = false;  // Under a called static class method
+    bool m_inAction = false;  // Under a call in an assertion action block
 
     // VISITORS
     void visit(AstVarRef* nodep) override {
         // Variables declared in a called function are excluded (IEEE 1800-2023 9.2.2.2.1)
         if (m_inCallee && nodep->varp()->isFuncLocal()) return;
+        const bool inAction = m_inAction || nodep->inAssertAction();
         if (!m_readsOnly) {
-            m_f(nodep->varScopep(), nodep->access());
+            m_f(nodep->varScopep(), nodep->access(), inAction);
         } else if (nodep->access().isReadOrRW()) {
-            m_f(nodep->varScopep(), VAccess::READ);
+            m_f(nodep->varScopep(), VAccess::READ, inAction);
         }
     }
     void visit(AstCCall* nodep) override {
@@ -280,7 +283,7 @@ class SchedLogicAccessVisitor final : public VNVisitorConst {
 
 public:
     // CONSTRUCTORS
-    explicit SchedLogicAccessVisitor(const LogicAccessFunc& f)
+    explicit SchedLogicAccessVisitor(const LogicActionAccessFunc& f)
         : m_f{f} {}
 
     // METHODS
@@ -288,9 +291,16 @@ public:
     void followCall(const AstCCall* callp) {
         AstCFunc* const funcp = callp->funcp();
         if (!isLogicCallee(funcp)) return;
+        VL_RESTORER(m_inAction);
+        m_inAction = m_inAction || callp->inAssertAction();
         // Each function is visited once per logic, like a once-inlined body: linear in the
-        // total size of the called functions, as inlining all calls would be.
-        if (!m_calledps.emplace(funcp).second) return;
+        // total size of the called functions, as inlining all calls would be. One called from
+        // an action block is visited again if also called from elsewhere.
+        if (m_calledps.count(funcp)) return;
+        if (m_inAction ? !m_calledActionps.emplace(funcp).second
+                       : !m_calledps.emplace(funcp).second) {
+            return;
+        }
         VL_RESTORER(m_inCallee);
         VL_RESTORER(m_readsOnly);
         m_inCallee = true;
@@ -302,11 +312,19 @@ public:
 };
 
 void foreachLogicAccess(AstNode* nodep, const LogicAccessFunc& f) {
+    const LogicActionAccessFunc actionf
+        = [&f](AstVarScope* vscp, VAccess access, bool) { f(vscp, access); };
+    SchedLogicAccessVisitor{actionf}.iterateLogic(nodep);
+}
+
+void foreachLogicActionAccess(AstNode* nodep, const LogicActionAccessFunc& f) {
     SchedLogicAccessVisitor{f}.iterateLogic(nodep);
 }
 
 void foreachCallAccess(const AstCCall* callp, const LogicAccessFunc& f) {
-    SchedLogicAccessVisitor{f}.followCall(callp);
+    const LogicActionAccessFunc actionf
+        = [&f](AstVarScope* vscp, VAccess access, bool) { f(vscp, access); };
+    SchedLogicAccessVisitor{actionf}.followCall(callp);
 }
 
 AstSenTree* changeSenTree(SenTreeFinder& finder, AstNodeProcedure* procp,
@@ -371,17 +389,30 @@ computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleW
     //      if (sometimes) foo = 1
     //      foo = foo + 1
     // TODO: Do this properly with liveness analysis (i.e.: if live, it's an implicit sensitivity)
+    const AstAlways* const alwaysp = VN_CAST(procp, Always);
+    const bool userComb = alwaysp && alwaysp->userComb();
     std::unordered_set<const AstVarScope*> implicitSensitivities;
     std::unordered_set<const AstVarScope*> assigned;
-    foreachLogicAccess(procp, [&](const AstVarScope* vscp, VAccess access) {
+    // "Expressions used in assertion action blocks do not contribute to the implicit sensitivity
+    // list of an always_comb" (IEEE 1800-2023 9.2.2.2.1). Variables read only there:
+    std::unordered_set<const AstVarScope*> actionReads;
+    foreachLogicActionAccess(procp, [&](const AstVarScope* vscp, VAccess access, bool inAction) {
         if (access.isWriteOrRW() && !vscp->varp()->ignoreSchedWrite()) assigned.emplace(vscp);
-        if (access.isReadOrRW() && !assigned.count(vscp)) implicitSensitivities.emplace(vscp);
+        if (access.isReadOrRW() && !assigned.count(vscp)) {
+            if (userComb && inAction) {
+                actionReads.emplace(vscp);
+            } else {
+                implicitSensitivities.emplace(vscp);
+            }
+        }
     });
+    for (const AstVarScope* const vscp : actionReads) {
+        if (!implicitSensitivities.count(vscp)) ++excludedr;
+    }
     // A user's always_comb is not sensitive to what it writes (IEEE 1800-2023 9.2.2.2.1), so does
     // not wake itself. Only the whole variables it alone writes are excluded, as another process
     // may drive other parts (IEEE 1800-2023 9.2.2.2). A task's writes count, being inlined.
-    const AstAlways* const alwaysp = VN_CAST(procp, Always);
-    if (alwaysp && alwaysp->userComb()) {
+    if (userComb) {
         for (const AstVarScope* const vscp : assigned) {
             const auto it = soleWriters.find(vscp);
             if (it != soleWriters.end() && it->second == procp

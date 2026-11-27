@@ -390,7 +390,10 @@ to nothing runs once at time zero, as initial logic. This uses a flag on
 the ``AstAlways`` from the parser, as other passes create ``always_comb``
 processes too. The writes of an inlined task count, though IEEE only
 excludes those of a function. Reads that optimizations remove before
-scheduling do not count.
+scheduling do not count. Reads in the action blocks of immediate assertions
+are not implicit sensitivities of an ``always_comb`` either (IEEE 1800-2023
+9.2.2.2.1): V3Assert marks the references there, and V3Task those of the
+bodies it inlines for calls there, with ``inAssertAction``.
 
 Hybrid logic is handled by ``V3Order`` mostly in the same way as
 combinational logic, with two exceptions:

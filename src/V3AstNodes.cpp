@@ -3223,6 +3223,7 @@ void AstNodeCCall::dump(std::ostream& str) const {
     Super::dump(str);
     if (superReference()) str << " [SUPERREF]";
     if (mayEnqueueGlobalNBA()) str << " [MAYENQUEUEGLOBALNBA]";
+    if (inAssertAction()) str << " [ASSERTACTION]";
     if (funcp()) {
         str << " " << funcp()->name() << " => ";
         funcp()->dump(str);
@@ -3233,6 +3234,7 @@ void AstNodeCCall::dump(std::ostream& str) const {
 void AstNodeCCall::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, superReference);
     dumpJsonBoolFuncIf(str, mayEnqueueGlobalNBA);
+    dumpJsonBoolFuncIf(str, inAssertAction);
     if (funcp()) dumpJsonStr(str, "funcName", funcp()->name());
     dumpJsonStr(str, "argTypes", argTypes());
     dumpJsonGen(str);
@@ -4006,6 +4008,7 @@ void AstNodeFTaskRef::dump(std::ostream& str) const {
     if (containsGenBlock()) str << " [GENBLK]";
     if (pli()) str << " [PLI]";
     if (superReference()) str << " [SUPERREF]";
+    if (inAssertAction()) str << " [ASSERTACTION]";
     str << " -> ";
     if (dotted() != "") str << ".=" << dotted() << " ";
     if (inlinedDots() != "") str << " inline.=" << inlinedDots() << " - ";
@@ -4019,6 +4022,7 @@ void AstNodeFTaskRef::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, containsGenBlock);
     dumpJsonBoolFuncIf(str, pli);
     dumpJsonBoolFuncIf(str, superReference);
+    dumpJsonBoolFuncIf(str, inAssertAction);
     dumpJsonStrFunc(str, dotted);
     dumpJsonStrFunc(str, inlinedDots);
     dumpJsonGen(str);
@@ -4285,10 +4289,12 @@ bool AstNodeUniop::isPure() {
 void AstNodeVarRef::dump(std::ostream& str) const {
     Super::dump(str);
     if (classOrPackagep()) str << " pkg=" << nodeAddr(classOrPackagep());
+    if (inAssertAction()) str << " [ASSERTACTION]";
     str << " " << access().arrow() << " ";
 }
 void AstNodeVarRef::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "access", access().ascii());
+    dumpJsonBoolFuncIf(str, inAssertAction);
     dumpJsonGen(str);
 }
 const char* AstNot::widthMismatch() const VL_MT_STABLE {
