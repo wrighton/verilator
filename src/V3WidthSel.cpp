@@ -711,17 +711,16 @@ class WidthSelVisitor final : public VNVisitor {
             AstNodeExpr* const qrightp = nodep->rightp()->unlinkFrBack();
             AstNodeExpr* const qleftBacknessp = selQueueBackness(qleftp);
             AstNodeExpr* const qrightBacknessp = selQueueBackness(qrightp);
-            // A slice of constant size keeps it, an index outside the array reading the default
-            // value: a dynamic array slice (IEEE 1800-2023 7.4.5), and a queue slice streamed by
-            // with[] (IEEE 1800-2023 11.4.14.4), also from the front to the back, which keeps the
-            // size its constant positions give. Any other slice, including one with an unknown
-            // position, which selects no element, is limited to the array, as a queue slice is
-            // (IEEE 1800-2023 7.10.1).
-            bool pad = (VN_IS(ddtypep, DynArrayDType) || m_padQueue)
-                       && (!qleftBacknessp || qrightBacknessp)
-                       && isConstPosition(qleftBacknessp ? qleftBacknessp : qleftp)
-                       && isConstPosition(qrightBacknessp ? qrightBacknessp : qrightp);
-            if (pad && !qleftBacknessp && !qrightBacknessp) {
+            // A slice keeps the size its positions give, an index outside the array reading the
+            // default value: a dynamic array slice of constant size (IEEE 1800-2023 7.4.5), and
+            // a slice streamed by with[], also from the front to the back, and also at runtime
+            // (IEEE 1800-2023 11.4.14.4). Any other slice is limited to the array, as a queue
+            // slice is (IEEE 1800-2023 7.10.1). A slice with an unknown position selects nothing.
+            const bool constSize = isConstPosition(qleftBacknessp ? qleftBacknessp : qleftp)
+                                   && isConstPosition(qrightBacknessp ? qrightBacknessp : qrightp);
+            bool pad = (!qleftBacknessp || qrightBacknessp)
+                       && (m_padQueue || (VN_IS(ddtypep, DynArrayDType) && constSize));
+            if (pad && constSize && !qleftBacknessp && !qrightBacknessp) {
                 // As its first position and size, so the size stays exact when a position does
                 // not fit the runtime's 32 bits
                 if (AstConst* const sizep
@@ -748,7 +747,7 @@ class WidthSelVisitor final : public VNVisitor {
                       ? (pad ? VCMethod::DYN_SLICE_PAD_BACK_BACK : VCMethod::DYN_SLICE_BACK_BACK)
                   : qrightBacknessp
                       ? (pad ? VCMethod::DYN_SLICE_PAD_FRONT_BACK : VCMethod::DYN_SLICE_FRONT_BACK)
-                      : VCMethod::DYN_SLICE;
+                      : (pad ? VCMethod::DYN_SLICE_PAD : VCMethod::DYN_SLICE);
             AstCMethodHard* const newp = new AstCMethodHard{nodep->fileline(), fromp, method};
             if (qleftBacknessp) {
                 VL_DO_DANGLING(pushDeletep(qleftp), qleftp);
