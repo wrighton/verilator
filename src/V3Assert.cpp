@@ -1121,12 +1121,12 @@ AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actions
         // runs, which may call one too
         ++m_statKillChecks;
         AstIf* const checkp = new AstIf{flp, newKilledp(), newDropp()};
-        if (runnerr.lastCheckp) {
-            runnerr.lastCheckp->addNextHere(checkp);
-        } else if (VN_IS(runnerr.bodyp->thensp(), CStmt)) {
-            runnerr.bodyp->thensp()->addNextHere(checkp);
-        } else if (AstNode* const firstp = runnerr.bodyp->thensp()) {
-            firstp->addHereThisAsNext(checkp);
+        // Each assertion adds its check before its loop, so the first comes after the flush
+        AstNode* const afterp = runnerr.lastCheckp ? runnerr.lastCheckp : runnerr.bodyp->thensp();
+        if (afterp) {
+            UASSERT_OBJ(afterp == runnerr.lastCheckp || VN_IS(afterp, CStmt), afterp,
+                        "Action before the first $assertkill check");
+            afterp->addNextHere(checkp);
         } else {
             runnerr.bodyp->addThensp(checkp);
         }
