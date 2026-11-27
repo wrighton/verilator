@@ -2854,6 +2854,24 @@ private:
                       });
         });
     }
+    // The array variable exprp selects an element of, through element selects only, else
+    // nullptr
+    static AstVar* elementArrayVarp(AstNodeExpr* exprp) {
+        bool selected = false;
+        while (true) {
+            if (AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
+                exprp = selp->fromp();
+            } else if (AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+                if (!isFrontElementSel(selp)) return nullptr;
+                exprp = selp->fromp();
+            } else {
+                break;
+            }
+            selected = true;
+        }
+        AstVarRef* const refp = VN_CAST(exprp, VarRef);
+        return selected && refp ? refp->varp() : nullptr;
+    }
     // Make the current constraint hold only while a solver-sized array keeps its size
     void gateOnCurrentSize(AstNodeExpr* arrayp) {
         // A reduction of the array, an 'inside' it, or a foreach over it, is expanded over the
@@ -9437,6 +9455,21 @@ private:
                 nodep->replaceWith(getConstFormat(nodep->cloneTreePure(false)));
                 VL_DO_DANGLING(nodep->deleteTree(), nodep);
                 return;
+            }
+            // The size of an element of an array is not solved, so the constraints on it hold
+            // only if the element has a size satisfying them. They are set up again for the
+            // elements the array has after it is resized, so it is solved for its size apart.
+            if (AstVar* const arrVarp = elementArrayVarp(nodep->fromp())) {
+                nodep->v3warn(CONSTRAINTIGN,
+                              "Unsupported: size of an element of an array in a constraint, "
+                              "treating as state, so randomize() fails unless the element's "
+                              "size satisfies the constraint.");
+                if (arrVarp->user4p() && m_sizeConstrainedArraysp) {
+                    m_sizeConstrainedArraysp->insert(arrVarp);
+                }
+                nodep->user1(false);
+                if (editFormat(nodep)) return;
+                nodep->v3fatalSrc("Method not handled in constraints? " << nodep);
             }
         }
 
