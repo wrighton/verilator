@@ -1690,6 +1690,13 @@ public:
         }
         return out;
     }
+    VlQueue<T_Value> slicePadFrontBack(int32_t lsb, int32_t msb) const {
+        return slicePadCount(lsb, static_cast<int64_t>(lastIndex()) - msb - lsb + 1);
+    }
+    VlQueue<T_Value> slicePadBackBack(int32_t lsb, int32_t msb) const {
+        return slicePadCount(static_cast<int64_t>(lastIndex()) - lsb,
+                             static_cast<int64_t>(lsb) - msb + 1);
+    }
     VlQueue<T_Value> slicePlusPad(int32_t lsb, int32_t width) const {
         return slicePadCount(lsb, width);
     }

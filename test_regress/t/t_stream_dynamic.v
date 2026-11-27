@@ -17,6 +17,8 @@ typedef enum bit [5:0] {
 } enum_t;
 
 module t;
+  int big = 32'sh7fff_ffff;
+  longint wide = 64'sh1_0000_0000;
   task test1;
     bit arr[];
     bit [1:0] arr2[$];
@@ -446,6 +448,51 @@ module t;
     for (int i = 0; i < 2; ++i) begin
       p16 = {>>{fd with [n - i -: 2]}};
       `checkh(p16, i == 0 ? 16'h0302 : 16'h0201);
+    end
+    // A range past the end of the array streams it, then the default value for the items it lacks
+    q = '{8'h11, 8'h22};
+    data = {>>{q with [0:3]}};
+    `checkp(data, "'{'h11, 'h22, 'h0, 'h0}");
+    data = {>>{q with [$-3:$]}};
+    `checkp(data, "'{'h0, 'h0, 'h11, 'h22}");
+    data = {>>{q with [-1:$]}};
+    `checkp(data, "'{'h0, 'h11, 'h22}");
+    data = {>>{q with [0:$-(-2)]}};
+    `checkp(data, "'{'h11, 'h22, 'h0, 'h0}");
+    data = {>>{q with [big+:2]}};
+    `checkp(data, "'{'h0, 'h0}");
+    data = {>>{q with [big-1+:2]}};
+    `checkp(data, "'{'h0, 'h0}");
+    data = {>>{q with [wide+:2]}};
+    `checkp(data, "'{'h0, 'h0}");
+    data = {>>{q with [64'sh1_0000_0000:64'sh1_0000_0001]}};
+    `checkp(data, "'{'h0, 'h0}");
+    // A range with an unknown position selects no element
+    data = {>>{q with [4'bx000:$]}};
+    `checkp(data, "'{}");
+    // verilator lint_off WIDTHEXPAND
+    data = {>>{q with [$:$-4'bx001]}};
+    // verilator lint_on WIDTHEXPAND
+    `checkp(data, "'{}");
+    // Too large to read padded, so the whole array
+    data = {>>{q with [0:64'sh1_0000_0000]}};
+    `checkp(data, "'{'h11, 'h22}");
+    data = {>>{q with [0:wide]}};
+    `checkp(data, "'{'h11, 'h22}");
+    // A range of variable size is limited to the array
+    data = {>>{q with [0:n+999999999]}};
+    `checkp(data, "'{'h11, 'h22}");
+    data = {>>{q with [n-1+:3]}};
+    `checkp(data, "'{'h22, 'h0, 'h0}");
+    data = '{8'h11, 8'h22, 8'h33};
+    data = {>>{data with [1:5]}};
+    `checkp(data, "'{'h22, 'h33, 'h0, 'h0, 'h0}");
+    begin
+      // Not limited by the bound of the queue
+      byte unsigned bq[$:3];
+      bq = '{8'h11, 8'h22};
+      data = {>>{bq with [0:5]}};
+      `checkp(data, "'{'h11, 'h22, 'h0, 'h0, 'h0, 'h0}");
     end
   endtask
 
