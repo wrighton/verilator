@@ -1483,7 +1483,7 @@ class AssertVisitor final : public VNVisitor {
             passsp = newIfAssertPassOn(passsp, nodep->directive(), nodep->userType(),
                                        /*vacuous=*/false);
         }
-        if (failsp && !VN_IS(propExprp, PExpr)) {
+        if (failsp && !VN_IS(propExprp, PExpr) && !nodep->failsGated()) {
             failsp = newIfAssertFailOn(failsp, nodep->directive(), nodep->userType());
         }
         // Also one left where it is

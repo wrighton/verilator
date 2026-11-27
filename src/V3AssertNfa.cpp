@@ -3289,6 +3289,19 @@ class AssertNfaVisitor final : public VNVisitor {
         return !nodep->exists([](const AstNodeExpr* exprp) { return exprp->isMultiCycleSva(); });
     }
 
+    // Prefix stmtsp, the pass actions of attempts passing on a tick when another attempt fails,
+    // to the fail action, once per assertion. The fail control applies to the fail action only
+    // (IEEE 1800-2023 20.11), so it is gated here instead of by V3Assert.
+    static void prependPassToFail(AstAssert* const assertp, AstNodeStmt* const stmtsp) {
+        if (AstNodeStmt* const failsp = assertp->failsp()) {
+            failsp->unlinkFrBackWithNext();
+            assertp->addFailsp(
+                newIfAssertFailOn(failsp, assertp->directive(), assertp->userType()));
+        }
+        assertp->failsGated(true);
+        assertp->prependFailsp(stmtsp);
+    }
+
     AstNodeDType* u32DTypep() const { return m_modp->findBasicDType(VBasicDTypeKwd::UINT32); }
     // One if condp holds, else zero
     AstNodeExpr* newCountp(FileLine* flp, AstNodeExpr* condp) const {
@@ -3322,7 +3335,7 @@ class AssertNfaVisitor final : public VNVisitor {
         ifp->isBoundsCheck(true);
         ifp->user1(true);
         // Another attempt failing on the same tick runs the fail action instead
-        assertp->prependFailsp(V3AssertCommon::cloneAction(ifp, m_actionNames));
+        prependPassToFail(assertp, V3AssertCommon::cloneAction(ifp, m_actionNames));
         assertp->addPasssp(ifp);
     }
 
@@ -3348,7 +3361,7 @@ class AssertNfaVisitor final : public VNVisitor {
                           /*vacuous=*/false);
         splitsp = AstNode::addNextNull<AstNodeStmt>(splitsp, nonvacuousp);
         // Another attempt failing on the same tick runs the fail action instead
-        assertp->prependFailsp(V3AssertCommon::cloneAction(splitsp, m_actionNames));
+        prependPassToFail(assertp, V3AssertCommon::cloneAction(splitsp, m_actionNames));
         assertp->addPasssp(splitsp);
     }
 
@@ -3458,11 +3471,13 @@ class AssertNfaVisitor final : public VNVisitor {
             UASSERT_OBJ(passsp, assertp, "needMatch set but passsp is null");
             passsp->unlinkFrBackWithNext();
             FileLine* const flp = assertp->fileline();
-            AstIf* const ifp = new AstIf{flp, matchExprp, passsp, nullptr};
+            // Gated by the pass control here, as V3Assert leaves an if it takes as gated
+            AstIf* const ifp = newPassOnIf(flp, matchExprp, passsp, assertp->userType(),
+                                           assertp->directive(), /*vacuous=*/false);
             assertp->addPasssp(ifp);
             // Fail-handler prefix for overlapping instances (IEEE 16.12):
             // fires when reject=1 && match=1 in the same cycle.
-            assertp->prependFailsp(V3AssertCommon::cloneAction(ifp, m_actionNames));
+            prependPassToFail(assertp, V3AssertCommon::cloneAction(ifp, m_actionNames));
         }
     }
 
@@ -3573,7 +3588,9 @@ class AssertNfaVisitor final : public VNVisitor {
                 AstNodeStmt* const passsp = assertAssertp->passsp()->unlinkFrBackWithNext();
                 AstNodeExpr* const onp
                     = assertOnCond(flp, assertp->userType(), assertp->directive());
-                assertAssertp->addPasssp(new AstIf{flp, new AstLogOr{flp, onp, matchp}, passsp});
+                assertAssertp->addPasssp(newPassOnIf(flp, new AstLogOr{flp, onp, matchp}, passsp,
+                                                     assertp->userType(), assertp->directive(),
+                                                     /*vacuous=*/false));
             }
         }
 
