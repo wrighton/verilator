@@ -52,6 +52,10 @@ module t (
   assert property (@(posedge clk) (s_always[300: 300] 1'b1) or(s_always[300: 300] 1'b1))
   else $display("EOS_DELAY_RING");
 
+  // The [0:0] operand resolves every attempt, so the [300:300] one still pending is no failure
+  assert property (@(posedge clk) (s_always[300: 300] 1'b1) or(s_always[0: 0] 1'b1))
+  else $display("EOS_OR_RESOLVED_BAD");
+
   // Attempts resolved by the immediate sibling are not EOS failures
   assert property (@(posedge clk) 1'b1 or(s_always[1: 3] 1'b1))
   else $display("EOS_RESOLVED_BAD");
