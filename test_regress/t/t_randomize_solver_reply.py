@@ -50,7 +50,9 @@ runs = [
     ('err_trunc', 2, 0),  # unterminated error, then the pipe closes
     ('err_unbal', 2, 15),  # a rejection error closing more parens than it opens
     ('err_unbal_cont', 2, 15),  # a rejection error with the extra paren on a continuation line
-    ('garbage_assume', 1, 16),  # a bare word in place of the unsat assumptions
+    # A bare word in place of the unsat assumptions, of each solver started: phased calls
+    # read cores too, so each restarted solver fails its next call, until it is given up
+    ('garbage_assume', 1, 4),
     ('garbage_model', 1, 15),  # half-valid model must not reach the variables
     ('garbage_status', 2, 15),  # a word that is not a status
     ('garbage_status', 15, 15),  # a phased check-sat that does not answer with a status
@@ -58,7 +60,9 @@ runs = [
     ('indent', 1, 16),  # leading whitespace before every reply
     ('low_digit', 1, 15),  # a character below any digit or letter
     ('model_trunc', 1, 0),  # unterminated model, then the pipe closes
-    ('model_trunc', 4, 15),  # unterminated reply to a spreading query, then the pipe closes
+    # Unterminated reply to a spreading query, then the pipe closes, in each solver started: a
+    # phased call spreads each layer, so a restarted solver dies in its next one, until given up
+    ('model_trunc', 4, 5),
     ('multiline', 1, 16),  # S-expression split one token per line
     ('no_digits', 1, 15),  # a base marker with no digits after it
     ('octal', 1, 16),  # octal values
@@ -127,7 +131,7 @@ solver_log = test.obj_dir + '/solver_bsat_narrow.log'
 test.execute(logfile=logfile,
              all_run_flags=['+verilator+solver+file+' + solver_log],
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=value_narrow TAMPER_AT=13')
+             'TAMPER=value_narrow TAMPER_AT=16')
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
 test.file_grep(
     solver_log, r'^  \(push 1\)\n  \(check-sat\)\n< sat\n  \(get-value \( a b\)\)\n'
