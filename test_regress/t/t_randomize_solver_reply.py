@@ -129,6 +129,8 @@ test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
              'TAMPER=bv_literals')
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
+# Spreading reads them too, rather than giving up on its solution
+test.file_grep_not(logfile, r'Solver failed while spreading')
 test.file_grep(solver_log, r'^  \(assert \(not \(and .*\(= \(select q #x00000000\) +#b[01]+\)')
 
 # The first UniGen2 sampler reply, for Packet's second call. The replies before it answer
