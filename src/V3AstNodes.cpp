@@ -5702,6 +5702,7 @@ void AstVar::dump(std::ostream& str) const {
     if (ignoreSchedWrite()) str << " [IGNWR]";
     if (isStdRandomizeArg()) str << " [STDRANDARG]";
     if (isRandSizeVar()) str << " [RANDSIZE]";
+    if (solverNative()) str << " [SOLVERNATIVE]";
     if (solverScalar()) str << " [SOLVERSCALAR]";
     if (!lifetime().isNone()) str << " [" << lifetime().ascii() << "] ";
     str << " " << varType();
@@ -5755,6 +5756,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isFuncLocal);
     dumpJsonBoolFuncIf(str, isStdRandomizeArg);
     dumpJsonBoolFuncIf(str, isRandSizeVar);
+    dumpJsonBoolFuncIf(str, solverNative);
     dumpJsonBoolFuncIf(str, solverScalar);
     dumpJsonStr(str, "lifetime", lifetime().ascii());
     dumpJsonStr(str, "varType", varType().ascii());

@@ -541,6 +541,12 @@ static std::vector<DistRun> distConstRuns(int width, bool exprSigned, const AstC
 
 using FastDistGens = std::unordered_map<const AstDist*, AstVar*>;
 
+// Whether indexp is the index of the foreach iteration, idxVarp
+static bool isForeachIndex(const AstNodeExpr* indexp, const AstVar* idxVarp) {
+    const AstNodeVarRef* const refp = VN_CAST(indexp, NodeVarRef);
+    return refp && refp->varp() == idxVarp;
+}
+
 class FastConstraintBuilder final {
     struct Range final {
         uint64_t lo;
@@ -561,6 +567,9 @@ class FastConstraintBuilder final {
     bool m_viewSigned = false;
     bool m_supported = true;
     std::vector<AstNodeExpr*> m_constants;  // Detached bound references and constified copies
+    // In element mode, describing a constraint of each element of a native array (see
+    // SolverScalarArrayVisitor) the foreach over it iterates: its reference in the header
+    AstNodeExpr* m_arrayRefp = nullptr;
 
     static Ranges unite(Ranges ranges) {
         std::sort(ranges.begin(), ranges.end(),
@@ -652,6 +661,43 @@ class FastConstraintBuilder final {
             m_viewWidth = selp->widthConst();
             m_viewSigned = selp->isSigned();
         });
+    }
+    // In element mode, the element of each iteration as the target, the only one exprp reads
+    void findElementTarget(AstNodeExpr* exprp, const AstVar* idxVarp) {
+        const AstVar* const arrayVarp = VN_AS(m_arrayRefp, NodeVarRef)->varp();
+        exprp->foreach([&](AstNodeExpr* const nodep) {
+            const AstNodeExpr* fromp = nullptr;
+            const AstNodeExpr* indexp = nullptr;
+            if (const AstArraySel* const selp = VN_CAST(nodep, ArraySel)) {
+                fromp = selp->fromp();
+                indexp = selp->bitp();
+            } else if (const AstCMethodHard* const atp = VN_CAST(nodep, CMethodHard)) {
+                if (atp->method() != VCMethod::ARRAY_AT) return;
+                fromp = atp->fromp();
+                indexp = atp->pinsp();
+            }
+            const AstNodeVarRef* const refp = fromp ? VN_CAST(fromp, NodeVarRef) : nullptr;
+            if (!refp || refp->varp() != arrayVarp) return;
+            // SolverScalarArrayVisitor admits only these selects of a native array
+            UASSERT_OBJ(isForeachIndex(indexp, idxVarp), nodep,
+                        "Native array select not at its index");
+            m_targetp = nodep;
+        });
+        if (!m_targetp) {
+            m_supported = false;
+            return;
+        }
+        m_viewp = m_targetp;
+        const AstNodeDType* const elemDtp = arrayVarp->dtypep()->skipRefp()->subDTypep();
+        m_viewWidth = elemDtp->width();
+        m_viewSigned = elemDtp->isSigned();
+    }
+    // In element mode, the ranges of a constraint of the element, as constants only
+    Ranges elementRanges(AstConstraintExpr* exprp, const AstVar* idxVarp, AstDist*& distpr) {
+        findElementTarget(exprp->exprp(), idxVarp);
+        distpr = VN_CAST(exprp->exprp(), Dist);
+        if (!m_supported) return {};
+        return distpr ? distribution(distpr) : parse(exprp->exprp());
     }
     bool isTarget(const AstNodeExpr* exprp) const {
         if (const AstExtend* const extendp = VN_CAST(exprp, Extend)) {
@@ -837,6 +883,27 @@ class FastConstraintBuilder final {
             method};
         callp->dtypeSetVoid();
         return callp;
+    }
+    AstNodeStmt* newNativeDomainp(FileLine* fl, const Ranges& ranges, bool soft,
+                                  const AstDist* distp) const {
+        AstCMethodHard* const beginp = newCallp(fl, VCMethod::RANDOMIZER_NATIVE_BEGIN);
+        AstNodeExpr* const arrayp = m_arrayRefp->cloneTreePure(false);
+        VN_AS(arrayp, NodeVarRef)->access(VAccess::READWRITE);
+        beginp->addPinsp(arrayp);
+        beginp->addPinsp(new AstConst{fl, static_cast<uint32_t>(m_viewWidth)});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, m_viewSigned});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, soft});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, distp != nullptr});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, distp && rangeMass(distp)});
+        AstNodeStmt* const stmtp = beginp->makeStmt();
+        for (const Range& range : ranges) {
+            AstCMethodHard* const callp = newCallp(fl, VCMethod::RANDOMIZER_NATIVE_RANGE);
+            for (const uint64_t value : {range.lo, range.hi, range.weight, range.scale}) {
+                callp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, value});
+            }
+            stmtp->addNext(callp->makeStmt());
+        }
+        return stmtp;
     }
     AstNodeStmt* newDomainp(FileLine* fl, const Ranges& ranges, bool soft, const AstDist* distp,
                             bool isEnum = false) const {
@@ -1329,6 +1396,57 @@ public:
     ~FastConstraintBuilder() {
         for (AstNodeExpr* const exprp : m_constants) VL_DO_DANGLING(exprp->deleteTree(), exprp);
     }
+    // Whether the constraints of the elements of an array, each the item of a foreach over it
+    // with its index, are described by constants, with the hard ones together satisfiable and
+    // one distribution at most among them
+    static bool
+    nativeSupported(AstNodeExpr* arrayRefp,
+                    const std::vector<std::pair<AstConstraintExpr*, const AstVar*>>& items) {
+        V3UniqueNames names;
+        Ranges hard;
+        bool hardDist = false;
+        for (const auto& item : items) {
+            FastConstraintBuilder builder{nullptr, names};
+            builder.m_arrayRefp = arrayRefp;
+            AstDist* distp;
+            const Ranges ranges = builder.elementRanges(item.first, item.second, distp);
+            if (!builder.m_supported) return false;
+            if (hard.empty()) hard = {{0, builder.mask()}};
+            if (item.first->isSoft()) {
+                if (distp) return false;  // Not with nextFast's soft retention
+                continue;
+            }
+            if (distp && hardDist) return false;
+            hardDist |= distp != nullptr;
+            const Ranges united = unite(ranges);
+            // A distribution over all 2^64 values may leave a domain fastSample cannot number,
+            // as other constraints can be turned off
+            if (distp && united.size() == 1 && !united[0].lo
+                && united[0].hi == std::numeric_limits<uint64_t>::max())
+                return false;
+            hard = intersect(hard, united);
+            if (hard.empty()) return false;
+        }
+        return true;
+    }
+    // The descriptions of the items of a foreach over a native array, see nativeSupported
+    static AstNodeStmt* applyNative(AstConstraintForeach* foreachp, AstVar* genp) {
+        V3UniqueNames names;
+        const AstVar* const idxVarp = VN_AS(foreachp->headerp()->elementsp(), Var);
+        AstNodeStmt* stmtsp = nullptr;
+        for (AstNode* const itemp : VNList<AstNode>{foreachp->bodyp()}) {
+            AstConstraintExpr* const exprp = VN_AS(itemp, ConstraintExpr);
+            FastConstraintBuilder builder{genp, names};
+            builder.m_arrayRefp = foreachp->headerp()->fromp();
+            AstDist* distp;
+            const Ranges ranges = builder.elementRanges(exprp, idxVarp, distp);
+            UASSERT_OBJ(builder.m_supported, exprp, "Native array item not described");
+            stmtsp = AstNode::addNext(stmtsp, builder.newNativeDomainp(exprp->fileline(), ranges,
+                                                                       exprp->isSoft(), distp));
+        }
+        V3Stats::addStat("Optimizations, Randomize native array domains", 1);
+        return stmtsp;
+    }
     static AstNodeStmt* apply(AstNode* itemsp, AstVar* genp, bool allow = true,
                               FastDistGens* distGensp = nullptr, V3UniqueNames* namesp = nullptr) {
         // Without any description the runtime keeps the solver (nextFast needs metadata)
@@ -1338,6 +1456,14 @@ public:
         AstNodeStmt* stmtsp = nullptr;
         for (AstNode* const itemp : VNList<AstNode>{itemsp}) {
             FastConstraintBuilder builder{genp, *namesp};
+            if (AstConstraintForeach* const foreachp = VN_CAST(itemp, ConstraintForeach)) {
+                const AstNodeVarRef* const refp
+                    = VN_CAST(foreachp->headerp()->fromp(), NodeVarRef);
+                if (refp && refp->varp()->solverNative()) {
+                    stmtsp = AstNode::addNext(stmtsp, applyNative(foreachp, genp));
+                    continue;
+                }
+            }
             if (AstConstraintIf* const ifp = VN_CAST(itemp, ConstraintIf)) {
                 if (stateExpression(ifp->condp()) && !checkedReceiver(ifp->condp())) {
                     AstNodeStmt* const thenp = apply(ifp->thensp(), genp, true, distGensp, namesp);
@@ -7747,6 +7873,17 @@ private:
             if (AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp)) {
                 loopp = new AstIf{fl, handlesp, loopp, newNullReadFailp(fl, arrayp)};
             }
+            const AstNodeVarRef* const arrayRefp = VN_CAST(arrayp, NodeVarRef);
+            if (arrayRefp && arrayRefp->varp()->solverNative()) {
+                // Solved only if not sampled, see FastConstraintBuilder::applyNative
+                AstCMethodHard* const nativep = new AstCMethodHard{
+                    fl,
+                    new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp,
+                                  VAccess::READWRITE},
+                    VCMethod::RANDOMIZER_NATIVE_ON, arrayp->cloneTreePure(false)};
+                nativep->dtypeSetBit();
+                loopp = new AstIf{fl, new AstLogNot{fl, nativep}, loopp};
+            }
             AstBegin* const blockp
                 = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), loopp, true};
             nodep->replaceWith(blockp);
@@ -9248,6 +9385,18 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
     std::unordered_map<AstClass*, std::vector<AstClass*>> m_derivedps;  // Directly derived
     std::vector<AstClass*> m_mergeHolderps;  // Classes with a rand handle of a merged class
     AstClass* m_classp = nullptr;  // Current class
+    // Native arrays: candidates whose constraints read their elements only as the item of a
+    // foreach over them, each element against constants (see FastConstraintBuilder::
+    // nativeSupported); their elements are sampled, not solved
+    std::unordered_set<const AstVar*> m_notNatives;  // Candidates read otherwise
+    // The items of the foreachs over each candidate, with the foreach's index
+    std::unordered_map<AstVar*, std::vector<std::pair<AstConstraintExpr*, const AstVar*>>>
+        m_nativeItems;
+    std::unordered_map<AstVar*, AstNodeExpr*> m_nativeRefps;  // A header reference of each
+    const AstVar* m_foreachArrayp = nullptr;  // Array of the foreach the items are of
+    const AstVar* m_foreachIdxp = nullptr;  // Its index
+    bool m_inCondItem = false;  // Under a conditional constraint item
+    bool m_inWith = false;  // Under a 'with' constraint
     bool m_collecting = true;  // First walk: candidates and randomize() arguments
     bool m_inConstraint = false;  // Under a constraint, or a 'with' of one
     const ElemRandModes& m_elemModes;  // Arrays with per-element rand_mode()
@@ -9383,8 +9532,48 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
     }
     void visit(AstWith* nodep) override {
         VL_RESTORER(m_inConstraint);
+        VL_RESTORER(m_inWith);
         m_inConstraint = true;
+        m_inWith = true;
         iterateChildrenConst(nodep);
+    }
+    void visit(AstConstraintIf* nodep) override {
+        VL_RESTORER(m_inCondItem);
+        m_inCondItem = true;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstConstraintForeach* nodep) override {
+        VL_RESTORER(m_foreachArrayp);
+        VL_RESTORER(m_foreachIdxp);
+        const AstNodeVarRef* const refp = VN_CAST(nodep->headerp()->fromp(), NodeVarRef);
+        AstVar* const arrayVarp = refp ? refp->varp() : nullptr;
+        const AstVar* const idxVarp = VN_CAST(nodep->headerp()->elementsp(), Var);
+        if (!m_collecting && arrayVarp && m_candidates.count(arrayVarp)) {
+            // Each item a constraint of the element alone, under no condition
+            if (m_inCondItem || m_inWith || m_foreachArrayp || !idxVarp || nodep->isSoft()
+                || nodep->headerp()->elementsp()->nextp()) {
+                m_notNatives.insert(arrayVarp);
+            }
+            m_nativeRefps.emplace(arrayVarp, nodep->headerp()->fromp());
+            for (AstNode* const itemp : VNList<AstNode>{nodep->bodyp()}) {
+                AstConstraintExpr* const exprp = VN_CAST(itemp, ConstraintExpr);
+                if (!exprp) {
+                    m_notNatives.insert(arrayVarp);
+                    continue;
+                }
+                m_nativeItems[arrayVarp].emplace_back(exprp, idxVarp);
+            }
+        }
+        m_foreachArrayp = arrayVarp;
+        m_foreachIdxp = idxVarp;
+        iterateChildrenConst(nodep);
+    }
+    // A select of a candidate at idxp is of a native array only as the element of each
+    // iteration of a foreach over it
+    void checkNativeSelect(const AstVar* varp, const AstNodeExpr* idxp) {
+        if (varp != m_foreachArrayp || m_inWith || !idxp || !isForeachIndex(idxp, m_foreachIdxp)) {
+            m_notNatives.insert(varp);
+        }
     }
     void visit(AstConstraintBefore* nodep) override {
         // Solve-before pins elements by their select terms
@@ -9412,6 +9601,7 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
                 if (m_candidates.count(refp->varp())) {
                     m_selectedRefs.insert(refp);
                     m_indices.emplace_back(refp->varp(), nodep->bitp());
+                    checkNativeSelect(refp->varp(), nodep->bitp());
                 }
                 if (!refp->varp()->isRand()) m_stateSelRefs.insert(refp);
             }
@@ -9440,10 +9630,12 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
                     if (nodep->method() == VCMethod::ARRAY_AT) {
                         m_selectedRefs.insert(refp);
                         m_indices.emplace_back(refp->varp(), nodep->pinsp());
+                        checkNativeSelect(refp->varp(), nodep->pinsp());
                     } else if (nodep->method() == VCMethod::ARRAY_AT_BACK) {
                         // q[$ - k], at an index the solver may give, see elemChain
                         m_selectedRefs.insert(refp);
                         m_offsets.emplace_back(refp->varp(), nodep->pinsp());
+                        m_notNatives.insert(refp->varp());
                     } else if (nodep->method() == VCMethod::DYN_SIZE) {
                         m_selectedRefs.insert(refp);  // The size is a variable of its own
                     }
@@ -9498,7 +9690,21 @@ public:
             if (!knownIndex(pair.second, true)) exclude(pair.first);
         }
         excludeMixed();
-        for (AstVar* const varp : m_candidates) varp->solverScalar(true);
+        size_t natives = 0;
+        for (AstVar* const varp : m_candidates) {
+            varp->solverScalar(true);
+            const auto itemsIt = m_nativeItems.find(varp);
+            if (!v3Global.opt.fConstraintFast() || v3Global.opt.fourstate()
+                || itemsIt == m_nativeItems.end() || m_notNatives.count(varp)
+                || VN_IS(varp->dtypep()->skipRefp()->subDTypep()->skipRefToEnump(), EnumDType)
+                || !FastConstraintBuilder::nativeSupported(m_nativeRefps.at(varp),
+                                                           itemsIt->second)) {
+                continue;
+            }
+            varp->solverNative(true);
+            ++natives;
+        }
+        V3Stats::addStat("Randomize, natively sampled arrays", natives);
         V3Stats::addStat("Randomize, scalarized arrays", m_candidates.size());
     }
     ~SolverScalarArrayVisitor() override = default;
