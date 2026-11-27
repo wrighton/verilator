@@ -1,0 +1,23 @@
+%Warning-CONSTRAINTIGN: t/t_constraint_solve_before_cond_bad.v:23:9: Ignoring solve-before inside conditional constraint; IEEE 1800-2023 A.1.10 allows it only directly in a constraint block
+   23 |         solve a before b[i];
+      |         ^~~~~
+                        ... For warning description see https://verilator.org/warn/CONSTRAINTIGN?v=latest
+                        ... Use "/* verilator lint_off CONSTRAINTIGN */" and lint_on around source to disable this message.
+%Warning-CONSTRAINTIGN: t/t_constraint_solve_before_cond_bad.v:32:7: Ignoring solve-before inside conditional constraint; IEEE 1800-2023 A.1.10 allows it only directly in a constraint block
+   32 |       solve a before b;
+      |       ^~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_solve_before_cond_bad.v:35:7: Ignoring solve-before inside conditional constraint; IEEE 1800-2023 A.1.10 allows it only directly in a constraint block
+   35 |       solve b before a;
+      |       ^~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_solve_before_cond_bad.v:40:7: Ignoring solve-before inside conditional constraint; IEEE 1800-2023 A.1.10 allows it only directly in a constraint block
+   40 |       solve a before b;
+      |       ^~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_solve_before_cond_bad.v:47:9: Ignoring solve-before inside conditional constraint; IEEE 1800-2023 A.1.10 allows it only directly in a constraint block
+   47 |         solve a before b[i];
+      |         ^~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_solve_before_cond_bad.v:50:9: Unsupported: Unique constraint on dynamically sized array inside conditional constraint
+   50 |         unique {q};
+      |         ^~~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_solve_before_cond_bad.v:57:9: Ignoring solve-before inside conditional constraint; IEEE 1800-2023 A.1.10 allows it only directly in a constraint block
+   57 |         solve a before b[i];
+      |         ^~~~~
