@@ -302,6 +302,7 @@ static AstIf* newPassOnIf(FileLine* flp, AstNodeExpr* firep, AstNodeStmt* bodyp,
         = new AstLogAnd{flp, firep, assertPassOnCond(flp, type, directiveType, vacuous)};
     AstIf* const ifp = new AstIf{flp, condp, bodyp};
     ifp->isBoundsCheck(true);
+    ifp->isAssertPassGate(true);
     ifp->user1(true);
     return ifp;
 }
@@ -3341,6 +3342,7 @@ class AssertNfaVisitor final : public VNVisitor {
         AstIf* const ifp = new AstIf{
             flp, new AstNeq{flp, countp, newTypedConstp(flp, countVarp->dtypep(), 0)}, stmtsp};
         ifp->isBoundsCheck(true);
+        ifp->isAssertPassGate(true);
         ifp->user1(true);
         // Another attempt failing on the same tick runs the fail action instead
         prependPassToFail(assertp, V3AssertCommon::cloneAction(ifp, m_actionNames));
@@ -3861,6 +3863,7 @@ class AssertNfaVisitor final : public VNVisitor {
                                                /*vacuous=*/true)};
             AstIf* const ifp = new AstIf{flp, passOnp, passsp};
             ifp->isBoundsCheck(true);
+            ifp->isAssertPassGate(true);
             ifp->user1(true);
             assertAssertp->addPasssp(ifp);
         } else {

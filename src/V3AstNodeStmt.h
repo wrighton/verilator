@@ -854,6 +854,7 @@ class AstIf final : public AstNodeStmt {
     // @astgen op3 := elsesp : List[AstNodeStmt]
     VBranchPred m_branchPred;  // Branch prediction as taken/untaken?
     bool m_isBoundsCheck = false;  // True if this if node is for assertion/bounds checking
+    bool m_isAssertPassGate = false;  // True if it runs an assertion pass action if pass control
     bool m_uniquePragma = false;  // unique case
     bool m_unique0Pragma = false;  // unique0 case
     bool m_priorityPragma = false;  // priority case
@@ -871,11 +872,15 @@ public:
     bool isGateOptimizable() const override { return false; }
     bool isGateDedupable() const override { return true; }
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
-    bool sameNode(const AstNode* /*samep*/) const override { return true; }
+    bool sameNode(const AstNode* samep) const override {
+        return isAssertPassGate() == VN_DBG_AS(samep, If)->isAssertPassGate();
+    }
     void branchPred(VBranchPred flag) { m_branchPred = flag; }
     VBranchPred branchPred() const { return m_branchPred; }
     void isBoundsCheck(bool flag) { m_isBoundsCheck = flag; }
     bool isBoundsCheck() const { return m_isBoundsCheck; }
+    void isAssertPassGate(bool flag) { m_isAssertPassGate = flag; }
+    bool isAssertPassGate() const { return m_isAssertPassGate; }
     bool uniquePragma() const { return m_uniquePragma; }
     void uniquePragma(bool flag) { m_uniquePragma = flag; }
     bool unique0Pragma() const { return m_unique0Pragma; }
@@ -886,6 +891,7 @@ public:
     void cloneAttr(const AstIf* fromp) {
         branchPred(fromp->branchPred());
         isBoundsCheck(fromp->isBoundsCheck());
+        isAssertPassGate(fromp->isAssertPassGate());
         uniquePragma(fromp->uniquePragma());
         unique0Pragma(fromp->unique0Pragma());
         priorityPragma(fromp->priorityPragma());

@@ -1028,6 +1028,7 @@ class AssertVisitor final : public VNVisitor {
         AstNodeExpr* const condp = assertPassOnCond(fl, type, directiveType, vacuous);
         AstIf* const newp = new AstIf{fl, condp, bodyp};
         newp->isBoundsCheck(true);  // To avoid LATCH warning
+        newp->isAssertPassGate(true);
         newp->user1(true);  // Don't assert/cover this if
         newp->user2(true);  // Mark as an assertOn() check
         return newp;
@@ -1478,8 +1479,11 @@ class AssertVisitor final : public VNVisitor {
         } else {
             propExprp = nodep->propp()->unlinkFrBack();
         }
+        // A pass action V3AssertNfa already gates on pass control, not a user's 'if'
         bool passspAlreadyGated = false;
-        if (passsp && VN_IS(passsp, If)) passspAlreadyGated = VN_AS(passsp, If)->user1();
+        if (passsp && VN_IS(passsp, If)) {
+            passspAlreadyGated = VN_AS(passsp, If)->isAssertPassGate();
+        }
         if (passsp && !passspGated && !passspAlreadyGated && !VN_IS(propExprp, PExpr)
             && !seqEvent) {
             passsp = newIfAssertPassOn(passsp, nodep->directive(), nodep->userType(),
