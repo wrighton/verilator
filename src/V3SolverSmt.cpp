@@ -2995,6 +2995,26 @@ private:
         return newp;
     }
 
+    // Replace selp, the SMT select of an element of scalar array varp at an index the solver
+    // gives, '(select <array> <index>)', with the element's term at that index term, or at
+    // indexp's if given, as the select's may be a name bound only where it is (editLetBound)
+    AstSFormatF* replaceWithElemChainp(AstSFormatF* selp, AstVar* varp, AstNodeExpr* indexp) {
+        FileLine* const fl = selp->fileline();
+        if (!indexp) indexp = VN_AS(selp->exprsp()->nextp(), NodeExpr)->unlinkFrBack();
+        AstSFormatF* const indexTextp = new AstSFormatF{fl, "%s", false, indexp};
+        indexTextp->dtypeSetString();
+        AstCMethodHard* const termp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_ELEM_CHAIN,
+            new AstConst{fl, AstConst::String{}, SmtUtil::smtSymbol(varp->name())}};
+        termp->addPinsp(indexTextp);
+        termp->dtypeSetString();
+        AstSFormatF* const newp = new AstSFormatF{fl, "%s", false, termp};
+        newp->dtypeSetString();
+        selp->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(selp), selp);
+        return newp;
+    }
     // Create SFormatF for array dereference inside solver
     AstSFormatF* createSolverArrDerefp(FileLine* const fl, AstNodeExpr* const arrExprp,
                                        AstNodeExpr* const idxExprp) {
@@ -8518,6 +8538,224 @@ private:
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
 
+        if (nodep->method() == VCMethod::ARRAY_AT && nodep->pinsp() == m_freshIndexp) {
+            // The fresh index of an array 'inside', already an SMT term (see newFreshInsidep)
+            iterateAndNextNull(nodep->fromp());
+            nodep->replaceWith(createSolverArrDerefp(fl, nodep->fromp()->unlinkFrBack(),
+                                                     nodep->pinsp()->unlinkFrBack()));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
+        if (nodep->method() == VCMethod::ARRAY_AT) {
+            addStringNamePart(nodep->pinsp(), "%x");
+            const bool indexIsRand = isRandIndex(nodep->pinsp());
+            // An index of a solved size is known only after the setup of the constraints
+            if ((indexIsRand || isSizeIndex(nodep->pinsp())) && m_structSel
+                && nodep->fromp()->user1()
+                && VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType)) {
+                unsupportedObjectRandIndex(nodep);
+                return;
+            }
+            if (editHeldArraySel(nodep, nodep->fromp(), nodep->pinsp())) return;
+            if (nodep->fromp()->user1()) {
+                // Queue/dynamic element: pre-edit clone for the rand_mode hoist, non-rand index
+                // only. A std::randomize() with-clause argument carries no rand qualifier of its
+                // own but is still part of the solve.
+                {
+                    const AstNode* const basep = nodep->baseFromp(true);
+                    if (basep->name() == "__Vthis"
+                        && VN_AS(basep->backp(), MemberRef)->varp()->isRand()) {
+                        nodep->fromp()->v3warn(E_UNSUPPORTED,
+                                               "Unsupported: Complex expression captured from "
+                                               "current scope with randomized variable");
+                        return;
+                    }
+                }
+                AstNodeExpr* const origp = indexIsRand ? nullptr : nodep->cloneTree(false);
+                const AstVarRef* const baseRefp
+                    = m_structSel ? VN_CAST(nodep->fromp()->baseFromp(true), VarRef) : nullptr;
+                if (baseRefp && !m_stagingField && VN_IS(nodep->pinsp(), Const)
+                    && VN_IS(baseRefp->varp()->dtypep()->skipRefp(), DynArrayDType)
+                    && m_prepareConstrainedArraysp) {
+                    AstNodeExpr* const indexp = nodep->pinsp()->cloneTreePure(false);
+                    AstNodeExpr* const arrayp = nodep->fromp()->cloneTreePure(false);
+                    AstCMethodHard* const currentSizep
+                        = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
+                    currentSizep->dtypeSetInt();
+                    AstNodeExpr* const inRangeRequiredp = new AstLogAnd{
+                        fl,
+                        new AstLteS{fl,
+                                    new AstConst{fl, AstConst::WidthedValue{}, indexp->width(), 0},
+                                    indexp->cloneTreePure(false)},
+                        new AstGteS{fl, indexp->cloneTreePure(false), currentSizep}};
+                    AstCMethodHard* const resizep
+                        = new AstCMethodHard{fl, arrayp, VCMethod::DYN_RESIZE,
+                                             new AstAdd{fl, indexp, new AstConst{fl, 1}}};
+                    resizep->dtypeSetVoid();
+                    m_prepareConstrainedArraysp->addStmtsp(
+                        new AstIf{fl, inRangeRequiredp, resizep->makeStmt()});
+                }
+                AstCMethodHard* const sizep
+                    = m_structSel ? new AstCMethodHard{fl, nodep->fromp()->cloneTreePure(false),
+                                                       VCMethod::DYN_SIZE}
+                                  : nullptr;
+                // An element select out of range reads zero. The size of an array selected from
+                // another, or reached through a class handle, is not known here.
+                AstNodeExpr* smtGuardp = nullptr;
+                AstNodeExpr* stateGuardp = nullptr;
+                const bool guarded = !m_structSel && !m_nestedAccessp
+                                     && nodep->dtypep()->skipRefp()->isIntegralOrPacked()
+                                     && boundableArray(nodep->fromp())
+                                     && !isForeachElement(nodep->fromp(), nodep->pinsp());
+                AstNodeExpr* sizeTextp = nullptr;  // For a solved index, after translation
+                AstNodeExpr* nullTextp = nullptr;  // Of the read through a null class handle
+                std::string keyName;  // Bound to a solved index, see editLetBound
+                if (guarded) {
+                    AstNodeExpr* const arrayp = nodep->fromp();
+                    AstNodeExpr* const indexp = nodep->pinsp();
+                    const int guardWidth = guardedIndexWidth(indexp->width());
+                    AstNodeExpr* const solvedSizep = newSolvedSizeRefp(arrayp);
+                    if (indexIsRand || solvedSizep || !countableArray(arrayp)) {
+                        // A solved size is a solver term, and the index may be one with it:
+                        // below the size in the solver's 32-bit index sort, see newSmtIndexp.
+                        // So is the size of an array selected by a random index.
+                        sizeTextp = newArraySizeTextp(arrayp, solvedSizep,
+                                                      guardedIndexWidth(VL_IDATASIZE));
+                        if (!indexIsRand && indexp->width() > VL_IDATASIZE) {
+                            // Not in that sort
+                            AstConst* const limitp
+                                = new AstConst{fl, AstConst::WidthedValue{}, guardWidth, 0};
+                            limitp->num().setBit(VL_IDATASIZE, 1);
+                            stateGuardp = new AstLt{
+                                fl, newGuardedIndexp(indexp->cloneTreePure(false)), limitp};
+                        }
+                    } else {
+                        stateGuardp
+                            = new AstLt{fl, newGuardedIndexp(indexp->cloneTreePure(false)),
+                                        new AstExtend{fl, newArraySizep(arrayp), guardWidth}};
+                    }
+                    // No element of a fixed-size array exists at an out-of-range index, and
+                    // the size read above at it would be another element's
+                    if (AstNodeExpr* const outerInRangep = newOuterIndexInRangep(arrayp)) {
+                        stateGuardp = stateGuardp ? new AstLogAnd{fl, outerInRangep, stateGuardp}
+                                                  : outerInRangep;
+                    }
+                    // A key that does not exist selects no array, checked before its size
+                    if (AstNodeExpr* const existp = newKeysExistp(arrayp)) {
+                        stateGuardp
+                            = stateGuardp ? new AstLogAnd{fl, existp, stateGuardp} : existp;
+                    }
+                    // Checked first, as the checks above read through the handles
+                    if (AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp)) {
+                        nullTextp = newNullReadTextp(handlesp->cloneTreePure(false), arrayp,
+                                                     nodep->width());
+                        stateGuardp
+                            = stateGuardp ? new AstLogAnd{fl, handlesp, stateGuardp} : handlesp;
+                    }
+                    // In the solver's 32-bit index sort, in range when selected
+                    if (!indexIsRand && indexp->width() > VL_IDATASIZE) {
+                        nodep->addPinsp(new AstSel{fl, indexp->unlinkFrBack(), 0, VL_IDATASIZE});
+                    } else if (!indexIsRand && indexp->width() < VL_IDATASIZE) {
+                        indexp->unlinkFrBack();
+                        nodep->addPinsp(indexp->isSigned()
+                                            ? static_cast<AstNodeExpr*>(
+                                                  new AstExtendS{fl, indexp, VL_IDATASIZE})
+                                            : new AstExtend{fl, indexp, VL_IDATASIZE});
+                    }
+                }
+                const int elemWidth = nodep->width();
+                // A copy, as formatting the index may replace and delete it
+                AstNodeExpr* const originalPinp
+                    = m_structSel ? nodep->pinsp()->cloneTreePure(false) : nullptr;
+                if (indexIsRand) {
+                    // A negative index stays out of range when sign extended
+                    AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
+                    nodep->addPinsp(newSmtIndexp(pinp, pinp->isSigned()));
+                }
+                AstVar* const scalarVarp = scalarArrayVarp(nodep->fromp());
+                // An index of solver terms, as q[$] of a queue whose size is solved has (see
+                // visit(AstCMethodHard) for ARRAY_AT_BACK), selects through elemChain
+                const bool solverIndex = indexIsRand || nodep->pinsp()->user1();
+                AstNodeExpr* scalarIndexp
+                    = scalarVarp && !solverIndex ? nodep->pinsp()->cloneTreePure(false) : nullptr;
+                iterateChildren(nodep);
+                AstNodeExpr* pinp = nodep->pinsp()->unlinkFrBack();
+                AstSFormatF* newp;
+                if (m_structSel && !indexIsRand) {
+                    // The value of a state index, as an expression is formatted as SMT terms
+                    VL_DO_DANGLING(pinp->deleteTree(), pinp);
+                    pinp = new AstSFormatF{fl, "%x", false, originalPinp->cloneTreePure(false)};
+                }
+                if (m_structSel) {
+                    if (AstSFormatF* const sformatfp = VN_CAST(pinp, SFormatF)) {
+                        sformatfp->name("%x");
+                    }
+                    AstNodeExpr* const argsp
+                        = AstNode::addNext(nodep->fromp()->unlinkFrBack(), pinp);
+                    sizep->dtypeSetInt();
+                    const int rangeWidth = indexIsRand
+                                               ? originalPinp->width()
+                                               : std::max(originalPinp->width(), sizep->width());
+                    AstNodeExpr* const rangeIndexp
+                        = indexIsRand ? originalPinp->cloneTreePure(false)
+                                      : newFieldIndexWidthp(originalPinp->cloneTreePure(false),
+                                                            rangeWidth);
+                    AstNodeExpr* const rangeSizep
+                        = indexIsRand
+                              ? sizep
+                              : adjustWidth(fl, sizep, rangeWidth, sizep->dtypep()->numeric());
+                    AstLogAnd* const condp = new AstLogAnd{
+                        fl,
+                        new AstLteS{fl, new AstConst{fl, AstConst::WidthedValue{}, rangeWidth, 0},
+                                    rangeIndexp->cloneTreePure(false)},
+                        new AstLtS{fl, rangeIndexp, rangeSizep}};
+                    m_conditionp = m_conditionp ? new AstLogAnd{fl, m_conditionp, condp} : condp;
+                    VL_DO_DANGLING(originalPinp->deleteTree(), originalPinp);
+                    newp = new AstSFormatF{fl, "%s.%s", false, argsp};
+                } else {
+                    AstNodeExpr* indexTextp = pinp;
+                    if (sizeTextp) {
+                        // The index is bound once, as its text may be long, e.g. of a select
+                        // by an index that is itself a guarded select
+                        keyName = m_uniqueNames.get("__Vk");
+                        indexTextp = new AstSFormatF{fl, keyName, false, nullptr};
+                        smtGuardp
+                            = new AstSFormatF{fl, "(bvult ((_ zero_extend 1) " + keyName + ") %s)",
+                                              false, sizeTextp};
+                    }
+                    newp = createSolverArrDerefp(fl, nodep->fromp()->unlinkFrBack(), indexTextp);
+                }
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                if (scalarVarp && !m_structSel && solverIndex) {
+                    newp = replaceWithElemChainp(newp, scalarVarp,
+                                                 smtGuardp ? pinp->cloneTreePure(false) : nullptr);
+                } else if (scalarVarp && !m_structSel) {
+                    newp = replaceWithElemTermp(newp, scalarVarp, scalarIndexp);
+                    scalarIndexp = nullptr;
+                }
+                if (scalarIndexp) VL_DO_DANGLING(scalarIndexp->deleteTree(), scalarIndexp);
+                // The state guard is outermost, as the solver guard reads the array's size
+                AstSFormatF* guardedp = newp;
+                if (smtGuardp) {
+                    guardedp = editSmtInRange(newp, smtGuardp, elemWidth);
+                    guardedp = editLetBound(guardedp, keyName, pinp);
+                }
+                if (stateGuardp) editStateInRange(guardedp, stateGuardp, elemWidth, nullTextp);
+                if (origp && !hoistRandModeOverSelectAndMember(newp, origp)) {
+                    VL_DO_DANGLING(origp->deleteTree(), origp);
+                }
+
+            } else if (indexIsRand) {
+                unsupportedStateArraySel(nodep);
+            } else {
+                nodep->user1(false);
+                UASSERT_OBJ(editFormat(nodep), nodep,
+                            "editFormat should return true when user1 is false");
+            }
+            return;
+        }
+
         if (nodep->method() == VCMethod::ARRAY_INSIDE) {
             const bool randArr = nodep->fromp()->user1();
             gateOnCurrentSize(nodep->fromp());
@@ -9000,6 +9238,7 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
     std::unordered_set<AstVar*> m_randArgs;  // Variables randomize() is called with
     std::unordered_set<const AstNode*> m_selectedRefs;  // References selected at known indices
     std::vector<std::pair<AstVar*, const AstNodeExpr*>> m_indices;  // Select indices to check
+    std::vector<std::pair<AstVar*, const AstNodeExpr*>> m_offsets;  // Offsets from '$' to check
     // The classes whose constraints reference each array other than as a select of a
     // non-random array, which the solver reads as a value
     std::unordered_map<AstVar*, std::vector<AstClass*>> m_arrayRefs;
@@ -9030,11 +9269,12 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
         const AstNodeDType* const elemp = dtypep->subDTypep()->skipRefp();
         return elemp->isIntegralOrPacked() && elemp->width() <= VL_QUADSIZE;
     }
-    // Whether an index's value is known before the solve
-    bool knownIndex(const AstNodeExpr* indexp) const {
-        return indexp->forall([this](const AstNode* np) {
+    // Whether an index's value is known before the solve, or if 'solved', is an expression of
+    // variables the solver may give
+    bool knownIndex(const AstNodeExpr* indexp, bool solved = false) const {
+        return indexp->forall([this, solved](const AstNode* np) {
             if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
-                return !refp->varp()->isRand() && !m_randArgs.count(refp->varp());
+                return solved || (!refp->varp()->isRand() && !m_randArgs.count(refp->varp()));
             }
             return VN_IS(np, NodeExpr) && !VN_IS(np, NodeFTaskRef) && !VN_IS(np, CMethodHard)
                    && !VN_IS(np, DynArraySel) && !VN_IS(np, QueueSel) && !VN_IS(np, MethodCall)
@@ -9197,7 +9437,14 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
         if (!m_collecting && m_inConstraint) {
             if (const AstNodeVarRef* const refp = VN_CAST(nodep->fromp(), NodeVarRef)) {
                 if (m_candidates.count(refp->varp())) {
-                    if (nodep->method() == VCMethod::DYN_SIZE) {
+                    if (nodep->method() == VCMethod::ARRAY_AT) {
+                        m_selectedRefs.insert(refp);
+                        m_indices.emplace_back(refp->varp(), nodep->pinsp());
+                    } else if (nodep->method() == VCMethod::ARRAY_AT_BACK) {
+                        // q[$ - k], at an index the solver may give, see elemChain
+                        m_selectedRefs.insert(refp);
+                        m_offsets.emplace_back(refp->varp(), nodep->pinsp());
+                    } else if (nodep->method() == VCMethod::DYN_SIZE) {
                         m_selectedRefs.insert(refp);  // The size is a variable of its own
                     }
                 }
@@ -9246,6 +9493,9 @@ public:
         iterateConst(netlistp);
         for (const auto& pair : m_indices) {
             if (!knownIndex(pair.second)) exclude(pair.first);
+        }
+        for (const auto& pair : m_offsets) {
+            if (!knownIndex(pair.second, true)) exclude(pair.first);
         }
         excludeMixed();
         for (AstVar* const varp : m_candidates) varp->solverScalar(true);

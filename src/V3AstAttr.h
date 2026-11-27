@@ -1090,6 +1090,8 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_CLEARCONSTRAINTS,        "clearConstraints",       false,  CLEAN,  false,      "", "") \
     macro(RANDOMIZER_CLEARALL,                "clearAll",               false,  CLEAN,  false,      "", "") \
     macro(RANDOMIZER_DISABLE_SOFT,            "disable_soft",           false,  CLEAN,  false,      "r", "") \
+    macro(RANDOMIZER_ELEM_CHAIN,              "elemChain",              false,  CLEAN,  false,      "rr", "") \
+    macro(RANDOMIZER_ELEM_TERM,               "elemTerm",               false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_END_PRIOR,               "end_prior",              false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_ENUM_DOMAIN,             "enum_domain",            false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_FAST_BEGIN,              "fast_begin",             false,  CLEAN,  false,      "mrrrrrrrr", "") \
