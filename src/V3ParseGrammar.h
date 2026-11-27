@@ -30,6 +30,7 @@ public:
     AstAttrOf* m_scopedSigAttrp = nullptr;  // Pointer to default signal attribute
     AstCase* m_caseAttrp = nullptr;  // Current case statement for attribute adding
     AstNodeDType* m_varDTypep = nullptr;  // Pointer to data type for next signal declaration
+    AstNodeDType* m_portInheritDTypep = nullptr;  // Type inherited by next untyped assertion port
     AstNodeDType* m_memDTypep = nullptr;  // Pointer to data type for next member declaration
     AstNodeUOrStructDType* m_memParentp = nullptr;  // Struct/union of next member declaration
     VRandAttr m_memRand;  // 'rand'/'randc' qualifier for next member declaration
@@ -53,7 +54,6 @@ public:
     bool m_insideProperty = false;  // Is inside property or sequence declaration
     bool m_insideTask = false;  // Is inside a task declaration
     bool m_specifyignWarned = false;  // Issued a SPECIFYIGN warning
-    bool m_typedPropertyPort = false;  // Typed property port occurred on port lists
     bool m_modportImpExpActive
         = false;  // Standalone ID is a tf_identifier instead of port_identifier
     bool m_modportImpExpLastIsExport
@@ -213,6 +213,21 @@ public:
             fl->v3warn(ENDLABEL, "End label '" << *endnamep << "' does not match begin label '"
                                                << name << "'");
         }
+    }
+    // The data type of a sequence, property or checker port without one is that of the previous
+    // port, if any, until a port of another type (IEEE 1800-2023 16.8, 17.2)
+    void setPortInheritDType(AstNodeDType* dtypep) {
+        if (m_portInheritDTypep) {
+            VL_DO_CLEAR(m_portInheritDTypep->deleteTree(), m_portInheritDTypep = nullptr);
+        }
+        m_portInheritDTypep = dtypep;
+    }
+    AstNodeDType* portDType(AstNodeDType* dtypep) {
+        if (dtypep) {
+            setPortInheritDType(dtypep->cloneTree(false));
+            return dtypep;
+        }
+        return m_portInheritDTypep ? m_portInheritDTypep->cloneTree(false) : nullptr;
     }
     void setDType(AstNodeDType* dtypep) {
         if (m_varDTypep) {
