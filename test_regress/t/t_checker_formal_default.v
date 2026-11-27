@@ -35,6 +35,14 @@ checker c_n (logic clk, logic [6:0] a);
   end
 endchecker
 
+// A formal passed on to a checker instance
+checker c_in (logic clk, logic [6:0] a, output logic [6:0] pa);
+  always_ff @(posedge clk) pa <= $past(a);
+endchecker
+checker c_out (logic clk, logic [6:0] b, output logic [6:0] pb);
+  c_in u_in (clk, b, pb);
+endchecker
+
 module t;
   logic clk = 0;
   logic d0 = 0;
@@ -55,6 +63,15 @@ module t;
   c_n u_n109 (clk, n109);
   c_n u_np (clk, NP);  // A parameter
   c_n u_ng (clk, ng[1]);  // An element of an unpacked array
+  logic [6:0] o21a = 7'd21;
+  logic [6:0] o42 = 7'd42;
+  logic [6:0] o21b = 7'd21;
+  logic [6:0] po21a;
+  logic [6:0] po42;
+  logic [6:0] po21b;
+  c_out u_o21a (clk, o21a, po21a);
+  c_out u_o42 (clk, o42, po42);
+  c_out u_o21b (clk, o21b, po21b);
   initial begin
     // Changed before the first edge, so the defaults differ from the sampled values
     #2;
@@ -66,6 +83,9 @@ module t;
     d1 = 1'b0;
     e0 = 1'b1;
     e1 = 1'b0;
+    o21a = 7'd5;
+    o42 = 7'd6;
+    o21b = 7'd7;
     #3 clk = 1'b1;
     #1;
     `checkh(u_d.pa, 1'b0);
@@ -84,6 +104,9 @@ module t;
     `checkh(u_n109.pa2, 7'd109);
     `checkh(u_np.pa, 7'd55);
     `checkh(u_ng.pa, 7'd77);
+    `checkh(po21a, 7'd21);
+    `checkh(po42, 7'd42);
+    `checkh(po21b, 7'd21);
     // At the second edge, the past value is sampled and the one before it the default
     #4 clk = 1'b0;
     #5 clk = 1'b1;

@@ -1907,6 +1907,10 @@ class AssertCheckerFormals final {
     static bool replaceByConstant(AstNodeExpr* nodep, AstNodeExpr* valuep);
     static void replaceElementByInitializer(AstArraySel* selp);
     static bool replaceByInitializer(AstNodeVarRef* refp);
+    static bool isChecker(const AstNodeModule* modp) {
+        const AstModule* const checkerp = VN_CAST(modp, Module);
+        return checkerp && checkerp->isChecker();
+    }
     static void deleteDefaults(const std::vector<AstConst*>& defaults) {
         for (AstConst* const constp : defaults)
             if (constp) constp->deleteTree();
@@ -2176,16 +2180,21 @@ std::vector<AstCell*>
 AssertCheckerFormals::specializeChecker(AstNodeModule* modp, const std::vector<AstCell*>& cellps) {
     // Return the cells in the copies made
     std::vector<AstCell*> newCellps;
-    // The formals read by $past, in the order of their first read
+    // The formals read by $past, or passed to the checkers instantiated here, in the order of
+    // their first read
     std::vector<const AstVar*> formalps;
     std::unordered_set<const AstVar*> seen;
-    modp->foreach([&](const AstPast* pastp) {
-        pastp->exprp()->foreach([&](const AstNodeVarRef* refp) {
+    const auto addFormals = [&](const AstNode* nodep) {
+        nodep->foreach([&](const AstNodeVarRef* refp) {
             const AstVar* const varp = refp->varp();
             if (varp->isIO() && varp->isNonOutput() && seen.emplace(varp).second) {
                 formalps.push_back(varp);
             }
         });
+    };
+    modp->foreach([&](const AstPast* pastp) { addFormals(pastp->exprp()); });
+    modp->foreach([&](const AstCell* cellp) {
+        if (isChecker(cellp->modp())) addFormals(cellp);
     });
     // Group the instances by the defaults of those formals, in the order of first instance
     std::vector<std::vector<AstConst*>> groupDefaults;
@@ -2237,8 +2246,7 @@ void AssertCheckerFormals::specialize(AstNetlist* netlistp) {
     // whose copies are then already made. Copies have no instances recorded, so need no copies.
     std::unordered_map<const AstNodeModule*, std::vector<AstCell*>> cellps;
     const auto addCell = [&](AstCell* cellp) {
-        const AstModule* const modp = VN_CAST(cellp->modp(), Module);
-        if (modp && modp->isChecker()) cellps[modp].push_back(cellp);
+        if (isChecker(cellp->modp())) cellps[cellp->modp()].push_back(cellp);
     };
     netlistp->foreach(addCell);
     for (AstNodeModule* const modp : netlistp->modulespList()) {
