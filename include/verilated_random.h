@@ -280,7 +280,9 @@ class VlRandomizer VL_NOT_FINAL {
     struct KeySet final {  // An associative array read, see key_set()
         int keyWidth;
         int valueWidth;
-        std::function<void()> record;  // Records the array's current elements
+        // Records the array's current elements into a randomizer, this one or a copy, as for a
+        // randomize() with clause
+        std::function<void(VlRandomizer&)> record;
     };
     std::map<std::string, KeySet> m_keySets;
     const VlQueue<CData>* m_randmodep = nullptr;  // rand_mode state;
@@ -647,13 +649,17 @@ public:
     void key_set(VlAssocArray<T_Key, T_Value>& var, const std::string& name, int keyWidth,
                  int valueWidth) {
         VlAssocArray<T_Key, T_Value>* const varp = &var;
-        m_keySets[name] = KeySet{keyWidth, valueWidth, [this, varp, name]() {
-                                     m_index = 0;
-                                     clear_arr_table(name);
-                                     record_arr_table(*varp, name, 1, {}, {});
-                                     const auto it = m_vars.find(name);
-                                     if (it != m_vars.end()) it->second->clearCountCache();
+        m_keySets[name] = KeySet{keyWidth, valueWidth, [varp, name](VlRandomizer& randomizer) {
+                                     randomizer.m_index = 0;
+                                     randomizer.clear_arr_table(name);
+                                     randomizer.record_arr_table(*varp, name, 1, {}, {});
+                                     const auto it = randomizer.m_vars.find(name);
+                                     if (it != randomizer.m_vars.end()) {
+                                         it->second->clearCountCache();
+                                     }
                                  }};
+        // Now too, as a copy updating the array's registration reads the elements it has
+        m_keySets[name].record(*this);
     }
 
     // Recursively record all elements in an unpacked array

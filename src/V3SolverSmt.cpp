@@ -3900,7 +3900,13 @@ class SolverSmtLowering final : public V3SolverLowering {
             AstStmtExpr* const stmtExprp = VN_CAST(stmtp, StmtExpr);
             if (!stmtExprp) continue;
             AstCMethodHard* const methodp = VN_CAST(stmtExprp->exprp(), CMethodHard);
-            if (!methodp || methodp->method() != VCMethod::RANDOMIZER_WRITE_VAR) continue;
+            if (!methodp) continue;
+            // A clone reads its own associative arrays
+            if (methodp->method() == VCMethod::RANDOMIZER_KEY_SET) {
+                updatep->addStmtsp(methodp->cloneTree(false)->makeStmt());
+                continue;
+            }
+            if (methodp->method() != VCMethod::RANDOMIZER_WRITE_VAR) continue;
 
             AstNodeVarRef* const varRefp = VN_AS(methodp->pinsp(), NodeVarRef);
             if (varRefp->varp()->lifetime().isStatic()) {

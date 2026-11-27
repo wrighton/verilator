@@ -60,6 +60,14 @@ class Widths;
   endfunction
 endclass
 
+// Keys given only after new(), of more than 32 bits
+class Late;
+  rand bit [32:0] aa[longint];
+  rand longint k;
+  rand bit [32:0] v;
+  constraint c {v == aa[k];}
+endclass
+
 // Many reads of a held array with many keys
 class Many;
   rand bit [7:0] aa[int];
@@ -147,6 +155,56 @@ module t;
     ok = m.randomize();
     `checkh(ok, 1);
     foreach (m.idx[i]) `checkh(m.vals[i], m.aa.exists(m.idx[i]) ? m.aa[m.idx[i]] : 8'h0);
+    // Keys changed since the last call with a randomize() with clause, and those of a copy,
+    // whose original is gone
+    begin
+      automatic Held h = new;
+      automatic Held hc;
+      h.aa.rand_mode(0);
+      ok = h.randomize() with {v == 8'h55;};
+      `checkh(ok, 1);
+      h.aa = '{3: 8'h33, default: 8'h77};
+      ok = h.randomize() with {v == 8'h33;};
+      `checkh(ok, 1);
+      `checkh(h.k, 3);
+      // A key replaced since the last call with a randomize() with clause
+      h.aa.delete(3);
+      h.aa[4] = 8'h44;
+      ok = h.randomize() with {v == 8'h44;};
+      `checkh(ok, 1);
+      `checkh(h.k, 4);
+      hc = new h;
+      ok = hc.randomize() with {v == 8'h44;};
+      `checkh(ok, 1);
+      `checkh(hc.k, 4);
+      hc.aa = '{8: 8'h88, default: 8'h77};
+      h = null;
+      repeat (2) begin
+        ok = hc.randomize() with {v == 8'h88;};
+        `checkh(ok, 1);
+        `checkh(hc.k, 8);
+      end
+    end
+    // A copy of an object of more keys than when made, changed by randomize() with clauses
+    begin
+      automatic Late l = new;
+      automatic Late lc;
+      l.aa.rand_mode(0);
+      l.aa[5] = 33'h1_0000_0055;
+      ok = l.randomize() with {v == 33'h1_0000_0055;};
+      `checkh(ok, 1);
+      `checkh(l.k, 5);
+      l.aa.delete(5);
+      l.aa[6] = 33'h66;
+      l.aa[-9] = 33'h99;
+      ok = l.randomize() with {v == 33'h99;};
+      `checkh(ok, 1);
+      `checkh(l.k, -9);
+      lc = new l;
+      ok = lc.randomize() with {v == 33'h66;};
+      `checkh(ok, 1);
+      `checkh(lc.k, 6);
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end
