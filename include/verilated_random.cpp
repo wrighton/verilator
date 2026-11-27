@@ -989,7 +989,11 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
     m_checkOnly = checkOnly;
-    const std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    m_unsat = false;
+    std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    // The sizes the elements could not be solved with, which also hold in a solve pinning
+    // other sizes
+    uniqueExprs.insert(uniqueExprs.end(), m_sizeExclusions.begin(), m_sizeExclusions.end());
 
     // Randc exclusion-based cycling: exclude previously used values per randc var.
     // When solver returns unsat (all values exhausted), clear history for new cycle.
@@ -1142,8 +1146,9 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
             // without pinning, so the solver's free assignment would clobber
             // user state.
             if (m_checkOnly) return false;
-            // Genuine unsat: report via unsat-core
-            reportUnsatSetup(sess, uniqueExprs);
+            // Genuine unsat: report via unsat-core, unless the call tries other sizes
+            m_unsat = true;
+            if (!m_quietUnsat) reportUnsatSetup(sess, uniqueExprs);
             return false;
         }
         if (!applyModel(sess)) return false;
@@ -1578,6 +1583,30 @@ std::vector<int> VlRandomizer::readUnsatAssumptions(VlSolverSession& sess)
 }
 
 // Re-solve with named asserts so an unsat core can name the failing constraints
+bool VlRandomizer::exclude_size(const char* name, IData value) {
+    std::ostringstream os;
+    os << " (= " << name << " #x" << std::hex << std::setw(8) << std::setfill('0') << value << ")";
+    m_sizeExclusion += os.str();
+    return true;
+}
+
+bool VlRandomizer::end_size_exclusion() {
+    m_sizeExclusions.push_back("(__Vbv (not (and true" + m_sizeExclusion + ")))");
+    m_sizeExclusion.clear();
+    return true;
+}
+
+bool VlRandomizer::report_unsat() {
+    VlSolverSession& sess = s_solverSession;
+    const VerilatedLockGuard lock{sess.m_mutex};
+    std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    uniqueExprs.insert(uniqueExprs.end(), m_sizeExclusions.begin(), m_sizeExclusions.end());
+    // Like a solve, in a transaction, so the next solve starts afresh
+    VlSolverTxn txn{sess};
+    if (txn.ok()) reportUnsatSetup(sess, uniqueExprs);
+    return true;
+}
+
 void VlRandomizer::reportUnsatSetup(VlSolverSession& sess,
                                     const std::vector<std::string>& uniqueExprs)
     VL_REQUIRES(sess.m_mutex) {

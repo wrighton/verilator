@@ -269,6 +269,11 @@ class VlRandomizer VL_NOT_FINAL {
     std::map<std::string, std::shared_ptr<const VlRandomVar>> m_vars;  // Solver-dependent
     // Scratch buffer for randomConstraint(), reused across calls
     std::vector<const VlRandomVar*> m_randomConstraintVars;
+    // Size assignments the solves of this call exclude (see exclude_size)
+    std::vector<std::string> m_sizeExclusions;
+    std::string m_sizeExclusion;  // The one exclude_size() is building
+    bool m_quietUnsat = false;  // An unsatisfied solve is not reported (see quiet_unsat)
+    bool m_unsat = false;  // The last solve failed as its constraints are unsatisfied
     std::set<std::string> m_disabledVars;  // Variables with rand_mode off (skip write-back)
                                            // variables
     ArrayInfoMap m_arr_vars;  // Tracks each element in array structures for iteration
@@ -961,6 +966,29 @@ public:
     }
     void disable_soft(const std::string& varName);
     void clearConstraints();
+    /// Add that size variable 'name' holds 'value' to the size assignment the solves of this
+    /// call exclude, as the solve of the elements failed with it (see end_size_exclusion).
+    /// Returns true.
+    bool exclude_size(const char* name, IData value);
+    /// Exclude the size assignment exclude_size() built from the next solves of this call.
+    /// Returns true.
+    bool end_size_exclusion();
+    /// Stop excluding sizes, as the call ends. Returns true.
+    bool clear_size_exclusions() {
+        m_sizeExclusions.clear();
+        return true;
+    }
+    /// Whether an unsatisfied solve is reported, as it is not when the call tries other sizes
+    /// after it. Returns true.
+    bool quiet_unsat(bool flag) {
+        m_quietUnsat = flag;
+        return true;
+    }
+    /// Report why the constraints set up now, with the sizes excluded, are unsatisfied, as an
+    /// unsatisfied solve does when not quiet. Returns true.
+    bool report_unsat();
+    /// Whether the last solve failed as its constraints are unsatisfied
+    bool unsat() const { return m_unsat; }
     void clearAll();  // Clear both constraints and variables
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
     void solveBefore(const std::string& beforeName,
