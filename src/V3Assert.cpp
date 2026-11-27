@@ -1939,6 +1939,24 @@ public:
     }
 };
 
+// The variable a class property read through a handle is read from, through member selects
+// and constant index array selects of handles, if any
+static const AstVar* memberRootVarp(const AstNode* nodep) {
+    if (const AstMemberRef* const selp = VN_CAST(nodep, MemberRef)) {
+        return memberRootVarp(selp->fromp());
+    }
+    const AstArraySel* const selp = VN_CAST(nodep, ArraySel);
+    if (selp && VN_IS(selp->bitp(), Const)) return memberRootVarp(selp->fromp());
+    const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef);
+    return refp ? refp->varp() : nullptr;
+}
+// Whether a class property read from root variable varp is sampled whole: not if read through
+// an automatic variable, whose sampled value is its current value, so whose object may change
+// after sampling (IEEE 1800-2023 16.5.1), or other than from a variable
+static bool isSampledWhole(const AstVar* varp) {
+    return varp && !isProceduralAutomatic(varp) && !varp->isTemp();
+}
+
 // Prepare one default sampled expression.
 class DefaultSampledValueVisitor final : public VNVisitor {
     // STATE
@@ -2076,6 +2094,17 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         iterate(exprp);
+    }
+    void visit(AstMemberRef* nodep) override {
+        // A class property sampled whole is not a static variable, so its default sampled value
+        // is the default value of its type (IEEE 1800-2023 16.5.1), also before its object
+        // exists. Otherwise only the handle is sampled.
+        if (isSampledWhole(memberRootVarp(nodep->fromp())) && hasConstant(nodep->dtypep())) {
+            nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        } else {
+            iterateChildren(nodep);
+        }
     }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
@@ -4803,6 +4832,27 @@ class AssertVisitor final : public VNVisitor {
                 newp->user1(1);
                 v3Global.setHasSampled();
             }
+        }
+    }
+    void visit(AstMemberRef* nodep) override {
+        // The sampled value of a class property read through a handle is the value of the
+        // property of the object of the handle's sampled value, both in the Preponed region
+        // (IEEE 1800-2023 16.5.1). So it is read whole when sampled, if from a static variable,
+        // possibly through constant index elements of arrays of handles. Otherwise only the
+        // handle is sampled, and the property is read when used: the object of an automatic
+        // variable, whose sampled value is its current value, may change after sampling.
+        const AstVar* const varp = memberRootVarp(nodep->fromp());
+        if (!m_inSampled || !isSampledWhole(varp)) {
+            iterateChildren(nodep);
+        } else if (varp->isClassMember() && !varp->lifetime().isStatic()) {
+            // Reported with the sampled expression
+        } else {
+            VNRelinker relinkHandle;
+            nodep->unlinkFrBack(&relinkHandle);
+            AstSampled* const newp = newSampledExpr(nodep);
+            relinkHandle.relink(newp);
+            newp->user1(1);
+            v3Global.setHasSampled();
         }
     }
     // Don't sample sensitivities
