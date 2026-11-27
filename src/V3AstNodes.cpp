@@ -4818,6 +4818,7 @@ void AstVar::dump(std::ostream& str) const {
     if (ignorePostWrite()) str << " [IGNPWR]";
     if (ignoreSchedWrite()) str << " [IGNWR]";
     if (isStdRandomizeArg()) str << " [STDRANDARG]";
+    if (clockvarOutput()) str << " [CLKVAROUT]";
     if (!lifetime().isNone()) str << " [" << lifetime().ascii() << "] ";
     str << " " << varType();
     if (forceRdVarp()) str << " forceRdVarp=" << nodeAddr(forceRdVarp());
@@ -4859,6 +4860,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isFuncReturn);
     dumpJsonBoolFuncIf(str, isFuncLocal);
     dumpJsonBoolFuncIf(str, isStdRandomizeArg);
+    dumpJsonBoolFuncIf(str, clockvarOutput);
     dumpJsonStr(str, "lifetime", lifetime().ascii());
     dumpJsonStr(str, "varType", varType().ascii());
     if (dtypep()) dumpJsonStr(str, "dtypeName", dtypep()->name());

@@ -51,8 +51,9 @@
 //
 // Interface nets: a net of an interface that other modules drive across hierarchy is resolved in
 // its interface from the contributions, a value and an enable each, of the driving modules. Its
-// own drivers, the continuous assignments in the interface where it is not tristate itself,
-// become contributions too when their values cannot be 'z (TristateMayZVisitor); else the net
+// own drivers, the continuous assignments in the interface where it is not tristate itself and the
+// updates of the whole net from the clockvar of a clocking block output there, become
+// contributions too when their values cannot be 'z (TristateMayZVisitor); else the net
 // keeps the lowering in which the external contributions replace them.
 //
 // Note 1800-2012 adds user defined resolution functions. This suggests
@@ -456,21 +457,28 @@ public:
 
 //######################################################################
 // Finds which of the given variables may be 'z after tristate lowering, i.e. are written from or
-// connected to a value that may be 'z. As elsewhere, tasks, functions and classes are not tracked.
+// connected to a value that may be 'z. Writes of clockvars are also followed in tasks, functions,
+// classes and members.
 
 class TristateMayZVisitor final : public VNVisitorConst {
     using WriteVars = std::vector<std::pair<uint32_t, uint32_t>>;  // (write, variable index)
 
     const std::function<bool(AstVar*)> m_isSource;  // Whether a variable may be 'z
+    // Clockvars to track in all writes, and whether tristate lowering made each tristate
+    const std::unordered_map<AstVar*, bool>& m_clockvarps;
     std::vector<AstVar*> m_varps;  // Variables in writes
     std::unordered_map<const AstVar*, uint32_t> m_indexes;  // Index of each in m_varps
     WriteVars m_writtenVars;  // Variables written by each write
     WriteVars m_readVars;  // Variables read by each write
+    std::vector<uint32_t> m_seeds;  // Clockvars that may be 'z whatever they are written from
+    std::vector<AstVar*> m_writtenCvps;  // Clockvars written by the current write
     std::vector<bool> m_mayZ;  // Per variable, whether written a value that may be 'z
     uint32_t m_writes = 0;  // Number of writes
     uint32_t m_write = 0;  // Current write
     bool m_inLhs = false;  // In the written side of the current write
     bool m_inWrite = false;  // In a write
+    bool m_inHidden = false;  // In a task, function or class
+    bool m_inInitial = false;  // In an initializer
 
     uint32_t indexOf(AstVar* varp) {
         const auto pair = m_indexes.emplace(varp, m_varps.size());
@@ -481,6 +489,7 @@ class TristateMayZVisitor final : public VNVisitorConst {
         VL_RESTORER(m_inLhs);
         VL_RESTORER(m_inWrite);
         VL_RESTORER(m_write);
+        VL_RESTORER_CLEAR(m_writtenCvps);
         m_write = m_writes++;
         m_inWrite = true;
         m_inLhs = true;
@@ -503,12 +512,39 @@ class TristateMayZVisitor final : public VNVisitorConst {
         if (!m_inLhs) {
             m_readVars.emplace_back(m_write, indexOf(varp));
         } else if (access.isWriteOrRW()) {
+            const auto it = m_clockvarps.find(varp);
+            if (it == m_clockvarps.end() ? m_inHidden : m_inInitial) return;
             m_writtenVars.emplace_back(m_write, indexOf(varp));
+            if (it == m_clockvarps.end()) return;
+            m_writtenCvps.push_back(varp);
+            if (it->second) m_seeds.push_back(indexOf(varp));
         }
     }
     void visit(AstNodeVarRef* nodep) override { visitRef(nodep->varp(), nodep->access()); }
-    void visit(AstClass*) override {}
-    void visit(AstNodeFTask*) override {}
+    void visit(AstMemberRef* nodep) override {
+        if (m_clockvarps.count(nodep->varp())
+            || (m_inWrite && !m_inLhs && !m_writtenCvps.empty())) {
+            visitRef(nodep->varp(), nodep->access());
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstConst* nodep) override {
+        // A 'z constant left after lowering in a write of a clockvar has no enable
+        if (!m_inWrite || !nodep->num().hasZ()) return;
+        for (AstVar* const varp : m_writtenCvps) m_seeds.push_back(indexOf(varp));
+    }
+    void visitHidden(AstNode* nodep) {
+        VL_RESTORER(m_inHidden);
+        m_inHidden = true;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstClass* nodep) override { visitHidden(nodep); }
+    void visit(AstNodeFTask* nodep) override { visitHidden(nodep); }
+    void visit(AstInitialStatic* nodep) override {
+        VL_RESTORER(m_inInitial);
+        m_inInitial = true;
+        iterateChildrenConst(nodep);
+    }
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
 
     // Group the pairs by write or by variable: the others of key k are at
@@ -528,8 +564,10 @@ class TristateMayZVisitor final : public VNVisitorConst {
 
 public:
     TristateMayZVisitor(AstNetlist* nodep, std::function<bool(AstVar*)> isSource,
+                        const std::unordered_map<AstVar*, bool>& clockvarps,
                         const std::vector<AstVar*>& queryps)
-        : m_isSource{isSource} {
+        : m_isSource{isSource}
+        , m_clockvarps{clockvarps} {
         iterateConst(nodep);
         const size_t vars = m_varps.size();
         // The variables the given ones depend on: read by writes of them, transitively
@@ -563,6 +601,11 @@ public:
         group(m_readVars, vars, false, readersStart, readersOf);
         group(m_writtenVars, m_writes, true, writtenStart, writtenOf);
         m_mayZ.assign(vars, false);
+        for (const uint32_t var : m_seeds) {
+            if (!needed[var] || m_mayZ[var]) continue;
+            m_mayZ[var] = true;
+            work.push_back(var);
+        }
         for (uint32_t var = 0; var < vars; ++var) {
             if (needed[var] && m_isSource(m_varps[var])) work.push_back(var);
         }
@@ -687,7 +730,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     std::map<AstVar*, std::vector<std::pair<AstVar*, AstVar*>>> m_ifaceContribs;
     // Drivers of an interface net that decide whether its own drivers become contributions
     struct IfaceOwn final {
-        std::vector<AstAssignW*> driverps;  // Its own drivers (see file header)
+        std::vector<AstNodeAssign*> driverps;  // Its own drivers (see file header)
         bool otherDriver = false;  // A driver that is neither own nor a contribution
         // A contribution an own driver of the whole net cannot disconnect: one that is no
         // continuous assignment of the whole net without delay
@@ -1276,39 +1319,49 @@ class TristateVisitor final : public TristateBaseVisitor {
         nodep->addStmtsp(new AstAlways{enAssp});
     }
 
+    // Whether a procedural assignment samples data and enables into a temporary
+    static bool samplesEnables(const AstNodeAssign* assignp) {
+        return !VN_IS(assignp, AssignDly) && assignp->timingControlp();
+    }
+    // Merge enable updates into a procedural assignment; see samplesEnables for sampleName
+    void mergeProceduralEnables(AstNodeModule* nodep, AstNodeAssign* assignp,
+                                std::vector<ProceduralEnable>& enables, const string& sampleName) {
+        AstNodeExpr* combinedLhsp = assignp->lhsp()->unlinkFrBack();
+        AstNodeExpr* combinedRhsp = assignp->rhsp()->unlinkFrBack();
+        for (ProceduralEnable& enable : enables) {
+            combinedLhsp = new AstConcat{assignp->fileline(), enable.m_lhsp, combinedLhsp};
+            combinedRhsp = new AstConcat{assignp->fileline(), enable.m_rhsp, combinedRhsp};
+        }
+
+        if (samplesEnables(assignp)) {
+            // A blocking intra-assignment timing control must suspend only once. Sample data
+            // and enables together, then apply both after the timing control completes.
+            AstVar* const sampledp = new AstVar{assignp->fileline(), VVarType::MODULETEMP,
+                                                sampleName, combinedRhsp->dtypep()};
+            nodep->addStmtsp(sampledp);
+            assignp->lhsp(new AstVarRef{assignp->fileline(), sampledp, VAccess::WRITE});
+            assignp->rhsp(combinedRhsp);
+            assignp->dtypeFrom(combinedRhsp);
+            AstAssign* const applyp
+                = new AstAssign{assignp->fileline(), combinedLhsp,
+                                new AstVarRef{assignp->fileline(), sampledp, VAccess::READ}};
+            UINFO(9, "       new timed procedural tristate apply " << applyp);
+            assignp->addNextHere(applyp);
+        } else {
+            // Keeping data and enables in one assignment preserves NBA scheduling and makes
+            // every partial LHS update affect the identical enable footprint.
+            assignp->lhsp(combinedLhsp);
+            assignp->rhsp(combinedRhsp);
+            assignp->dtypeFrom(combinedRhsp);
+            UINFO(9, "       augmented procedural tristate assignment " << assignp);
+        }
+    }
     void insertProceduralEnableAssignments(AstNodeModule* nodep) {
         for (auto& assignEnables : m_proceduralEnables) {
             AstNodeAssign* const assignp = assignEnables.first;
-            AstNodeExpr* combinedLhsp = assignp->lhsp()->unlinkFrBack();
-            AstNodeExpr* combinedRhsp = assignp->rhsp()->unlinkFrBack();
-            for (ProceduralEnable& enable : assignEnables.second) {
-                combinedLhsp = new AstConcat{assignp->fileline(), enable.m_lhsp, combinedLhsp};
-                combinedRhsp = new AstConcat{assignp->fileline(), enable.m_rhsp, combinedRhsp};
-            }
-
-            if (!VN_IS(assignp, AssignDly) && assignp->timingControlp()) {
-                // A blocking intra-assignment timing control must suspend only once. Sample data
-                // and enables together, then apply both after the timing control completes.
-                AstVar* const sampledp
-                    = new AstVar{assignp->fileline(), VVarType::MODULETEMP,
-                                 "__VtriSample" + cvtToStr(m_unique++), combinedRhsp->dtypep()};
-                nodep->addStmtsp(sampledp);
-                assignp->lhsp(new AstVarRef{assignp->fileline(), sampledp, VAccess::WRITE});
-                assignp->rhsp(combinedRhsp);
-                assignp->dtypeFrom(combinedRhsp);
-                AstAssign* const applyp
-                    = new AstAssign{assignp->fileline(), combinedLhsp,
-                                    new AstVarRef{assignp->fileline(), sampledp, VAccess::READ}};
-                UINFO(9, "       new timed procedural tristate apply " << applyp);
-                assignp->addNextHere(applyp);
-            } else {
-                // Keeping data and enables in one assignment preserves NBA scheduling and makes
-                // every partial LHS update affect the identical enable footprint.
-                assignp->lhsp(combinedLhsp);
-                assignp->rhsp(combinedRhsp);
-                assignp->dtypeFrom(combinedRhsp);
-                UINFO(9, "       augmented procedural tristate assignment " << assignp);
-            }
+            const string sampleName
+                = samplesEnables(assignp) ? "__VtriSample" + cvtToStr(m_unique++) : "";
+            mergeProceduralEnables(nodep, assignp, assignEnables.second, sampleName);
         }
         m_proceduralEnables.clear();
     }
@@ -2586,6 +2639,15 @@ class TristateVisitor final : public TristateBaseVisitor {
     // Record a driver of an interface net, see IfaceOwn
     void recordPlainDriver(AstNodeVarRef* nodep) {
         IfaceOwn& own = m_ifaceOwn[nodep->varp()];
+        // The update of the whole net from the clockvar of a clocking block output, which
+        // V3AssertPre generates and marks on the clockvar, drives the net from when it is done
+        const AstAssign* const updatep = VN_CAST(m_assignp, Assign);
+        const AstVarRef* const cvRefp = updatep ? VN_CAST(updatep->rhsp(), VarRef) : nullptr;
+        if (VN_IS(nodep, VarRef) && cvRefp && updatep->lhsp() == nodep
+            && cvRefp->varp()->clockvarOutput()) {
+            own.driverps.push_back(m_assignp);
+            return;
+        }
         AstAssignW* const assignp = VN_CAST(m_assignp, AssignW);
         // A delayed driver would need a delayed enable
         if (VN_IS(nodep, VarRef) && assignp && !assignp->strengthSpecp()
@@ -2801,8 +2863,12 @@ class TristateVisitor final : public TristateBaseVisitor {
         if (own.driverps.empty() || own.otherDriver || invarp->isWiredNet()) return false;
         if (own.fixedContrib && hasWholeOwnDriver(own)) return false;
         bool reads = false;
-        for (const AstAssignW* const assignp : own.driverps) {
-            if (assignp->rhsp()->exists([&](const AstNodeVarRef* refp) {
+        for (const AstNodeAssign* const assignp : own.driverps) {
+            if (!VN_IS(assignp, AssignW)) {
+                reads = true;
+                continue;
+            }
+            if (VN_AS(assignp, AssignW)->rhsp()->exists([&](const AstNodeVarRef* refp) {
                     reads = true;
                     queryps.push_back(refp->varp());
                     return isMayZSource(refp->varp());
@@ -2816,10 +2882,23 @@ class TristateVisitor final : public TristateBaseVisitor {
     // Whether the own drivers of a candidate (isOwnCandidate) read no variable written a value
     // that may be 'z
     bool isOwnContrib(const TristateMayZVisitor& mayZ, AstVar* invarp) {
-        for (const AstAssignW* const assignp : m_ifaceOwn.at(invarp).driverps) {
-            if (assignp->rhsp()->exists(
-                    [&](const AstNodeVarRef* refp) { return mayZ.isWrittenMayZ(refp->varp()); })) {
-                return false;
+        for (const AstNodeAssign* const assignp : m_ifaceOwn.at(invarp).driverps) {
+            if (VN_IS(assignp, AssignW)) {
+                if (assignp->rhsp()->exists([&](const AstNodeVarRef* refp) {
+                        return mayZ.isWrittenMayZ(refp->varp());
+                    })) {
+                    return false;
+                }
+                continue;
+            }
+            // A procedural update: the variable, and, if external drivers made it tristate, its
+            // contributions
+            AstVar* const cvp = VN_AS(assignp->rhsp(), VarRef)->varp();
+            if (mayZ.isWrittenMayZ(cvp)) return false;
+            const auto it = m_ifaceContribs.find(cvp);
+            if (it == m_ifaceContribs.end()) continue;
+            for (const std::pair<AstVar*, AstVar*>& contrib : it->second) {
+                if (mayZ.isWrittenMayZ(contrib.second)) return false;
             }
         }
         return true;
@@ -2829,7 +2908,9 @@ class TristateVisitor final : public TristateBaseVisitor {
     // disconnects the external contributions, which are not stronger.
     static bool hasWholeOwnDriver(const IfaceOwn& own) {
         return std::any_of(own.driverps.begin(), own.driverps.end(),
-                           [](const AstAssignW* assignp) { return !VN_IS(assignp->lhsp(), Sel); });
+                           [](const AstNodeAssign* assignp) {
+                               return VN_IS(assignp, AssignW) && !VN_IS(assignp->lhsp(), Sel);
+                           });
     }
     // Make each own driver of an interface net a contribution, enabled for the bits it drives
     void addOwnContribs(AstNodeModule* ifaceModp, AstVar* invarp,
@@ -2838,7 +2919,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         size_t n = contribs.size();  // Names after those of the external contributions
         const IfaceOwn& own = m_ifaceOwn.at(invarp);
         if (hasWholeOwnDriver(own)) contribs.clear();
-        for (AstAssignW* const assignp : own.driverps) {
+        for (AstNodeAssign* const assignp : own.driverps) {
             const string suffix = cvtToStr(n++);
             AstVar* const outVarp
                 = new AstVar{fl, VVarType::MODULETEMP, invarp->name() + "__out" + suffix, invarp};
@@ -2849,6 +2930,25 @@ class TristateVisitor final : public TristateBaseVisitor {
             enVarp->setDfgTriLowered();
             ifaceModp->addStmtsp(enVarp);
             AstNodeExpr* enp;
+            if (!VN_IS(assignp, AssignW)) {
+                // A procedural update, enabled from when it is done, by the enable of the
+                // variable if tristate lowering made it tristate
+                AstVar* const cvp = VN_AS(assignp->rhsp(), VarRef)->varp();
+                VN_AS(assignp->lhsp(), VarRef)->varp(outVarp);
+                AstNodeExpr* enRhsp;
+                if (m_ifaceContribs.count(cvp)) {
+                    enRhsp
+                        = new AstVarRef{fl, getCreateIfaceEnVarp(ifaceModp, cvp), VAccess::READ};
+                } else {
+                    enRhsp = newAllZerosOrOnes(invarp, true);
+                }
+                std::vector<ProceduralEnable> enables{
+                    ProceduralEnable{new AstVarRef{fl, enVarp, VAccess::WRITE}, enRhsp}};
+                mergeProceduralEnables(ifaceModp, assignp, enables,
+                                       "__V" + invarp->name() + "Sample" + suffix);
+                contribs.emplace_back(enVarp, outVarp);
+                continue;
+            }
             if (AstSel* const selp = VN_CAST(assignp->lhsp(), Sel)) {
                 VN_AS(selp->fromp(), VarRef)->varp(outVarp);
                 enp = newEnableDeposit(selp, newAllZerosOrOnes(selp, true));
@@ -2862,6 +2962,19 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
     }
 
+    // Enable of an interface tristate signal, as combining its contributions always made it.
+    // getCreateEnVarp serves the module being processed, and adds the enable to the modports of
+    // the signal's interface; this runs after all modules, for an enable only the interface uses.
+    static AstVar* getCreateIfaceEnVarp(AstNodeModule* ifaceModp, AstVar* invarp) {
+        if (!invarp->user1p()) {
+            AstVar* const envarp = new AstVar{invarp->fileline(), VVarType::MODULETEMP,
+                                              invarp->name() + "__en", invarp};
+            envarp->setDfgTriLowered();
+            ifaceModp->addStmtsp(envarp);
+            invarp->user1p(envarp);
+        }
+        return VN_AS(invarp->user1p(), Var);
+    }
     void combineIfaceContribs() {
         // After all modules have been processed, combine per-module contributions
         // for each interface tristate signal into final resolution logic.
@@ -2872,16 +2985,30 @@ class TristateVisitor final : public TristateBaseVisitor {
         std::vector<std::pair<AstVar*, bool>> candidates;
         bool needsMayZ = false;
         std::vector<AstVar*> queryps;  // The variables whose may-'z decides them
+        // The variables their procedural updates read, and whether tristate
+        std::unordered_map<AstVar*, bool> clockvarps;
         for (const auto& kv : m_ifaceContribs) {
             bool needs = false;
             if (!isOwnCandidate(kv.first, needs, queryps)) continue;
             candidates.emplace_back(kv.first, needs);
             needsMayZ |= needs;
+            for (const AstNodeAssign* const assignp : m_ifaceOwn.at(kv.first).driverps) {
+                if (VN_IS(assignp, AssignW)) continue;
+                AstVar* const cvp = VN_AS(assignp->rhsp(), VarRef)->varp();
+                const auto it = m_ifaceContribs.find(cvp);
+                clockvarps.emplace(cvp, it != m_ifaceContribs.end());
+                queryps.push_back(cvp);
+                if (it == m_ifaceContribs.end()) continue;
+                for (const std::pair<AstVar*, AstVar*>& contrib : it->second) {
+                    queryps.push_back(contrib.second);
+                }
+            }
         }
         std::unique_ptr<const TristateMayZVisitor> mayZp;
         if (needsMayZ) {
             mayZp = std::make_unique<const TristateMayZVisitor>(
-                v3Global.rootp(), [this](AstVar* varp) { return isMayZSource(varp); }, queryps);
+                v3Global.rootp(), [this](AstVar* varp) { return isMayZSource(varp); }, clockvarps,
+                queryps);
         }
         for (const std::pair<AstVar*, bool>& candidate : candidates) {
             AstVar* const invarp = candidate.first;
@@ -2917,14 +3044,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 enp = (!enp) ? enRef2p : new AstOr{fl, enp, enRef2p};
             }
 
-            // Create or get __en var for this interface signal
-            AstVar* envarp = VN_CAST(invarp->user1p(), Var);
-            if (!envarp) {
-                envarp = new AstVar{fl, VVarType::MODULETEMP, invarp->name() + "__en", invarp};
-                envarp->setDfgTriLowered();
-                ifaceModp->addStmtsp(envarp);
-                invarp->user1p(envarp);
-            }
+            AstVar* const envarp = getCreateIfaceEnVarp(ifaceModp, invarp);
 
             // Assign combined enable
             AstAssignW* const enAssp

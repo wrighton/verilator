@@ -1069,6 +1069,12 @@ module t;
         bit detect_overlap;
     } __Vcg_cp_options__option;
     endcovergroup
+    logic cb_out;
+
+    ???? // CLOCKING 'cb_drv'
+    @(posedge clk)
+    ???? // CLOCKINGITEM
+    32'h0cb_outlogic cb_out;
     covergroup cg_clocked;
     @(posedge clk)function new();
         cp_cyc: coverpoint cg_sig;

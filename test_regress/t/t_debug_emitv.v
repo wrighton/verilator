@@ -621,6 +621,12 @@ module t (/*AUTOARG*/
     }
   endgroup
 
+  // Clocking block output
+  logic cb_out;
+  clocking cb_drv @(posedge clk);
+    output cb_out;
+  endclocking
+
   // Covergroup with clocking event
   covergroup cg_clocked @(posedge clk);
     cp_cyc: coverpoint cg_sig;

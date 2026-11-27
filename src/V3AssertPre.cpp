@@ -346,6 +346,7 @@ private:
         nodep->user1p(varp);
         varp->user1p(nodep);
         if (nodep->direction() == VDirection::OUTPUT) {
+            varp->clockvarOutput(true);
             exprp->foreach([](const AstNodeVarRef* varrefp) {
                 // Prevent confusing BLKANDNBLK warnings on clockvars due to generated assignments
                 varrefp->fileline()->warnOff(V3ErrorCode::BLKANDNBLK, true);

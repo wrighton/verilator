@@ -2475,6 +2475,7 @@ class AstVar final : public AstNode {
     bool m_ignorePostWrite : 1;  // Ignore writes in 'Post' blocks during ordering
     bool m_ignoreSchedWrite : 1;  // Ignore writes in scheduling (for special optimizations)
     bool m_dfgTriLowered : 1;  // Signal/temporary introduced by tristate lowering
+    bool m_clockvarOutput : 1;  // Clockvar of a clocking block output (V3AssertPre)
     bool m_dfgAllowMultidriveTri : 1;  // Allow DFG MULTIDRIVEN warning for intentional tri nets
     bool m_globalConstrained : 1;  // Global constraint per IEEE 1800-2023 18.5.8
     bool m_isStdRandomizeArg : 1;  // Argument variable created for std::randomize (__Varg*)
@@ -2543,6 +2544,7 @@ class AstVar final : public AstNode {
         m_ignorePostWrite = false;
         m_ignoreSchedWrite = false;
         m_dfgTriLowered = false;
+        m_clockvarOutput = false;
         m_dfgAllowMultidriveTri = false;
         m_globalConstrained = false;
         m_isStdRandomizeArg = false;
@@ -2760,6 +2762,8 @@ public:
     void setIgnoreSchedWrite() { m_ignoreSchedWrite = true; }
     bool dfgTriLowered() const { return m_dfgTriLowered; }
     void setDfgTriLowered() { m_dfgTriLowered = true; }
+    bool clockvarOutput() const { return m_clockvarOutput; }
+    void clockvarOutput(bool flag) { m_clockvarOutput = flag; }
     bool dfgAllowMultidriveTri() const { return m_dfgAllowMultidriveTri; }
     void setDfgAllowMultidriveTri() { m_dfgAllowMultidriveTri = true; }
     void globalConstrained(bool flag) { m_globalConstrained = flag; }
