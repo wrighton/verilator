@@ -1,0 +1,26 @@
+%Error: t/t_dynarray_slice_size_bad.v:13:14: Illegal assignment: Unmatched array sizes (IEEE 1800-2023 7.6)
+                                           : ... note: In instance 't'
+                                           : ... Left-hand slice has 2 elements
+                                           : ... Right-hand array has 3 elements
+   13 |     d[0:1] = '{1, 2, 3};   
+      |              ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_dynarray_slice_size_bad.v:14:14: Illegal assignment: Unmatched array sizes (IEEE 1800-2023 7.6)
+                                           : ... note: In instance 't'
+                                           : ... Left-hand slice has 3 elements
+                                           : ... Right-hand array has 2 elements
+   14 |     d[1:3] = '{1, 2};   
+      |              ^~
+%Error: t/t_dynarray_slice_size_bad.v:15:15: Illegal assignment: Unmatched array sizes (IEEE 1800-2023 7.6)
+                                           : ... note: In instance 't'
+                                           : ... Left-hand slice has 2 elements
+                                           : ... Right-hand array has 3 elements
+   15 |     d[i+:2] = {s3[0], 1, 2};   
+      |               ^
+%Error: t/t_dynarray_slice_size_bad.v:16:17: Illegal assignment: Unmatched array sizes (IEEE 1800-2023 7.6)
+                                           : ... note: In instance 't'
+                                           : ... Left-hand slice has 3 elements
+                                           : ... Right-hand array has 2 elements
+   16 |     d[i-:3] = s3[0:1];   
+      |                 ^
+%Error: Exiting due to
