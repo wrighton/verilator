@@ -30,6 +30,7 @@
 #include <sstream>
 #include <streambuf>
 #include <tuple>
+#include <unordered_map>
 
 // Diversity (scalar rand vars): tie each free bit to a random target via a
 //   boolean assumption literal, then force the bits with (check-sat-assuming).
@@ -1667,6 +1668,9 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
     std::vector<std::tuple<const VlRandomVar*, std::string, std::string>> staged;
     // Every requested term must come back exactly once, whether or not it is written
     std::set<std::string> answered;
+    // The registered array elements by name, as the reply names them
+    std::unordered_map<std::string, const ArrayInfo*> elementsByName;
+    for (const auto& it : m_arr_vars) elementsByName.emplace(it.second->m_name, it.second.get());
     while (true) {
         if (VL_UNCOVERABLE(!(is >> c))) return false;  // Balanced reply breaks at ')' first
         if (c == ')') break;
@@ -1736,11 +1740,8 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
             }
             const std::string indexed_name = oss.str();
 
-            const auto iti = std::find_if(m_arr_vars.begin(), m_arr_vars.end(),
-                                          [&indexed_name](const auto& entry) {
-                                              return entry.second->m_name == indexed_name;
-                                          });
-            if (iti != m_arr_vars.end()) {
+            const auto iti = elementsByName.find(indexed_name);
+            if (iti != elementsByName.end()) {
                 std::ostringstream ss;
                 ss << "#x" << std::hex << std::setw(8) << std::setfill('0')
                    << iti->second->m_index;
