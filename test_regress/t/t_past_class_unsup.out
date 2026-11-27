@@ -7,4 +7,16 @@
                                                 : ... note: In instance 't'
    20 |       return $sampled(v);   
       |                       ^
+%Error-UNSUPPORTED: t/t_past_class_unsup.v:24:20: Unsupported: sampled value of non-static class property 'v'.
+                                                : ... note: In instance 't'
+   24 |       return $past(v, 1,, @(posedge clk));   
+      |                    ^
+%Error-UNSUPPORTED: t/t_past_class_unsup.v:27:20: Unsupported: sampled value of non-static class property 'v'.
+                                                : ... note: In instance 't'
+   27 |       return $rose(v, @(posedge clk));   
+      |                    ^
+%Error-UNSUPPORTED: t/t_past_class_unsup.v:30:22: Unsupported: sampled value of non-static class property 'v'.
+                                                : ... note: In instance 't'
+   30 |       return $stable(v, @(posedge clk));   
+      |                      ^
 %Error: Exiting due to
