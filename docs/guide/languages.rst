@@ -450,6 +450,14 @@ Assertions
 Verilator partially supports assertions and assertion-driven functional
 coverage.
 
+A strong property, such as ``s_always [m:n]`` or ``s_until``, that is still
+pending at the end of simulation fails, and its fail action runs from a
+final block (IEEE 1800-2023 16.12.11). A timing control could not resume
+there, so for a fail action containing one, the default error is reported
+instead. A task with a timing control called by the action is not detected:
+the action runs up to that timing control for the first pending attempt
+only, and the other pending attempts of that assertion are not reported.
+
 Coverage
 --------
 
