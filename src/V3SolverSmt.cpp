@@ -68,6 +68,30 @@ static std::string buildMemberPath(const AstNodeExpr* const exprp) {
 //######################################################################
 // Helpers shared by the lowering visitors
 
+// Whether the class handles on the path objp are not null, nullptr if none is a handle
+static AstNodeExpr* newHandlesNonNullp(AstNodeExpr* objp) {
+    // The object of a null handle is not randomized (IEEE 1800-2023 18.4). objp is a chain of
+    // member and array element selects from a member of 'this'.
+    AstNodeExpr* condp = nullptr;
+    while (objp) {
+        if (AstNodeSel* const nodeSelp = VN_CAST(objp, NodeSel)) {
+            objp = nodeSelp->fromp();  // An element
+            continue;
+        }
+        AstMemberRef* const selp = VN_CAST(objp, MemberRef);
+        const AstVar* const varp = selp ? selp->varp() : VN_AS(objp, VarRef)->varp();
+        if (VN_IS(varp->dtypep()->skipRefp(), ClassRefDType)) {
+            FileLine* const fl = objp->fileline();
+            AstNodeExpr* const neqp
+                = new AstNeq{fl, objp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
+            // The handles holding this one are checked first
+            condp = condp ? new AstLogAnd{fl, neqp, condp} : neqp;
+        }
+        objp = selp ? selp->fromp() : nullptr;
+    }
+    return condp;
+}
+
 class SmtUtil final {
 public:
     // Walk up the extends chain from classp to find the nearest ancestor (starting
@@ -1046,9 +1070,14 @@ class ConstraintExprVisitor final : public VNVisitor {
             disablep->dtypeSetVoid();
             AstNodeExpr* const disnp = nameExprp->cloneTree(false);
             disablep->addPinsp(disnp);
-            AstIf* const ifp
+            AstNodeStmt* stmtp
                 = new AstIf{varp->fileline(), atp, enablep->makeStmt(), disablep->makeStmt()};
-            addRegistrationStmt(ifp, initp);
+            // The rand_mode of a member object is read only through non-null handles
+            if (AstNodeExpr* const nonNullp
+                = memberRefp ? newHandlesNonNullp(memberRefp->fromp()) : nullptr) {
+                stmtp = new AstIf{varp->fileline(), nonNullp, stmtp};
+            }
+            addRegistrationStmt(stmtp, initp);
         }
     }
 
@@ -1279,8 +1308,21 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         // A foreignMode variable with rand_mode is always registered (keeps it in the
         // solver for constraint evaluation), with its disabled state toggled so the
-        // solver skips write-back when rand_mode is off.
-        initp->addStmtsp(methodp->makeStmt());
+        // solver skips write-back when rand_mode is off. A variable of a member object is
+        // not registered through a null handle, and a registration made before is removed,
+        // as the object it was in may be gone.
+        AstNodeStmt* regp = methodp->makeStmt();
+        if (AstNodeExpr* const nonNullp
+            = memberRefp ? newHandlesNonNullp(memberRefp->fromp()) : nullptr) {
+            AstCMethodHard* const clearp = new AstCMethodHard{
+                varp->fileline(),
+                new AstVarRef{varp->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
+                              VAccess::READWRITE},
+                VCMethod::RANDOMIZER_CLEAR_VAR, varnamep->cloneTree(false)};
+            clearp->dtypeSetVoid();
+            regp = new AstIf{varp->fileline(), nonNullp, regp, clearp->makeStmt()};
+        }
+        initp->addStmtsp(regp);
         if (varp->lifetime().isStatic() && randMode.usesMode) {
             AstCMethodHard* const markp = new AstCMethodHard{
                 varp->fileline(),
@@ -4276,6 +4318,24 @@ class SolverSmtLowering final : public V3SolverLowering {
     static std::string siblingSmtName(const AstVar* const varp, const AstMemberRef* const mselp) {
         return mselp ? buildMemberPath(mselp->fromp()) + "." + varp->name() : varp->name();
     }
+    // Statements stmtsp of constraint constrp run only while the handles to the member object it
+    // was cloned for, if any, are not null
+    AstNodeStmt* newIfObjectp(const AstConstraint* const constrp,
+                              AstNodeStmt* const stmtsp) const {
+        // The constraints of the object of a null handle are not solved (IEEE 1800-2023 18.4)
+        if (!m_cloneObjps.count(constrp)) return stmtsp;
+        AstNodeExpr* const nonNullp = newHandlesNonNullp(m_cloneObjps.at(constrp).objp);
+        return nonNullp ? new AstIf{constrp->fileline(), nonNullp, stmtsp} : stmtsp;
+    }
+    // Statements stmtsp on the array of member select mselp, if any, run only while the
+    // handles to its object are not null
+    static AstNodeStmt* newIfNonNullp(FileLine* const fl, AstNodeStmt* const stmtsp,
+                                      const AstMemberRef* const mselp) {
+        // The object of a null handle is not randomized (IEEE 1800-2023 18.4), and its
+        // constraints copied into this class are not solved
+        AstNodeExpr* const nonNullp = mselp ? newHandlesNonNullp(mselp->fromp()) : nullptr;
+        return nonNullp ? new AstIf{fl, nonNullp, stmtsp} : stmtsp;
+    }
     // Add write_var calls for each array element after resizing it with array-size constraint
     void addArrayElemRefresh(FileLine* const fl, AstVar* const arrVarp, AstFunc* const randomizep,
                              AstVar* const genp, const AstMemberRef* const mselp = nullptr) {
@@ -4312,7 +4372,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, rmode.index});
         }
 
-        randomizep->addStmtsp(methodp->makeStmt());
+        randomizep->addStmtsp(newIfNonNullp(fl, methodp->makeStmt(), mselp));
     }
 
     AstNodeStmt* newPinSizeVariable(FileLine* const fl, AstVar* const arrVarp, AstVar* const genp,
@@ -4345,11 +4405,12 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstCMethodHard* const currentSizep = new AstCMethodHard{
             fl, newSiblingRefp(fl, arrVarp, mselp, VAccess::READ), sizeMethod};
         currentSizep->dtypep(sizeVarp->dtypep());
-        randomizep->addStmtsp(
-            new AstAssign{fl, newSiblingRefp(fl, sizeVarp, mselp, VAccess::WRITE), currentSizep});
+        AstNodeStmt* const stmtsp
+            = new AstAssign{fl, newSiblingRefp(fl, sizeVarp, mselp, VAccess::WRITE), currentSizep};
         AstNodeExpr* const modep = newModeBitRead(arrVarp, mselp, randModeVarp, fl);
-        randomizep->addStmtsp(
+        stmtsp->addNext(
             new AstIf{fl, new AstLogNot{fl, modep}, newPinSizeVariable(fl, arrVarp, genp, mselp)});
+        randomizep->addStmtsp(newIfNonNullp(fl, stmtsp, mselp));
     }
 
     void collectSizeConstrainedArrays(AstClass* classp,
@@ -4462,15 +4523,17 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
         for (const auto& pathMsel : memberArrays) {
             const AstMemberRef* const mselp = pathMsel.second;
-            randomizep->addStmtsp(newPinSizeVariable(fl, mselp->varp(), solveGenp, mselp));
+            randomizep->addStmtsp(
+                newIfNonNullp(fl, newPinSizeVariable(fl, mselp->varp(), solveGenp, mselp), mselp));
         }
     }
 
 public:
     // CONSTRUCTORS
     SolverSmtLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
-                      const RandModeVars& modeVars, VNDeleter& deleter)
-        : V3SolverLowering{memberMap, uniqueNames, modeVars, deleter} {}
+                      const RandModeVars& modeVars, const ClonedConstraints& cloneObjps,
+                      VNDeleter& deleter)
+        : V3SolverLowering{memberMap, uniqueNames, modeVars, cloneObjps, deleter} {}
     ~SolverSmtLowering() override = default;
 
     // V3SolverLowering
@@ -4559,7 +4622,8 @@ public:
                         = new AstTaskRef{constrp->fileline(), resizeTaskp};
                     resizeTaskRefp->classOrPackagep(classp);
                     resizeAllTaskp->addStmtsp(
-                        wrapIfConstraintMode(nodep, constrp, resizeTaskRefp->makeStmt()));
+                        newIfObjectp(constrp, wrapIfConstraintMode(nodep, constrp,
+                                                                   resizeTaskRefp->makeStmt())));
                 }
 
                 if (constrp->itemsp()) {
@@ -4575,7 +4639,8 @@ public:
                 if (constrp->itemsp()) {
                     AstBegin* const holderp = SmtUtil::newItemsHolderp(
                         constrp->fileline(), constrp->itemsp()->unlinkFrBackWithNext());
-                    taskp->addStmtsp(wrapIfConstraintMode(nodep, constrp, holderp));
+                    taskp->addStmtsp(
+                        newIfObjectp(constrp, wrapIfConstraintMode(nodep, constrp, holderp)));
                     ConstraintExprVisitor{
                         classp,        m_memberMap,  holderp->declsp(), nullptr,
                         genp,          randModeVarp, m_writtenVars,     &m_uniqueConstraintId,
@@ -4864,7 +4929,9 @@ public:
                     AstCMethodHard* const resizep
                         = new AstCMethodHard{fl, resizeVarRefp, VCMethod::DYN_RESIZE, sizeExprp};
                     resizep->dtypep(methodp->findVoidDType());
-                    resizeStmtsp = AstNode::addNext(resizeStmtsp, new AstStmtExpr{fl, resizep});
+                    resizeStmtsp = AstNode::addNext(
+                        resizeStmtsp, newIfNonNullp(fl, new AstStmtExpr{fl, resizep},
+                                                    VN_CAST(resizeVarRefp, MemberRef)));
                 }
                 AstNodeExpr* const sizeNodeExprp = buildMemberRefExprp(rootExprp, sizeVarp);
                 if (VN_IS(rootExprp, MemberRef)) {
@@ -5079,7 +5146,8 @@ public:
 
             for (const auto& pathMsel : memberArrays) {
                 const AstMemberRef* const mselp = pathMsel.second;
-                randomizeFuncp->addStmtsp(newPinSizeVariable(fl, mselp->varp(), localGenp, mselp));
+                randomizeFuncp->addStmtsp(newIfNonNullp(
+                    fl, newPinSizeVariable(fl, mselp->varp(), localGenp, mselp), mselp));
             }
 
             // Final solve: element values with sizes pinned
@@ -5155,9 +5223,10 @@ public:
 std::unique_ptr<V3SolverLowering> V3SolverSmt::newLowering(VMemberMap& memberMap,
                                                            V3UniqueNames& uniqueNames,
                                                            const RandModeVars& modeVars,
+                                                           const ClonedConstraints& cloneObjps,
                                                            VNDeleter& deleter) const {
     return std::unique_ptr<V3SolverLowering>{
-        new SolverSmtLowering{memberMap, uniqueNames, modeVars, deleter}};
+        new SolverSmtLowering{memberMap, uniqueNames, modeVars, cloneObjps, deleter}};
 }
 
 std::vector<std::string> V3SolverSmt::runtimeCFlags() const {

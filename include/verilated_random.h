@@ -501,7 +501,9 @@ public:
                             void>::type
     write_var(T& var, int width, const std::string& name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
-        if (m_vars.find(name) != m_vars.end()) return;
+        // Registered again when reached through a member object that may have been replaced
+        const auto it = m_vars.find(name);
+        if (it != m_vars.end() && it->second->datap(0) == &var) return;
         // TODO: make_unique once VlRandomizer is per-instance not per-ref
         m_vars[name]
             = std::make_shared<const VlRandomVar>(name, width, &var, dimension, randmodeIdx);
@@ -962,6 +964,8 @@ public:
     void disable_soft(const std::string& varName);
     void clearConstraints();
     void clearAll();  // Clear both constraints and variables
+    // Unregister a variable
+    void clear_var(const std::string& name) { m_vars.erase(name); }
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
     void solveBefore(const std::string& beforeName,
                      const std::string& afterName);  // Register solve-before ordering
