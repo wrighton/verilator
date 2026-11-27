@@ -297,7 +297,8 @@ class AstToDfgVisitor final : public VNVisitorConst {
         // Keep a user's always_comb that reads, before writing, what only it writes, as it is
         // not sensitive to that (IEEE 1800-2023 9.2.2.2.1), which scheduling takes from it
         size_t selfWritten = 0;
-        V3Sched::util::computeImplicitSensitivities(nodep, m_soleWriters, selfWritten);
+        V3Sched::util::ReadRangesList triggers;
+        V3Sched::util::computeImplicitSensitivities(nodep, m_soleWriters, selfWritten, triggers);
         if (selfWritten) {
             ++m_ctx.m_nonRepSelfRead;
             return false;

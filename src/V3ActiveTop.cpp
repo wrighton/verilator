@@ -45,21 +45,25 @@ class ActiveTopVisitor final : public VNVisitor {
 
     // METHODS
     static bool isInitial(AstNode* nodep) {
-        const VNUser1InUse user1InUse;
         // Return true if no variables that read, nor a value following the time (see V3Sampled)
         if (nodep->exists([](const AstSampled* sampledp) { return sampledp->timed(); })) {
             return false;
         }
         bool reads = false;
-        V3Sched::util::foreachLogicAccess(nodep, [&](AstVarScope* vscp, VAccess access) {
-            // Note: Use same heuristic as ordering does to ignore written variables
+        // Bits of each variable written so far
+        std::unordered_map<const AstVarScope*, V3Sched::util::BitRanges> written;
+        V3Sched::util::foreachLogicRef(nodep, [&](const AstVarRef* refp, VAccess access) {
+            const V3Sched::util::BitRange bits = V3Sched::util::accessedBits(refp);
+            V3Sched::util::BitRanges& writtenBits = written[refp->varScopep()];
+            // Note: Use same heuristic as ordering does to ignore written variables, of the bits
+            // written (see V3Sched::util::computeImplicitSensitivities)
             // TODO: Use live variable analysis.
             if (access.isWriteOnly()) {
-                vscp->user1(true);
+                writtenBits.add(bits);
                 return;
             }
             // Read or ReadWrite: OK if written before
-            if (!vscp->user1()) reads = true;
+            if (!writtenBits.covers(bits)) reads = true;
         });
         return !reads;
     }
