@@ -8,4 +8,12 @@
                                                : ... note: In instance 't'
    12 |     a[32'bz] = 1;
       |      ^
+%Warning-SELRANGE: t/t_assoc_index_x_bad.v:13:11: Associative array index has X or Z bits, so exists() returns 0 (IEEE 1800-2023 7.8.6).
+                                                : ... note: In instance 't'
+   13 |     r = a.exists(32'bx);
+      |           ^~~~~~
+%Warning-SELRANGE: t/t_assoc_index_x_bad.v:14:7: Associative array index has X or Z bits, so delete() does nothing (IEEE 1800-2023 7.8.6).
+                                               : ... note: In instance 't'
+   14 |     a.delete(32'bz);
+      |       ^~~~~~
 %Error: Exiting due to
