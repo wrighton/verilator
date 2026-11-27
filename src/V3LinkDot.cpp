@@ -7115,10 +7115,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         if (m_ds.m_unresolvedCell && m_ds.m_unlinkedScopep) {
                             const string dotted = refp->dotted();
                             const size_t pos = dotted.find("__BRA__??__KET__");
-                            // Arrays of interfaces all have the same parameters, but a path
-                            // through a generate block may select a loop block instance
+                            // Arrays of interfaces all have the same parameters, which the
+                            // array, a variable, gives. But a path through a generate block may
+                            // select a loop block instance, and an arrayed module instance is
+                            // named only per element, once V3Param expands it.
+                            const AstNode* const dotScopep = m_ds.m_dotSymp->nodep();
+                            const AstCell* const dotCellp = VN_CAST(dotScopep, Cell);
+                            const bool ifaceArray
+                                = VN_IS(dotScopep, Modport)
+                                  || (dotCellp && VN_IS(dotCellp->modp(), Iface));
                             if (pos != string::npos && varp->isParam() && !m_ds.m_genBlk
-                                && VN_IS(m_ds.m_unlinkedScopep, CellArrayRef)) {
+                                && ifaceArray && VN_IS(m_ds.m_unlinkedScopep, CellArrayRef)) {
                                 refp->dotted(dotted.substr(0, pos));
                                 newp = refp;
                             } else {
