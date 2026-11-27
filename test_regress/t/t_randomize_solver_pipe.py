@@ -122,7 +122,7 @@ test.file_grep(logfile, r'Solver died or replied unreadably')
 
 # A reply the unigen2 sampler can't read while it measures the solution space.
 # Falls back to the plain solve, so every randomize still succeeds. Each model of the
-# measurement's first cell is cut in turn: the models it reads, each followed by the
+# measurement's first cell is cut in turn, once: the models it reads, each followed by the
 # clause blocking it, found in the solver log of a run left alone.
 reflog = test.obj_dir + '/sim_ug2_reference.smt2'
 test.execute(logfile=test.obj_dir + '/sim_ug2_reference.log',
@@ -144,9 +144,12 @@ if not cell:
     test.error("No measurement of the solution space in " + reflog)
 for at in cell:
     logfile = test.obj_dir + '/sim_ug2_estimate_' + str(at) + '.log'
+    latch = test.obj_dir + '/ug2_estimate_' + str(at) + '.latch'
+    if os.path.exists(latch):
+        os.unlink(latch)
     test.execute(logfile=logfile,
                  run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-                 'TAMPER=model_trunc TAMPER_AT=' + str(at) + ' ')
+                 'TAMPER=model_trunc TAMPER_AT=' + str(at) + ' TAMPER_ONCE="' + latch + '" ')
     test.file_grep(logfile, r'NPASS=(\d+)', 12)
 
 # A value the sampler can't parse while it measures the solution space.
