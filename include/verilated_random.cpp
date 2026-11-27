@@ -46,6 +46,9 @@
 //   (per-element ranges aren't power-of-2 boundaries) and use the XOR rounds.
 #define _VL_SOLVER_HASH_LEN 1
 #define _VL_SOLVER_HASH_LEN_TOTAL 4
+// Most variable bits one spreading hash samples. A hash over half the bits of a large array is
+// a solver check costing time in their number, many times the solve itself.
+static constexpr int diversityXorBits = 4096;
 
 // clang-format off
 #if defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
@@ -886,7 +889,7 @@ void VlRandomizer::randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
     if (bits > 1) os << " (concat";
     for (int i = 0; i < bits; ++i) {
         IData varBitsLeft = varBits;
-        IData varBitsWant = (varBits + 1) / 2;
+        IData varBitsWant = std::min<IData>((varBits + 1) / 2, diversityXorBits);
         if (varBits > 2) os << " (bvxor";
         for (const auto& varp : vars) {  // LCOV_EXCL_BR_LINE - reservoir-sampling below
                                          // always forces its last pick before exhausting vars
