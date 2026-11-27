@@ -366,6 +366,11 @@ class SvaNfaBuilder final {
     bool m_trackVacuous = false;  // Record vacuous successes (they fail a negated assertion)
     bool m_atPropEnd = false;  // Building the consequent of a followed-by ending the property
     bool m_hasAndLatch = false;  // An 'and' combines its operands' matches (buildAndCombiner)
+    bool m_inAntecedent = false;  // Building an implication antecedent, where nothing fails
+    // Building the consequent of an antecedent with an empty match, which keeps merge vertices
+    bool m_inEmptyMatchConsequent = false;
+    // Building an operand of an 'or' that keeps its merge vertex, whose own 'or's keep theirs
+    bool m_inMergeFallback = false;
 
     struct RangeDelayRejectInfo final {
         SvaStateVertex* startp = nullptr;
@@ -416,6 +421,7 @@ class SvaNfaBuilder final {
     //  - AstSExpr with range delay M==N      -> pre + N + body
     //  - AstSThroughout                      -> length of rhsp (the seq)
     //  - AstSConsRep [*N], N > 0             -> N * (length of exprp + 1) - 1
+    //  - always [M:N] of a boolean           -> N (an operand of a property 'or')
     // Unsupported (returns -1):
     //  - Range delays with M != N            -> variable
     //  - Unbounded waits ##[M:$]             -> infinite/variable
@@ -423,6 +429,12 @@ class SvaNfaBuilder final {
     //  - SIntersect nested in SIntersect     -> defer
     //  - Property operands such as implications
     static int fixedLength(AstNodeExpr* nodep) {
+        if (const AstPropAlways* const alwaysp = VN_CAST(nodep, PropAlways)) {
+            if (VN_IS(alwaysp->hiBoundp(), Unbounded) || !isPlainBoolean(alwaysp->propp())) {
+                return -1;
+            }
+            return static_cast<int>(getConstUInt(alwaysp->hiBoundp()));
+        }
         if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
             AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
             if (!delayp || !delayp->isCycleDelay()) return -1;
@@ -1158,9 +1170,335 @@ class SvaNfaBuilder final {
             [](const AstNodeExpr* np) { return np->isMultiCycleSva() || VN_IS(np, Implication); });
     }
 
+    // Collect the operands of nested sequence 'or's
+    static void collectOrOperands(AstNodeExpr* nodep, std::vector<AstNodeExpr*>& out) {
+        if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
+            collectOrOperands(orp->lhsp(), out);
+            collectOrOperands(orp->rhsp(), out);
+        } else {
+            out.push_back(nodep);
+        }
+    }
+    // Operand of a sequence 'or' of fixed-length sequences of boolean leaves
+    struct FixedOrOperand final {
+        std::map<int, std::vector<AstNodeExpr*>> checks;  // Leaf checks by clock offset
+        int length = 0;  // Offset of its last clock tick
+    };
+    static constexpr size_t MAX_FIXED_OR_OPERANDS = 4;  // Limits the 2^n operand sets tracked
+    static constexpr size_t MAX_FIXED_OR_TRANSITIONS = 1024;  // Limits their transitions
+    // Sampled checks of an operand at clock offset 'offset', true if it has none there
+    static AstNodeExpr* newOperandCondp(const FixedOrOperand& op, int offset, FileLine* flp) {
+        const auto it = op.checks.find(offset);
+        if (it == op.checks.end()) return new AstConst{flp, AstConst::BitTrue{}};
+        AstNodeExpr* condp = nullptr;
+        for (AstNodeExpr* const leafp : it->second) {
+            AstNodeExpr* const clonep = sampled(newLeafCondp(leafp));
+            condp = condp ? new AstLogAnd{flp, condp, clonep} : clonep;
+        }
+        return condp;
+    }
+    // Whether any operand in 'mask' holds at clock offset 'offset'
+    static AstNodeExpr* newAnyHoldsp(const std::vector<FixedOrOperand>& ops, unsigned mask,
+                                     int offset, FileLine* flp) {
+        AstNodeExpr* condp = nullptr;
+        for (size_t i = 0; i < ops.size(); ++i) {
+            if (!(mask & (1U << i))) continue;
+            AstNodeExpr* const opp = newOperandCondp(ops[i], offset, flp);
+            condp = condp ? new AstLogOr{flp, condp, opp} : opp;
+        }
+        return condp;
+    }
+    // Whether every operand in 'mask' holds at clock offset 'offset', or fails if not 'holds'
+    static AstNodeExpr* newAllHoldp(const std::vector<FixedOrOperand>& ops, unsigned mask,
+                                    int offset, bool holds, FileLine* flp) {
+        AstNodeExpr* condp = nullptr;
+        for (size_t i = 0; i < ops.size(); ++i) {
+            if (!(mask & (1U << i))) continue;
+            AstNodeExpr* opp = newOperandCondp(ops[i], offset, flp);
+            if (!holds) opp = new AstLogNot{flp, opp};
+            condp = condp ? new AstLogAnd{flp, condp, opp} : opp;
+        }
+        return condp;
+    }
+    // Build `s1 or s2 ...` at the end of an asserted property, with fixed-length sequences of
+    // boolean leaves as operands, or return an invalid result for other operands
+    // The transitions between the sets of operands still matching that buildFixedSeqOrProp
+    // makes for an attempt
+    static size_t fixedOrTransitions(const std::vector<FixedOrOperand>& ops,
+                                     const std::set<int>& offsets) {
+        size_t transitions = 0;
+        std::set<unsigned> live{(1U << ops.size()) - 1};
+        for (auto it = offsets.begin(); !live.empty(); ++it) {
+            unsigned checkedMask = 0;
+            for (size_t i = 0; i < ops.size(); ++i) {
+                if (ops[i].checks.count(*it)) checkedMask |= 1U << i;
+            }
+            std::set<unsigned> next;
+            for (const unsigned mask : live) {
+                unsigned endedMask = 0;
+                for (size_t i = 0; i < ops.size(); ++i) {
+                    if ((mask & (1U << i)) && ops[i].length == *it) endedMask |= 1U << i;
+                }
+                const unsigned contMask = mask & ~endedMask;
+                const unsigned uncheckedMask = contMask & ~checkedMask;
+                for (unsigned checkedSub = contMask & checkedMask;;
+                     checkedSub = (checkedSub - 1) & contMask & checkedMask) {
+                    if (const unsigned sub = checkedSub | uncheckedMask) {
+                        ++transitions;
+                        next.insert(sub);
+                    }
+                    if (!checkedSub) break;
+                }
+            }
+            live = std::move(next);
+        }
+        return transitions;
+    }
+    BuildResult buildFixedSeqOrProp(AstNodeExpr* lhsp, AstNodeExpr* rhsp,
+                                    SvaStateVertex* entryVtxp, FileLine* flp) {
+        // It holds when any operand matches, and fails once all have failed (IEEE 1800-2023
+        // 16.9.7, 16.12.2). The operands of an attempt start together and have fixed lengths, so
+        // at each clock offset track the set of operands of the attempt still matching. Offsets
+        // with no check and no end leave the set unchanged, so a delay ring skips them.
+        std::vector<AstNodeExpr*> opps;
+        collectOrOperands(lhsp, opps);
+        collectOrOperands(rhsp, opps);
+        if (opps.size() > MAX_FIXED_OR_OPERANDS) return BuildResult::fail();
+        std::vector<FixedOrOperand> ops(opps.size());
+        std::set<int> offsets{0};  // Offsets of the start, and where an operand checks or ends
+        // A strong always also fails at the end of simulation before its last tick (IEEE
+        // 1800-2023 16.12.11)
+        unsigned strongMask = 0;
+        for (size_t i = 0; i < opps.size(); ++i) {
+            const AstPropAlways* const alwaysp = VN_CAST(opps[i], PropAlways);
+            // cppcheck-suppress knownConditionTrueFalse
+            if (alwaysp && alwaysp->isStrong() && !m_noEosFailure) strongMask |= 1U << i;
+            if (!flattenFixedSeq(opps[i], 0, ops[i].checks)) return BuildResult::fail();
+            for (const auto& offsetChecks : ops[i].checks) offsets.insert(offsetChecks.first);
+            // The offset of the last check, also of an implication of one tick
+            ops[i].length = ops[i].checks.empty() ? 0 : ops[i].checks.rbegin()->first;
+            offsets.insert(ops[i].length);
+        }
+        // More transitions keep the merge vertex, as an 'or' that is not of fixed-length operands
+        if (fixedOrTransitions(ops, offsets) > MAX_FIXED_OR_TRANSITIONS)
+            return BuildResult::fail();
+        SvaStateVertex* const matchVtxp = scopedCreateVertex();
+        SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+        sinkVtxp->m_isRejectSink = true;
+        // The operand sets an attempt can move to number up to 3^n per checked offset, so their
+        // transitions are bounded
+        size_t transitions = 0;
+        // Vertices of the current offset, by the set of operands still matching
+        std::map<unsigned, SvaStateVertex*> livep;
+        livep[(1U << ops.size()) - 1] = entryVtxp;
+        for (auto it = offsets.begin(); !livep.empty(); ++it) {
+            const int offset = *it;
+            unsigned checkedMask = 0;
+            for (size_t i = 0; i < ops.size(); ++i) {
+                if (ops[i].checks.count(offset)) checkedMask |= 1U << i;
+            }
+            // Vertices entering the delay to the next offset, by the set of operands holding
+            std::map<unsigned, SvaStateVertex*> holdp;
+            for (const auto& maskVtx : livep) {
+                const unsigned mask = maskVtx.first;
+                SvaStateVertex* const fromp = maskVtx.second;
+                // The attempt fails when no operand still matching holds
+                m_graph.addLink(fromp, sinkVtxp, newAnyHoldsp(ops, mask, offset, flp))
+                    ->m_rejectOnFail
+                    = true;
+                // It matches when an operand ending here holds
+                unsigned endedMask = 0;
+                for (size_t i = 0; i < ops.size(); ++i) {
+                    if ((mask & (1U << i)) && ops[i].length == offset) endedMask |= 1U << i;
+                }
+                if (endedMask) {
+                    guardedLink(fromp, matchVtxp, newAnyHoldsp(ops, endedMask, offset, flp), flp);
+                }
+                // Otherwise it continues with the operands that hold. An operand with no check
+                // here holds.
+                const unsigned contMask = mask & ~endedMask;
+                const unsigned uncheckedMask = contMask & ~checkedMask;
+                for (unsigned checkedSub = contMask & checkedMask;;
+                     checkedSub = (checkedSub - 1) & contMask & checkedMask) {
+                    const unsigned sub = checkedSub | uncheckedMask;
+                    if (sub) {
+                        ++transitions;
+                        AstNodeExpr* condp = newAllHoldp(ops, sub, offset, true, flp);
+                        if (const unsigned failMask = (contMask & ~sub) | endedMask) {
+                            condp = new AstLogAnd{flp, condp,
+                                                  newAllHoldp(ops, failMask, offset, false, flp)};
+                        }
+                        SvaStateVertex*& toVtxp = holdp[sub];
+                        if (!toVtxp) toVtxp = scopedCreateVertex();
+                        guardedLink(fromp, toVtxp, condp, flp);
+                    }
+                    if (!checkedSub) break;
+                }
+            }
+            std::map<unsigned, SvaStateVertex*> nextp;
+            for (const auto& subVtx : holdp) {
+                const unsigned gap = static_cast<unsigned>(*std::next(it) - offset);
+                // The attempt fails at the end of simulation while only strong operands remain
+                VL_RESTORER(m_markStrongPending);
+                m_markStrongPending = !(subVtx.first & ~strongMask);
+                subVtx.second->m_strongPending = m_markStrongPending;
+                SvaStateVertex* const nextVtxp = addDelayChain(subVtx.second, gap, flp);
+                if (m_markStrongPending && nextVtxp->m_delayRingSize) {
+                    nextVtxp->m_strongAlwaysRing = true;
+                }
+                nextp[subVtx.first] = nextVtxp;
+            }
+            livep = std::move(nextp);
+        }
+        V3Stats::addStatSum("Assertions, NFA 'or' operand set transitions", transitions);
+        return {matchVtxp, nullptr, {}};
+    }
+    // The conjunction of the checks of a sequence of boolean leaves with no cycle delay, or
+    // nullptr for other sequences
+    static AstNodeExpr* newZeroLengthCondp(AstNodeExpr* nodep, FileLine* flp) {
+        std::map<int, std::vector<AstNodeExpr*>> checks;
+        if (!flattenFixedSeq(nodep, 0, checks) || checks.size() != 1 || checks.count(0) != 1) {
+            return nullptr;
+        }
+        AstNodeExpr* condp = nullptr;
+        for (AstNodeExpr* const leafp : checks[0]) {
+            AstNodeExpr* const clonep = newLeafCondp(leafp);
+            condp = condp ? new AstLogAnd{flp, condp, clonep} : clonep;
+        }
+        return condp;
+    }
+    // Whether an operand of 'or' is a property rather than a sequence (IEEE 1800-2023 16.12)
+    static bool isPropertyOperand(const AstNode* const nodep) {
+        return nodep->exists([](const AstNodeExpr* const np) {
+            const AstLogNot* const notp = VN_CAST(np, LogNot);
+            return VN_IS(np, Implication) || VN_IS(np, Until) || VN_IS(np, PropAlways)
+                   || VN_IS(np, SEventually) || VN_IS(np, AbortOn)
+                   || (notp && notp->lhsp()->exists([](const AstNodeExpr* const exprp) {
+                          return exprp->isMultiCycleSva();
+                      }));
+        });
+    }
+    // Whether `b or p`, with b boolean, keeps the merge vertex of an 'or' instead of
+    // buildBoolOrProp, which does not see an attempt in which both operands fail. An 'always' of
+    // more than two ticks rejects through a delay ring, which would count the failures of the
+    // attempts entering p on different ticks once per tick. A ranged or unbounded end rejects
+    // through its ring at the match vertex, which p does not reach, and the attempts in an
+    // unbounded state share it, so they would fail together once, and so does an accept_on,
+    // whose acceptance ends p at any tick. A 'not' of a multi-cycle sequence is no boolean leaf.
+    static bool boolOrKeepsMerge(const AstNodeExpr* boolp, const AstNodeExpr* propp) {
+        if (VN_IS(boolp, Const)) return false;
+        if (VN_IS(propp, LogNot)
+            && propp->exists([](const AstNodeExpr* np) { return np->isMultiCycleSva(); })) {
+            return true;
+        }
+        return propp->exists([](const AstNode* np) {
+            if (const AstAbortOn* const abortp = VN_CAST(np, AbortOn)) {
+                return abortp->kind().isAccept();
+            }
+            if (const AstPropAlways* const alwaysp = VN_CAST(np, PropAlways)) {
+                return VN_IS(alwaysp->hiBoundp(), Unbounded)
+                       || getConstUInt(alwaysp->hiBoundp()) - getConstUInt(alwaysp->loBoundp())
+                              > 1;
+            }
+            if (const AstDelay* const delayp = VN_CAST(np, Delay)) return delayp->isRangeDelay();
+            if (const AstSConsRep* const repp = VN_CAST(np, SConsRep)) {
+                return repp->maxCountp() || repp->unbounded();
+            }
+            return VN_IS(np, SGotoRep) || VN_IS(np, SNonConsRep) || VN_IS(np, SEventually)
+                   || VN_IS(np, Until);
+        });
+    }
+
+    // Build `b or p` at the end of an asserted property, with b boolean
+    BuildResult buildBoolOrProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
+                                FileLine* flp) {
+        // It holds at once when b holds and otherwise exactly when p does (IEEE 1800-2023
+        // 16.12.4). So p is evaluated only when b is false, with the rejections of a top-level
+        // property.
+        // In a negated property, a success through b would not be counted with the vacuous
+        // successes of an implication in p, which fail it too.
+        const AstImplication* implp = nullptr;
+        if (m_trackVacuous) {
+            propp->exists([&implp](const AstImplication* np) {
+                if (!np->isFollowedBy()) implp = np;
+                return implp != nullptr;
+            });
+        }
+        if (implp) {
+            implp->v3warn(E_UNSUPPORTED, "Unsupported: implication inside another property "
+                                         "operator in a negated property.");
+            return BuildResult::failWithError();
+        }
+        VL_RESTORER(m_wantBoolLeaf);
+        m_wantBoolLeaf = true;
+        // A constant b holds on every attempt, or never so that only p decides
+        if (const AstConst* const constp = VN_CAST(boolp, Const)) {
+            if (constp->isZero()) return buildExpr(propp, entryVtxp, /*isTopLevelStep=*/true);
+            return {entryVtxp, boolp->cloneTreePure(false), {}};
+        }
+        SvaStateVertex* const propEntryp = scopedCreateVertex();
+        guardedLink(entryVtxp, propEntryp,
+                    new AstLogNot{flp, sampled(boolp->cloneTreePure(false))}, flp);
+        const BuildResult prop = buildExpr(propp, propEntryp, /*isTopLevelStep=*/true);
+        if (!prop.valid()) return prop;
+        SvaStateVertex* const propTermp = prop.termVertexp;
+        UASSERT_OBJ(prop.midSources.empty() && !propTermp->m_isUnbounded, propp,
+                    "Ranged or unbounded end of a property 'or' operand");
+        UASSERT_OBJ(!propTermp->m_delayRingSize || propTermp->m_isFixedDelayRing, propTermp,
+                    "Ranged delay ring ends a property without mid-window sources");
+        // Otherwise reach the merge vertex as p would reach the match vertex
+        SvaStateVertex* const mergeVtxp = scopedCreateVertex();
+        guardedLink(entryVtxp, mergeVtxp, sampled(boolp->cloneTreePure(false)), flp);
+        if (!prop.finalCondp) {
+            guardedLink(propTermp, mergeVtxp, flp);
+            return {mergeVtxp, nullptr, {}};
+        }
+        guardedLink(propTermp, mergeVtxp, sampled(prop.finalCondp->cloneTreePure(false)), flp);
+        if (!propTermp->m_isUnbounded) {
+            SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+            sinkVtxp->m_isRejectSink = true;
+            SvaTransEdge* const edgep = m_graph.addLink(
+                propTermp, sinkVtxp, sampled(prop.finalCondp->cloneTreePure(false)));
+            edgep->m_rejectOnFail = true;
+        }
+        freeUnlinkedCondp(prop.finalCondp);
+        return {mergeVtxp, nullptr, {}};
+    }
+
     // Build merge vertex for SOr / LogOr: both branches feed into one vertex.
     BuildResult buildOrMerge(AstNodeExpr* lhsp, AstNodeExpr* rhsp, SvaStateVertex* entryVtxp,
                              FileLine* flp, bool wantBoolLeaf) {
+        // An attempt fails once every operand fails (IEEE 1800-2023 16.9.7), which the merge
+        // vertex below does not see. Nothing fails in a cover, an event control or an
+        // antecedent.
+        const bool canFail
+            = !m_noEosFailure && !m_isSeqEvent && !m_inAntecedent && !m_inMergeFallback;
+        // Where the attempt can fail, a disjunction that holds or fails at once must reject
+        const bool foldBool = wantBoolLeaf || (canFail && !m_inEmptyMatchConsequent);
+        if (foldBool) {
+            // Operands with no cycle delay hold or fail at once, as the boolean OR-fold below
+            if (AstNodeExpr* const lhsCondp = newZeroLengthCondp(lhsp, flp)) {
+                if (AstNodeExpr* const rhsCondp = newZeroLengthCondp(rhsp, flp)) {
+                    return {entryVtxp, new AstLogOr{flp, lhsCondp, rhsCondp}, {}};
+                }
+                VL_DO_DANGLING(lhsCondp->deleteTree(), lhsCondp);
+            }
+        }
+        if (canFail && wantBoolLeaf && (!isPlainBoolean(lhsp) || !isPlainBoolean(rhsp))) {
+            const BuildResult fixedOr = buildFixedSeqOrProp(lhsp, rhsp, entryVtxp, flp);
+            if (fixedOr.valid() || fixedOr.errorEmitted) return fixedOr;
+            if (isPlainBoolean(lhsp) && isPropertyOperand(rhsp) && !boolOrKeepsMerge(lhsp, rhsp)) {
+                return buildBoolOrProp(lhsp, rhsp, entryVtxp, flp);
+            }
+            if (isPlainBoolean(rhsp) && isPropertyOperand(lhsp) && !boolOrKeepsMerge(rhsp, lhsp)) {
+                return buildBoolOrProp(rhsp, lhsp, entryVtxp, flp);
+            }
+        }
+        // Other operands meet at a merge vertex, which does not see an attempt in which every
+        // operand fails: such an attempt is not reported (a limit). Their own 'or's keep their
+        // merge vertices too, as an operand rejecting alone would fail the attempt.
+        VL_RESTORER(m_inMergeFallback);
+        if (canFail && (!isPlainBoolean(lhsp) || !isPlainBoolean(rhsp))) m_inMergeFallback = true;
         const BuildResult lhs = buildExpr(lhsp, entryVtxp);
         const BuildResult rhs = buildExpr(rhsp, entryVtxp);
         if (!lhs.valid() || !rhs.valid()) {  // LCOV_EXCL_START -- sub-build fail bail
@@ -1181,11 +1519,11 @@ class SvaNfaBuilder final {
             freeUnlinkedCondp(rhs.finalCondp);
             return BuildResult::failWithError();
         }
-        if (booleanOnly && wantBoolLeaf) {
+        if (booleanOnly && foldBool) {
             if (isPlainBoolean(lhs.finalCondp) && isPlainBoolean(rhs.finalCondp)) {
-                // As a |-> / |=> or top-level body, a disjunction of two plain booleans must
-                // be able to reject: return it as a boolean finalCondp. The merge vertex
-                // below drops the attempt silently when both operands are false.
+                // A disjunction of two plain booleans must be able to reject: return it as a
+                // boolean finalCondp. The merge vertex below drops the attempt silently when
+                // both operands are false.
                 AstNodeExpr* const orCondp
                     = new AstLogOr{flp, lhs.finalCondp->cloneTreePure(false),
                                    rhs.finalCondp->cloneTreePure(false)};
@@ -1399,6 +1737,15 @@ class SvaNfaBuilder final {
     // AstSExpr with fixed cycle delays over boolean leaves (e.g. throughout).
     static bool flattenFixedSeq(AstNodeExpr* nodep, int baseOffset,
                                 std::map<int, std::vector<AstNodeExpr*>>& out) {
+        if (const AstPropAlways* const alwaysp = VN_CAST(nodep, PropAlways)) {
+            // A bounded always of a boolean checks it on each tick of its range
+            const int hi = fixedLength(nodep);
+            if (hi < 0) return false;
+            for (int i = getConstUInt(alwaysp->loBoundp()); i <= hi; ++i) {
+                out[baseOffset + i].push_back(alwaysp->propp());
+            }
+            return true;
+        }
         if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
             AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
             if (!delayp || !delayp->isCycleDelay() || delayp->isUnbounded()) return false;
@@ -1413,9 +1760,46 @@ class SvaNfaBuilder final {
             }
             return flattenFixedSeq(sexprp->exprp(), baseOffset + preLen + delayCycles, out);
         }
-        if (nodep->isMultiCycleSva()) return false;
+        if (AstSThroughout* const throughp = VN_CAST(nodep, SThroughout)) {
+            // Over a single-cycle sequence, both conditions hold at that tick (IEEE 1800-2023
+            // 16.9.9)
+            if (fixedLength(throughp->rhsp()) != 0 || !isPlainBoolean(throughp->lhsp())
+                || !flattenFixedSeq(throughp->rhsp(), baseOffset, out)) {
+                return false;
+            }
+            out[baseOffset].push_back(throughp->lhsp());
+            return true;
+        }
+        if (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            // A boolean leaf if single-cycle, see newLeafCondp
+            std::map<int, std::vector<AstNodeExpr*>> lhsChecks;
+            std::map<int, std::vector<AstNodeExpr*>> rhsChecks;
+            if (!implp->isOverlapped() || implp->isFollowedBy()
+                || !flattenFixedSeq(implp->lhsp(), 0, lhsChecks)
+                || !flattenFixedSeq(implp->rhsp(), 0, rhsChecks) || lhsChecks.size() != 1
+                || !lhsChecks.count(0) || rhsChecks.size() != 1 || !rhsChecks.count(0)) {
+                return false;
+            }
+            out[baseOffset].push_back(nodep);
+            return true;
+        }
+        if (!isPlainBoolean(nodep)) return false;
         out[baseOffset].push_back(nodep);
         return true;
+    }
+    // The condition of a leaf of a fixed-length sequence (see flattenFixedSeq)
+    static AstNodeExpr* newLeafCondp(AstNodeExpr* leafp) {
+        const AstImplication* const implp = VN_CAST(leafp, Implication);
+        if (!implp) return leafp->cloneTreePure(false);
+        // A single-cycle overlapped implication holds unless its antecedent holds and its
+        // consequent does not (IEEE 1800-2023 16.12.7)
+        FileLine* const flp = implp->fileline();
+        AstNodeExpr* const notAntp = new AstLogNot{flp, newZeroLengthCondp(implp->lhsp(), flp)};
+        notAntp->dtypeSetBit();
+        AstNodeExpr* const condp
+            = new AstLogOr{flp, notAntp, newZeroLengthCondp(implp->rhsp(), flp)};
+        condp->dtypeSetBit();
+        return condp;
     }
 
     // Conjoin two equal-length fixed sequences into one: at each clock offset
@@ -1432,7 +1816,7 @@ class SvaNfaBuilder final {
             const int offset = offsetChecks.first;
             AstNodeExpr* condp = nullptr;
             for (AstNodeExpr* const leafp : offsetChecks.second) {
-                AstNodeExpr* const clonep = leafp->cloneTreePure(false);
+                AstNodeExpr* const clonep = newLeafCondp(leafp);
                 if (!condp) {
                     condp = clonep;
                 } else {
@@ -2066,7 +2450,11 @@ public:
         // guards the antecedent adds to it are removed again below
         std::vector<AstNodeExpr*>& entryConds = entryVtxp->m_throughoutConds;
         const size_t entryCondsNum = entryConds.size();
-        const BuildResult antResult = buildExpr(antExprp, entryVtxp);
+        const BuildResult antResult = [&] {
+            VL_RESTORER(m_inAntecedent);
+            m_inAntecedent = true;
+            return buildExpr(antExprp, entryVtxp);
+        }();
         if (!antResult.valid()) return antResult;
         for (auto it = vertices.rbegin(); &*it != lastPrep; ++it)
             static_cast<SvaStateVertex*>(&*it)->m_isAntecedent = true;
@@ -2147,7 +2535,9 @@ public:
         // repetition's empty match is not handled here; keep the merge vertex for those
         VL_RESTORER(m_wantBoolLeaf);
         VL_RESTORER(m_atPropEnd);
-        m_wantBoolLeaf = !isFollowedBy && !hasZeroMinRep(antExprp);
+        VL_RESTORER(m_inEmptyMatchConsequent);
+        m_inEmptyMatchConsequent = hasZeroMinRep(antExprp);
+        m_wantBoolLeaf = !isFollowedBy && !m_inEmptyMatchConsequent;
         m_atPropEnd = isFollowedBy && atPropEnd;
         return buildExpr(bodyExprp, bodyEntryp, /*isTopLevelStep=*/true);
     }
@@ -3371,13 +3761,12 @@ public:
             }
             if (sigs.vacuousp) matchp = new AstLogOr{flp, matchp, sigs.vacuousp};
             if (outMatchpp) {
+                // Without a final condition, reaching a terminal is a match, not a rejection
                 AstNodeExpr* notPMatchp = nullptr;
                 if (matchCondp && rejectBasep) {
                     AstNodeExpr* const sampledCondp = sampled(matchCondp->cloneTreePure(false));
                     notPMatchp = new AstLogAnd{flp, rejectBasep->cloneTreePure(false),
                                                new AstLogNot{flp, sampledCondp}};
-                } else if (rejectBasep) {
-                    notPMatchp = rejectBasep->cloneTreePure(false);
                 }
                 if (throughoutRejectp)
                     notPMatchp = orExprs(flp, notPMatchp, throughoutRejectp->cloneTreePure(false));

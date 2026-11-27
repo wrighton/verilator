@@ -67,6 +67,8 @@ module t (
     isect_unexp_zero_fail <= isect_unexp_zero_fail + 1;
   else isect_fail_zero <= isect_fail_zero + 1;
 
+  // Known limit: an 'or' inside an intersect keeps a merge vertex, which does not report an
+  // attempt in which every operand fails: no failure, where 17 attempts fail
   assert property (@(posedge clk) ((1'b1 ##1 1'b0) or(1'b1 ##1 1'b0)) intersect (1'b1 ##1 1'b1))
     isect_unexp_left <= isect_unexp_left + 1;
   else isect_fail_left <= isect_fail_left + 1;
@@ -123,7 +125,7 @@ module t (
     repeat (3) @(negedge clk);
 
     `checkd(or_fail_pass, 0);
-    `checkd(or_fail_count, 0);
+    `checkd(or_fail_count, 1);
     `checkd(or_both_pass, 1);
     `checkd(or_both_fail, 0);
     `checkd(cross_hits, 0);

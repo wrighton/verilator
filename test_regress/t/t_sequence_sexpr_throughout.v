@@ -248,8 +248,8 @@ module t (
       `checkd(count_fail18_ref, 51);
       `checkd(count_fail19, 45);
       `checkd(count_fail19_ref, 45);
-      `checkd(count_fail20, 45);
-      `checkd(count_fail20_ref, 45);
+      `checkd(count_fail20, 8);
+      `checkd(count_fail20_ref, 8);
       `checkd(count_fail21, 1);
       `checkd(count_fail22, 2);
       $write("*-* All Finished *-*\n");
