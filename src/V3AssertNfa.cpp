@@ -462,6 +462,17 @@ class SvaNfaBuilder final {
     // variable-length `intersect` lowering (IEEE 1800-2023 16.9.6): more than
     // one ranged delay would make the per-length realization ambiguous, so it
     // is reported unsupported rather than mis-paired.
+    // True if the operands of an 'intersect' have no length in common, so it never matches
+    static bool noCommonLength(const AstSIntersect* nodep) {
+        const int lhsLen = fixedLength(nodep->lhsp());
+        const int rhsLen = fixedLength(nodep->rhsp());
+        if (lhsLen >= 0 && rhsLen >= 0) return lhsLen != rhsLen;
+        const std::pair<int, int> lhsRange = lengthRange(nodep->lhsp());
+        const std::pair<int, int> rhsRange = lengthRange(nodep->rhsp());
+        return lhsRange.first >= 0 && rhsRange.first >= 0
+               && std::max(lhsRange.first, rhsRange.first)
+                      > std::min(lhsRange.second, rhsRange.second);
+    }
     static std::pair<int, int> lengthRange(AstNodeExpr* nodep) {
         if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
             AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
@@ -1608,6 +1619,70 @@ class SvaNfaBuilder final {
     }
 
 public:
+    // Fold each sequence under nodep that never matches to a constant false, recorded in neverps:
+    // an 'intersect' without a common length of its operands, a 'within' with an inner sequence
+    // longer than the outer one (IEEE 1800-2023 16.9.6, 16.9.10), and a sequence operator
+    // needing a match of such an operand. An operator over it then sees the non-match.
+    static void foldNeverMatch(AstNode* nodep, std::unordered_set<const AstNode*>& neverps) {
+        for (AstNode* const opp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+            for (AstNode* childp = opp; childp;) {
+                AstNode* const nextp = childp->nextp();
+                foldNeverMatch(childp, neverps);
+                childp = nextp;
+            }
+        }
+        const auto never = [&](const AstNode* np) { return np && neverps.count(np); };
+        const char* reasonp = nullptr;
+        bool fold = false;
+        if (const AstSIntersect* const intp = VN_CAST(nodep, SIntersect)) {
+            fold = never(intp->lhsp()) || never(intp->rhsp());
+            if (!fold && noCommonLength(intp)) {
+                reasonp = "intersect operands have no common length";
+                fold = true;
+            }
+        } else if (const AstSWithin* const withinp = VN_CAST(nodep, SWithin)) {
+            fold = never(withinp->lhsp()) || never(withinp->rhsp());
+            const int innerLen = fixedLength(withinp->lhsp());
+            if (!fold && innerLen >= 0 && innerLen > fixedLength(withinp->rhsp())
+                && fixedLength(withinp->rhsp()) >= 0) {
+                reasonp = "the inner sequence is longer than the outer sequence";
+                fold = true;
+            }
+        } else if (const AstSAnd* const andp = VN_CAST(nodep, SAnd)) {
+            // A property if/case conjunction holds a branch that need not be taken
+            fold = !andp->propertyControl() && (never(andp->lhsp()) || never(andp->rhsp()));
+        } else if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
+            if (never(orp->lhsp()) != never(orp->rhsp())) {
+                // The 'or' is the operand that can match
+                AstNodeExpr* const keepp
+                    = (never(orp->lhsp()) ? orp->rhsp() : orp->lhsp())->unlinkFrBack();
+                orp->replaceWith(keepp);
+                VL_DO_DANGLING(orp->deleteTree(), orp);
+                return;
+            }
+            fold = never(orp->lhsp());
+        } else if (const AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
+            fold = never(sexprp->preExprp()) || never(sexprp->exprp());
+        } else if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            fold = never(repp->exprp()) && VN_IS(repp->countp(), Const)
+                   && !VN_AS(repp->countp(), Const)->isZero();
+        } else if (const AstSThroughout* const throughp = VN_CAST(nodep, SThroughout)) {
+            fold = never(throughp->rhsp());
+        }
+        // A match item or call in it is left to the lowering, which reports it
+        if (!fold || nodep->exists([](const AstNode* np) {
+                return VN_IS(np, ExprStmt) || VN_IS(np, NodeFTaskRef);
+            })) {
+            return;
+        }
+        if (reasonp) {
+            nodep->v3warn(NEVERMATCH, "Sequence can never match because " << reasonp << ".");
+        }
+        AstConst* const falsep = new AstConst{nodep->fileline(), AstConst::BitFalse{}};
+        nodep->replaceWith(falsep);
+        VL_DO_DANGLING(nodep->deleteTree(), nodep);
+        neverps.insert(falsep);
+    }
     // Free a dropped sub-result condition that is not linked into the AST
     // (abort folds synthesize unparented finalCondp trees).
     static void freeUnlinkedCondp(AstNodeExpr* condp) {
@@ -3279,6 +3354,9 @@ class AssertNfaVisitor final : public VNVisitor {
             return nullptr;
         }
 
+        // Sequences that never match are constant false, so the operators over them see it
+        std::unordered_set<const AstNode*> neverps;
+        SvaNfaBuilder::foldNeverMatch(propp, neverps);
         if (!hasMultiCycleExpr(propp)) return nullptr;
         if (isBareTopLevelUntil(propp)) return nullptr;
         return propp;
