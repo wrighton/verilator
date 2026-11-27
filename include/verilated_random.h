@@ -559,8 +559,10 @@ class VlRandomizer VL_NOT_FINAL {
                         const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
                         int& checksLeftr, std::vector<bool>* guessedp = nullptr,
                         std::vector<int>* slotIdsp = nullptr, int* satisfiedLeftp = nullptr);
-    // Values of a (get-value) reply, in order
-    bool readValues(VlSolverSession& sess, std::vector<std::string>& valuesr);
+    // Values of a (get-value) reply asking for terms, in order, each of its term's width and in
+    // either SMT-LIB 2.6 literal notation
+    bool readValues(VlSolverSession& sess, const std::vector<PinTerm>& terms,
+                    std::vector<std::string>& valuesr);
     // Layers of the solve...before variables and parts of them in dependency order
     bool buildSolveLayers(std::vector<std::vector<std::string>>& layersr);
     // SMT logic for a flat or UniGen2 session

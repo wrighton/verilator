@@ -2921,7 +2921,7 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
         for (const PinTerm& term : conflicted) emitTerm(term);
         os << "))\n";
         std::vector<std::string> values;
-        if (!readValues(sess, values) || values.size() != conflicted.size()) {
+        if (!readValues(sess, conflicted, values)) {
             m_spreadFailed = true;
             return false;
         }
@@ -3264,33 +3264,28 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
     return false;
 }
 
-bool VlRandomizer::readValues(VlSolverSession& sess, std::vector<std::string>& valuesr)
-    VL_REQUIRES(sess.m_mutex) {
+bool VlRandomizer::readValues(VlSolverSession& sess, const std::vector<PinTerm>& terms,
+                              std::vector<std::string>& valuesr) VL_REQUIRES(sess.m_mutex) {
     std::string reply;
     if (!sess.readSExpr(reply)) return false;
     if (isSolverError(reply)) {
         sess.warnReply(reply);
         return false;
     }
-    // Each value is the last token directly inside its (term value) pair
-    int depth = 0;
-    std::string token;
-    std::string last;
-    for (const char c : reply) {
-        if (c != '(' && c != ')' && !std::isspace(static_cast<unsigned char>(c))) {
-            token += c;
-            continue;
-        }
-        if (depth == 2 && !token.empty()) last = token;
-        token.clear();
-        if (c == '(') {
-            if (++depth == 2) last.clear();
-        } else if (c == ')' && depth-- == 2) {
-            if (!validSMTNum(last)) return false;
-            valuesr.push_back(last);
-        }
+    // Each value is the last term of its (term value) pair
+    std::istringstream is{reply};
+    char c = 0;
+    is >> c;  // The '(' opening the readSExpr-balanced reply
+    while (is >> c && c == '(') {
+        if (valuesr.size() == terms.size()) return false;
+        (void)readSMTTerm(is);
+        std::string value = readSMTLastTerm(is);
+        const int width = terms[valuesr.size()].width;
+        smtIndexedToBinary(value, width);
+        if (!validSMTNum(value) || !smtValueOfWidth(value, width)) return false;
+        valuesr.push_back(value);
     }
-    return true;
+    return c == ')' && valuesr.size() == terms.size();
 }
 
 // Re-add softs highest-priority first, dropping incompatible ones.
