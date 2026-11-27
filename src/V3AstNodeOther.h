@@ -3834,6 +3834,7 @@ public:
 class AstAlways final : public AstNodeProcedure {
     // @astgen op1 := sentreep : Optional[AstSenTree] // Sensitivity list iff clocked
     VAlwaysKwd m_keyword;
+    bool m_userComb = false;  // A user's always_comb, not sensitive to what it writes
 
 public:
     AstAlways(FileLine* fl, VAlwaysKwd keyword, AstSenTree* sentreep,
@@ -3849,6 +3850,8 @@ public:
     void dumpJson(std::ostream& str) const override;
     VAlwaysKwd keyword() const { return m_keyword; }
     void keyword(VAlwaysKwd keyword) { m_keyword = keyword; }
+    bool userComb() const { return m_userComb; }
+    void userComb(bool flag) { m_userComb = flag; }
 };
 class AstAlwaysObserved final : public AstNodeProcedure {
     // Like always but Observed scheduling region

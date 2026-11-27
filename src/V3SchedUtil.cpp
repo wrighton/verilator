@@ -25,6 +25,7 @@
 #include "V3Order.h"
 #include "V3Sched.h"
 #include "V3SenExprBuilder.h"
+#include "V3SenTree.h"
 #include "V3Stats.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -256,19 +257,22 @@ void splitCheck(AstCFunc* const ofuncp) {
 
 class SchedLogicAccessVisitor final : public VNVisitorConst {
     // STATE
-    const LogicAccessFunc& m_f;  // Called on each access
+    const LogicActionAccessFunc& m_f;  // Called on each access
     std::unordered_set<const AstCFunc*> m_calledps;  // Functions already followed
+    std::unordered_set<const AstCFunc*> m_calledActionps;  // Followed only from action blocks
     bool m_inCallee = false;  // Under a called function
     bool m_readsOnly = false;  // Under a called static class method
+    bool m_inAction = false;  // Under a call in an assertion action block
 
     // VISITORS
     void visit(AstVarRef* nodep) override {
         // Variables declared in a called function are excluded (IEEE 1800-2023 9.2.2.2.1)
         if (m_inCallee && nodep->varp()->isFuncLocal()) return;
+        const bool inAction = m_inAction || nodep->inAssertAction();
         if (!m_readsOnly) {
-            m_f(nodep->varScopep(), nodep->access());
+            m_f(nodep->varScopep(), nodep->access(), inAction);
         } else if (nodep->access().isReadOrRW()) {
-            m_f(nodep->varScopep(), VAccess::READ);
+            m_f(nodep->varScopep(), VAccess::READ, inAction);
         }
     }
     void visit(AstCCall* nodep) override {
@@ -279,7 +283,7 @@ class SchedLogicAccessVisitor final : public VNVisitorConst {
 
 public:
     // CONSTRUCTORS
-    explicit SchedLogicAccessVisitor(const LogicAccessFunc& f)
+    explicit SchedLogicAccessVisitor(const LogicActionAccessFunc& f)
         : m_f{f} {}
 
     // METHODS
@@ -287,9 +291,16 @@ public:
     void followCall(const AstCCall* callp) {
         AstCFunc* const funcp = callp->funcp();
         if (!isLogicCallee(funcp)) return;
+        VL_RESTORER(m_inAction);
+        m_inAction = m_inAction || callp->inAssertAction();
         // Each function is visited once per logic, like a once-inlined body: linear in the
-        // total size of the called functions, as inlining all calls would be.
-        if (!m_calledps.emplace(funcp).second) return;
+        // total size of the called functions, as inlining all calls would be. One called from
+        // an action block is visited again if also called from elsewhere.
+        if (m_calledps.count(funcp)) return;
+        if (m_inAction ? !m_calledActionps.emplace(funcp).second
+                       : !m_calledps.emplace(funcp).second) {
+            return;
+        }
         VL_RESTORER(m_inCallee);
         VL_RESTORER(m_readsOnly);
         m_inCallee = true;
@@ -301,14 +312,73 @@ public:
 };
 
 void foreachLogicAccess(AstNode* nodep, const LogicAccessFunc& f) {
+    const LogicActionAccessFunc actionf
+        = [&f](AstVarScope* vscp, VAccess access, bool) { f(vscp, access); };
+    SchedLogicAccessVisitor{actionf}.iterateLogic(nodep);
+}
+
+void foreachLogicActionAccess(AstNode* nodep, const LogicActionAccessFunc& f) {
     SchedLogicAccessVisitor{f}.iterateLogic(nodep);
 }
 
 void foreachCallAccess(const AstCCall* callp, const LogicAccessFunc& f) {
-    SchedLogicAccessVisitor{f}.followCall(callp);
+    const LogicActionAccessFunc actionf
+        = [&f](AstVarScope* vscp, VAccess access, bool) { f(vscp, access); };
+    SchedLogicAccessVisitor{actionf}.followCall(callp);
 }
 
-std::unordered_set<const AstVarScope*> computeImplicitSensitivities(AstNodeProcedure* procp) {
+AstSenTree* changeSenTree(SenTreeFinder& finder, AstNodeProcedure* procp,
+                          const std::unordered_set<const AstVarScope*>& vscps) {
+    FileLine* const flp = procp->fileline();
+    AstSenItem* senItemsp = nullptr;
+    std::unordered_set<const AstVarScope*> added;
+    foreachLogicAccess(procp, [&](AstVarScope* vscp, VAccess) {
+        if (!vscps.count(vscp) || !added.emplace(vscp).second) return;
+        AstVarRef* const newRefp = new AstVarRef{flp, vscp, VAccess::READ};
+        senItemsp
+            = AstNode::addNext(senItemsp, new AstSenItem{flp, VEdgeType::ET_HYBRID, newRefp});
+    });
+    AstSenTree* const senTreep = new AstSenTree{flp, senItemsp};
+    AstSenTree* const resultp = finder.getSenTree(senTreep);
+    // SenTreeFinder::getSenTree clones, so clean up
+    VL_DO_DANGLING(senTreep->deleteTree(), senTreep);
+    return resultp;
+}
+
+SoleWriterMap computeSoleWriters(AstNetlist* netlistp) {
+    SoleWriterMap soleWriters;
+    // Static initializers run before any process, so do not count as writers
+    netlistp->foreach([&](const AstActive* activep) {
+        if (activep->sentreep()->hasStatic()) return;
+        for (AstNodeProcedure* const procp : activep->procspList()) {
+            foreachLogicAccess(procp, [&](const AstVarScope* vscp, VAccess access) {
+                if (!access.isWriteOrRW()) return;
+                const auto pair = soleWriters.emplace(vscp, procp);
+                if (pair.second) return;
+                if (pair.first->second != procp) pair.first->second = nullptr;
+            });
+        }
+    });
+    // Writes in functions called other than as logic, and outside the model, are other writers
+    netlistp->foreach([&](AstCFunc* funcp) {
+        if (isLogicCallee(funcp)) return;  // Of the processes calling it
+        foreachLogicAccess(funcp, [&](const AstVarScope* vscp, VAccess access) {
+            if (access.isWriteOrRW()) soleWriters[vscp] = nullptr;
+        });
+    });
+    for (auto& pair : soleWriters) {
+        const AstVar* const varp = pair.first->varp();
+        if (varp->isForceable() || varp->isSigPublic() || varp->isWrittenByDpi()
+            || varp->isInout()) {
+            pair.second = nullptr;
+        }
+    }
+    return soleWriters;
+}
+
+std::unordered_set<const AstVarScope*>
+computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleWriters,
+                             size_t& excludedr) {
     // Dangerous assumption:
     // A variable read after the process assigned it earlier (in tree order, with a read-write
     // reference counting as an assignment) is not an implicit sensitivity, considering it
@@ -319,12 +389,65 @@ std::unordered_set<const AstVarScope*> computeImplicitSensitivities(AstNodeProce
     //      if (sometimes) foo = 1
     //      foo = foo + 1
     // TODO: Do this properly with liveness analysis (i.e.: if live, it's an implicit sensitivity)
+    const AstAlways* const alwaysp = VN_CAST(procp, Always);
+    const bool userComb = alwaysp && alwaysp->userComb();
     std::unordered_set<const AstVarScope*> implicitSensitivities;
     std::unordered_set<const AstVarScope*> assigned;
-    foreachLogicAccess(procp, [&](const AstVarScope* vscp, VAccess access) {
+    // "Expressions used in assertion action blocks do not contribute to the implicit sensitivity
+    // list of an always_comb" (IEEE 1800-2023 9.2.2.2.1). Variables read only there:
+    std::unordered_set<const AstVarScope*> actionReads;
+    // Internal variables whose writes scheduling ignores, such as the pending reports of a
+    // deferred assertion, wake no combinational logic. What they hold is the process's own state
+    // between runs, so an always_comb reading one is not idempotent.
+    std::unordered_set<const AstVarScope*> internalReads;
+    const size_t excludedBefore = excludedr;
+    foreachLogicActionAccess(procp, [&](const AstVarScope* vscp, VAccess access, bool inAction) {
         if (access.isWriteOrRW() && !vscp->varp()->ignoreSchedWrite()) assigned.emplace(vscp);
-        if (access.isReadOrRW() && !assigned.count(vscp)) implicitSensitivities.emplace(vscp);
+        if (access.isReadOrRW() && !assigned.count(vscp)) {
+            if (vscp->varp()->isInternal() && vscp->varp()->ignoreSchedWrite()) {
+                internalReads.emplace(vscp);
+            } else if (userComb && inAction) {
+                actionReads.emplace(vscp);
+            } else {
+                implicitSensitivities.emplace(vscp);
+            }
+        }
     });
+    for (const AstVarScope* const vscp : actionReads) {
+        if (!implicitSensitivities.count(vscp)) ++excludedr;
+    }
+    excludedr += userComb ? internalReads.size() : 0;
+    std::unordered_set<const AstVarScope*> unexcluded;  // Before anything is left out
+    // A user's always_comb is not sensitive to what it writes (IEEE 1800-2023 9.2.2.2.1), so does
+    // not wake itself. Only the whole variables it alone writes are excluded, as another process
+    // may drive other parts (IEEE 1800-2023 9.2.2.2). A task's writes count, being inlined.
+    if (userComb) {
+        unexcluded = implicitSensitivities;
+        unexcluded.insert(actionReads.begin(), actionReads.end());
+        unexcluded.insert(internalReads.begin(), internalReads.end());
+        for (const AstVarScope* const vscp : assigned) {
+            const auto it = soleWriters.find(vscp);
+            if (it != soleWriters.end() && it->second == procp
+                && implicitSensitivities.erase(vscp)) {
+                ++excludedr;
+            }
+        }
+    }
+    // A user's always_comb leaving a variable out is run only by changes of the rest (see
+    // V3Sched). If a change of one of those cannot be detected, is of a variable whose writes
+    // scheduling ignores, or is of a public variable, which may be written from outside the model
+    // and whose readers the 'ico' region runs, leave nothing out: it then stays as before, a
+    // cycle that is reported, rather than logic silently running more often than IEEE allows.
+    if (excludedr != excludedBefore
+        && !std::all_of(implicitSensitivities.begin(), implicitSensitivities.end(),
+                        [](const AstVarScope* vscp) {
+                            return SenExprBuilder::isSupportedDType(vscp->dtypep())
+                                   && !vscp->varp()->ignoreSchedWrite()
+                                   && !vscp->varp()->isSigPublic();
+                        })) {
+        excludedr = excludedBefore;
+        implicitSensitivities = std::move(unexcluded);
+    }
     // Reads through forced values the process computes itself do not trigger it either
     VarScopeSet forceReadEdgeIgnores;
     collectForceReadEdgeIgnores(procp, forceReadEdgeIgnores);

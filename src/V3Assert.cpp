@@ -2393,6 +2393,8 @@ class AssertVisitor final : public VNVisitor {
     AstVar* m_strongFailOnp = nullptr;  // Strong property's active attempts started FailOn
     std::unordered_map<std::string, AstVar*> m_pexprStartVarps;  // Controls read at its start
     AstNodeProcedure* m_procedurep = nullptr;  // Current procedure
+    // What the current always_comb reads outside the action blocks of immediate assertions
+    std::unordered_set<const AstVar*> m_combReads;
     AstAlways* m_assertCoverp = nullptr;  // Process of the current concurrent assertion
     VDouble0 m_statCover;  // Statistic tracking
     VDouble0 m_statAsNotImm;  // Statistic tracking
@@ -3837,6 +3839,22 @@ class AssertVisitor final : public VNVisitor {
         }
     }
 
+    // Collect the variables 'nodep' reads outside the action blocks of immediate assertions
+    static void collectNonActionReads(AstNode* nodep, std::unordered_set<const AstVar*>& readsr) {
+        for (; nodep; nodep = nodep->nextp()) {
+            const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef);
+            if (refp && refp->access().isReadOrRW()) readsr.emplace(refp->varp());
+            const AstNodeCoverOrAssert* const assertp = VN_CAST(nodep, NodeCoverOrAssert);
+            if (assertp && assertp->immediate()) {
+                collectNonActionReads(assertp->propp(), readsr);
+                continue;
+            }
+            collectNonActionReads(nodep->op1p(), readsr);
+            collectNonActionReads(nodep->op2p(), readsr);
+            collectNonActionReads(nodep->op3p(), readsr);
+            collectNonActionReads(nodep->op4p(), readsr);
+        }
+    }
     void visitAssertionIterate(AstNodeCoverOrAssert* nodep, AstNodeStmt* failsp) {
         FileLine* const flp = nodep->fileline();
         const bool obsDeferred = nodep->userType() == VAssertType::OBSERVED_DEFERRED_IMMEDIATE;
@@ -3867,6 +3885,21 @@ class AssertVisitor final : public VNVisitor {
             return;
         }
         if (m_beginp && nodep->name() == "") nodep->name(m_beginp->name());
+        // What an immediate assertion's action block reads does not wake an always_comb
+        // (IEEE 1800-2023 9.2.2.2.1), so mark its references for V3Sched. A variable the
+        // always_comb also reads elsewhere stays a sensitivity, even if an optimization removes
+        // that read, so is not marked.
+        if (nodep->immediate()) {
+            for (AstNode* const actionsp :
+                 {static_cast<AstNode*>(failsp), static_cast<AstNode*>(nodep->passsp())}) {
+                if (!actionsp) continue;
+                actionsp->foreachAndNext([this](AstNodeVarRef* refp) {
+                    if (!m_combReads.count(refp->varp())) refp->inAssertAction(true);
+                });
+                actionsp->foreachAndNext(
+                    [](AstNodeFTaskRef* refp) { refp->inAssertAction(true); });
+            }
+        }
         VL_RESTORER(m_inlineAction);
         m_inlineAction = false;
         VL_RESTORER(m_taskMature);
@@ -5397,6 +5430,7 @@ class AssertVisitor final : public VNVisitor {
     }
     void visit(AstNodeProcedure* nodep) override {
         VL_RESTORER(m_procedurep);
+        VL_RESTORER_CLEAR(m_combReads);
         VL_RESTORER(m_matureEpochp);
         m_matureEpochp = nullptr;
         VL_RESTORER(m_obsFlushp);
@@ -5408,6 +5442,8 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_procSuspends);
         VL_RESTORER(m_taskRunner);
         m_procedurep = nodep;
+        const AstAlways* const combp = VN_CAST(nodep, Always);
+        if (combp && combp->userComb()) collectNonActionReads(nodep->stmtsp(), m_combReads);
         m_procSuspends = V3AssertCommon::procSuspends(nodep->stmtsp());
         m_actionEventp = nullptr;
         m_actionReactivep = nullptr;
