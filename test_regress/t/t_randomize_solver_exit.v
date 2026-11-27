@@ -42,10 +42,14 @@ class Spread;
   }
 endclass
 
-// Sampled by UniGen2 from its second call on
+// Sampled by UniGen2 from its second call on; relating two elements keeps the array from
+// being sampled natively, one element at a time
 class Sampled;
   rand bit [7:0] v[4];
-  constraint c {foreach (v[i]) v[i] > 8'd10;}
+  constraint c {
+    foreach (v[i]) v[i] > 8'd10;
+    v[0] != v[1];
+  }
 endclass
 
 module t;
