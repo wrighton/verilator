@@ -16901,7 +16901,18 @@ public:
             } else if (VN_IS(rhsDTypep, UnpackArrayDType) && !lowerAsFixedAggregate(rhsDTypep)) {
                 // V3Const packs an array of unpacked structures
                 AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
-                nodep->rhsp(new AstCvtArrayToPacked{rhsp->fileline(), rhsp, streamp->dtypep()});
+                if (lwidth != 0 && rwidth > lwidth) {
+                    // A fixed-size target takes the bits it needs from the left of a wider array
+                    // (IEEE 1800-2023 11.4.14.3)
+                    AstNodeExpr* const packedp = new AstCvtArrayToPacked{
+                        rhsp->fileline(), rhsp,
+                        rhsp->findBitOrLogicDType(rwidth, rwidth, VSigning::UNSIGNED,
+                                                  rhsp->isFourstateOrNoDtype())};
+                    nodep->rhsp(new AstSel{rhsp->fileline(), packedp, rwidth - lwidth, lwidth});
+                } else {
+                    nodep->rhsp(
+                        new AstCvtArrayToPacked{rhsp->fileline(), rhsp, streamp->dtypep()});
+                }
             }
         }
     }
