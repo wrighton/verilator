@@ -67,6 +67,10 @@ class VlRandomVar VL_NOT_FINAL {
     const int m_width;  // Variable width in bits
     const int m_dimension;  //Variable dimension, default is 0
     const std::uint32_t m_randModeIdx;  // rand_mode index
+    // Declared element by element, each a constant named by elementName(), as the compiler
+    // found every constraint reads it only so (V3SolverSmt SolverScalarArrayVisitor)
+    mutable bool m_scalar = false;
+    mutable std::vector<std::string> m_elemNames;  // elementName() of each index, as built
 
 public:
     VlRandomVar(const std::string& name, int width, void* datap, int dimension,
@@ -88,6 +92,24 @@ public:
                                                    std::numeric_limits<std::uint32_t>::max());
     }
     std::uint32_t randModeIdx() const { return m_randModeIdx; }
+    bool scalar() const { return m_scalar; }
+    void scalar(bool flag) const { m_scalar = flag; }
+    // The constant declaring element 'index' of a scalar array, "<name>__Vs<8 hex digits>",
+    // built once for each index up to the largest one an element of the array had
+    const std::string& elementName(IData index) const {
+        for (IData i = static_cast<IData>(m_elemNames.size()); i <= index; ++i) {
+            m_elemNames.emplace_back();
+            elementNameOf(m_elemNames.back(), m_name, i, "__Vs");
+        }
+        return m_elemNames[index];
+    }
+    // Into resultr, "<name><tag><8 hex digits of index>"
+    static void elementNameOf(std::string& resultr, const std::string& name, IData index,
+                              const char* tag) {
+        static const char* const s_digits = "0123456789abcdef";
+        resultr = name + tag + "00000000";
+        for (size_t i = resultr.size(); index; index >>= 4) resultr[--i] = s_digits[index & 0xf];
+    }
     bool randModeIdxNone() const { return randModeIdx() == std::numeric_limits<unsigned>::max(); }
     void set(const std::string& idx, const std::string& val) const;
     virtual void emitGetValue(std::ostream& s) const;
@@ -146,9 +168,11 @@ public:
         , m_fallbackIdxWidths{idxWidths} {}
     bool isArray() const override { return true; }
     std::shared_ptr<const VlRandomVar> renamed(const std::string& name) const override {
-        return std::make_shared<const VlRandomArrayVarTemplate>(
+        const auto copyp = std::make_shared<const VlRandomArrayVarTemplate>(
             name, width(), VlRandomVar::datap(0), dimension(),
             std::numeric_limits<std::uint32_t>::max(), m_fallbackIdxWidths);
+        copyp->scalar(scalar());
+        return copyp;
     }
     void* datap(int idx) const override {
         const auto it = m_arrVarsRefp->find({name(), idx});
@@ -164,6 +188,10 @@ public:
     }
     void emitSelect(std::ostream& s, const std::vector<IData>& indices,
                     const std::vector<size_t>& idxWidths) const {
+        if (scalar()) {
+            s << elementName(indices[0]);
+            return;
+        }
         const size_t num_indices = idxWidths.size();
         size_t wide_size = 0;
 
@@ -191,6 +219,7 @@ public:
             if (it != m_arrVarsRefp->end()) {
                 const std::vector<IData>& indices = it->second->m_indices;
                 const std::vector<size_t>& idxWidths = it->second->m_idxWidths;
+                if (scalar()) s << ' ';
                 emitSelect(s, indices, idxWidths);
             } else {
                 VL_FATAL_MT(__FILE__, __LINE__, "randomize",
@@ -247,6 +276,7 @@ public:
         const int j = i / width();
         i = i % width();
         s << " ((_ extract " << i << ' ' << i << ')';
+        if (scalar()) s << ' ';
         const auto it = m_arrVarsRefp->find({name(), j});
         if (it != m_arrVarsRefp->end()) {
             const std::vector<IData>& indices = it->second->m_indices;
@@ -268,6 +298,15 @@ class VlRandomizer VL_NOT_FINAL {
     // MEMBERS
     std::vector<std::string> m_constraints;  // Solver-dependent hard constraints
     std::vector<std::string> m_freshVars;  // Solver constants of fresh_const()
+    // Constants of indices a constraint selects from a scalar array that has no element there,
+    // by name, with their widths: declared, so a guard of the select keeps its meaning (an
+    // array whose size is solved has the elements of its size only after the size phase), but
+    // never read back
+    std::map<std::string, int> m_ghostElems;
+    // Each scalar array element's constant, by name, as last declared, see emitDeclares
+    mutable std::unordered_map<std::string,
+                               std::pair<const VlRandomVar*, std::shared_ptr<const ArrayInfo>>>
+        m_scalarElems;
     // Solver variables the hard constraints name, flattened in m_constraints order; the
     // string literals of the generated code, so stored without copying
     std::vector<const char*> m_constraintVarNames;
@@ -1347,6 +1386,17 @@ public:
     // of 'into' and of the other objects merged into it
     void table_prefix_from(VlRandomizer& into);
     void clearConstraints();
+    // The term of element 'index' of scalar array 'name' in a constraint: the element's
+    // constant, or, for an index the array has no element at, a constant of its own
+    const std::string& elemTerm(const std::string& name, IData index);
+    // Declare array 'name' element by element, see elemTerm
+    void markScalar(const std::string& name) {
+        const auto it = m_vars.find(name);
+        if (it != m_vars.end()) it->second->scalar(true);
+    }
+    // The variable a term of a solver reply names: of an element of a scalar array, or the
+    // array of a (select ...), whose indices are appended, or the term itself
+    std::string termVarName(const std::string& term, std::vector<std::string>& indices) const;
     void clearAll();  // Clear both constraints and variables
     // Unregister the fields of the objects in a class handle array to register them again, once
     // after clearConstraints(): returns whether it did
