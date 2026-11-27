@@ -106,6 +106,7 @@ class AstNodeCoverOrAssert VL_NOT_FINAL : public AstNodeStmt {
     bool m_senFromAlways = false;  // Sensitivity list copied from upper always
     bool m_immediate = false;  // Immediate assert (may differ from userType being immediate)
     bool m_nfaLowered = false;  // V3AssertNfa lowered its property to a Boolean output
+    bool m_failsGated = false;  // V3AssertNfa gated the fail action in failsp by FailOn
 
 public:
     AstNodeCoverOrAssert(VNType t, FileLine* fl, AstNode* propp, AstNodeStmt* passsp,
@@ -143,6 +144,8 @@ public:
     void senFromAlways(bool flag) { m_senFromAlways = flag; }
     bool nfaLowered() const { return m_nfaLowered; }
     void nfaLowered(bool flag) { m_nfaLowered = flag; }
+    bool failsGated() const { return m_failsGated; }
+    void failsGated(bool flag) { m_failsGated = flag; }
 };
 class AstNodeReadWriteMem VL_NOT_FINAL : public AstNodeStmt {
     // @astgen op1 := filenamep : AstNodeExpr
