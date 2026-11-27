@@ -1067,6 +1067,9 @@ class AssertVisitor final : public VNVisitor {
             AstFork* const forkp = new AstFork{nodep->fileline(), VJoinType::JOIN_NONE};
             forkp->addForksp(new AstForkItem{nodep->fileline(), pexprp->bodyp()->unlinkFrBack()});
             if (AstNodeStmt* const finalp = pexprp->finalp()) {
+                // An attempt starts at once, so one starting on the tick of $finish is pending
+                // in the end-of-simulation check (IEEE 1800-2023 16.12.11)
+                forkp->immediateStart(true);
                 // A final block of its own, so an action suspending in it, by a task it calls,
                 // does not stop the end-of-simulation checks of other assertions
                 m_modp->addStmtsp(new AstFinal{m_modp->fileline(), finalp->unlinkFrBack()});

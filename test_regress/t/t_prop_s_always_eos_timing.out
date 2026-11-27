@@ -34,11 +34,14 @@
 [55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
 [55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
 [55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
+[55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
 [55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
 [55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
 [55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
 [55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
 [55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
+[55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
+[55] UNTIL_PLAIN
 [55] UNTIL_PLAIN
 [55] UNTIL_PLAIN
 [55] UNTIL_PLAIN
