@@ -663,6 +663,10 @@ class VlRandomizer VL_NOT_FINAL {
     // the values for them, each array and all together
     void addUniqueSizeBounds(std::vector<std::string>& exprs) const;
     void emitRandcExclusions(std::ostream& os) const;  // Emit randc exclusion constraints
+    // Variables and elements of arrays whose values the solver sampler draws, see checkFree
+    using FreeElements = std::vector<std::pair<const VlRandomVar*, int>>;
+    FreeElements freeElements() const;
+    VlSolverStatus checkFree(VlRNG& rngr, VlSolverSession& sess, const FreeElements& elements);
     void recordRandcValues();  // Record solved randc values for future exclusion
     size_t hashConstraints(const std::vector<std::string>& extras, bool randcOnly = false) const;
     bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly, bool sizeSolve = false);
