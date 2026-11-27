@@ -6110,10 +6110,10 @@ public:
         std::vector<SvaVertexData> vertexData(N);
         for (int i = 0; i < N; ++i) vtx[i]->userp(&vertexData[i]);
 
-        // A wait ring of `##[M:$] b` counts its attempts to run the pass action of each, and
-        // then ends them on the match of b, as each passes
+        // A wait ring of `##[M:$] b` counts its attempts to run the pass action of each, or to
+        // count each covered, and then ends them on the match of b, as each succeeds
         std::vector<bool> countedWaits(N);
-        if (countAttemptPasses) {
+        if (countAttemptPasses || countAttempts) {
             for (int i = 0; i < N; ++i) {
                 if (vtx[i]->m_delayRingClearCondp || !waitMergep(graph, vtx[i], matchCondp)) {
                     continue;
@@ -9050,17 +9050,19 @@ class AssertNfaVisitor final : public VNVisitor {
         const bool countsConsequent = !parts.hasImplication
                                       || (isUntilConsequent(seqBodyp) && !parts.isFollowedBy
                                           && isBoolean(parts.triggerExprp));
+        // A cover of a property counts its attempts succeeding (IEEE 1800-2023 16.14.3)
+        const bool countCovered = coverp && !isCoverSeq && !negated
+                                  && (v3Global.opt.coverageUser() || coverp->passsp());
         const bool exactCounts
             = (replayFails && countsConsequent && oneThreadPerAttempt(seqBodyp, true))
-              || (countAttemptPasses && parts.hasImplication
+              || ((countAttemptPasses || countCovered) && parts.hasImplication
                   && oneThreadPerConsequent(parts.seqExprp));
         // A match and a vacuous success of its operand on one tick both fail a negated property
         const bool replaySuccesses = assertAssertp && assertAssertp->failsp() && negated;
         const auto signals
             = m_loweringp->lower(assertp, graph, senTreep, result.finalCondp, disableExprp,
                                  replayThreads, replayThreads, replaySuccesses, exactCounts,
-                                 exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr,
-                                 coverp && !isCoverSeq && !negated && v3Global.opt.coverageUser(),
+                                 exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr, countCovered,
                                  trackAntecedentEnd, countAttemptPasses, vacuousTriggerp);
         const bool attemptPasses = signals.attemptPassCountp;
         AstNodeExpr* matchExprp = nullptr;
