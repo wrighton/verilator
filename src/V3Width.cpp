@@ -2076,7 +2076,9 @@ class WidthVisitor final : public VNVisitor {
                 nodep->v3error("Wildcard index must be integral (IEEE 1800-2023 7.8.1)");
             }
             userIterateAndNext(nodep->bitp(), WidthVP{SELF, BOTH}.p());
-            convertWildcardKey(nodep->bitp());
+            // An index with X or Z bits has no key form; V3Unknown reads it as invalid
+            const AstConst* const constp = VN_CAST(nodep->bitp(), Const);
+            if (!constp || !constp->num().isFourState()) convertWildcardKey(nodep->bitp());
             nodep->dtypeFrom(adtypep->subDTypep());
         }
     }
