@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_queue_slice_unbounded_unsup.v:16:13: Unsupported: Unbounded ('$') outside of queue or string operations
+                                                           : ... note: In instance 't'
+   16 |     r = q[k-$:2];
+      |             ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_queue_slice_unbounded_unsup.v:17:13: Unsupported: Unbounded ('$') outside of queue or string operations
+                                                           : ... note: In instance 't'
+   17 |     r = q[k-$+:2];
+      |             ^
+%Error-UNSUPPORTED: t/t_queue_slice_unbounded_unsup.v:19:21: Unsupported: unbounded ('$') in the base of a with[] stream expression part-select.
+                                                           : ... note: In instance 't'
+   19 |     s = {>>{q with [$-1+:2]}};
+      |                     ^
+%Error: Exiting due to
