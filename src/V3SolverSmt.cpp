@@ -543,8 +543,82 @@ class ConstraintExprVisitor final : public VNVisitor {
         // Replace computable expression with SMT constant
         VNRelinker handle;
         nodep->unlinkFrBack(&handle);
-        handle.relink(getConstFormat(nodep));
+        handle.relink(newStateFormatp(nodep));
         return true;
+    }
+    // SMT constant of state expression nodep, not evaluated where it would read a member
+    // through a null class handle: as for a member read, an evaluation error unless a false
+    // guard keeps it out (IEEE 1800-2023 18.5.12, see newNullCheckedReadp)
+    AstNodeExpr* newStateFormatp(AstNodeExpr* nodep) {
+        AstMemberRef* readp = nullptr;
+        AstNodeExpr* const okp = newReadsOkp(nodep, readp);
+        if (!okp) return getConstFormat(nodep);
+        AstMemberRef* const namep = readp->cloneTree(false);
+        AstNodeExpr* const textp = newNullCheckedReadp(namep, okp, getConstFormat(nodep), nodep);
+        VL_DO_DANGLING(namep->deleteTree(), namep);
+        // Text, which a second visit, as of a guard formatted first, leaves as it is
+        AstSFormatF* const resultp = new AstSFormatF{textp->fileline(), "%s", false, textp};
+        resultp->dtypeSetString();
+        return resultp;
+    }
+    static AstNodeExpr* newLogAndp(AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
+        if (!lhsp) return rhsp;
+        if (!rhsp) return lhsp;
+        return new AstLogAnd{lhsp->fileline(), lhsp, rhsp};
+    }
+    // Whether evaluating state expression exprp reads no member through a null class handle,
+    // nullptr if it reads none through handles; readpr is set to the first such read
+    static AstNodeExpr* newReadsOkp(AstNodeExpr* exprp, AstMemberRef*& readpr) {
+        FileLine* const fl = exprp->fileline();
+        if (AstMemberRef* const refp = VN_CAST(exprp, MemberRef)) {
+            AstNodeExpr* const okp = newNonNullp(refp->fromp());
+            if (okp && !readpr) readpr = refp;
+            return okp;
+        }
+        if (VN_IS(exprp, LogAnd) || VN_IS(exprp, LogOr) || VN_IS(exprp, LogIf)) {
+            AstNodeBiop* const biopp = VN_AS(exprp, NodeBiop);
+            AstNodeExpr* const lhsOkp = newReadsOkp(biopp->lhsp(), readpr);
+            AstNodeExpr* rhsOkp = newReadsOkp(biopp->rhsp(), readpr);
+            // The right operand is evaluated only where the left one does not decide
+            if (rhsOkp) {
+                AstNodeExpr* decidedp = biopp->lhsp()->cloneTree(false);
+                if (!VN_IS(exprp, LogOr)) decidedp = new AstLogNot{fl, decidedp};
+                rhsOkp = new AstLogOr{fl, decidedp, rhsOkp};
+            }
+            return newLogAndp(lhsOkp, rhsOkp);
+        }
+        if (AstCond* const condp = VN_CAST(exprp, Cond)) {
+            AstNodeExpr* const condOkp = newReadsOkp(condp->condp(), readpr);
+            AstNodeExpr* thenOkp = newReadsOkp(condp->thenp(), readpr);
+            AstNodeExpr* elseOkp = newReadsOkp(condp->elsep(), readpr);
+            // Only the branch the condition selects is evaluated
+            AstNodeExpr* branchOkp = nullptr;
+            if (thenOkp || elseOkp) {
+                if (!thenOkp) thenOkp = new AstConst{fl, AstConst::BitTrue{}};
+                if (!elseOkp) elseOkp = new AstConst{fl, AstConst::BitTrue{}};
+                branchOkp = new AstCond{fl, condp->condp()->cloneTree(false), thenOkp, elseOkp};
+            }
+            return newLogAndp(condOkp, branchOkp);
+        }
+        // Any other expression evaluates all its operands
+        AstNodeExpr* okp = nullptr;
+        for (AstNode* opp : {exprp->op1p(), exprp->op2p(), exprp->op3p(), exprp->op4p()}) {
+            for (AstNode* itemp = opp; itemp; itemp = itemp->nextp()) {
+                if (AstNodeExpr* const itemExprp = VN_CAST(itemp, NodeExpr)) {
+                    okp = newLogAndp(okp, newReadsOkp(itemExprp, readpr));
+                }
+            }
+        }
+        return okp;
+    }
+    // State guard condp, negated if negate, false where evaluating condp would read a member
+    // through a null class handle, which it reports itself
+    static AstNodeExpr* newSafeGuardp(AstNodeExpr* condp, bool negate) {
+        FileLine* const fl = condp->fileline();
+        AstMemberRef* readp = nullptr;
+        AstNodeExpr* const okp = newReadsOkp(condp, readp);
+        if (negate) condp = new AstLogNot{fl, condp};
+        return newLogAndp(okp, condp);
     }
     AstNodeExpr* wrapWithCond(AstNodeExpr* const exprp, AstNodeExpr* const condp,
                               const int width) {
@@ -2201,12 +2275,13 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
     // Text of a read of member nodep, whose text is textp otherwise, through handles that are
     // null unless nonNullp: recorded, as an evaluation error that fails randomize() if a
-    // constraint has the read (IEEE 1800-2023 18.5.12)
+    // constraint has the read (IEEE 1800-2023 18.5.12). For a state expression statep reading
+    // nodep, textp is its text, and nonNullp holds where it reads no null handle.
     AstNodeExpr* newNullCheckedReadp(AstMemberRef* nodep, AstNodeExpr* nonNullp,
-                                     AstNodeExpr* textp) {
+                                     AstNodeExpr* textp, const AstNodeExpr* statep = nullptr) {
         // An object handle is read by the read of its member, which checks it, and an array
         // of a null object reads as empty
-        if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked()) {
+        if (!statep && !nodep->dtypep()->skipRefp()->isIntegralOrPacked()) {
             if (nonNullp) VL_DO_DANGLING(nonNullp->deleteTree(), nonNullp);
             return textp;
         }
@@ -2221,7 +2296,10 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstCMethodHard* const readp = new AstCMethodHard{
             fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READ},
             VCMethod::RANDOMIZER_NULL_READ, namep};
-        readp->addPinsp(textp->cloneTree(false));
+        // A state value is not read through the null handle: a name only the text of that
+        // constraint has stands in for it
+        readp->addPinsp(statep ? new AstConst{fl, AstConst::String{}, m_uniqueNames.get("__Vnull")}
+                               : textp->cloneTree(false));
         readp->dtypeSetString();
         // A nonexistent element, like an index out of bounds, is not read, see m_conditionp
         if (m_conditionp) {
@@ -2236,9 +2314,10 @@ class ConstraintExprVisitor final : public VNVisitor {
                 guardsp = guardsp ? new AstLogAnd{fl, guardsp, guardp->cloneTree(false)}
                                   : guardp->cloneTree(false);
             }
+            const int width = (statep ? statep : nodep)->width();
             nullTextp = new AstCond{
                 fl, guardsp, readp,
-                getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0})};
+                getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, 0})};
         }
         AstCond* const condp = new AstCond{fl, nonNullp, textp, nullTextp};
         condp->user1(true);  // Mark as formatted
@@ -2403,14 +2482,14 @@ class ConstraintExprVisitor final : public VNVisitor {
     size_t pushStateGuards(AstNodeExpr* exprp, bool negate) {
         if (negate) {
             if (!isStateGuard(exprp)) return 0;
-            m_stateGuardps.push_back(new AstLogNot{exprp->fileline(), exprp->cloneTree(false)});
+            m_stateGuardps.push_back(newSafeGuardp(exprp->cloneTree(false), true));
             return 1;
         }
         if (AstLogAnd* const andp = VN_CAST(exprp, LogAnd)) {
             return pushStateGuards(andp->lhsp(), false) + pushStateGuards(andp->rhsp(), false);
         }
         if (!isStateGuard(exprp)) return 0;
-        m_stateGuardps.push_back(exprp->cloneTree(false));
+        m_stateGuardps.push_back(newSafeGuardp(exprp->cloneTree(false), false));
         return 1;
     }
     void popStateGuards(size_t count) {
@@ -2429,8 +2508,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         return resultp;
     }
     void visit(AstLogIf* nodep) override {
-        // Its antecedent guards its consequent
-        const size_t pushed = pushStateGuards(nodep->lhsp(), false);
+        // Its antecedent guards its consequent, not itself: a state one is formatted first
+        AstNodeExpr* const condp = nodep->lhsp()->cloneTree(false);
+        if (!nodep->lhsp()->user1()) iterate(nodep->lhsp());
+        const size_t pushed = pushStateGuards(condp, false);
+        VL_DO_DANGLING(condp->deleteTree(), condp);
         visit(static_cast<AstNodeBiop*>(nodep));
         popStateGuards(pushed);
     }
