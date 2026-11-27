@@ -552,7 +552,11 @@ private:
         V3Const::constifyEdit(nodep->skewp());
         if (!VN_IS(nodep->skewp(), Const)) {
             nodep->skewp()->v3error("Skew must be constant (IEEE 1800-2023 14.4)");
-            return;
+            // Continue with the default skew (IEEE 1800-2023 14.3), so the clockvar is made
+            AstNode* const badp = nodep->skewp()->unlinkFrBack();
+            nodep->skewp(nodep->direction().isOutput() ? new AstConst{flp, 0}
+                                                       : new AstConst{flp, AstConst::OneStep{}});
+            VL_DO_DANGLING(pushDeletep(badp), badp);
         }
         AstConst* const skewp = VN_AS(nodep->skewp(), Const);
         if (skewp->num().isNegative()) skewp->v3error("Skew cannot be negative");
