@@ -955,23 +955,50 @@ class WidthSelVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
         } else if (VN_IS(ddtypep, QueueDType) || VN_IS(ddtypep, DynArrayDType)) {
             // SELPLUS(from,lsb,width) -> CMETHODHARD(from, slicePlus, lsb, width), so the position
-            // is evaluated once
-            AstNodeExpr* lsbp = rhsp;
+            // is evaluated once. A base of '$ - k' is given by its offset k from the back.
+            // V3Width reported '$' in the base of a with[] part-select as unsupported
+            AstNodeExpr* const backnessp
+                = VN_IS(ddtypep, QueueDType) && !m_padQueue ? selQueueBackness(rhsp) : nullptr;
+            AstNodeExpr* lsbp = backnessp ? backnessp : rhsp;
             if (VN_IS(nodep, SelMinus)) {
                 // Subtract in 64 signed bits, so a position of up to 32 bits may go below 0 or
                 // past the int range of the runtime position, which then is converted as an
                 // index that does not fit
-                if (rhsp->width() <= VL_IDATASIZE) {
-                    if (rhsp->isSigned()) {
-                        lsbp = new AstExtendS{rhsp->fileline(), rhsp, VL_QUADSIZE};
+                if (lsbp->width() <= VL_IDATASIZE) {
+                    if (lsbp->isSigned()) {
+                        lsbp = new AstExtendS{lsbp->fileline(), lsbp, VL_QUADSIZE};
                     } else {
-                        lsbp = new AstExtend{rhsp->fileline(), rhsp, VL_QUADSIZE};
+                        lsbp = new AstExtend{lsbp->fileline(), lsbp, VL_QUADSIZE};
                     }
                     lsbp->dtypeSetLogicSized(VL_QUADSIZE, VSigning::SIGNED);
                 }
-                lsbp = newSubNeg(lsbp, width - 1);
+                if (backnessp) {
+                    // 'q[$-k-:w]' is 'q[$-(k+w-1):$-k]', so its offset from the back grows. Add
+                    // in one more bit than the offset, so an offset near its maximum cannot wrap,
+                    // and an addend of that width, so a wide constant offset stays exact.
+                    FileLine* const flp = lsbp->fileline();
+                    const int addWidth = lsbp->width() + 1;
+                    const VSigning signing
+                        = lsbp->isSigned() ? VSigning::SIGNED : VSigning::UNSIGNED;
+                    AstNodeExpr* widep;
+                    if (lsbp->isSigned()) {
+                        widep = new AstExtendS{flp, lsbp, addWidth};
+                    } else {
+                        widep = new AstExtend{flp, lsbp, addWidth};
+                    }
+                    widep->dtypeSetLogicSized(addWidth, signing);
+                    AstNodeExpr* const addp
+                        = new AstAdd{flp, widep,
+                                     new AstConst{flp, AstConst::WidthedValue{}, addWidth,
+                                                  static_cast<uint32_t>(width - 1)}};
+                    addp->dtypeSetLogicSized(addWidth, signing);
+                    lsbp = addp;
+                } else {
+                    lsbp = newSubNeg(lsbp, width - 1);
+                }
             }
-            const VCMethod method = (VN_IS(ddtypep, DynArrayDType) || m_padQueue)
+            const VCMethod method = backnessp ? VCMethod::DYN_SLICE_PLUS_BACK
+                                    : (VN_IS(ddtypep, DynArrayDType) || m_padQueue)
                                         ? VCMethod::DYN_SLICE_PLUS_PAD
                                         : VCMethod::DYN_SLICE_PLUS;
             AstCMethodHard* const newp

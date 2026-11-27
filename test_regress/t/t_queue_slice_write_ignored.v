@@ -37,6 +37,27 @@ module t;
     `checkp(q, "'{'h1, 'h7, 'h8}");
     q[$-3:$] = '{4, 5, 6};
     `checkp(q, "'{'h4, 'h5, 'h6}");
+    // Also through a part-select with a base relative to '$'
+    q[$-3+:2] = '{7, 8};
+    `checkp(q, "'{'h4, 'h5, 'h6}");
+    q[$-:4] = '{7, 8, 9, 10};
+    `checkp(q, "'{'h4, 'h5, 'h6}");
+    q[$-1-:3] = '{7, 8};
+    `checkp(q, "'{'h7, 'h8, 'h6}");
+    // verilator lint_off WIDTHEXPAND
+    q[$-64'sd6442450943-:2] = '{1, 2};
+    `checkp(q, "'{'h7, 'h8, 'h6}");
+    q[$-64'sd6442450943+:2] = '{1, 2};
+    `checkp(q, "'{'h7, 'h8, 'h6}");
+    q[$-64'hffff_ffff_ffff_ffff-:3] = '{1, 2, 3};
+    `checkp(q, "'{'h7, 'h8, 'h6}");
+    q[$-64'hffff_ffff_ffff_ffff+:1] = '{1};
+    `checkp(q, "'{'h7, 'h8, 'h6}");
+    q[$-64'hffff_ffff_ffff_fffe-:3] = '{1, 2, 3};
+    `checkp(q, "'{'h7, 'h8, 'h6}");
+    q[$-64'hffff_ffff_ffff_fffe+:2] = '{1, 2};
+    `checkp(q, "'{'h7, 'h8, 'h6}");
+    // verilator lint_on WIDTHEXPAND
     $write("*-* All Finished *-*\n");
     $finish;
   end
