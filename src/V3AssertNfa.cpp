@@ -3995,9 +3995,10 @@ class AssertNfaVisitor final : public VNVisitor {
         AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
         const bool needMatch = assertAssertp && assertAssertp->passsp();
         // Without a split by its antecedent's value, an implication's vacuous successes are
-        // its antecedent's threads ending, when each attempt has one
+        // its antecedent's threads ending, when each attempt has one, also with a negated
+        // consequent, whose nonvacuous successes are its operand failing
         const bool trackAntecedentEnd = needMatch && parts.hasImplication && !parts.isFollowedBy
-                                        && !splitsImplicationPasssp(assertp, parts) && !negated
+                                        && !splitsImplicationPasssp(assertp, parts)
                                         && oneThreadPerAttempt(parts.triggerExprp);
 
         // The rejected threads of a negated property's operand are passes of the property,
