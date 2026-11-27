@@ -2189,6 +2189,10 @@ List Of Warnings
    This also applies to constant selections of an outer packed-array dimension,
    such as selecting ``[4]`` from ``logic [3:0][3:0] data``.
 
+   It also warns of a constant associative array index with X or Z bits,
+   which is invalid: a read returns the default value and a write is
+   ignored (IEEE 1800-2023 7.8.6).
+
    Faulty example:
 
    .. code-block:: sv
