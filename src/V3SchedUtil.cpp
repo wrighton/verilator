@@ -292,13 +292,19 @@ computeImplicitSensitivities(const AstNodeProcedure* procp, const SoleWriterMap&
     // "Expressions used in assertion action blocks do not contribute to the implicit sensitivity
     // list of an always_comb" (IEEE 1800-2023 9.2.2.2.1). Variables read only there:
     std::unordered_set<const AstVarScope*> actionReads;
+    // Internal variables whose writes scheduling ignores, such as the pending reports of a
+    // deferred assertion, wake no combinational logic. What they hold is the process's own state
+    // between runs, so an always_comb reading one is not idempotent.
+    std::unordered_set<const AstVarScope*> internalReads;
     procp->foreach([&](const AstVarRef* refp) {
         const AstVarScope* const vscp = refp->varScopep();
         if (refp->access().isWriteOrRW() && !refp->varp()->ignoreSchedWrite()) {
             assigned.emplace(vscp);
         }
         if (refp->access().isReadOrRW() && !assigned.count(vscp)) {
-            if (userComb && refp->inAssertAction()) {
+            if (refp->varp()->isInternal() && refp->varp()->ignoreSchedWrite()) {
+                internalReads.emplace(vscp);
+            } else if (userComb && refp->inAssertAction()) {
                 actionReads.emplace(vscp);
             } else {
                 implicitSensitivities.emplace(vscp);
@@ -308,6 +314,7 @@ computeImplicitSensitivities(const AstNodeProcedure* procp, const SoleWriterMap&
     for (const AstVarScope* const vscp : actionReads) {
         if (!implicitSensitivities.count(vscp)) ++excludedr;
     }
+    excludedr += userComb ? internalReads.size() : 0;
     // A user's always_comb is not sensitive to what it writes (IEEE 1800-2023 9.2.2.2.1), so does
     // not wake itself. Only the whole variables it alone writes are excluded, as another process
     // may drive other parts (IEEE 1800-2023 9.2.2.2). A task's writes count, being inlined.
