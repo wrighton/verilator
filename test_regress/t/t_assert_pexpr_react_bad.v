@@ -4,6 +4,10 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+interface wire_if;
+  logic n;
+endinterface
+
 module t (
     input clk,
     input p,
@@ -19,6 +23,17 @@ module t (
     else begin
       k = k + 1;
       n = n + k;
+    end
+  end
+  wire_if ifa ();
+  wire_if ifb ();
+  always @(posedge clk) begin
+    automatic virtual wire_if v = ifa;
+    // Bad: likewise a virtual interface handle; writing a member through it is fine
+    assert property (p until q)
+    else begin
+      v.n = 1'b1;
+      v = ifb;
     end
   end
 endmodule
