@@ -578,7 +578,9 @@ computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleW
     std::unordered_set<const AstVarScope*> actionReads;
     // Internal variables whose writes scheduling ignores, such as the pending reports of a
     // deferred assertion, wake no combinational logic. What they hold is the process's own state
-    // between runs, so an always_comb reading one is not idempotent.
+    // between runs, so an always_comb reading one is not idempotent. Not so one of a C++ type,
+    // such as the cache of a DPI import reusing its results, which keeps no state of what the
+    // process does.
     std::unordered_set<const AstVarScope*> internalReads;
     const size_t excludedBefore = excludedr;
     // A process with timing controls, even if only in forked processes, is not run on changes
@@ -596,7 +598,8 @@ computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleW
             if (exact) exactAssigned[vscp].add(bits);
         }
         if (access.isReadOrRW() && !assigned[vscp].covers(bits)) {
-            if (vscp->varp()->isInternal() && vscp->varp()->ignoreSchedWrite()) {
+            if (vscp->varp()->isInternal() && vscp->varp()->ignoreSchedWrite()
+                && !VN_IS(vscp->dtypep()->skipRefp(), CDType)) {
                 internalReads.emplace(vscp);
             } else if (userComb && inAction) {
                 actionReads.emplace(vscp);
