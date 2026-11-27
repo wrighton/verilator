@@ -3411,11 +3411,70 @@ class SolverSmtLowering final : public V3SolverLowering {
 
     struct DistBucket final {
         AstNodeExpr* rangep;  // A single value or an InsideRange
-        AstNodeExpr* weightExprp;  // Effective 64-bit weight (range weight scaled by size)
+        AstNodeExpr* weightExprp;  // Effective weight (range weight scaled by size)
     };
 
-    // Non-zero-weight buckets with each weight extended to 64 bits.
-    std::vector<DistBucket> collectDistBuckets(AstDist* const distp) {
+    // A constant bound of a dist range as 64 bits, signed as the dist compares it
+    static uint64_t distConstBound(AstDist* distp, const AstConst* constp) {
+        if (distp->exprp()->isSigned()) return static_cast<uint64_t>(constp->num().toSQuad());
+        return constp->toUQuad();
+    }
+
+    // A bound of a dist range at the given width, signed as the dist compares it
+    static AstNodeExpr* newDistBoundp(AstDist* distp, AstNodeExpr* boundp, int width) {
+        FileLine* const fl = distp->fileline();
+        AstNodeExpr* const clonep = boundp->cloneTreePure(false);
+        if (distp->exprp()->isSigned()) return new AstExtendS{fl, clonep, width};
+        return new AstExtend{fl, clonep, width};
+    }
+
+    // Width of the bucket weights of a dist, each the item weight times its range size, and
+    // of their sum. A sum of up to 64 bits keeps 64-bit weights; a wider one is computed with
+    // 64 bits more, so a draw of that many random bits picks a bucket biased by at most 2^-64.
+    static int distWeightWidth(AstDist* distp) {
+        int itemBits = 0;
+        int items = 0;
+        for (AstDistItem* const ditemp : distp->itemspList()) {
+            const AstConst* const weightp = VN_CAST(ditemp->weightp(), Const);
+            if (weightp && weightp->toUQuad() == 0) continue;
+            ++items;
+            int bits = weightp ? weightp->num().mostSetBitP1()
+                               : std::min(ditemp->weightp()->width(), VL_QUADSIZE);
+            const AstInsideRange* const irp = VN_CAST(ditemp->rangep(), InsideRange);
+            if (!ditemp->isWhole() && irp) {
+                const AstConst* const lop = VN_CAST(irp->lhsp(), Const);
+                const AstConst* const hip = VN_CAST(irp->rhsp(), Const);
+                if (lop && hip) {
+                    // The bits of the size: up to 2^64 values, of 65 bits
+                    const uint64_t sizeLess1
+                        = distConstBound(distp, hip) - distConstBound(distp, lop);
+                    bits += VL_QUADSIZE + 1;
+                    for (uint64_t v = ~0ULL; v > sizeLess1 && v; v >>= 1) --bits;
+                } else {
+                    // Bounds of up to 64 bits, extended, so up to 2^width values
+                    bits += std::min(std::max(irp->lhsp()->width(), irp->rhsp()->width()),
+                                     VL_QUADSIZE)
+                            + 1;
+                }
+            }
+            itemBits = std::max(itemBits, bits);
+        }
+        int sumBits = itemBits;
+        while ((1LL << (sumBits - itemBits)) < items) ++sumBits;
+        return sumBits <= VL_QUADSIZE ? VL_QUADSIZE : sumBits + VL_QUADSIZE;
+    }
+
+    // A constant of the bucket weight width
+    static AstConst* newDistWeightConstp(AstDist* distp, int width, uint64_t value) {
+        FileLine* const fl = distp->fileline();
+        if (width == VL_QUADSIZE) return new AstConst{fl, AstConst::Unsized64{}, value};
+        V3Number num{distp, width, 0};
+        num.setQuad(value);
+        return new AstConst{fl, num};
+    }
+
+    // Non-zero-weight buckets with each weight extended to the given width.
+    std::vector<DistBucket> collectDistBuckets(AstDist* const distp, int width) {
         FileLine* const fl = distp->fileline();
         std::vector<DistBucket> buckets;
         for (AstDistItem* const ditemp : distp->itemspList()) {
@@ -3423,7 +3482,7 @@ class SolverSmtLowering final : public V3SolverLowering {
                 if (constp->toUQuad() == 0) continue;
             }
             AstNodeExpr* weightExprp
-                = new AstExtend{fl, ditemp->weightp()->cloneTreePure(false), 64};
+                = new AstExtend{fl, ditemp->weightp()->cloneTreePure(false), width};
             // := on a range weights every element, so scale by the range size.
             if (!ditemp->isWhole()) {
                 if (const AstInsideRange* const irp = VN_CAST(ditemp->rangep(), InsideRange)) {
@@ -3431,14 +3490,17 @@ class SolverSmtLowering final : public V3SolverLowering {
                     const AstConst* const hip = VN_CAST(irp->rhsp(), Const);
                     AstNodeExpr* rangeSizep;
                     if (lop && hip) {
-                        const uint64_t rangeSize = hip->toUQuad() - lop->toUQuad() + 1;
-                        rangeSizep = new AstConst{fl, AstConst::Unsized64{}, rangeSize};
+                        const uint64_t sizeLess1
+                            = distConstBound(distp, hip) - distConstBound(distp, lop);
+                        AstConst* const sizep = newDistWeightConstp(distp, width, sizeLess1 + 1);
+                        // All 2^64 values, which only a wider weight holds
+                        if (sizeLess1 == ~0ULL) sizep->num().setBit(VL_QUADSIZE, 1);
+                        rangeSizep = sizep;
                     } else {
-                        rangeSizep = new AstAdd{
-                            fl, new AstConst{fl, AstConst::Unsized64{}, 1},
-                            new AstSub{fl,
-                                       new AstExtend{fl, irp->rhsp()->cloneTreePure(false), 64},
-                                       new AstExtend{fl, irp->lhsp()->cloneTreePure(false), 64}}};
+                        rangeSizep
+                            = new AstAdd{fl, newDistWeightConstp(distp, width, 1),
+                                         new AstSub{fl, newDistBoundp(distp, irp->rhsp(), width),
+                                                    newDistBoundp(distp, irp->lhsp(), width)}};
                     }
                     weightExprp = new AstMul{fl, weightExprp, rangeSizep};
                 }
@@ -3788,7 +3850,16 @@ class SolverSmtLowering final : public V3SolverLowering {
 
             FileLine* const fl = distp->fileline();
 
-            std::vector<DistBucket> buckets = collectDistBuckets(distp);
+            const int width = distWeightWidth(distp);
+            std::vector<DistBucket> buckets = collectDistBuckets(distp, width);
+            // Weights, their sums and the bucket drawn: 64-bit, or wider (distWeightWidth)
+            const auto setWidth = [&](AstNode* nodep) {
+                if (width == VL_QUADSIZE) {
+                    nodep->dtypeSetUInt64();
+                } else {
+                    nodep->dtypep(nodep->findBitDType(width, width, VSigning::UNSIGNED));
+                }
+            };
 
             if (buckets.empty()) {
                 // All weights are zero: dist is vacuously true (unconstrained)
@@ -3809,7 +3880,7 @@ class SolverSmtLowering final : public V3SolverLowering {
                 } else {
                     totalWeightExprp = new AstAdd{fl, totalWeightExprp,
                                                   bucket.weightExprp->cloneTreePure(false)};
-                    totalWeightExprp->dtypeSetUInt64();
+                    setWidth(totalWeightExprp);
                 }
             }
 
@@ -3818,6 +3889,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             const std::string totalName = "__Vdist_total" + cvtToStr(distId);
             AstVar* const totalVarp
                 = new AstVar{fl, VVarType::BLOCKTEMP, totalName, taskp->findUInt64DType()};
+            setWidth(totalVarp);
             totalVarp->noSubst(true);
             totalVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
             totalVarp->funcLocal(true);
@@ -3830,6 +3902,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             const std::string bucketName = "__Vdist_bucket" + cvtToStr(distId);
             AstVar* const bucketVarp
                 = new AstVar{fl, VVarType::BLOCKTEMP, bucketName, taskp->findUInt64DType()};
+            setWidth(bucketVarp);
             bucketVarp->noSubst(true);
             bucketVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
             bucketVarp->funcLocal(true);
@@ -3837,11 +3910,11 @@ class SolverSmtLowering final : public V3SolverLowering {
             taskp->addDeclsp(bucketVarp);
 
             AstNodeExpr* const randp = new AstRand{fl, nullptr, false};
-            randp->dtypeSetUInt64();
+            setWidth(randp);
             addStmt(new AstAssign{
                 fl, new AstVarRef{fl, bucketVarp, VAccess::WRITE},
                 new AstAdd{
-                    fl, new AstConst{fl, AstConst::Unsized64{}, 1},
+                    fl, newDistWeightConstp(distp, width, 1),
                     new AstModDiv{fl, randp, new AstVarRef{fl, totalVarp, VAccess::READ}}}});
 
             // Build cumulative sum expressions forward: cumSum[i] = w[0]+...+w[i]
@@ -3853,7 +3926,7 @@ class SolverSmtLowering final : public V3SolverLowering {
                 } else {
                     runningSump = new AstAdd{fl, runningSump,
                                              buckets[i].weightExprp->cloneTreePure(false)};
-                    runningSump->dtypeSetUInt64();
+                    setWidth(runningSump);
                 }
                 cumSums.push_back(runningSump->cloneTreePure(true));
             }
