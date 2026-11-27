@@ -362,6 +362,8 @@ class VlRandomizer VL_NOT_FINAL {
     Unigen2State m_ug2;
 
     void solveDiversity(VlRNG& rngr, VlSolverSession& sess);
+    // Resource limit of each check spreading the solution of the variables 'layerVarsp', or all
+    uint64_t diversityLimit(const std::vector<std::string>* layerVarsp) const;
     void solveDiversityPins(VlRNG& rngr, VlSolverSession& sess);
     void solveDiversityXor(VlRNG& rngr, VlSolverSession& sess);
     // Layers of solve...before variables in dependency order
