@@ -770,7 +770,8 @@ class AssertVisitor final : public VNVisitor {
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
     V3UniqueNames m_matchCountNames{"__VnfaRemainingMatchCount"};  // Match replay counter names
     V3UniqueNames m_obsNames{"__VassertObs"};  // Observed deferred assertion temp names
-    V3UniqueNames m_actionNames{"__VassertAction"};  // Concurrent assertion action temp names
+    // Concurrent assertion action temporaries, and automatics of cloned actions
+    V3UniqueNames m_actionNames{"__VassertAction"};
     // Key equality for the delayed value maps. AstNode::sameTree is not enough, as
     // AstVar::sameNode compares only names, and before V3Begin distinct variables in
     // different scopes (e.g. generate blocks) can have the same name.
@@ -1512,6 +1513,12 @@ class AssertVisitor final : public VNVisitor {
             replaysp->addNext(loopp);
             passsp = replaysp;
         }
+        // A discarded cover runs no action, so also not at the end of simulation.
+        if (selfDestruct) {
+            if (const AstPExpr* const pexprp = VN_CAST(propExprp, PExpr)) {
+                if (pexprp->finalp()) pushDeletep(pexprp->finalp()->unlinkFrBack());
+            }
+        }
         AstNodeStmt* bodysp = assertBody(nodep, propExprp, passsp, failsp);
         if (disablep) bodysp = new AstIf{flp, new AstLogNot{flp, disablep}, bodysp};
         // Add assertOn check last, for better combining. V3AssertNfa gates the start of each
@@ -1909,12 +1916,15 @@ class AssertVisitor final : public VNVisitor {
     void visit(AstPExprClause* nodep) override {
         AstNodeStmt* stmtsp = nullptr;
         if (nodep->pass() && m_passsp) {
-            // Cover adds COVERINC by AstNode::addNext, thus need to clone next too.
-            stmtsp = m_passsp->cloneTree(true);
+            // Cover adds COVERINC by AstNode::addNext, so the action is a list.
+            // The first clause takes the action, later ones a clone.
+            stmtsp = m_passsp->backp() ? V3AssertCommon::cloneAction(m_passsp, m_actionNames)
+                                       : m_passsp;
             stmtsp = newIfAssertPassOn(stmtsp, m_assertp->directive(), m_assertp->userType(),
                                        nodep->vacuous());
         } else if (!nodep->pass() && m_failsp) {
-            stmtsp = m_failsp->cloneTree(true);
+            stmtsp = m_failsp->backp() ? V3AssertCommon::cloneAction(m_failsp, m_actionNames)
+                                       : m_failsp;
             stmtsp = newIfAssertFailOn(stmtsp, m_assertp->directive(), m_assertp->userType());
         }
         if (stmtsp) {
