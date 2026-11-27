@@ -390,8 +390,9 @@ module t;
       stream_enable = 7'(cyc * 23);
       stream_data = 7'(cyc * 19);
       expected = (stream_data & stream_enable) | (7'h25 & ~stream_enable);
-      pair_expected = {expected[1:0], expected[3:2], expected[5:4], expected[6]};
-      triple_expected = {expected[2:0], expected[5:3], expected[6]};
+      // Unpacking is the inverse of packing, whose short slice is the leftmost of the target
+      pair_expected = {expected[0], expected[2:1], expected[4:3], expected[6:5]};
+      triple_expected = {expected[0], expected[3:1], expected[6:4]};
       #1;
       `checkh(stream_right, expected);
       `checkh(stream_left, {expected[0], expected[1], expected[2], expected[3],
@@ -399,8 +400,8 @@ module t;
       `checkh(stream_pairs, pair_expected);
       `checkh(stream_nested, {pair_expected[6:4], pair_expected[0], pair_expected[1],
                               pair_expected[2], pair_expected[3]});
-      `checkh(stream_unaligned, {triple_expected[1:0], triple_expected[3:2],
-                                 triple_expected[5:4], triple_expected[6]});
+      `checkh(stream_unaligned, {triple_expected[0], triple_expected[2:1],
+                                 triple_expected[4:3], triple_expected[6:5]});
       `checkh(stream_right_observed, expected);
       `checkh(stream_left_observed, expected);
       `checkh(stream_pairs_observed, expected);
@@ -444,8 +445,8 @@ module t;
         int bits;
         bits = start + 33 <= WIDE_WIDTH ? 33 : WIDE_WIDTH - start;
         for (int i = 0; i < 33 && start + i < WIDE_WIDTH; ++i) begin
-          blocks_expected[WIDE_WIDTH-start-bits+i] = wide_data[start+i];
-          blocks_readback[start+i] = wide_data[WIDE_WIDTH-start-bits+i];
+          blocks_expected[start+i] = wide_data[WIDE_WIDTH-start-bits+i];
+          blocks_readback[WIDE_WIDTH-start-bits+i] = wide_data[start+i];
         end
       end
       #1;
@@ -463,11 +464,11 @@ module t;
         `checkh(wide_reverse[WIDE_WIDTH-1], 1'b1);
         `checkh(wide_reverse[1:0], 2'b10);
         `checkh(wide_reverse[WIDE_WIDTH-2:2] === 'z, 1'b1);
-        `checkh(wide_blocks[WIDE_WIDTH-33], 1'b1);
-        `checkh(wide_blocks[2:1], 2'b01);
-        `checkh(wide_blocks[WIDE_WIDTH-1:WIDE_WIDTH-32] === 'z, 1'b1);
-        `checkh(wide_blocks[WIDE_WIDTH-34:3] === 'z, 1'b1);
-        `checkh(wide_blocks[0] === 1'bz, 1'b1);
+        `checkh(wide_blocks[WIDE_WIDTH-3], 1'b1);
+        `checkh(wide_blocks[32:31], 2'b01);
+        `checkh(wide_blocks[WIDE_WIDTH-1:WIDE_WIDTH-2] === 'z, 1'b1);
+        `checkh(wide_blocks[WIDE_WIDTH-4:33] === 'z, 1'b1);
+        `checkh(wide_blocks[30:0] === 'z, 1'b1);
         `checkh(wide_reverse_observed[0], 1'b1);
         `checkh(wide_reverse_observed[WIDE_WIDTH-1:WIDE_WIDTH-2], 2'b01);
         `checkh(wide_blocks_observed[0], 1'b1);
