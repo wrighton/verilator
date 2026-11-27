@@ -34,6 +34,7 @@
 #include <ostream>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 //=============================================================================
@@ -279,6 +280,11 @@ class VlRandomizer VL_NOT_FINAL {
     std::unordered_set<std::string> m_staticVars;  // Names of static rand vars
     int m_index = 0;  // Internal counter for key generation
     std::set<std::string> m_randcVarNames;  // Names of randc variables for cyclic tracking
+    std::unordered_set<std::string> m_resized;  // See markResized
+    std::unordered_map<std::string, IData> m_sizeStarts;  // Size variables' values before
+    std::unordered_map<std::string, IData> m_sizesLarge;  // Sizes solved again, see boundSizes
+    std::vector<std::string> m_sizePins;  // Sizes the solve again keeps, see boundSizes
+    bool m_sizesBound = false;  // m_sizePins are chosen
     std::map<std::string, std::set<uint64_t>>
         m_randcUsedValues;  // Previously used values per randc var (exclusion-based cycling)
     size_t m_randcConstraintHash = 0;  // Hash of constraints when history was valid
@@ -321,6 +327,9 @@ class VlRandomizer VL_NOT_FINAL {
     void emitDefines(std::ostream& os) const;
     void emitDeclares(std::ostream& os, bool pinCurrent) const;
     void emitAsserts(std::ostream& os, const std::vector<std::string>& extras, bool named) const;
+    // Keep the sizes over sizeLargeMin the constraints leave unbounded; false if the solver
+    // failed
+    bool boundSizes(VlSolverSession& sess);
     bool nextFlat(VlRNG& rngr, VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
 
     // --- UniGen2 (a near-uniform constrained randomization sampler) fields ---
@@ -963,6 +972,8 @@ public:
     void clearConstraints();
     void clearAll();  // Clear both constraints and variables
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
+    // Mark 'name' as the size variable of an array this randomize() resizes
+    void markResized(const std::string& name) { m_resized.insert(name); }
     void solveBefore(const std::string& beforeName,
                      const std::string& afterName);  // Register solve-before ordering
     void set_randmode(const VlQueue<CData>& randmode) { m_randmodep = &randmode; }

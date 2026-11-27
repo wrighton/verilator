@@ -4336,17 +4336,31 @@ class SolverSmtLowering final : public V3SolverLowering {
     void addFrozenSizePin(FileLine* const fl, AstVar* const arrVarp, AstFunc* const randomizep,
                           AstVar* const genp, AstVar* const randModeVarp,
                           const AstMemberRef* const mselp = nullptr) {
+        // The size variable of a resized array starts as the array's size, which the solve
+        // keeps where the constraints leave it unbounded (VlRandomizer::boundSizes)
         const RandomizeMode rmode = {.asUQuad = arrVarp->user1()};
-        if (!rmode.usesMode) return;
+        const bool assoc = VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType);
+        if (!rmode.usesMode && assoc) return;
         AstVar* const sizeVarp = sizeVarOf(arrVarp, mselp);
-        const VCMethod sizeMethod = VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)
-                                        ? VCMethod::ASSOC_SIZE
-                                        : VCMethod::DYN_SIZE;
+        const VCMethod sizeMethod = assoc ? VCMethod::ASSOC_SIZE : VCMethod::DYN_SIZE;
         AstCMethodHard* const currentSizep = new AstCMethodHard{
             fl, newSiblingRefp(fl, arrVarp, mselp, VAccess::READ), sizeMethod};
         currentSizep->dtypep(sizeVarp->dtypep());
         randomizep->addStmtsp(
             new AstAssign{fl, newSiblingRefp(fl, sizeVarp, mselp, VAccess::WRITE), currentSizep});
+        if (!assoc) {
+            AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
+            AstCMethodHard* const markp
+                = new AstCMethodHard{fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
+                                     VCMethod::RANDOMIZER_MARK_RESIZED};
+            markp->dtypeSetVoid();
+            AstCExpr* const namep = new AstCExpr{fl, AstCExpr::Pure{},
+                                                 "\"" + siblingSmtName(sizeVarp, mselp) + "\""};
+            namep->dtypeSetUInt32();
+            markp->addPinsp(namep);
+            randomizep->addStmtsp(markp->makeStmt());
+        }
+        if (!rmode.usesMode) return;
         AstNodeExpr* const modep = newModeBitRead(arrVarp, mselp, randModeVarp, fl);
         randomizep->addStmtsp(
             new AstIf{fl, new AstLogNot{fl, modep}, newPinSizeVariable(fl, arrVarp, genp, mselp)});
