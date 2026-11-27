@@ -137,7 +137,11 @@ module t;
       `checkd(ok, 1);
       `checkd(nb.pre_count, 4);
       `checkd(nb.post_count, 3);
+      // Break the cycle, so that its objects are freed and runtime leak checking stays clean
+      nb.a = null;
     end
+    // Break the cycle, so that its objects are freed and runtime leak checking stays clean
+    b.m_a = null;
     $write("*-* All Finished *-*\n");
     $finish;
   end
