@@ -33,8 +33,9 @@ module t;
       foreach (s.d[i]) `checkd(s.d[i] != 0, 1'b1);
       seen[s.d.size()] = 1;
     end
-    // The sizes spread over their range
-    `checkd(seen.num() >= 12, 1'b1);
+    // The sizes spread over their range: n is tied first to a value of its range, which the
+    // size equal to it takes (about 24 of 64 values in 30 draws)
+    `checkd(seen.num() >= 18, 1'b1);
     $write("*-* All Finished *-*\n");
     $finish;
   end

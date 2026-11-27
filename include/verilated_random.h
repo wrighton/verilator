@@ -421,6 +421,15 @@ class VlRandomizer VL_NOT_FINAL {
         FastRanges ranges;
         const FastConstraint* distp = nullptr;
     };
+    // A scalar's values by its range constraints, to tie it to when spreading
+    struct FastTarget final {
+        FastRanges ranges;  // In the constraints' ordered coordinates
+        int width;
+        bool isSigned;
+        QData count;  // Values in ranges
+    };
+    void fastTargets(std::unordered_map<const void*, FastTarget>& targetsr) const;
+    static QData fastTargetValue(VlRNG& rngr, const FastTarget& target);
     std::vector<FastConstraint> m_fastConstraints;
     bool m_fastDisabled = false;  // At least one original item cannot be represented
     static bool fastPinned(const FastConstraint& constraint);
