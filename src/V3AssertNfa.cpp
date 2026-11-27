@@ -1672,6 +1672,167 @@ class SvaNfaBuilder final {
         return {combVtxp, nullptr, {}};
     }
 
+    // Limits the states of an attempt of an asserted 'within' tracked at one clock offset, which
+    // number up to 2^(inner length + 1) (see buildFixedWithinProp)
+    static constexpr size_t MAX_WITHIN_STATES = 256;
+    // Sampled conjunction of the leaf checks at clock offset 'offset', nullptr if none
+    static AstNodeExpr* newChecksCondp(const std::map<int, std::vector<AstNodeExpr*>>& checks,
+                                       int offset, FileLine* flp) {
+        const auto it = checks.find(offset);
+        if (it == checks.end()) return nullptr;
+        AstNodeExpr* condp = nullptr;
+        for (AstNodeExpr* const leafp : it->second) {
+            AstNodeExpr* const clonep = sampled(newLeafCondp(leafp));
+            condp = condp ? new AstLogAnd{flp, condp, clonep} : clonep;
+        }
+        return condp;
+    }
+    static AstNodeExpr* andCondps(FileLine* flp, AstNodeExpr* ap, AstNodeExpr* bp) {
+        if (!ap) return bp;
+        if (!bp) return ap;
+        return new AstLogAnd{flp, ap, bp};
+    }
+    // Whether the states of an attempt that buildFixedWithinProp tracks number at most
+    // MAX_WITHIN_STATES at each clock offset
+    static bool fixedWithinFits(const std::map<int, std::vector<AstNodeExpr*>>& innerChecks,
+                                int innerLen, int outerLen) {
+        constexpr unsigned MATCHED = ~0U;
+        const unsigned endBit = 1U << innerLen;
+        const int slack = outerLen - innerLen;
+        std::set<unsigned> live{0};
+        for (int offset = 0; offset <= outerLen; ++offset) {
+            if (live.size() > MAX_WITHIN_STATES) return false;
+            std::set<unsigned> next;
+            for (const unsigned state : live) {
+                if (state == MATCHED) {
+                    next.insert(MATCHED);
+                    continue;
+                }
+                const unsigned candMask = state | (offset <= slack ? 1U : 0U);
+                unsigned checkedMask = 0;
+                for (int j = 0; j <= innerLen; ++j) {
+                    if ((candMask & (1U << j)) && innerChecks.count(j)) checkedMask |= 1U << j;
+                }
+                const unsigned uncheckedMask = candMask & ~checkedMask;
+                for (unsigned sub = checkedMask;; sub = (sub - 1) & checkedMask) {
+                    const unsigned holds = sub | uncheckedMask;
+                    const unsigned nextState = (holds & endBit) ? MATCHED : holds << 1;
+                    if (nextState || offset < slack) next.insert(nextState);
+                    if (!sub) break;
+                }
+            }
+            live = std::move(next);
+        }
+        return true;
+    }
+    // Build `inner within outer` (IEEE 1800-2023 16.9.10) as a step of an asserted property, with
+    // fixed-length sequences of boolean leaves as operands, the inner one shorter, or return an
+    // invalid result for other operands
+    BuildResult buildFixedWithinProp(AstSWithin* nodep, SvaStateVertex* entryVtxp, int outerLen) {
+        // An attempt matches at the end of the outer sequence when the outer sequence matches
+        // and the inner one matches at one of its placements in it, and fails once either is
+        // no longer possible. At each clock offset track whether a placement already matched,
+        // and otherwise the set of placements in progress still matching. Each attempt is in
+        // one such state at an offset, so it fails or matches once.
+        FileLine* const flp = nodep->fileline();
+        std::map<int, std::vector<AstNodeExpr*>> innerChecks;
+        std::map<int, std::vector<AstNodeExpr*>> outerChecks;
+        if (!flattenFixedSeq(nodep->lhsp(), 0, innerChecks)
+            || !flattenFixedSeq(nodep->rhsp(), 0, outerChecks)) {
+            return BuildResult::fail();
+        }
+        const int innerLen = fixedLength(nodep->lhsp());
+        const int slack = outerLen - innerLen;
+        // More states keep the 'or' of the placements
+        if (!fixedWithinFits(innerChecks, innerLen, outerLen)) return BuildResult::fail();
+        // A state is MATCHED, or the set of placements still matching, as a mask whose bit j
+        // is the placement started j ticks before the offset
+        constexpr unsigned MATCHED = ~0U;
+        const unsigned endBit = 1U << innerLen;
+        SvaStateVertex* const matchVtxp = scopedCreateVertex();
+        SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+        sinkVtxp->m_isRejectSink = true;
+        std::map<unsigned, SvaStateVertex*> livep{{0, entryVtxp}};
+        size_t states = 0;  // States over all offsets
+        for (int offset = 0; offset <= outerLen; ++offset) {
+            states += livep.size();
+            const bool last = offset == outerLen;
+            // Vertices entering the delay to the next offset, by state
+            std::map<unsigned, SvaStateVertex*> holdp;
+            for (const auto& stateVtx : livep) {
+                SvaStateVertex* const fromp = stateVtx.second;
+                AstNodeExpr* const outerCondp = newChecksCondp(outerChecks, offset, flp);
+                // Condition the attempt survives this offset, nullptr if it always does
+                AstNodeExpr* surviveCondp = nullptr;
+                bool survives = false;
+                // Link to the next state, or the match at the end
+                const auto addSuccessor = [&](unsigned next, AstNodeExpr* condp) {
+                    surviveCondp = condp
+                                       ? (surviveCondp ? new AstLogOr{flp, surviveCondp,
+                                                                      condp->cloneTreePure(false)}
+                                                       : condp->cloneTreePure(false))
+                                       : surviveCondp;
+                    if (!condp) survives = true;
+                    if (last) {
+                        guardedLink(fromp, matchVtxp, condp, flp);
+                        return;
+                    }
+                    SvaStateVertex*& toVtxp = holdp[next];
+                    if (!toVtxp) toVtxp = scopedCreateVertex();
+                    guardedLink(fromp, toVtxp, condp, flp);
+                };
+                if (stateVtx.first == MATCHED) {
+                    addSuccessor(MATCHED, outerCondp ? outerCondp->cloneTreePure(false) : nullptr);
+                } else {
+                    // Placements still matching, and the one starting here
+                    const unsigned candMask = stateVtx.first | (offset <= slack ? 1U : 0U);
+                    unsigned checkedMask = 0;
+                    for (int j = 0; j <= innerLen; ++j) {
+                        if ((candMask & (1U << j)) && innerChecks.count(j)) checkedMask |= 1U << j;
+                    }
+                    const unsigned uncheckedMask = candMask & ~checkedMask;
+                    // Each set of checked placements holding
+                    for (unsigned sub = checkedMask;; sub = (sub - 1) & checkedMask) {
+                        const unsigned holds = sub | uncheckedMask;
+                        // A placement ending here matched; otherwise those still matching go on
+                        const unsigned next = (holds & endBit) ? MATCHED : holds << 1;
+                        // Dead with no placement going on, and none starting later
+                        const bool dead = !next && offset >= slack;
+                        if (!dead && (!last || next == MATCHED)) {
+                            AstNodeExpr* condp
+                                = outerCondp ? outerCondp->cloneTreePure(false) : nullptr;
+                            for (int j = 0; j <= innerLen; ++j) {
+                                const unsigned bit = 1U << j;
+                                if (!(checkedMask & bit)) continue;
+                                AstNodeExpr* checkp = newChecksCondp(innerChecks, j, flp);
+                                if (!(sub & bit)) checkp = new AstLogNot{flp, checkp};
+                                condp = andCondps(flp, condp, checkp);
+                            }
+                            addSuccessor(next, condp);
+                        }
+                        if (!sub) break;
+                    }
+                }
+                // An unconditional successor is the only one, as nothing is checked
+                UASSERT_OBJ(!survives || !surviveCondp, nodep,
+                            "Unconditional successor not alone");
+                // The attempt fails when it has no successor
+                if (!survives) {
+                    if (!surviveCondp) surviveCondp = new AstConst{flp, AstConst::BitFalse{}};
+                    m_graph.addLink(fromp, sinkVtxp, surviveCondp)->m_rejectOnFail = true;
+                }
+                if (outerCondp) VL_DO_DANGLING(outerCondp->deleteTree(), outerCondp);
+            }
+            std::map<unsigned, SvaStateVertex*> nextp;
+            for (const auto& stateVtx : holdp) {
+                nextp[stateVtx.first] = addDelayChain(stateVtx.second, 1, flp);
+            }
+            livep = std::move(nextp);
+        }
+        V3Stats::addStatSum("Assertions, NFA 'within' states", states);
+        return {matchVtxp, nullptr, {}};
+    }
+
     // Lower `seq1 within seq2` (IEEE 1800-2023 16.9.10) as:
     //   (OR_{i in 0..slack} 1 ##i seq1 ##(slack-i) 1) intersect seq2
     // Both operands must have fixed length (no ranged cycle delays).
@@ -1693,6 +1854,27 @@ class SvaNfaBuilder final {
         }
         FileLine* const flp = nodep->fileline();
         const int slack = outerLen - innerLen;
+        if (!slack) {
+            // Of one length, it is the intersect of its operands (IEEE 1800-2023 16.9.10), whose
+            // final condition rejects
+            AstSIntersect* const intp = new AstSIntersect{flp, nodep->lhsp()->cloneTreePure(false),
+                                                          nodep->rhsp()->cloneTreePure(false)};
+            const BuildResult result = buildExpr(intp, entryVtxp, isTopLevelStep);
+            VL_DO_DANGLING(intp->deleteTree(), intp);
+            return result;
+        }
+        // The alternative inner placements below form a sequence 'or', which does not report an
+        // attempt in which every placement fails. As a step of an asserted property, fixed-length
+        // sequences of boolean leaves are lowered per attempt instead; other forms, and those in
+        // an operand of an 'or' that keeps its merge vertex, keep it.
+        if (!m_noEosFailure && !m_isSeqEvent && !m_inAntecedent && !m_inMergeFallback) {
+            // A range delay before it leaves several threads of an attempt at entryVtxp
+            const bool rangeEntry = entryVtxp->m_delayRingSize && !entryVtxp->m_isFixedDelayRing;
+            if (isTopLevelStep && !m_inUnboundedScope && !rangeEntry) {
+                const BuildResult result = buildFixedWithinProp(nodep, entryVtxp, outerLen);
+                if (result.valid() || result.errorEmitted) return result;
+            }
+        }
         AstNodeExpr* innerOrp = nullptr;
         for (int i = 0; i <= slack; ++i) {
             const int postPad = slack - i;
