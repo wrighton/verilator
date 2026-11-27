@@ -277,10 +277,12 @@ struct SvaAttemptNode final {
     bool followedBy = false;  // Implication: a followed-by, failing without its antecedent
     // The 'and' or 'or' of the implications of the lengths of one antecedent, as one implication
     bool lengthsJoin = false;
-    // Implication not split as its antecedent has more lengths, or is longer, than an
-    // implication is split by: the implication, an error in another property operator
+    // Implication not split as its antecedent has more lengths, is longer, or makes more
+    // ticks of implications, than an implication is split by: the implication, an error in
+    // another property operator
     const AstImplication* overLimitp = nullptr;
-    bool overLatency = false;  // Implication not split: as its antecedent is too long
+    enum class OverLimit : uint8_t { LENGTHS, LATENCY, TICKS };
+    OverLimit overLimit = OverLimit::LENGTHS;  // Implication not split: the limit exceeded
     int latency = 0;  // Ticks from its start to the last tick it can resolve on
     // Most ticks of latency of a property lowered per attempt, a vector bit for each
     static constexpr int MAX_LATENCY = 255;
@@ -3094,6 +3096,9 @@ public:
     }
     // Most lengths of an antecedent of variable length an implication is split by
     static constexpr int MAX_ANTECEDENT_LENGTHS = 16;
+    // Most ticks of latency summed over the implications an antecedent is split into, as the
+    // lowering of each is about as large as its latency
+    static constexpr int MAX_ANTECEDENT_BRANCH_TICKS = 256;
     // An implication with an antecedent of variable length as an 'and' of one for each length of
     // a match of it, the antecedent restricted to that length, and a followed-by as an 'or' of
     // them (IEEE 1800-2023 16.12.7, 16.12.9). Each starts its consequent on one tick of the
@@ -3108,18 +3113,36 @@ public:
         using Kind = SvaAttemptNode::Kind;
         const std::unique_ptr<SvaAttemptSeq> antSeqp = buildAttemptSeq(implp->lhsp(), true);
         if (!antSeqp) return nullptr;
-        if (antSeqp->maxLen > SvaAttemptNode::MAX_LATENCY
-            || antSeqp->maxLen - antSeqp->minLen >= MAX_ANTECEDENT_LENGTHS) {
+        using OverLimit = SvaAttemptNode::OverLimit;
+        std::unique_ptr<SvaAttemptNode> consp = buildAttemptTree(implp->rhsp());
+        if (!consp) return nullptr;
+        const int delay = implp->isOverlapped() ? 0 : 1;
+        const AttemptLengths lens = attemptLengths(*antSeqp);
+        int ticks = 0;  // Latency summed over the implications
+        bool overLimit = false;
+        OverLimit limit = OverLimit::LENGTHS;
+        if (antSeqp->maxLen > SvaAttemptNode::MAX_LATENCY) {
+            overLimit = true;
+            limit = OverLimit::LATENCY;
+        } else if (antSeqp->maxLen - antSeqp->minLen >= MAX_ANTECEDENT_LENGTHS) {
+            overLimit = true;
+        } else {
+            for (int len = antSeqp->minLen; len <= antSeqp->maxLen; ++len) {
+                if (lens.test(len)) ticks += len + delay + consp->latency;
+            }
+            overLimit = ticks > MAX_ANTECEDENT_BRANCH_TICKS;
+            limit = OverLimit::TICKS;
+        }
+        if (overLimit) {
             // Lowered by the NFA, unless in another property operator, see attemptTree
             std::unique_ptr<SvaAttemptNode> treep{new SvaAttemptNode};
             treep->kind = Kind::IMPLICATION;
             treep->overLimitp = implp;
-            treep->overLatency = antSeqp->maxLen > SvaAttemptNode::MAX_LATENCY;
-            treep->lhsp = buildAttemptTree(implp->rhsp());
-            if (!treep->lhsp) return nullptr;
+            treep->overLimit = limit;
+            treep->lhsp = std::move(consp);
             return treep;
         }
-        const AttemptLengths lens = attemptLengths(*antSeqp);
+        V3Stats::addStatSum("Assertions, NFA per-attempt antecedent branch ticks", ticks);
         std::unique_ptr<SvaAttemptNode> treep;
         for (int len = antSeqp->minLen; len <= antSeqp->maxLen; ++len) {
             // A length no match has needs no branch
@@ -3130,7 +3153,7 @@ public:
             std::unique_ptr<SvaAttemptNode> branchp{new SvaAttemptNode};
             branchp->kind = Kind::IMPLICATION;
             branchp->antLen = len;
-            branchp->delay = implp->isOverlapped() ? 0 : 1;
+            branchp->delay = delay;
             branchp->followedBy = implp->isFollowedBy();
             // The antecedent intersected with a sequence of len ticks
             std::unique_ptr<SvaAttemptSeq> lengthp{new SvaAttemptSeq};
@@ -8081,19 +8104,23 @@ class AssertNfaVisitor final : public VNVisitor {
             // outcome of each attempt, it is unsupported
             if (limitp != treep.get()) {
                 const AstImplication* const implp = limitp->overLimitp;
-                const std::string limit
-                    = limitp->overLatency
-                          ? "longer than " + std::to_string(SvaAttemptNode::MAX_LATENCY)
-                                + " cycles"
-                          : "of more than " + std::to_string(SvaNfaBuilder::MAX_ANTECEDENT_LENGTHS)
-                                + " match lengths";
+                std::string limit = "of more than "
+                                    + std::to_string(SvaNfaBuilder::MAX_ANTECEDENT_LENGTHS)
+                                    + " match lengths";
+                if (limitp->overLimit == SvaAttemptNode::OverLimit::LATENCY) {
+                    limit
+                        = "longer than " + std::to_string(SvaAttemptNode::MAX_LATENCY) + " cycles";
+                } else if (limitp->overLimit == SvaAttemptNode::OverLimit::TICKS) {
+                    limit = "whose match lengths make implications of more than "
+                            + std::to_string(SvaNfaBuilder::MAX_ANTECEDENT_BRANCH_TICKS)
+                            + " cycles in all";
+                }
                 implp->lhsp()->v3warn(
                     E_UNSUPPORTED,
-                    "Unsupported: antecedent "
-                        << limit << " of "
-                        << (implp->isFollowedBy() ? "a followed-by" : "an implication")
-                        << " in another property operator (IEEE 1800-2023 "
-                        << (implp->isFollowedBy() ? "16.12.9" : "16.12.7") << ").");
+                    "Unsupported: " << (implp->isFollowedBy() ? "followed-by" : "implication")
+                                    << " in another property operator with an antecedent " << limit
+                                    << " (IEEE 1800-2023 "
+                                    << (implp->isFollowedBy() ? "16.12.9" : "16.12.7") << ").");
                 errored = true;
             }
             return nullptr;
