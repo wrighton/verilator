@@ -4289,8 +4289,8 @@ class SolverSmtLowering final : public V3SolverLowering {
         if (!sizeVarp) {
             // Declared next to the array, so every class constraining the array's size
             // (e.g. sibling classes extending the array's class) shares it
-            sizeVarp = newSizeVar(VN_AS(arrVarp->user2p(), Class),
-                                  SmtUtil::sizeVarName(arrVarp), fl, signed32DTypep);
+            sizeVarp = newSizeVar(VN_AS(arrVarp->user2p(), Class), SmtUtil::sizeVarName(arrVarp),
+                                  fl, signed32DTypep);
             arrVarp->user4p(sizeVarp);
         }
         return sizeVarp;
@@ -6049,7 +6049,9 @@ public:
             const AstMemberRef* const mselp = pathMsel.second;
             funcp->addStmtsp(newSizeVarAssign(fl, mselp->varp(), mselp));
         }
-        copyVariableRegistrations(VN_AS(m_memberMap.findMember(classp, "randomize"), Func), funcp);
+        // randomize() calls the rest, which registers them
+        copyVariableRegistrations(
+            VN_AS(m_memberMap.findMember(classp, NOCB_RANDOMIZE_FUNC_NAME), Func), funcp);
         AstNodeModule* const genModp = VN_AS(classGenp->user2p(), NodeModule);
         funcp->addStmtsp(implementConstraintsClear(fl, classGenp));
         AstTask* const setupAllTaskp = SmtUtil::getCreateConstraintSetupFunc(classp, m_memberMap);

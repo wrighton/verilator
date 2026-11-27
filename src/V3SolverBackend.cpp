@@ -51,6 +51,9 @@
 
 #include "V3SolverBackend.h"
 
+#include "V3MemberMap.h"
+#include "V3UniqueNames.h"
+
 AstVar* RandModeVars::randModeVarp(AstNodeModule* classp) {
     while (classp) {
         if (classp->user2p()) return VN_AS(classp->user2p(), Var);
@@ -187,5 +190,215 @@ AstNodeExpr* RandomizeUtil::randIndexSelp(AstNodeExpr* exprp,
         }
         if (indexp && !fromp->user1() && isRandIndexp(indexp)) return curp;
         curp = fromp;
+    }
+}
+
+//######################################################################
+// V3SolverLowering
+
+// Builds the methods of classes copying the random variables of the object into variables of
+// it, and those of the objects of its rand class handles by their methods, and assigning them
+// back, or discarding the copies. As they are virtual, an object of a derived class copies its
+// own variables too, and the code grows with the number of classes, not with the number of paths
+// to the objects. A flag of the object, set by copying and cleared by assigning back or
+// discarding, makes each object copied once, also if reached again through a cycle of handles.
+class RandomSaves final {
+    VMemberMap& m_memberMap;  // Members of the classes
+    const V3SolverLowering::DerivedClassMap& m_derived;  // Directly derived classes
+    std::unordered_set<const AstClass*>& m_builtr;  // Classes with the methods
+
+    AstTask* getCreateTask(AstClass* classp, const char* name) {
+        AstTask* taskp = VN_CAST(m_memberMap.findMember(classp, name), Task);
+        if (taskp) return taskp;
+        taskp = new AstTask{classp->fileline(), name};
+        taskp->classMethod(true);
+        taskp->isVirtual(classp->isExtended());
+        // Rand class handles may hold objects of the same class, such as a tree of objects
+        taskp->recursive(true);
+        classp->addMembersp(taskp);
+        m_memberMap.insert(classp, taskp);
+        return taskp;
+    }
+    // The variable of the object holding the copy of varp, declared by declClassp
+    AstVar* getCreateCopyVarp(AstClass* declClassp, AstVar* varp) {
+        const std::string name = "__Vsaved_" + varp->name();
+        AstVar* copyp = VN_CAST(m_memberMap.findMember(declClassp, name), Var);
+        if (copyp) return copyp;
+        copyp = new AstVar{varp->fileline(), VVarType::MEMBER, name, varp->dtypep()};
+        declClassp->addMembersp(copyp);
+        m_memberMap.insert(declClassp, copyp);
+        return copyp;
+    }
+    // The flag of the object, in the base-most class, so the same for every class of the object
+    AstVar* getCreateFlagVarp(AstClass* classp) {
+        AstClass* const basep = classp->baseMostClassp();
+        AstVar* flagp = VN_CAST(m_memberMap.findMember(basep, FLAG_VAR_NAME), Var);
+        if (flagp) return flagp;
+        flagp = new AstVar{basep->fileline(), VVarType::MEMBER, FLAG_VAR_NAME,
+                           basep->findBitDType()};
+        basep->addMembersp(flagp);
+        m_memberMap.insert(basep, flagp);
+        return flagp;
+    }
+    // Run the statements of taskp only if the flag is clear when copying, or set otherwise,
+    // and set or clear it
+    void addFlagGuard(AstClass* classp, AstTask* taskp, bool saving) {
+        FileLine* const fl = taskp->fileline();
+        AstVar* const flagp = getCreateFlagVarp(classp);
+        AstClass* const basep = classp->baseMostClassp();
+        AstNodeStmt* const stmtsp
+            = taskp->stmtsp() ? taskp->stmtsp()->unlinkFrBackWithNext() : nullptr;
+        AstNodeExpr* condp = new AstVarRef{fl, basep, flagp, VAccess::READ};
+        if (saving) condp = new AstLogNot{fl, condp};
+        AstNodeStmt* const setp
+            = new AstAssign{fl, new AstVarRef{fl, basep, flagp, VAccess::WRITE},
+                            new AstConst{fl, AstConst::BitTrue{}, saving}};
+        taskp->addStmtsp(new AstIf{fl, condp, AstNode::addNextNull(setp, stmtsp)});
+    }
+    void buildMethods(AstClass* classp) {
+        AstTask* const savep = getCreateTask(classp, SAVE_FUNC_NAME);
+        AstTask* const restorep = getCreateTask(classp, RESTORE_FUNC_NAME);
+        AstTask* const discardp = getCreateTask(classp, DISCARD_FUNC_NAME);
+        addClassVars(classp, savep, restorep, discardp);
+        addFlagGuard(classp, savep, true);
+        addFlagGuard(classp, restorep, false);
+        addFlagGuard(classp, discardp, false);
+        // An object of a derived class copies its own variables by its override
+        const auto it = m_derived.find(classp);
+        if (it != m_derived.end()) buildList(it->second);
+    }
+    void buildList(const std::vector<AstClass*>& classps) {
+        for (AstClass* const classp : classps) build(classp);
+    }
+    // Add the copies of the variables declClassp and its base classes declare
+    void addClassVars(AstClass* declClassp, AstTask* savep, AstTask* restorep, AstTask* discardp) {
+        for (AstNode* const memberp : declClassp->memberspList()) {
+            addMember(declClassp, memberp, savep, restorep, discardp);
+        }
+        AstClassExtends* const extendsp = declClassp->extendsp();
+        if (extendsp) addClassVars(extendsp->classp(), savep, restorep, discardp);
+    }
+    void addMember(AstClass* declClassp, AstNode* memberp, AstTask* savep, AstTask* restorep,
+                   AstTask* discardp) {
+        AstVar* const varp = VN_CAST(memberp, Var);
+        if (varp && varp->rand().isRandomizable()) {
+            addVar(declClassp, varp, savep, restorep, discardp);
+        }
+    }
+    void addVar(AstClass* declClassp, AstVar* varp, AstTask* savep, AstTask* restorep,
+                AstTask* discardp) {
+        FileLine* const fl = varp->fileline();
+        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+        const AstUnpackArrayDType* const arrDTypep = VN_CAST(dtypep, UnpackArrayDType);
+        const AstClassRefDType* const objDTypep = VN_CAST(dtypep, ClassRefDType);
+        const AstClassRefDType* const elemDTypep
+            = arrDTypep ? VN_CAST(arrDTypep->subDTypep()->skipRefp(), ClassRefDType) : nullptr;
+        if (objDTypep) {
+            // The objects of rand handles are kept too; randomize() does not change the
+            // handles themselves
+            addObject(new AstVarRef{fl, declClassp, varp, VAccess::READ}, objDTypep->classp(),
+                      savep, restorep, discardp);
+        } else if (elemDTypep) {
+            // Of a fixed-size array of handles, each element's; those of a dynamic array or
+            // queue of handles are not kept
+            addElements(declClassp, varp, arrDTypep->elementsConst(), elemDTypep->classp(), savep,
+                        restorep, discardp);
+        } else {
+            // A static variable is copied by each object, so whichever objects are null
+            AstVar* const copyp = getCreateCopyVarp(declClassp, varp);
+            savep->addStmtsp(new AstAssign{fl,
+                                           new AstVarRef{fl, declClassp, copyp, VAccess::WRITE},
+                                           new AstVarRef{fl, declClassp, varp, VAccess::READ}});
+            restorep->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, declClassp, varp, VAccess::WRITE},
+                              new AstVarRef{fl, declClassp, copyp, VAccess::READ}});
+        }
+    }
+    void addElements(AstClass* declClassp, AstVar* varp, int elements, AstClass* elemClassp,
+                     AstTask* savep, AstTask* restorep, AstTask* discardp) {
+        for (int i = 0; i < elements; ++i) {
+            addElement(declClassp, varp, i, elemClassp, savep, restorep, discardp);
+        }
+    }
+    void addElement(AstClass* declClassp, AstVar* varp, int i, AstClass* elemClassp,
+                    AstTask* savep, AstTask* restorep, AstTask* discardp) {
+        FileLine* const fl = varp->fileline();
+        addObject(new AstArraySel{fl, new AstVarRef{fl, declClassp, varp, VAccess::READ}, i},
+                  elemClassp, savep, restorep, discardp);
+    }
+    // Call the methods of the object objp, of objClassp or a derived class, if not null, and
+    // delete objp
+    void addObject(AstNodeExpr* objp, AstClass* objClassp, AstTask* savep, AstTask* restorep,
+                   AstTask* discardp) {
+        build(objClassp);
+        savep->addStmtsp(newObjectCallp(objp, objClassp, SAVE_FUNC_NAME));
+        restorep->addStmtsp(newObjectCallp(objp, objClassp, RESTORE_FUNC_NAME));
+        discardp->addStmtsp(newObjectCallp(objp, objClassp, DISCARD_FUNC_NAME));
+        VL_DO_DANGLING(objp->deleteTree(), objp);
+    }
+    AstNodeStmt* newObjectCallp(AstNodeExpr* objp, AstClass* objClassp, const char* name) {
+        FileLine* const fl = objp->fileline();
+        AstTask* const taskp = getCreateTask(objClassp, name);
+        AstMethodCall* const callp = new AstMethodCall{fl, objp->cloneTree(false), name};
+        callp->taskp(taskp);
+        callp->dtypeSetVoid();
+        return new AstIf{
+            fl, new AstNeq{fl, objp->cloneTree(false), new AstConst{fl, AstConst::Null{}}},
+            callp->makeStmt()};
+    }
+
+public:
+    static constexpr const char* SAVE_FUNC_NAME = "__VsaveRand";
+    static constexpr const char* RESTORE_FUNC_NAME = "__VrestoreRand";
+    static constexpr const char* DISCARD_FUNC_NAME = "__VdiscardRand";
+    static constexpr const char* FLAG_VAR_NAME = "__VsavedRand";
+
+    RandomSaves(VMemberMap& memberMap, const V3SolverLowering::DerivedClassMap& derived,
+                std::unordered_set<const AstClass*>& builtr)
+        : m_memberMap{memberMap}
+        , m_derived{derived}
+        , m_builtr{builtr} {}
+    // Build the methods of classp, once
+    void build(AstClass* classp) {
+        if (m_builtr.emplace(classp).second) buildMethods(classp);
+    }
+    // Call of the method name of this object, of classp or a derived class
+    AstNodeStmt* newThisCallp(AstClass* classp, const char* name) {
+        return (new AstTaskRef{classp->fileline(), getCreateTask(classp, name)})->makeStmt();
+    }
+    // Reference to the flag of this object, of classp or a derived class
+    AstVarRef* newThisFlagRefp(AstClass* classp, VAccess access) {
+        return new AstVarRef{classp->fileline(), classp->baseMostClassp(),
+                             getCreateFlagVarp(classp), access};
+    }
+};
+
+AstNodeStmt* V3SolverLowering::addFailureRestore(AstFunc* funcp, AstClass* classp) {
+    if (!m_derivedBuilt) {
+        m_derivedBuilt = true;
+        v3Global.rootp()->foreach([&](AstClass* derivedp) { addDerivedClass(derivedp); });
+    }
+    RandomSaves saves{m_memberMap, m_derivedClassps, m_savedClasses};
+    saves.build(classp);
+    // A randomize() of an object already copied by the call randomizing another one, as its
+    // member, leaves its copies to that call
+    FileLine* const fl = funcp->fileline();
+    AstVar* const ownerp = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VsavedHere"),
+                                      classp->findBitDType()};
+    ownerp->funcLocal(true);
+    ownerp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+    funcp->addDeclsp(ownerp);
+    funcp->addStmtsp(
+        new AstAssign{fl, new AstVarRef{fl, ownerp, VAccess::WRITE},
+                      new AstLogNot{fl, saves.newThisFlagRefp(classp, VAccess::READ)}});
+    funcp->addStmtsp(saves.newThisCallp(classp, RandomSaves::SAVE_FUNC_NAME));
+    return new AstIf{fl, new AstVarRef{fl, ownerp, VAccess::READ},
+                     new AstIf{fl, new AstVarRef{fl, funcp->fvarp(), VAccess::READ},
+                               saves.newThisCallp(classp, RandomSaves::DISCARD_FUNC_NAME),
+                               saves.newThisCallp(classp, RandomSaves::RESTORE_FUNC_NAME)}};
+}
+void V3SolverLowering::addDerivedClass(AstClass* classp) {
+    if (AstClassExtends* const extendsp = classp->extendsp()) {
+        m_derivedClassps[extendsp->classp()].push_back(classp);
     }
 }

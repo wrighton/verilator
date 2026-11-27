@@ -45,6 +45,8 @@ class VMemberMap;
 static constexpr const char* GLOBAL_CONSTRAINT_SEPARATOR = "__DT__";
 // Name of the method randomizing the variables the solver does not
 static constexpr const char* BASIC_RANDOMIZE_FUNC_NAME = "__VBasicRand";
+// The rest of randomize() but the pre/post_randomize() callbacks, see V3Randomize
+static constexpr const char* NOCB_RANDOMIZE_FUNC_NAME = "__VrandNoCb";
 
 // ######################################################################
 // Stores info about a variable's rand_mode state/a constraint's constraint_mode state
@@ -152,6 +154,15 @@ protected:
     const ClonedConstraints& m_cloneObjps;  // Constraints cloned from objects
     VNDeleter& m_deleter;  // Deferred deletion of nodes removed by the back-end
 
+public:
+    // Directly derived classes of each class
+    using DerivedClassMap = std::unordered_map<const AstClass*, std::vector<AstClass*>>;
+
+protected:
+    DerivedClassMap m_derivedClassps;  // Directly derived classes, see addFailureRestore
+    bool m_derivedBuilt = false;  // m_derivedClassps is built
+    std::unordered_set<const AstClass*> m_savedClasses;  // Classes copying their variables
+
     // CONSTRUCTORS
     V3SolverLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
                      const RandModeVars& modeVars, ElemRandModes& elemModes,
@@ -169,6 +180,17 @@ protected:
 public:
     virtual ~V3SolverLowering() = default;
 
+    // Copy the random variables of the object of funcp, of classp or a derived class, also
+    // those of the objects of its rand class handles, which a failed randomize() leaves
+    // unchanged (IEEE 1800-2023 18.6.3), adding the call copying them to funcp now, and return
+    // the statement, run after the solves, assigning them back if funcp failed, or discarding
+    // the copies otherwise
+    AstNodeStmt* addFailureRestore(AstFunc* funcp, AstClass* classp);
+
+private:
+    void addDerivedClass(AstClass* classp);
+
+public:
     // Per class. prepareClass() is called before any class is lowered, for each
     // class that has constraint blocks, declared or inherited.
     virtual void prepareClass(AstClass* classp) = 0;
