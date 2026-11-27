@@ -98,6 +98,15 @@ endclass
 class KeptWidths;
   `WIDTHS
 endclass
+// Solved from each size the queue starts with, within the range or past it
+class Started;
+  rand int q[$];
+  constraint c {
+    q.size() inside {[1 : 5]};
+    q[$] == 7;
+  }
+endclass
+
 class SolvedWidths;
   `WIDTHS
   constraint c_size {q.size() == 6;}
@@ -114,6 +123,7 @@ module t;
     automatic KeptWidths kw = new;
     automatic SolvedWidths sw = new;
     automatic Order r = new;
+    automatic Started st = new;
     automatic int ok;
     automatic bit sizes[int];
     repeat (20) begin
@@ -201,6 +211,16 @@ module t;
       `checkd(sw.q[1], 44);
       `checkd(sw.ku, 5);
       `checkd(sw.q[0], 55);
+    end
+    for (int start = 0; start <= 7; ++start) begin
+      repeat (4) begin
+        st.q.delete();
+        for (int i = 0; i < start; ++i) st.q.push_back(100 + i);
+        ok = st.randomize();
+        `checkd(ok, 1);
+        `check_range(st.q.size(), 1, 5);
+        `checkd(st.q[st.q.size() - 1], 7);
+      end
     end
     k.q = '{1, 2, 3};
     ok = k.randomize();
