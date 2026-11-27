@@ -4686,6 +4686,11 @@ public:
             // A member object array is randomized with the outer object, after its resize
             sizePhase = !sizeArrayVars.empty() || !memberArrays.empty();
             if (sizePhase) {
+                // Its size solve writes the variables, and its resize changes the arrays,
+                // before the call can still fail
+                AstNodeStmt* const restoresp = m_callerRestores.count(nodep)
+                                                   ? nullptr
+                                                   : addFailureRestore(randomizep, nodep);
                 AstVar* const sizeOkVarp = addSizeSolvep(randomizep, genp);
                 if (AstTask* const resizeAllTaskp
                     = VN_AS(m_memberMap.findMember(nodep, "__Vresize_constrained_arrays"), Task)) {
@@ -4712,6 +4717,14 @@ public:
                 randomizep->addDeclsp(finalOkVarp);
                 randomizep->addStmtsp(new AstAssign{
                     fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE}, newSolverCallp(genp)});
+                if (restoresp) {
+                    randomizep->addStmtsp(new AstIf{
+                        fl,
+                        new AstLogNot{
+                            fl, new AstLogAnd{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
+                                              new AstVarRef{fl, finalOkVarp, VAccess::READ}}},
+                        restoresp});
+                }
 
                 beginValp = new AstAnd{fl, new AstVarRef{fl, fvarp, VAccess::READ},
                                        new AstAnd{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
@@ -4750,8 +4763,11 @@ public:
         if (needsSizePhase) return;
         if (AstTask* const resizeAllTaskp
             = VN_AS(m_memberMap.findMember(nodep, "__Vresize_constrained_arrays"), Task)) {
-            AstTaskRef* const resizeTaskRefp = new AstTaskRef{nodep->fileline(), resizeAllTaskp};
-            randomizep->addStmtsp(resizeTaskRefp->makeStmt());
+            FileLine* const fl = nodep->fileline();
+            // Not after a failed solve, which leaves the arrays (IEEE 1800-2023 18.6.3)
+            randomizep->addStmtsp(new AstIf{fl,
+                                            new AstVarRef{fl, randomizep->fvarp(), VAccess::READ},
+                                            (new AstTaskRef{fl, resizeAllTaskp})->makeStmt()});
         }
     }
     void lowerInlineRandomize(AstNodeFTaskRef* nodep, AstClass* classp, AstFunc* randomizeFuncp,
@@ -4940,6 +4956,9 @@ public:
         addFrozenSizePins(sizedArrays, memberArrays, randomizeFuncp, localGenp, randModeVarp);
 
         if (needsSizePhase) {
+            // The size solve writes the variables, and the resize changes the arrays, before
+            // the call can still fail
+            AstNodeStmt* const restoresp = addFailureRestore(randomizeFuncp, classp);
             AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
                                                    classp->findBasicDType(VBasicDTypeKwd::BIT)};
             finalOkVarp->funcLocal(true);
@@ -5108,6 +5127,10 @@ public:
                            new AstAnd{fl, new AstVarRef{fl, basicOkVarp, VAccess::READ},
                                       new AstVarRef{fl, sizeOkVarp, VAccess::READ}},
                            new AstVarRef{fl, finalOkVarp, VAccess::READ}}});
+            if (restoresp) {
+                randomizeFuncp->addStmtsp(new AstIf{
+                    fl, new AstLogNot{fl, new AstVarRef{fl, retVarp, VAccess::READ}}, restoresp});
+            }
         } else {
             VL_DO_DANGLING(capturedClonep->deleteTree(), capturedClonep);
 

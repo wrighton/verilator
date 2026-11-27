@@ -30,6 +30,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class V3UniqueNames;
@@ -96,6 +97,8 @@ protected:
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
     const RandModeVars& m_modeVars;  // rand_mode/constraint_mode state arrays
     VNDeleter& m_deleter;  // Deferred deletion of nodes removed by the back-end
+    // Classes whose randomize() the front end restores on failure (see restoredByCaller)
+    std::unordered_set<const AstClass*> m_callerRestores;
 
     // CONSTRUCTORS
     V3SolverLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
@@ -110,6 +113,15 @@ protected:
 
 public:
     virtual ~V3SolverLowering() = default;
+
+    // Copy into temporaries of funcp the random variables of classp, also those of the
+    // objects of its rand class handles, which a failed randomize() leaves unchanged (IEEE
+    // 1800-2023 18.6.3), adding the copies to funcp now, and return the statements
+    // assigning them back, or nullptr if none
+    AstNodeStmt* addFailureRestore(AstFunc* funcp, AstClass* classp);
+    // The front end restores the variables of classp when its randomize() fails, so the
+    // back-end need not
+    void restoredByCaller(const AstClass* classp) { m_callerRestores.emplace(classp); }
 
     // Per class. prepareClass() is called before any class is lowered, for each
     // class that has constraint blocks, declared or inherited.

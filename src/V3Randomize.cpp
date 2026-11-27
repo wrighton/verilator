@@ -2465,6 +2465,12 @@ class RandomizeVisitor final : public VNVisitor {
 
         // Both IS_RANDOMIZED and IS_RANDOMIZED_GLOBAL classes need full constraint support
         // IS_RANDOMIZED_GLOBAL classes can be randomized independently
+        // A global constraint owner's __VBasicRand also randomizes its objects before the
+        // solver, so its variables are restored here if the call fails (IEEE 1800-2023
+        // 18.6.3); the back-end restores those of a size phase otherwise
+        AstNodeStmt* const restoresp
+            = basicFirst ? m_solverp->addFailureRestore(randomizep, nodep) : nullptr;
+        if (basicFirst) m_solverp->restoredByCaller(nodep);
         AstNodeExpr* const beginValp
             = m_solverp->lowerClassRandomize(nodep, randomizep, randModeVarp);
 
@@ -2490,10 +2496,21 @@ class RandomizeVisitor final : public VNVisitor {
 
             AstNodeExpr* const secondHalfp
                 = basicFirst ? beginValp : new AstFuncRef{fl, basicRandomizep};
-            randomizep->addStmtsp(new AstAssign{fl, fvarRefp->cloneTree(false),
-                                                new AstAnd{fl, fvarRefReadp, secondHalfp}});
+            AstNodeStmt* const secondp = new AstAssign{fl, fvarRefp->cloneTree(false),
+                                                       new AstAnd{fl, fvarRefReadp, secondHalfp}};
+            if (basicFirst) {
+                randomizep->addStmtsp(secondp);
+            } else {
+                // A failed call leaves the values (IEEE 1800-2023 18.6.3), so the members the
+                // solver does not own, and the objects, are randomized only after it succeeds
+                randomizep->addStmtsp(new AstIf{fl, fvarRefReadp->cloneTree(false), secondp});
+            }
 
             if (basicFirst) m_solverp->addAfterClassSolve(nodep, randomizep);
+        }
+        if (restoresp) {
+            randomizep->addStmtsp(new AstIf{
+                fl, new AstLogNot{fl, new AstVarRef{fl, fvarp, VAccess::READ}}, restoresp});
         }
 
         // Call nested post_randomize on rand class-type members (IEEE 18.4.1)

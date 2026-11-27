@@ -51,6 +51,8 @@
 
 #include "V3SolverBackend.h"
 
+#include "V3UniqueNames.h"
+
 AstVar* RandModeVars::randModeVarp(AstNodeModule* classp) {
     while (classp) {
         if (classp->user2p()) return VN_AS(classp->user2p(), Var);
@@ -99,4 +101,88 @@ AstVar* RandModeVars::constraintModeVarp(AstClass* classp) {
         return constraintModeVarp(extendsp->classp());
     }
     return nullptr;
+}
+
+//######################################################################
+// V3SolverLowering
+
+// Add to savesr the copies of the random variables of classp, of the object basep is, or of
+// this if nullptr, and to restoresr the assignments back. A static member, shared by the
+// objects of its class, is copied once (staticsr).
+static void addRandomSaves(AstFunc* funcp, AstClass* classp, AstNodeExpr* basep,
+                           V3UniqueNames& uniqueNames,
+                           std::unordered_set<const AstClass*>& visitingr,
+                           std::unordered_set<const AstVar*>& staticsr, AstNodeStmt*& savesr,
+                           AstNodeStmt*& restoresr) {
+    FileLine* const fl = funcp->fileline();
+    visitingr.emplace(classp);
+    classp->foreachMember([&](AstClass* memberClassp, AstVar* varp) {
+        if (!varp->rand().isRandomizable()) return;
+        const bool isStatic = varp->lifetime().isStatic();
+        if (isStatic && !staticsr.emplace(varp).second) return;
+        const auto refp = [&](VAccess access) -> AstNodeExpr* {
+            if (!basep || isStatic) return new AstVarRef{fl, memberClassp, varp, access};
+            AstMemberRef* const selp = new AstMemberRef{fl, basep->cloneTree(false), varp};
+            selp->access(access);
+            return selp;
+        };
+        // The objects of rand handles are kept too; the handles themselves randomize() does
+        // not change
+        const auto saveObject = [&](AstNodeExpr* const objp, AstClass* const objClassp) {
+            if (!visitingr.count(objClassp)) {  // A cycle of handles is not followed
+                AstNodeStmt* objSavesp = nullptr;
+                AstNodeStmt* objRestoresp = nullptr;
+                addRandomSaves(funcp, objClassp, objp, uniqueNames, visitingr, staticsr, objSavesp,
+                               objRestoresp);
+                const auto nonNullp = [&]() {
+                    return new AstNeq{fl, objp->cloneTree(false),
+                                      new AstConst{fl, AstConst::Null{}}};
+                };
+                if (objSavesp) {
+                    savesr = AstNode::addNextNull(savesr, new AstIf{fl, nonNullp(), objSavesp});
+                    restoresr
+                        = AstNode::addNextNull(restoresr, new AstIf{fl, nonNullp(), objRestoresp});
+                }
+            }
+            VL_DO_DANGLING(objp->deleteTree(), objp);
+        };
+        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+        if (const AstClassRefDType* const objDTypep = VN_CAST(dtypep, ClassRefDType)) {
+            saveObject(refp(VAccess::READ), objDTypep->classp());
+            return;
+        }
+        // Of a fixed-size array of handles, each element's; those of a dynamic array or queue
+        // of handles are not kept
+        if (const AstUnpackArrayDType* const arrDTypep = VN_CAST(dtypep, UnpackArrayDType)) {
+            if (const AstClassRefDType* const objDTypep
+                = VN_CAST(arrDTypep->subDTypep()->skipRefp(), ClassRefDType)) {
+                for (int i = 0; i < arrDTypep->elementsConst(); ++i) {
+                    saveObject(new AstArraySel{fl, refp(VAccess::READ), i}, objDTypep->classp());
+                }
+                return;
+            }
+        }
+        AstVar* const savep
+            = new AstVar{fl, VVarType::BLOCKTEMP, uniqueNames.get("__Vsaved"), varp->dtypep()};
+        savep->funcLocal(true);
+        savep->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        funcp->addDeclsp(savep);
+        savesr = AstNode::addNextNull(
+            savesr,
+            new AstAssign{fl, new AstVarRef{fl, savep, VAccess::WRITE}, refp(VAccess::READ)});
+        restoresr = AstNode::addNextNull(
+            restoresr,
+            new AstAssign{fl, refp(VAccess::WRITE), new AstVarRef{fl, savep, VAccess::READ}});
+    });
+    visitingr.erase(classp);
+}
+
+AstNodeStmt* V3SolverLowering::addFailureRestore(AstFunc* funcp, AstClass* classp) {
+    std::unordered_set<const AstClass*> visiting;
+    std::unordered_set<const AstVar*> statics;
+    AstNodeStmt* savesp = nullptr;
+    AstNodeStmt* restoresp = nullptr;
+    addRandomSaves(funcp, classp, nullptr, m_uniqueNames, visiting, statics, savesp, restoresp);
+    if (savesp) funcp->addStmtsp(savesp);
+    return restoresp;
 }
