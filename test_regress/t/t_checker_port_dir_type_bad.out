@@ -1,0 +1,8 @@
+%Error: t/t_checker_port_dir_type_bad.v:8:28: Checker port 'b' has a direction, so it needs a data type (IEEE 1800-2023 17.2).
+    8 | checker chk_output (int a, output b);
+      |                            ^~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_checker_port_dir_type_bad.v:11:20: Checker port 'c' has a direction, so it needs a data type (IEEE 1800-2023 17.2).
+   11 | checker chk_input (input c);
+      |                    ^~~~~
+%Error: Exiting due to
