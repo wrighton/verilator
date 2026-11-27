@@ -4360,6 +4360,16 @@ class AssertNfaVisitor final : public VNVisitor {
         }
     }
 
+    // Whether nodep has a subroutine call match item (IEEE 1800-2023 16.11)
+    static bool hasMatchItemCall(const AstNode* nodep) {
+        return nodep->exists([](const AstExprStmt* exprStmtp) {
+            if (!exprStmtp->isMatchItem()) return false;
+            for (const AstNode* stmtp = exprStmtp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (!VN_IS(stmtp, Assign)) return true;
+            }
+            return false;
+        });
+    }
     static bool hasMultiCycleExpr(const AstNode* nodep) {
         return nodep->exists([](const AstNode* np) {
             if (const auto* const ep = VN_CAST(np, NodeExpr)) return ep->isMultiCycleSva();
@@ -4531,10 +4541,13 @@ class AssertNfaVisitor final : public VNVisitor {
         AstNodeStmt* splitsp = nullptr;
 
         if (!parts.isFollowedBy) {
-            // A vacuous success is of the attempt starting on this tick
-            AstNodeExpr* const vacuousp = new AstLogAnd{
-                flp, assertOnCond(flp, assertp->userType(), assertp->directive()),
-                new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))}};
+            // A vacuous success is of the attempt starting on this tick. Its subroutine call
+            // match items run in the property, not again here.
+            AstExprStmt* const callsp = VN_CAST(parts.triggerExprp, ExprStmt);
+            AstNodeExpr* const triggerp = callsp ? callsp->resultp() : parts.triggerExprp;
+            AstNodeExpr* const vacuousp
+                = new AstLogAnd{flp, assertOnCond(flp, assertp->userType(), assertp->directive()),
+                                new AstLogNot{flp, sampled(triggerp->cloneTreePure(false))}};
             AstNodeStmt* const vacuousBodyp = V3AssertCommon::cloneAction(passsp, m_actionNames);
             splitsp = newPassOnIf(flp, vacuousp, vacuousBodyp, assertp->userType(),
                                   assertp->directive(), /*vacuous=*/true);
@@ -4917,12 +4930,28 @@ class AssertNfaVisitor final : public VNVisitor {
         if (!exprStmtp) return false;
         // IEEE 1800-2023 16.10 BNF requires `(expr, match_item {, match_item})`
         // with at least one match item; V3LinkParse only emits ExprStmt for
-        // this form and only emits AstAssign with VarRef LHS for each item.
+        // this form, with an AstAssign with VarRef LHS for each assignment item.
+        // The other items are subroutine calls, kept to run as match items, reading
+        // the values the assignments before them gave the local variables.
         std::unordered_map<const AstVar*, AstNodeExpr*> matchItems;
+        std::vector<AstAssign*> assignps;
         for (AstNode* const stmtp : exprStmtp->stmtspList()) {
-            AstAssign* const assignp = VN_AS(stmtp, Assign);
-            AstVarRef* const lhsRefp = VN_AS(assignp->lhsp(), VarRef);
-            matchItems[lhsRefp->varp()] = assignp->rhsp();
+            if (AstAssign* const assignp = VN_CAST(stmtp, Assign)) {
+                AstVarRef* const lhsRefp = VN_AS(assignp->lhsp(), VarRef);
+                matchItems[lhsRefp->varp()] = assignp->rhsp();
+                assignps.push_back(assignp);
+                continue;
+            }
+            std::vector<AstVarRef*> refps;
+            stmtp->foreach([&](AstVarRef* refp) {
+                if (refp->access().isReadOnly() && matchItems.count(refp->varp())) {
+                    refps.push_back(refp);
+                }
+            });
+            for (AstVarRef* const refp : refps) {
+                refp->replaceWith(matchItems[refp->varp()]->cloneTreePure(false));
+                VL_DO_DANGLING(pushDeletep(refp), refp);
+            }
         }
         const unsigned startK = parts.isOverlapped ? 0 : 1;
         const int length = walkSubstituteMatchItems(seqBodyp, startK, matchItems);
@@ -4930,6 +4959,11 @@ class AssertNfaVisitor final : public VNVisitor {
         // builds don't auto-clear caches on edits, so refresh here.
         VIsCached::clearCacheTree();
         if (length < 0) return true;
+        for (AstAssign* const assignp : assignps) {
+            VL_DO_DANGLING(pushDeletep(assignp->unlinkFrBack()), assignp);
+        }
+        // The calls stay with the antecedent
+        if (exprStmtp->stmtsp()) return false;
         AstNodeExpr* const antBoolp = exprStmtp->resultp()->unlinkFrBack();
         exprStmtp->replaceWith(antBoolp);
         VL_DO_DANGLING(pushDeletep(exprStmtp), exprStmtp);
@@ -4979,6 +5013,8 @@ class AssertNfaVisitor final : public VNVisitor {
             // Match item assignments belong to the antecedent, not to its checks
             AstNodeExpr* antp = implp->lhsp();
             if (const AstExprStmt* const exprStmtp = VN_CAST(antp, ExprStmt)) {
+                // Subroutine call items run per attempt, which this check does not
+                if (hasMatchItemCall(exprStmtp)) return false;
                 antp = exprStmtp->resultp();
             }
             if (!buildSingleTickProp(antp, lhs) || lhs.nonvacuousp
@@ -5114,7 +5150,8 @@ class AssertNfaVisitor final : public VNVisitor {
             return nullptr;
         }
 
-        if (!hasMultiCycleExpr(propp)) return nullptr;
+        // A subroutine call match item runs per attempt, which V3AssertPre does not do
+        if (!hasMultiCycleExpr(propp) && !hasMatchItemCall(propp)) return nullptr;
         if (isBareTopLevelUntil(propp)) return nullptr;
         return propp;
     }
