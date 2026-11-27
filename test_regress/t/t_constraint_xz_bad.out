@@ -49,4 +49,22 @@
 %Error: t/t_constraint_xz_bad.v:37:20: Constraint expression reads parameter 'WILD' of 4-state value '8'b1zzz0000' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
    37 |     bounded dist {[WILD : 8'd250] := 1};
       |                    ^~~~
+%Error: t/t_constraint_xz_bad.v:46:26: Constraint expression reads parameter 'HIGH_Z' of 4-state value '8'b111100zz' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   46 |     d_high dist {[8'd3 : HIGH_Z] :/ 1};
+      |                          ^~~~~~
+%Error: t/t_constraint_xz_bad.v:47:19: Constraint expression has 4-state value '8'b1z000000' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   47 |     d_value dist {8'b1z00_0000 := 1, 8'd3 := 1};
+      |                   ^~~~~~~~~~~~
+%Error: t/t_constraint_xz_bad.v:48:20: Constraint expression reads parameter 'LOW_X' of 4-state value '8'b1x000000' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   48 |     i_low inside {[LOW_X : 8'd250]};
+      |                    ^~~~~
+%Error: t/t_constraint_xz_bad.v:49:28: Constraint expression reads parameter 'HIGH_Z' of 4-state value '8'b111100zz' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   49 |     i_high inside {[8'd3 : HIGH_Z]};
+      |                            ^~~~~~
+%Error: t/t_constraint_xz_bad.v:50:24: Constraint expression has 4-state value '8'b1x000000' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   50 |     i_low_lit inside {[8'b1x00_0000 : 8'd250]};
+      |                        ^~~~~~~~~~~~
+%Error: t/t_constraint_xz_bad.v:51:32: Constraint expression has 4-state value '8'b1111000z' (x, z or '?' bits), but constraints support only 2-state values (IEEE 1800-2023 18.3).
+   51 |     i_high_lit inside {[8'd1 : 8'b1111_000z]};
+      |                                ^~~~~~~~~~~~
 %Error: Exiting due to
