@@ -1,0 +1,26 @@
+%Error-UNSUPPORTED: t/t_property_attempts_antecedent_unsup.v:18:39: Unsupported: implication in another property operator with an antecedent of more than 16 match lengths (IEEE 1800-2023 16.12.7).
+                                                                  : ... note: In instance 't'
+   18 |   assert property (@(posedge clk) ((a ##[1:17] b) |-> c) and (d |-> e));
+      |                                       ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_attempts_antecedent_unsup.v:19:39: Unsupported: implication in another property operator with an antecedent of more than 16 match lengths (IEEE 1800-2023 16.12.7).
+                                                                  : ... note: In instance 't'
+   19 |   assert property (@(posedge clk) ((a [* 1:17]) |-> c) and (d |-> e));
+      |                                       ^~
+%Error-UNSUPPORTED: t/t_property_attempts_antecedent_unsup.v:20:45: Unsupported: implication in another property operator with an antecedent of more than 16 match lengths (IEEE 1800-2023 16.12.7).
+                                                                  : ... note: In instance 't'
+   20 |   assert property (@(posedge clk) e |-> ((a ##[1:17] b) |-> c));
+      |                                             ^~
+%Error-UNSUPPORTED: t/t_property_attempts_antecedent_unsup.v:21:39: Unsupported: followed-by in another property operator with an antecedent of more than 16 match lengths (IEEE 1800-2023 16.12.9).
+                                                                  : ... note: In instance 't'
+   21 |   assert property (@(posedge clk) ((a ##[1:17] b) #-# c) or (d |-> e));
+      |                                       ^~
+%Error-UNSUPPORTED: t/t_property_attempts_antecedent_unsup.v:22:39: Unsupported: implication in another property operator with an antecedent longer than 255 cycles (IEEE 1800-2023 16.12.7).
+                                                                  : ... note: In instance 't'
+   22 |   assert property (@(posedge clk) ((a ##[250:260] b) |-> c) and (d |-> e));
+      |                                       ^~
+%Error-UNSUPPORTED: t/t_property_attempts_antecedent_unsup.v:24:39: Unsupported: implication in another property operator with an antecedent whose match lengths make implications of more than 256 cycles in all (IEEE 1800-2023 16.12.7).
+                                                                  : ... note: In instance 't'
+   24 |   assert property (@(posedge clk) ((a ##[127:128] b) |=> c) and (d |-> e));
+      |                                       ^~
+%Error: Exiting due to
