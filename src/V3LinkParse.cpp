@@ -86,6 +86,8 @@ class LinkParseVisitor final : public VNVisitor {
     bool m_lifetimeAllowed = false;  // True to allow lifetime settings
     bool m_outlivesCall = false;  // If values of the current task can be used after it returns
     bool m_readsResult = false;  // If the current function may read its result variable
+    // Output arguments of the current task or function that it may read
+    std::unordered_set<std::string> m_readsOutputs;
     bool m_moduleWithGenericIface = false;  // If current module contains generic interface
     std::set<AstVar*> m_portDups;  // Non-ANSI port datatype duplicating input/output decls
 
@@ -291,8 +293,11 @@ class LinkParseVisitor final : public VNVisitor {
     // write it, and may read it, or return, before a plain assignment of it, or 'return' of a
     // value, not reading it, at the start of its body, outside conditions, loops and forks
     static bool readsResult(const AstNodeFTask* nodep) {
-        if (!VN_IS(nodep, Func)) return false;
-        const std::string& name = nodep->name();
+        return VN_IS(nodep, Func) && readsPrevious(nodep, nodep->name(), true);
+    }
+    // Whether a task or function may read the value of its variable 'name' from a previous call,
+    // as readsResult does; 'result' if it is the function's result, which 'return' assigns
+    static bool readsPrevious(const AstNodeFTask* nodep, const std::string& name, bool result) {
         const auto isRef = [&](const AstNode* np) {
             return np->exists([&](const AstParseRef* refp) { return refp->name() == name; });
         };
@@ -346,7 +351,9 @@ class LinkParseVisitor final : public VNVisitor {
                         return Scan::WRITTEN;
                     }
                 } else if (const AstReturn* const returnp = VN_CAST(stmtp, Return)) {
-                    if (returnp->lhsp() && !isRef(returnp->lhsp())) return Scan::WRITTEN;
+                    if (result && returnp->lhsp() && !isRef(returnp->lhsp())) {
+                        return Scan::WRITTEN;
+                    }
                 } else if (const AstBegin* const beginp = VN_CAST(stmtp, Begin)) {
                     const Scan result = scan(beginp->stmtsp());
                     if (result != Scan::NEITHER) return result;
@@ -383,6 +390,14 @@ class LinkParseVisitor final : public VNVisitor {
         VL_RESTORER(m_outlivesCall);
         VL_RESTORER(m_readsResult);
         m_readsResult = readsResult(nodep);
+        VL_RESTORER_CLEAR(m_readsOutputs);
+        // The output arguments, which, unlike the others, the call does not set
+        nodep->foreach([&](const AstVar* varp) {
+            if (varp->direction() == VDirection::OUTPUT && !varp->isFuncReturn()
+                && readsPrevious(nodep, varp->name(), false)) {
+                m_readsOutputs.emplace(varp->name());
+            }
+        });
         // Timing control lets a value be used after the task has ended, with fork..join_none,
         // and a sampled value function samples it at later clock ticks
         m_outlivesCall = nodep->exists([](const AstNode* const nodep) {
@@ -537,10 +552,11 @@ class LinkParseVisitor final : public VNVisitor {
         } else if (m_ftaskp) {
             // Variables of a static task whose values can be used after it returns need to be
             // static, as IEEE 1800-2023 6.21 makes them, also a function's result variable
-            // (IEEE 1800-2023 13.4.1), and so a result variable whose value of the previous call
-            // may be read
+            // (IEEE 1800-2023 13.4.1), and so a result variable, or output argument, whose value
+            // of the previous call may be read (IEEE 1800-2023 13.3.2)
             if (m_ftaskp->lifetime().isStatic()
-                && (m_outlivesCall || (nodep->isFuncReturn() && m_readsResult))) {
+                && (m_outlivesCall || (nodep->isFuncReturn() && m_readsResult)
+                    || m_readsOutputs.count(nodep->name()))) {
                 nodep->lifetime(VLifetime::STATIC_IMPLICIT);
             } else if (!nodep->isFuncReturn()) {  // Return variables are created automatic
                 nodep->lifetime(VLifetime::AUTOMATIC_IMPLICIT);
