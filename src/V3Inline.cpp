@@ -385,18 +385,24 @@ namespace ModuleInliner {
 
 // The scopes instantiated directly under each scope (that is parent -> children links)
 using ScopeChildren = std::unordered_map<const AstScope*, std::vector<AstScope*>>;
+// The scopes of each instance to inline
+using CellScopes = std::unordered_map<const AstCell*, std::vector<AstScope*>>;
 
-// Record downward links from parent scopes to their child scopes
-void gatherScopes(const AstNodeModule* modp, ScopeChildren& children) {
+// Record downward links from parent scopes to their child scopes that are not inlined
+void gatherScopes(const AstNodeModule* modp, const CellScopes& cellScopeps,
+                  ScopeChildren& children) {
     for (AstNode* const nodep : modp->stmtspList()) {
         if (AstScope* const scopep = VN_CAST(nodep, Scope)) {
             // Note the top scope is held under the AstTopScope, so is not seen here
             UASSERT_OBJ(scopep->aboveScopep(), scopep, "Instance scope should have a scope above");
+            // A scope to inline is inlined before the scope above it is inlined or renamed
+            // (bottom up order), so no link to it is ever needed
+            if (cellScopeps.count(scopep->aboveCellp())) continue;
             children[scopep->aboveScopep()].push_back(scopep);
         } else if (const AstNodeModule* const subModp = VN_CAST(nodep, NodeModule)) {
             // An AstClass holds its scopes under itself
             UASSERT_OBJ(VN_IS(subModp, Class), subModp, "Nested module should be a class");
-            gatherScopes(subModp, children);
+            gatherScopes(subModp, cellScopeps, children);
         }
     }
 }
@@ -499,8 +505,6 @@ void inlineScope(AstScope* scopep, AstCell* cellp, const std::string& prefix,
     // Children of the inlined scope are now children of the scope above. Note this must
     // come after the erase above, as inserting into 'children' can invalidate 'it'.
     std::vector<AstScope*>& parentChildps = children[parentScopep];
-    parentChildps.erase(std::remove(parentChildps.begin(), parentChildps.end(), scopep),
-                        parentChildps.end());
     parentChildps.insert(parentChildps.end(), childScopeps.begin(), childScopeps.end());
 
     UASSERT_OBJ(!scopep->varsp() && !scopep->blocksp() && !scopep->inlinesp(), scopep,
@@ -609,10 +613,6 @@ void process(AstNetlist* netlistp, InlineModGraph& graph) {
     // Number of inlined instances, for statistics
     VDouble0 m_nInlined;
 
-    // Record the scope hierarchy - we need the downward links
-    ScopeChildren children;
-    for (AstNodeModule* const modp : netlistp->modulespList()) { gatherScopes(modp, children); }
-
     // Gather all cells that need to be inlined (this is in topological order)
     std::vector<InlineModCellVertex*> cVtxps;
     for (V3GraphVertex& vtx : graph.vertices()) {
@@ -623,9 +623,15 @@ void process(AstNetlist* netlistp, InlineModGraph& graph) {
     }
 
     // The scopes of each instance to inline, filled below
-    std::unordered_map<const AstCell*, std::vector<AstScope*>> cellScopeps;
+    CellScopes cellScopeps;
     for (const InlineModCellVertex* const cVtxp : cVtxps) {
         cellScopeps.emplace(cVtxp->cellp(), std::vector<AstScope*>{});
+    }
+
+    // Record the scope hierarchy - we need the downward links
+    ScopeChildren children;
+    for (AstNodeModule* const modp : netlistp->modulespList()) {
+        gatherScopes(modp, cellScopeps, children);
     }
 
     // Unlink the scopes of the modules being inlined, so they are not cloned with them, and
