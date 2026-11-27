@@ -1568,6 +1568,24 @@ class TimingControlVisitor final : public VNVisitor {
                 new AstCStmt{nodep->fileline(), "vlProcess->state(VlProcess::FINISHED);"});
         }
     }
+    // Whether a forked process waits a nonzero delay before doing anything
+    static bool startsWithDelay(const AstForkItem* itemp) {
+        const AstNode* stmtp = itemp->stmtsp();
+        const AstDelay* const startp = VN_CAST(stmtp, Delay);
+        if (startp && startp->isForkBranchStart()) stmtp = stmtp->nextp();
+        const AstDelay* const delayp = VN_CAST(stmtp, Delay);
+        if (!delayp || delayp->isForkBranchStart()) return false;
+        const AstConst* const constp = VN_CAST(delayp->lhsp(), Const);
+        return constp && !constp->isZero();
+    }
+    // Whether the processes a fork starts would start after the region of the forking procedure
+    static bool forkStartsLate(const AstFork* forkp) {
+        if (!forkp->joinType().joinNone() || forkp->immediateStart()) return false;
+        for (const AstForkItem* const itemp : forkp->forkspList()) {
+            if (!startsWithDelay(itemp)) return true;
+        }
+        return false;
+    }
     void visit(AstAlways* nodep) override {
         if (v3Global.usesSuspendableExports() && hasFlags(nodep, T_DPI_CALL)) {
             nodep->v3warn(E_UNSUPPORTED,
@@ -1585,9 +1603,28 @@ class TimingControlVisitor final : public VNVisitor {
             && !(m_activep && m_activep->sentreep() && m_activep->sentreep()->hasCombo()))
             addFlags(nodep, T_SUSPENDEE);
 
+        // The processes this one forks start when it returns, in its region (IEEE 1800-2023
+        // 9.3.2), not after it, unless they start the same at any point of the time step
+        const bool forksStart
+            = nodep->exists([](const AstFork* forkp) { return forkStartsLate(forkp); });
         iterateChildren(nodep);
         if (hasFlags(nodep, T_HAS_PROC)) nodep->setNeedsVlProcess();
-        if (!hasFlags(nodep, T_SUSPENDEE)) return;
+        if (!hasFlags(nodep, T_SUSPENDEE)) {
+            if (forksStart && m_activep && m_activep->sentreep()
+                && !m_activep->sentreep()->hasCombo()) {
+                const auto newCallp = [&](VCMethod method) {
+                    FileLine* const flp = nodep->fileline();
+                    AstCMethodHard* const callp = new AstCMethodHard{
+                        flp, new AstVarRef{flp, getCreateDelayScheduler(), VAccess::WRITE},
+                        method};
+                    callp->dtypeSetVoid();
+                    return callp->makeStmt();
+                };
+                nodep->stmtsp()->addHereThisAsNext(newCallp(VCMethod::SCHED_COLLECT_FORK_STARTS));
+                nodep->addStmtsp(newCallp(VCMethod::SCHED_RESUME_FORK_STARTS));
+            }
+            return;
+        }
         FileLine* const flp = nodep->fileline();
         AstSenTree* const sentreep = m_activep->sentreep();
         if (sentreep->hasCombo() && !hasFlags(nodep, T_SUSPENDER)) {

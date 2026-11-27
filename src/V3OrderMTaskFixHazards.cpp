@@ -264,6 +264,14 @@ class ProcessControlVisitor final : public VNVisitorConst {
     void visit(AstCMethodHard* nodep) override {
         // Notifying the dynamic trigger scheduler of a handle write is safe in parallel
         if (nodep->method() == VCMethod::SCHED_HANDLES_WRITTEN) return;
+        // Starting the processes the logic forked runs them, so what they may control
+        if (nodep->method() == VCMethod::SCHED_RESUME_FORK_STARTS) {
+            if (m_funcVtxp) {
+                m_funcVtxp->m_control = true;
+            } else {
+                m_logicControl = true;
+            }
+        }
         iterateChildrenConst(nodep);
     }
     void visit(AstNodeCCall* nodep) override {
