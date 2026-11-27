@@ -2296,6 +2296,7 @@ void VlRandomizer::table_begin(int indexWidth, int valueWidth, bool positional, 
     m_tableBuilders.push_back(TableBuilder{"((?i (_ BitVec " + std::to_string(indexWidth)
                                                + "))) (_ BitVec " + std::to_string(valueWidth)
                                                + ") ",
+                                           indexWidth,
                                            positional,
                                            needs,
                                            {},
@@ -2307,10 +2308,39 @@ void VlRandomizer::table_entry(const std::string& key, std::string value) {
     m_tableBuilders.back().values.push_back(std::move(value));
 }
 
-// Append the body of a table to 'body': a chain of tests of the key, '(ite (= ?i k) v ...)',
-// linear in the number of keys
+// Append to 'body' a test of the bits of '?i' from 'bit' down, choosing among the values at
+// positions 'lo' and above
+static void appendBitTests(std::string& body, const std::vector<std::string>& values, size_t lo,
+                           int bit) {
+    while (bit >= 0 && lo + (size_t{1} << bit) >= values.size()) --bit;  // No upper half
+    if (bit < 0) {
+        body += values[lo];
+        return;
+    }
+    body += "(ite (= ((_ extract " + std::to_string(bit) + ' ' + std::to_string(bit)
+            + ") ?i) #b1) ";
+    appendBitTests(body, values, lo + (size_t{1} << bit), bit - 1);
+    body += ' ';
+    appendBitTests(body, values, lo, bit - 1);
+    body += ')';
+}
+// Append the body of a table to 'body', linear in the number of keys. Keys that are the
+// 'positional' 0, 1, ... are found by a test of each bit of the index of 'indexWidth' bits, which
+// a solve splits on faster than on a test of each key, '(ite (= ?i k) v ...)', as other keys are.
 static void appendTableBody(std::string& body, const std::vector<std::string>& keys,
-                            const std::vector<std::string>& values, const std::string& otherwise) {
+                            const std::vector<std::string>& values, bool positional,
+                            int indexWidth, const std::string& otherwise) {
+    if (positional && !values.empty()) {
+        // The positions fit the index, which the compiler makes at least 32 bits wide
+        assert(indexWidth >= 64 || values.size() < (uint64_t{1} << indexWidth));
+        int bits = 0;
+        while ((size_t{1} << bits) < values.size()) ++bits;
+        body += "(ite (bvult ?i (_ bv" + std::to_string(values.size()) + ' '
+                + std::to_string(indexWidth) + ")) ";
+        appendBitTests(body, values, 0, bits - 1);
+        body += ' ' + otherwise + ')';
+        return;
+    }
     for (size_t j = 0; j < keys.size(); ++j) {
         body += "(ite (= ?i " + keys[j] + ") " + values[j] + ' ';
     }
@@ -2322,7 +2352,8 @@ std::string VlRandomizer::table_end(const std::string& otherwise) {
     TableBuilder builder = std::move(m_tableBuilders.back());
     m_tableBuilders.pop_back();
     std::string body;
-    appendTableBody(body, builder.keys, builder.values, otherwise);
+    appendTableBody(body, builder.keys, builder.values, builder.positional, builder.indexWidth,
+                    otherwise);
     size_t hash = std::hash<std::string>{}(builder.head);
     hash = hash * 31 + std::hash<std::string>{}(body);
     m_pendingTablesHash
