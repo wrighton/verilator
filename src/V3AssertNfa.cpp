@@ -7844,6 +7844,7 @@ class AssertNfaVisitor final : public VNVisitor {
     std::vector<const AstBegin*> m_namedBeginps;  // Named blocks around the current assertion
     AstNode* m_containerp = nullptr;  // Current module or generate block
     bool m_procSuspends = false;  // Current procedure may suspend
+    size_t m_statShortenedReps = 0;  // Repetitions of 'and' operands shortened
     // The count of the calls that may kill assertions, in $unit, if the design has one: the
     // logic of the assertions reads it, so it runs again on a call
     AstVar* m_killEpochp = nullptr;
@@ -8793,6 +8794,36 @@ class AssertNfaVisitor final : public VNVisitor {
         return treep;
     }
 
+    // A sequence of a property decides an attempt at its first match, so an operand of an 'and'
+    // of it may match its shortest way: with a match of an operand, the 'and' matches no later
+    // with a shorter match of the other (IEEE 1800-2023 16.9.5). So a repetition of a boolean
+    // without a bound at the end of such an operand repeats it the fewest times, as it would
+    // otherwise keep threads of attempts already matched, paired with those of other attempts.
+    void shortenAndOperands(AstNodeExpr* nodep, bool inAnd) {
+        if (AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            shortenAndOperands(implp->rhsp(), false);
+        } else if (AstLogNot* const notp = VN_CAST(nodep, LogNot)) {
+            shortenAndOperands(notp->lhsp(), inAnd);
+        } else if (AstSAnd* const andp = VN_CAST(nodep, SAnd)) {
+            shortenAndOperands(andp->lhsp(), true);
+            shortenAndOperands(andp->rhsp(), true);
+        } else if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
+            shortenAndOperands(orp->lhsp(), inAnd);
+            shortenAndOperands(orp->rhsp(), inAnd);
+        } else if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
+            shortenAndOperands(sexprp->exprp(), inAnd);
+        } else if (AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            // A match item runs on each repetition (IEEE 1800-2023 16.10, 16.11)
+            if (!inAnd || !repp->unbounded() || VN_AS(repp->countp(), Const)->isZero()
+                || repp->exprp()->isMultiCycleSva()
+                || repp->exprp()->exists([](const AstExprStmt*) { return true; })) {
+                return;
+            }
+            repp->unbounded(false);
+            ++m_statShortenedReps;
+        }
+    }
+
     void processAssertion(AstNodeCoverOrAssert* assertp) {
         if (assertp->immediate()) return;
 
@@ -8919,6 +8950,7 @@ class AssertNfaVisitor final : public VNVisitor {
         // repetition, not at each failing match, but does not support it with a cycle delay or
         // in an abort operator. Left after the module defaults are inherited, which
         // V3AssertPre relies on.
+        if (!countsMatches(assertp)) shortenAndOperands(propp->propp(), false);
         if (propp->exists([](const AstSNonConsRep*) { return true; })
             && !propp->exists([](const AstSExpr*) { return true; })
             && !propp->exists([](const AstAbortOn*) { return true; })) {
@@ -9207,6 +9239,8 @@ public:
     ~AssertNfaVisitor() override {
         V3Stats::addStatSum("Assertions, local variable state summaries over limit",
                             m_ftaskInfo.statStateVarsUnknown);
+        V3Stats::addStatSum("Assertions, NFA 'and' operand repetitions shortened",
+                            m_statShortenedReps);
     }
 };
 
