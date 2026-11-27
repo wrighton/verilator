@@ -294,9 +294,12 @@ private:
         return new AstIf{flp, new AstNot{flp, isTriggeredp}, waitp};
     }
 
-    static void checkSamplingFuncDType(AstNodeExpr* nodep, const AstNode* exprp) {
+    static void checkSamplingFuncDType(AstNodeExpr* nodep, const AstNode* exprp,
+                                       bool allowUnpacked = false) {
         const AstNodeDType* const dtypep = exprp->dtypep()->skipRefp();
-        if (!dtypep->isIntegralOrPacked()) {
+        if (!dtypep->isDouble()
+            && !(allowUnpacked ? V3AssertCommon::isSampledType(dtypep)
+                               : dtypep->isIntegralOrPacked())) {
             nodep->v3error("Expected numeric type, but got a " << dtypep->prettyDTypeNameQ()
                                                                << " data type");
         }
@@ -358,7 +361,7 @@ private:
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void lowerStable(AstStable* nodep) {
-        checkSamplingFuncDType(nodep, nodep->exprp());
+        checkSamplingFuncDType(nodep, nodep->exprp(), /* allowUnpacked */ true);
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
         AstSenTree* sentreep = nodep->sentreep();
@@ -366,7 +369,7 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstEq{fl, pastp, exprp->cloneTreePure(false)};
+        exprp = AstEq::newTyped(fl, pastp, exprp->cloneTreePure(false));
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -940,10 +943,9 @@ private:
         nodep->sentreep(newSenTree(nodep));
     }
     void visit(AstPast* nodep) override {
-        checkSamplingFuncDType(nodep, nodep->exprp());
-        if (nodep->sentreep()) return;  // Already processed
-        iterateChildren(nodep);
-        nodep->sentreep(newSenTree(nodep));
+        checkSamplingFuncDType(nodep, nodep->exprp(), /* allowUnpacked */ true);
+        iterateAndNextNull(nodep->exprp());
+        if (!nodep->sentreep()) nodep->sentreep(newSenTree(nodep));
     }
     void visit(AstSConsRep* nodep) override {
         // IEEE 1800-2023 16.9.2 -- Lower standalone exact [*N] (N >= 2) via saturating counter.
@@ -1140,17 +1142,18 @@ private:
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
-        if (exprp->width() > 1) exprp = new AstSel{fl, exprp, 0, 1};
         AstNodeExpr* const futurep = new AstFuture{fl, exprp, newSenTree(nodep)};
         futurep->dtypeFrom(exprp);
-        exprp = new AstEq{fl, exprp->cloneTreePure(false), futurep};
+        exprp = AstEq::newTyped(fl, exprp->cloneTreePure(false), futurep);
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void visit(AstSampled* nodep) override {
         iterateChildren(nodep);
-        if (!nodep->internal()) checkSamplingFuncDType(nodep, nodep->exprp());
+        if (!nodep->internal()) {
+            checkSamplingFuncDType(nodep, nodep->exprp(), /* allowUnpacked */ true);
+        }
     }
 
     // Validate repetition count: must be a non-negative elaboration-time constant.

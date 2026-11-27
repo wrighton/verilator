@@ -107,6 +107,22 @@ string V3AssertCommon::assertCtlGetCall(const char* query, VAssertType type,
            + std::to_string(directiveType) + ">(VerilatedAssertCtlQuery::"s + query + "))"s;
 }
 
+bool V3AssertCommon::isSampledType(const AstNodeDType* dtypep) {
+    // An integral type, or an unpacked array or structure of such types (IEEE 1800-2023 16.9.3).
+    dtypep = dtypep->skipRefp();
+    if (dtypep->isIntegralOrPacked()) return true;
+    if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        return isSampledType(arrayp->subDTypep());
+    }
+    const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+    if (!structp) return false;
+    for (const AstMemberDType* memberp = structp->membersp(); memberp;
+         memberp = VN_AS(memberp->nextp(), MemberDType)) {
+        if (!isSampledType(memberp->subDTypep())) return false;
+    }
+    return true;
+}
+
 bool V3AssertCommon::checkSvaValueLimit(AstNode* nodep, const AstConst* constp, const char* what) {
     // Temporal values can materialize as O(N) AST or state in later passes.
     // Leave headroom for a range ring's extra slot and V3Number's signed
@@ -190,6 +206,7 @@ class AssertDeFutureVisitor final : public VNVisitor {
     std::map<AstVar*, AstVar*> m_delayedVars;  // Old to delayed variable mapping
     // STATE - for current visit position (use VL_RESTORER)
     bool m_inFuture = false;  // Inside a future
+    bool m_inDisable = false;  // Inside a disable condition
     bool m_unsupported = false;  // Printed unsupported
 
     // METHODS
@@ -200,8 +217,34 @@ class AssertDeFutureVisitor final : public VNVisitor {
                       "Unsupported/illegal: Future value function used with expression with "
                           << nodep->prettyOperatorName());
     }
+    // Return a new variable that each future clock tick loads with 'valuep'
+    AstVar* newDelayedVar(const string& name, AstNodeExpr* valuep) {
+        FileLine* const flp = valuep->fileline();
+        AstAlways* const alwaysp = new AstAlways{flp, VAlwaysKwd::ALWAYS,
+                                                 m_futurep->sentreep()->cloneTree(false), nullptr};
+        m_modp->addStmtsp(alwaysp);
+        AstVar* const varp = new AstVar{flp, VVarType::MODULETEMP, name, valuep->dtypep()};
+        m_modp->addStmtsp(varp);
+        AstVarRef* const writeRefp = new AstVarRef{flp, varp, VAccess::WRITE};
+        writeRefp->user1(true);
+        alwaysp->addStmtsp(new AstAssignDly{flp, writeRefp, valuep});
+        return varp;
+    }
     // VISITORS
+    void visit(AstPropSpec* nodep) override {
+        iterateAndNextNull(nodep->sensesp());
+        {
+            VL_RESTORER(m_inDisable);
+            m_inDisable = true;
+            iterateAndNextNull(nodep->disablep());
+        }
+        iterateAndNextNull(nodep->propp());
+        iterateAndNextNull(nodep->matchCountp());
+    }
     void visit(AstFuture* nodep) override {
+        // A disable condition is not a property or sequence expression, so leave a future value
+        // function there for AssertVisitor to reject (IEEE 1800-2023 16.9.4)
+        if (m_inDisable) return;
         VL_RESTORER(m_inFuture);
         m_inFuture = true;
         iterateChildren(nodep);
@@ -220,21 +263,10 @@ class AssertDeFutureVisitor final : public VNVisitor {
         auto it = m_delayedVars.find(nodep->varp());
         AstVar* outvarp;
         if (it == m_delayedVars.end()) {
-            AstSenTree* const sentreep = m_futurep->sentreep();
-            AstAlways* const alwaysp = new AstAlways{nodep->fileline(), VAlwaysKwd::ALWAYS,
-                                                     sentreep->cloneTree(false), nullptr};
-            m_modp->addStmtsp(alwaysp);
-            outvarp = new AstVar{nodep->fileline(), VVarType::MODULETEMP,
-                                 "__Vnotfuture" + cvtToStr(m_pastNum) + "_" + nodep->name(),
-                                 nodep->dtypep()};
-            m_modp->addStmtsp(outvarp);
-            AstVarRef* varRefAWritep = new AstVarRef{nodep->fileline(), outvarp, VAccess::WRITE};
-            varRefAWritep->user1(true);
-            AstNodeVarRef* varRefAReadp = nodep->cloneTree(false);
-            varRefAReadp->user1(true);
-            AstNodeStmt* const assp
-                = new AstAssignDly{nodep->fileline(), varRefAWritep, varRefAReadp};
-            alwaysp->addStmtsp(assp);
+            AstNodeVarRef* const valuep = nodep->cloneTree(false);
+            valuep->user1(true);
+            outvarp = newDelayedVar("__Vnotfuture" + cvtToStr(m_pastNum) + "_" + nodep->name(),
+                                    valuep);
             m_delayedVars.emplace(nodep->varp(), outvarp);
         } else {
             outvarp = it->second;
@@ -244,6 +276,14 @@ class AssertDeFutureVisitor final : public VNVisitor {
         UINFO(9, "DeFuture " << nodep << "  becomes " << newp);
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    void visit(AstPExpr* nodep) override {
+        // V3AssertPre lowered this operator to a forked process, which cannot be evaluated one
+        // tick late; the rest of the visit then only strips the future value functions
+        nodep->v3warn(E_UNSUPPORTED, "Unsupported: future sampled value function in a property"
+                                     " with this temporal operator");
+        m_unsupported = true;
+        iterateChildren(nodep);
     }
     void visit(AstNodeFTaskRef* nodep) override { unsupported(nodep); }
     void visit(AstMethodCall* nodep) override { unsupported(nodep); }
@@ -263,42 +303,83 @@ public:
                 return false;
             }))
             return;
+        // Only concurrent assertions, which have a PropSpec, are lowered (IEEE 1800-2023 16.9.4)
+        AstPropSpec* const specp = VN_AS(nodep, PropSpec);
         // UINFOTREE(9, nodep, "", "defuture-in");
-        visit(nodep);  // Nodep may get deleted
+        visit(specp);
         // UINFOTREE(9, nodep, "", "defuture-ou");
+        // The attempt checked at a tick is the one from the previous tick, so disable the
+        // first tick, which has no previous tick and no delayed values
+        FileLine* const flp = specp->fileline();
+        AstVar* const startedp = newDelayedVar("__VfutureStarted" + cvtToStr(m_pastNum),
+                                               new AstConst{flp, AstConst::BitTrue{}});
+        AstNodeExpr* disablep = new AstLogNot{flp, new AstVarRef{flp, startedp, VAccess::READ}};
+        if (specp->disablep()) {
+            disablep = new AstLogOr{flp, specp->disablep()->unlinkFrBack(), disablep};
+        }
+        specp->disablep(disablep);
     }
     ~AssertDeFutureVisitor() override = default;
 };
 
 // Prepare one default sampled expression.
 class DefaultSampledValueVisitor final : public VNVisitor {
-    // STATE
-    bool m_defaulted = false;  // A reference below was replaced by its default
-
     // METHODS
-    AstConst* newTypeDefault(AstNodeExpr* nodep) {
-        m_defaulted = true;
-        AstConst* const constp
-            = new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()};
-        if (nodep->dtypep()->isFourstate()) constp->num().setAllBitsX();
-        constp->dtypeFrom(nodep);
+    static AstNodeExpr* newTypeDefault(FileLine* flp, AstNodeDType* dtypep) {
+        AstNodeDType* const skipDtp = dtypep->skipRefp();
+        if (AstUnpackArrayDType* const arrayp = VN_CAST(skipDtp, UnpackArrayDType)) {
+            return new AstConsArray{flp, arrayp, newTypeDefault(flp, arrayp->subDTypep())};
+        }
+        AstStructDType* const structp = VN_CAST(skipDtp, StructDType);
+        if (structp && !structp->packed()) {
+            AstConsStruct* const consp = new AstConsStruct{flp, structp};
+            for (AstMemberDType* memberp = structp->membersp(); memberp;
+                 memberp = VN_AS(memberp->nextp(), MemberDType)) {
+                consp->addItemsp(new AstConsStructItem{flp, memberp,
+                                                       newTypeDefault(flp, memberp->subDTypep())});
+            }
+            return consp;
+        }
+        AstConst* const constp = new AstConst{flp, AstConst::DTyped{}, dtypep};
+        if (dtypep->isFourstate()) constp->num().setAllBitsX();
+        constp->dtypep(dtypep);
         return constp;
     }
-
+    static bool hasDefaultValue(const AstVar* varp) {
+        return !varp->isParam()
+               && (varp->isNet() || !varp->lifetime().isStatic() || !varp->hasUserInit());
+    }
+    static AstNodeExpr* selectFromp(AstNode* nodep) {
+        if (AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) return selp->fromp();
+        if (AstSel* const selp = VN_CAST(nodep, Sel)) return selp->fromp();
+        if (AstStructSel* const selp = VN_CAST(nodep, StructSel)) return selp->fromp();
+        return nullptr;
+    }
     void visitSelect(AstNodeExpr* nodep) {
-        // A select of a replaced value or index is itself the default of its type
-        bool setDefaulted;
-        {
-            VL_RESTORER(m_defaulted);
-            m_defaulted = false;
-            iterateChildren(nodep);
-            setDefaulted = m_defaulted;
+        // A selection from a variable with its default value, or with an unknown index, has
+        // the default value of the selected type (IEEE 1800-2023 7.4.6, 11.5.1). Replace the
+        // whole selection: the variable may be unpacked, and a constant unknown index would
+        // be rejected later.
+        AstNodeExpr* basep = selectFromp(nodep);
+        while (AstNodeExpr* const fromp = selectFromp(basep)) basep = fromp;
+        const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
+        bool isDefault = refp && hasDefaultValue(refp->varp());
+        if (!isDefault) {
+            AstNodeExpr* selp = nodep;
+            for (; selectFromp(selp); selp = selectFromp(selp)) {
+                // The index of an AstNodeSel or AstSel; an AstStructSel has none
+                AstNodeBiop* const biopp = VN_CAST(selp, NodeBiop);
+                if (!biopp) continue;
+                iterate(biopp->rhsp());
+                const AstConst* const constp
+                    = VN_CAST(V3Const::constifyEdit(biopp->rhsp()), Const);
+                if (constp && constp->num().isAnyXZ()) isDefault = true;
+            }
+            iterate(selp);
         }
-        if (setDefaulted) {
-            m_defaulted = true;  // Propagate up that replacement was made
-            nodep->replaceWith(newTypeDefault(nodep));
+        if (isDefault) {
+            nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return;
         }
     }
 
@@ -311,17 +392,14 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             iterateChildren(nodep);
         }
     }
+    void visit(AstNodeSel* nodep) override { visitSelect(nodep); }
+    void visit(AstSel* nodep) override { visitSelect(nodep); }
+    void visit(AstStructSel* nodep) override { visitSelect(nodep); }
     void visit(AstNodeVarRef* nodep) override {
-        AstVar* const varp = nodep->varp();
-        if (varp->isParam()
-            || (!varp->isNet() && varp->lifetime().isStatic() && varp->hasUserInit())) {
-            return;
-        }
-        nodep->replaceWith(newTypeDefault(nodep));
+        if (!hasDefaultValue(nodep->varp())) return;
+        nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void visit(AstArraySel* nodep) override { visitSelect(nodep); }
-    void visit(AstSel* nodep) override { visitSelect(nodep); }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:
@@ -1385,7 +1463,33 @@ class AssertVisitor final : public VNVisitor {
     }
 
     //========== Past
+    // True if sentreep has an event that fires in the Observed region
+    static bool isObservedEventClock(const AstSenTree* sentreep) {
+        // Compiler-made events, of clocking blocks and sequences (the only MODULETEMP events
+        // at this stage), fire in the Observed region
+        for (const AstSenItem* itemp = sentreep->sensesp(); itemp;
+             itemp = VN_AS(itemp->nextp(), SenItem)) {
+            const AstNodeVarRef* const refp = itemp->varrefp();
+            if (refp && refp->varp()->varType() == VVarType::MODULETEMP
+                && refp->varp()->isEvent()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void visit(AstPast* nodep) override {
+        // When clocked in the Observed region, the history of a nested sampled value function
+        // would already be updated in the time step
+        if (isObservedEventClock(nodep->sentreep())
+            && nodep->exprp()->exists([](const AstPast*) { return true; })) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: sampled value function clocked by a"
+                                         " clocking block or sequence event, of an expression"
+                                         " with a nested sampled value function");
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         if (!nodep->propertyTiming()) {
             nodep->initp(nodep->exprp()->cloneTreePure(false));
             { DefaultSampledValueVisitor{nodep->initp()}; }
