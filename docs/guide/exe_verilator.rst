@@ -971,7 +971,12 @@ Summary:
    supported. A contiguous slice can be sampled when every bit outside it is
    hard-pinned; those fixed bits are preserved, including nonzero values.
    Distribution weights are preserved after hard restrictions and soft-priority
-   resolution. Unsupported forms, unrepresentable sampling arithmetic, and
+   resolution. The elements of a one-dimensional random array whose
+   constraints are each the item of a ``foreach`` over it, reading only the
+   element against constants (ranges, ``inside``, at most one distribution,
+   and soft constraints), are sampled the same way, each independently,
+   however large the array is; such an array is never given to the solver.
+   Unsupported forms, unrepresentable sampling arithmetic, and
    :vlopt:`+verilator+rand+sampler+\<name\>` set to ``solver`` retain the
    solver path. Random values from a given seed may differ when this
    optimization is enabled, and so may the result of ``randomize()`` where the
@@ -987,9 +992,10 @@ Summary:
    before solving, is given to the solver as one bit-vector variable per
    element rather than as an array, so a problem with no other array is
    solved in the faster bit-vector logic. Any other use of the array keeps it
-   an array. Random values from a given seed may differ when this
-   optimization is enabled. This option is useful when testing the solver
-   protocol itself.
+   an array. Disabling it also disables the sampling of array elements
+   :vlopt:`-fno-constraint-fast` describes. Random values from a given seed may
+   differ when this optimization is enabled. This option is useful when testing
+   the solver protocol itself.
 
 .. option:: -fno-dead-assigns
 
