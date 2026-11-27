@@ -1735,8 +1735,14 @@ class WidthVisitor final : public VNVisitor {
                     && !basicp->keyword().isIntNumeric())) {
                 nodep->v3error("Wildcard index must be integral (IEEE 1800-2023 7.8.1)");
             }
-            iterateCheckTyped(nodep, "Wildcard associative select", nodep->bitp(),
-                              adtypep->findStringDType(), BOTH);
+            // An index with X or Z bits has no string form; V3Unknown reads it as invalid
+            const AstConst* const constp = VN_CAST(nodep->bitp(), Const);
+            if (constp && constp->num().isFourState()) {
+                userIterateAndNext(nodep->bitp(), WidthVP{SELF, BOTH}.p());
+            } else {
+                iterateCheckTyped(nodep, "Wildcard associative select", nodep->bitp(),
+                                  adtypep->findStringDType(), BOTH);
+            }
             nodep->dtypeFrom(adtypep->subDTypep());
         }
     }

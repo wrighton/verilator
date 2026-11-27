@@ -614,6 +614,39 @@ class UnknownVisitor final : public VNVisitor {
         }
     }
     //--------------------
+    // An associative array element whose index has X or Z bits, which is invalid: a read gives
+    // the default value, and a write is ignored, through a temporary (IEEE 1800-2023 7.8.6)
+    void visitAssocElement(AstNodeSel* nodep) {
+        const AstNodeExpr* indexp = nodep->bitp();
+        // The index may be under its cast to the key type
+        while (const AstNodeUniop* const castp = VN_CAST(indexp, NodeUniop)) {
+            if (!VN_IS(castp, Extend) && !VN_IS(castp, ExtendS) && !VN_IS(castp, CCast)) break;
+            indexp = castp->lhsp();
+        }
+        const AstConst* const constp = VN_CAST(indexp, Const);
+        if (!constp || !constp->num().isFourState()) {
+            iterateChildren(nodep);
+            return;
+        }
+        FileLine* const flp = nodep->fileline();
+        AstNodeExpr* newp;
+        if (nodep->isLValue()) {
+            nodep->v3warn(SELRANGE, "Associative array index has X or Z bits, so the write is"
+                                    " ignored (IEEE 1800-2023 7.8.6).");
+            newp = new AstVarRef{flp, createAddTemp(nodep), nodep->getVAccessRecurse()};
+        } else {
+            nodep->v3warn(SELRANGE, "Associative array index has X or Z bits, so the read returns"
+                                    " the default value (IEEE 1800-2023 7.8.6).");
+            AstCMethodHard* const callp = new AstCMethodHard{flp, nodep->fromp()->unlinkFrBack(),
+                                                             VCMethod::ARRAY_AT_DEFAULT};
+            callp->dtypeFrom(nodep);
+            newp = callp;
+        }
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    void visit(AstAssocSel* nodep) override { visitAssocElement(nodep); }
+    void visit(AstWildcardSel* nodep) override { visitAssocElement(nodep); }
     void visit(AstDynArraySel* nodep) override { visitDynElement(nodep); }
     void visit(AstQueueSel* nodep) override { visitDynElement(nodep); }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }

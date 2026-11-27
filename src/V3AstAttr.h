@@ -937,6 +937,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
 #define FOR_EACH_CMETHOD(macro) \
     /*    id,                                 method,                   pure,   clean,  awaitable,  args */ \
     macro(_NONE,                              "_none",                  false,  CLEAN,  false,      "") \
+    macro(ARRAY_AT_DEFAULT,                   "atDefault",              PURE,   CLEAN,  false,      "") \
     macro(ARRAY_FIND,                         "find",                   PURE,   CLEAN,  false,      "") \
     macro(ARRAY_FIND_FIRST,                   "find_first",             PURE,   CLEAN,  false,      "") \
     macro(ARRAY_FIND_FIRST_INDEX,             "find_first_index",       PURE,   CLEAN,  false,      "") \
