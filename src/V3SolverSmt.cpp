@@ -2589,13 +2589,15 @@ class ConstraintExprVisitor final : public VNVisitor {
             if (!alreadyWritten) {
                 varp->user3(true);  // Solver owns it; __VBasicRand must not overwrite
                 if (m_inlineInitBlockp) m_inlineWrittenVars.insert(varp->name());
-                initp->addStmtsp(newWriteVarp());
-            }
-            // The runtime makes distinct the elements listed when the array was registered,
-            // so an array whose elements can change since it was registered, as set after
-            // the object was constructed, is registered again when the constraints are set up
-            if (!VN_IS(dtypep, UnpackArrayDType)) {
-                setupStmtsp = AstNode::addNext<AstNode, AstNode>(setupStmtsp, newWriteVarp());
+                // The runtime makes distinct the elements listed when the array was
+                // registered, so an array whose elements can change after construction is
+                // registered by each randomize(), as a read of its elements registers it (see
+                // getInitp), whatever constraints are enabled
+                if (VN_IS(dtypep, UnpackArrayDType)) {
+                    initp->addStmtsp(newWriteVarp());
+                } else {
+                    getInitp(varp, true, varModp)->addStmtsp(newWriteVarp());
+                }
             }
 
             // A solver-sized container is resized between solve passes; joining the
