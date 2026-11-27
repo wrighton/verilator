@@ -177,6 +177,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         std::vector<AstNodeExpr*> smtps;  // Of random indices, as solver terms
         AstNodeExpr* statep = nullptr;  // Of other indices, evaluated when randomize() is called
         AstNodeExpr* nullTextp = nullptr;  // Read through a null class handle, see statep
+        // Names bound to the random indices the solver terms read, with their texts
+        std::vector<std::pair<std::string, AstNodeExpr*>> lets;
     };
     SelGuards* m_selGuardsp = nullptr;  // Those of the integral element select being translated
     AstNodeFTask* m_prepareConstrainedArraysp = nullptr;  // Grow arrays for indexed struct access
@@ -2187,19 +2189,23 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
     // Record that the translated element select 'selp', whose index is a solver term of 'width'
     // bits, reads zero unless that index is below 'sizeTextp', of guardedIndexWidth, and select
-    // with the index in the solver's 32-bit index sort
+    // with the index in the solver's 32-bit index sort. The index is bound to a name, read by
+    // both, as its text may be long, e.g. of a select by an index that is itself a select.
     void addSmtSelGuard(AstSFormatF* selp, int width, bool isSigned, AstNodeExpr* sizeTextp) {
         FileLine* const fl = selp->fileline();
         AstNodeExpr* const indexp = VN_AS(selp->exprsp()->nextp(), NodeExpr);
+        const std::string name = m_uniqueNames.get("__Vk");
         AstSFormatF* const guardp
             = new AstSFormatF{fl, "(bvult %s %s)", false,
-                              newResizedTextp(indexp->cloneTreePure(false), width, isSigned,
-                                              guardedIndexWidth(width))};
+                              newResizedTextp(new AstSFormatF{fl, name, false, nullptr}, width,
+                                              isSigned, guardedIndexWidth(width))};
         guardp->addExprsp(sizeTextp);
         m_selGuardsp->smtps.push_back(guardp);
         VNRelinker handle;
         indexp->unlinkFrBack(&handle);
-        handle.relink(newResizedTextp(indexp, width, isSigned, VL_IDATASIZE));
+        handle.relink(newResizedTextp(new AstSFormatF{fl, name, false, nullptr}, width, isSigned,
+                                      VL_IDATASIZE));
+        m_selGuardsp->lets.emplace_back(name, indexp);
     }
     // Record the range check 'condp' of a non-random index
     void addStateSelGuard(AstNodeExpr* condp) {
@@ -2228,8 +2234,19 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstSFormatF* const itep = new AstSFormatF{fl, "(ite %s %s %s)", false, condp};
             itep->addExprsp(resultp);
             itep->addExprsp(newZerop());
-            handle.relink(itep);
             resultp = itep;
+            if (!guards.lets.empty()) {
+                std::string letFmt = "(let (";
+                AstNodeExpr* valuesp = nullptr;
+                for (size_t i = 0; i < guards.lets.size(); ++i) {
+                    letFmt += "(" + guards.lets[i].first + " %s)";
+                    valuesp = AstNode::addNext(valuesp, guards.lets[i].second);
+                }
+                AstSFormatF* const letp = new AstSFormatF{fl, letFmt + ") %s)", false, valuesp};
+                letp->addExprsp(resultp);
+                resultp = letp;
+            }
+            handle.relink(resultp);
         }
         if (guards.statep) {
             VNRelinker handle;
