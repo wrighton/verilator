@@ -3625,10 +3625,9 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     void makeActionsReactive(AstNodeCoverOrAssert* assertp, AstSenTree* senTreep) {
-        // A sequence event control resumes its waiters from the cover action, and without
-        // coverage the cover statement is deleted
+        // A sequence event control resumes its waiters from the cover action
         const AstCover* const coverp = VN_CAST(assertp, Cover);
-        if (coverp && (coverp->isSeqEvent() || !v3Global.opt.coverageUser())) return;
+        if (coverp && coverp->isSeqEvent()) return;
         // A procedure that may suspend may evaluate it in a later time step
         if (m_procSuspends) return;
         std::string scope;
@@ -4119,7 +4118,9 @@ class AssertNfaVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
             return;
         }
-        if (countMatches && !v3Global.opt.coverageUser()) {
+        // Without coverage collection, a cover sequence counts matches only for its pass
+        // statement
+        if (countMatches && !v3Global.opt.coverageUser() && !assertp->passsp()) {
             SvaNfaBuilder::freeUnlinkedCondp(result.finalCondp);
             VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
             AstNode* const innerPropp = propp->propp();

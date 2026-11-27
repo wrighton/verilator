@@ -1406,7 +1406,13 @@ class AssertVisitor final : public VNVisitor {
             if (seqEvent) {
                 // Keep the event-fire action, with no coverage bucket
             } else if (!v3Global.opt.coverageUser()) {
-                selfDestruct = true;
+                // Without coverage collection, only the pass statement runs, gated as the pass
+                // action of an assertion is (IEEE 1800-2023 16.14.3); with none, nothing does
+                if (!passsp) selfDestruct = true;
+                if (obsDeferred && passsp) passsp = newObservedDeferredAction(flp, passsp);
+                if (passsp && actionSenTreep && !nodep->nfaLowered() && !passPast) {
+                    passsp = newReactiveAction(nodep, actionSenTreep, passsp);
+                }
             } else {
                 // V3Coverage assigned us a bucket to increment.
                 AstCoverInc* const covincp = VN_AS(coverp->coverincsp(), CoverInc);
