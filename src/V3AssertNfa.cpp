@@ -8148,6 +8148,32 @@ class AssertNfaVisitor final : public VNVisitor {
         }
         return (node.lhsp && hasVarLenAnd(*node.lhsp)) || (node.rhsp && hasVarLenAnd(*node.rhsp));
     }
+    // Collect the lengths of the sequences of an 'or' of sequences; false if not one
+    static bool sequenceOrLengths(const SvaAttemptNode& node, std::set<int>& lengths) {
+        using Kind = SvaAttemptNode::Kind;
+        if (node.kind == Kind::OR) {
+            return sequenceOrLengths(*node.lhsp, lengths)
+                   && sequenceOrLengths(*node.rhsp, lengths);
+        }
+        if (node.kind != Kind::SEQUENCE) return false;
+        // A sequence of variable length counts as two lengths
+        if (node.seqp) {
+            lengths.insert(node.seqp->minLen);
+            lengths.insert(node.seqp->maxLen);
+        } else {
+            lengths.insert(node.latency);
+        }
+        return true;
+    }
+    // True if the tree is a sequence 'or', or a negation of one, of operands not all of one
+    // length, whose matches the NFA lowering counts by tick rather than by attempt
+    static bool isUnequalSequenceOr(const SvaAttemptNode& node) {
+        const SvaAttemptNode* nodep = &node;
+        while (nodep->kind == SvaAttemptNode::Kind::NOT) nodep = nodep->lhsp.get();
+        std::set<int> lengths;
+        return nodep->kind == SvaAttemptNode::Kind::OR && sequenceOrLengths(*nodep, lengths)
+               && lengths.size() > 1;
+    }
     // The tree to lower per attempt of an asserted property with an implication and another
     // property operator, which may be another implication, or of a property with an 'and' of an
     // operand of variable length, if each operand of it resolves within a fixed number of ticks
@@ -8176,7 +8202,8 @@ class AssertNfaVisitor final : public VNVisitor {
         int implications = 0;
         bool other = false;
         findAttemptKinds(*treep, implications, other);
-        if (!hasVarLenAnd(*treep) && (cover || !implications || (!other && implications < 2))) {
+        if (!hasVarLenAnd(*treep) && (cover || !implications || (!other && implications < 2))
+            && (cover || !isUnequalSequenceOr(*treep))) {
             return nullptr;
         }
         if (const SvaAttemptNode* const limitp = findOverLimit(*treep)) {

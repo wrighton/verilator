@@ -29,14 +29,14 @@ module t (
   assert property (@(posedge clk) (a |-> ((##1 b) or (##2 c) or (##3 a) or (##4 b) or (##5 c)))
       or (always [0:2] b));
   // Negated, each operand end would fail the attempt again
-  assert property (@(posedge clk) not ((a ##1 b) or (a ##[2:3] c)));
+  assert property (@(posedge clk) not ((a ##1 b) or (a ##[2:$] c)));
   assert property (@(posedge clk) not (((a ##1 b) or c) ##1 a));
   assert property (@(posedge clk) not ((always [0:1] a) or (b ##[2:3] c)));
   assert property (@(posedge clk) not ((a #=# b) or (c ##[2:$] a)));
   assert property (@(posedge clk) not ((s_eventually a) or (b ##1 c)));
   assert property (@(posedge clk) not (((a |-> b) and a) or (a ##[1:$] c)));
   assert property (@(posedge clk) not (((a ##1 b) or (c ##[2:$] a)) |-> b));
-  assert property (@(posedge clk) not ((##1 a) or (##2 b) or (##3 c) or (##4 a) or (##5 b)));
+  assert property (@(posedge clk) not ((##1 a) or (##2 b) or (##3 c) or (##4 a) or (##[5:$] b)));
   // A property operand that rejects on its own would fail the 'or' while the other one holds
   assert property (@(posedge clk) (a |-> ((b ##2 !b) or (a ##2 a))) or (always [0:2] c));
   assert property (@(posedge clk) (reject_on(c) (a ##1 b)) or (b ##1 c));
