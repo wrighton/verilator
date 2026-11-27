@@ -68,7 +68,8 @@ class BeginVisitor final : public VNVisitor {
 
     string dot(const string& a, const string& b) { return VString::dot(a, "__DOT__", b); }
 
-    void dotNames(const std::string& name, FileLine* const flp, const char* const blockName) {
+    void dotNames(const std::string& name, FileLine* const flp, const char* const blockName,
+                  bool displayed = true) {
         UINFO(8, "nname " << m_namedScope);
         // If unneeded unnamed block, whatever that means :)
         if (name == "") return;
@@ -80,7 +81,7 @@ class BeginVisitor final : public VNVisitor {
             const std::string ident = dottedname.substr(0, pos);
             dottedname = dottedname.substr(pos + std::strlen("__DOT__"));
             if (name != "") {
-                m_displayScope = dot(m_displayScope, ident);
+                if (displayed) m_displayScope = dot(m_displayScope, ident);
                 m_namedScope = dot(m_namedScope, ident);
             }
             m_unnamedScope = dot(m_unnamedScope, ident);
@@ -228,7 +229,9 @@ class BeginVisitor final : public VNVisitor {
         VL_RESTORER_COPY(m_displayScope);
         VL_RESTORER_COPY(m_namedScope);
         VL_RESTORER_COPY(m_unnamedScope);
-        dotNames(nodep->name(), nodep->fileline(), "__BEGIN__");
+        // A block Verilator made to hold its own temporaries is not in the scope %m reports
+        dotNames(nodep->name(), nodep->fileline(), "__BEGIN__",
+                 !(nodep->implied() && VString::startsWith(nodep->name(), "__V")));
         iterateChildren(nodep);
 
         // Cleanup

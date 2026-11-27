@@ -1,0 +1,7 @@
+[15] NAMED top.t.named
+[35] ACTION top.t
+[35] ACTION top.t
+[35] ACTION top.t
+[35] %Error: t_assert_pexpr_scope.v:20: Assertion failed in top.t: 'assert' failed.
+[35] %Error: t_assert_pexpr_scope.v:20: Assertion failed in top.t: 'assert' failed.
+[35] %Error: t_assert_pexpr_scope.v:20: Assertion failed in top.t: 'assert' failed.
