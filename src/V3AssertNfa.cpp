@@ -8275,12 +8275,13 @@ class AssertNfaVisitor final : public VNVisitor {
     }
     // Sets errored if reporting an error
     static std::unique_ptr<SvaAttemptNode> attemptTree(const AstNodeCoverOrAssert* assertp,
-                                                       AstNodeExpr* bodyp, bool localValues,
-                                                       bool& errored) {
-        // A match item or future value is not on a tick of the attempt, and a cover sequence
-        // counts each match
+                                                       AstNodeExpr* bodyp, bool& errored) {
+        // A subroutine call of a match item or a future value is not on a tick of the attempt,
+        // and a cover sequence counts each match. A local variable read is a sampled value of
+        // a fixed number of ticks before (see AssertNfaMatchItemVisitor), the same for all the
+        // attempts reading it on a tick.
         const bool cover = VN_IS(assertp, Cover);
-        if ((!cover && !VN_IS(assertp, Assert)) || (cover && countsMatches(assertp)) || localValues
+        if ((!cover && !VN_IS(assertp, Assert)) || (cover && countsMatches(assertp))
             || bodyp->exists(
                 [](const AstNode* np) { return VN_IS(np, ExprStmt) || isFutureValueFn(np); })) {
             return nullptr;
@@ -8468,7 +8469,7 @@ class AssertNfaVisitor final : public VNVisitor {
 
         bool attemptErrored = false;
         if (const std::unique_ptr<SvaAttemptNode> treep
-            = attemptTree(assertp, propp->propp(), !localValueps.empty(), attemptErrored)) {
+            = attemptTree(assertp, propp->propp(), attemptErrored)) {
             const auto signals
                 = m_loweringp->lowerAttempts(assertp, *treep, senTreep, disableExprp);
             AstNodeExpr* failCountp = signals.threadFailCountp;
