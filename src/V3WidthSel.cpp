@@ -44,6 +44,13 @@ class WidthSelVisitor final : public VNVisitor {
     //  on if widthing top-down or just for parameters.
 #define iterateChildren DO_NOT_iterateChildern_IN_V3WidthSel
 
+    // A position this far out of range is beyond any value, part-select or element
+    static constexpr int32_t FAR_POSITION = 1 << 28;
+
+    // STATE
+    // Compute bit positions exactly, as a constraint reads one out of range as zero
+    bool m_exactPosition;
+
     // METHODS
 
     void checkConstantOrReplace(AstNode* nodep, const string& message) {
@@ -105,10 +112,75 @@ class WidthSelVisitor final : public VNVisitor {
         return FromData(errp, ddtypep, fromRange);
     }
 
+    // Return 'addend' minus 'indexp' if 'negate', else 'indexp' plus 'addend', as a signed value
+    // wide enough not to wrap. An index of up to 32 bits is an integer, so an unsigned 32-bit one
+    // with its top bit set is negative, as the major simulators take it. A constant position
+    // beyond FAR_POSITION is as far out of range as that, which later passes read as an integer.
+    AstNodeExpr* newExactPosition(AstNodeExpr* indexp, bool negate, int32_t addend) {
+        FileLine* const fl = indexp->fileline();
+        const int width = std::max(indexp->width(), VL_IDATASIZE) + 2;
+        const bool isInteger = indexp->width() <= VL_IDATASIZE;
+        V3Number offset{fl, width, 0};
+        offset.opExtendS(V3Number{fl, VL_IDATASIZE, static_cast<uint32_t>(addend)}, VL_IDATASIZE);
+        offset.isSigned(true);
+        if (const AstConst* const constp = VN_CAST(indexp, Const)) {
+            V3Number index{fl, std::max(indexp->width(), VL_IDATASIZE), 0};
+            if (indexp->isSigned()) {
+                index.opExtendS(constp->num(), constp->width());
+            } else {
+                index.opAssign(constp->num());
+            }
+            V3Number pos{fl, width, 0};
+            if (isInteger || indexp->isSigned()) {
+                pos.opExtendS(index, index.width());
+            } else {
+                pos.opAssign(index);
+            }
+            if (negate) {
+                pos.opSub(offset, V3Number{pos});
+            } else {
+                pos.opAdd(V3Number{pos}, offset);
+            }
+            V3Number far{fl, width, 0};
+            far.opExtendS(V3Number{fl, VL_IDATASIZE, FAR_POSITION}, VL_IDATASIZE);
+            V3Number beyond{fl, 1, 0};
+            beyond.opGtS(pos, far);
+            if (beyond.isNeqZero()) return new AstConst{fl, AstConst::Signed32{}, FAR_POSITION};
+            V3Number nearFar{fl, width, 0};
+            nearFar.opNegate(far);
+            beyond.opLtS(pos, nearFar);
+            if (beyond.isNeqZero()) return new AstConst{fl, AstConst::Signed32{}, -FAR_POSITION};
+            V3Number pos32{fl, VL_IDATASIZE, 0};
+            pos32.opSel(pos, VL_IDATASIZE - 1, 0);
+            return new AstConst{fl, AstConst::Signed32{}, pos32.toSInt()};
+        }
+        AstNodeExpr* posp = indexp;
+        if (indexp->width() < VL_IDATASIZE) {
+            posp = indexp->isSigned()
+                       ? static_cast<AstNodeExpr*>(new AstExtendS{fl, posp, VL_IDATASIZE})
+                       : new AstExtend{fl, posp, VL_IDATASIZE};
+            posp->dtypeSetLogicSized(VL_IDATASIZE, VSigning::SIGNED);
+        }
+        posp = isInteger || indexp->isSigned()
+                   ? static_cast<AstNodeExpr*>(new AstExtendS{fl, posp, width})
+                   : new AstExtend{fl, posp, width};
+        posp->dtypeSetLogicSized(width, VSigning::SIGNED);
+        if (addend == 0 && !negate) return posp;
+        AstConst* const offsetp = new AstConst{fl, offset};
+        if (negate) {
+            posp = new AstSub{fl, offsetp, posp};
+        } else {
+            posp = new AstAdd{fl, posp, offsetp};
+        }
+        posp->dtypeSetLogicSized(width, VSigning::SIGNED);
+        return posp;
+    }
     AstNodeExpr* newSubNeg(AstNodeExpr* lhsp, int32_t rhs) {
         // Return lhs-rhs, but if rhs is negative use an add, so we won't
         // have to deal with signed math and related 32bit sign extension problems
-        if (rhs == 0) {
+        if (m_exactPosition) {
+            return newExactPosition(lhsp, false, -rhs);
+        } else if (rhs == 0) {
             return lhsp;
         } else if (VN_IS(lhsp, Const)) {
             // Optional vs just making add/sub below, but saves constification some work
@@ -134,6 +206,7 @@ class WidthSelVisitor final : public VNVisitor {
     }
     AstNodeExpr* newSubNeg(int32_t lhs, AstNodeExpr* rhsp) {
         // Return lhs-rhs
+        if (m_exactPosition) return newExactPosition(rhsp, true, lhs);
         // We must make sure sub gets sign of original value
         AstNodeExpr* const newp = new AstSub{
             rhsp->fileline(), new AstConst(rhsp->fileline(), AstConst::Unsized32{}, lhs), rhsp};
@@ -161,6 +234,21 @@ class WidthSelVisitor final : public VNVisitor {
         }
     }
     AstNodeExpr* newMulConst(FileLine* fl, uint32_t elwidth, AstNodeExpr* indexp) {
+        if (m_exactPosition) {
+            // Wide enough that the bit position cannot wrap
+            const int width
+                = std::max(indexp->width(), VL_IDATASIZE) + V3Number::log2b(elwidth) + 2;
+            const VSigning signing = VSigning::fromBool(indexp->isSigned());
+            AstNodeExpr* const extendp
+                = indexp->isSigned() ? static_cast<AstNodeExpr*>(new AstExtendS{fl, indexp, width})
+                                     : new AstExtend{fl, indexp, width};
+            extendp->dtypeSetLogicSized(width, signing);
+            V3Number scale{fl, width, elwidth};
+            scale.isSigned(indexp->isSigned());
+            AstNodeExpr* const mulp = new AstMul{fl, new AstConst{fl, scale}, extendp};
+            mulp->dtypeSetLogicSized(width, signing);
+            return mulp;
+        }
         AstNodeExpr* extendp;
         const int widthMin = std::max(V3Number::log2b(elwidth) + 1, indexp->widthMin());
         if (indexp->width() > 32) {
@@ -231,6 +319,8 @@ class WidthSelVisitor final : public VNVisitor {
         if (VN_IS(ddtypep, UnpackArrayDType)) {
             // SELBIT(array, index) -> ARRAYSEL(array, index)
             AstNodeExpr* subp = rhsp;
+            VL_RESTORER(m_exactPosition);
+            m_exactPosition = false;  // Not a bit position
             if (fromRange.lo() != 0 || fromRange.hi() < 0) {
                 subp = newSubNeg(subp, fromRange.lo());
             }
@@ -604,7 +694,8 @@ class WidthSelVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    WidthSelVisitor() = default;
+    explicit WidthSelVisitor(bool exactPosition)
+        : m_exactPosition{exactPosition} {}
     ~WidthSelVisitor() override = default;
     AstNode* mainAcceptEdit(AstNode* nodep) { return iterateSubtreeReturnEdits(nodep); }
 };
@@ -612,9 +703,9 @@ public:
 //######################################################################
 // Width class functions
 
-AstNode* V3Width::widthSelNoIterEdit(AstNode* nodep) {
+AstNode* V3Width::widthSelNoIterEdit(AstNode* nodep, bool exactPosition) {
     UINFO(4, __FUNCTION__ << ": " << nodep);
-    WidthSelVisitor visitor;
+    WidthSelVisitor visitor{exactPosition};
     nodep = visitor.mainAcceptEdit(nodep);
     return nodep;
 }

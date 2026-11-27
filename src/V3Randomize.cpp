@@ -1471,16 +1471,24 @@ class RandomizeVisitor final : public VNVisitor {
         if (VN_IS(argExprp, ArraySel) && VN_IS(withExprp, ArraySel)) {
             const AstArraySel* const withASp = VN_AS(withExprp, ArraySel);
             const AstArraySel* const argASp = VN_AS(argExprp, ArraySel);
-            // Before checking Sel type index, check if both are Const
+            // Before checking Sel type index, check if both are Const. The 'with' clause, a
+            // constraint, keeps the whole index of an integral element, which the argument
+            // has truncated to address the array.
             if (VN_IS(withASp->bitp(), Const) && VN_IS(argASp->bitp(), Const)) {
                 const AstConst* const withIdxp = VN_AS(withASp->bitp(), Const);
                 const AstConst* const argIdxp = VN_AS(argASp->bitp(), Const);
+                const int width = std::max(withIdxp->width(), argIdxp->width());
+                V3Number withNum{withIdxp->fileline(), width, 0};
+                withNum.opAssign(withIdxp->num());
+                V3Number argNum{argIdxp->fileline(), width, 0};
+                argNum.opAssign(argIdxp->num());
                 return isSimilarNode(withASp->fromp(), argASp->fromp())
-                       && withIdxp->num().isCaseEq(argIdxp->num());
+                       && withNum.isCaseEq(argNum);
             }
             // Index must be Sel type, extract VarRef using fromp()
-            if (!VN_IS(withASp->bitp(), Sel) || !VN_IS(argASp->bitp(), Sel)) return false;
-            const AstNodeExpr* const withIdxp = VN_AS(withASp->bitp(), Sel)->fromp();
+            if (!VN_IS(argASp->bitp(), Sel)) return false;
+            const AstNodeExpr* withIdxp = withASp->bitp();
+            if (const AstSel* const selp = VN_CAST(withIdxp, Sel)) withIdxp = selp->fromp();
             const AstNodeExpr* const argIdxp = VN_AS(argASp->bitp(), Sel)->fromp();
             return isSimilarNode(withASp->fromp(), argASp->fromp())
                    && isSimilarNode(withIdxp, argIdxp);

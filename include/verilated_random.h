@@ -299,6 +299,11 @@ class VlRandomizer VL_NOT_FINAL {
     int m_funcRound = 0;  // Current solve round
     int m_funcRoundLast = 0;  // Final solve round
     bool funcPreRound() const { return m_funcRound < m_funcRoundLast; }
+    // Members of null handles constraints may read, by solver name, with their source names
+    std::vector<std::pair<std::string, std::string>> m_nullReads;
+    std::string m_nullRead;  // Warning for a constraint reading one of them
+    const char* m_nullReadFilename = nullptr;  // Where that constraint is
+    uint32_t m_nullReadLinenum = 0;  // And line
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
@@ -393,6 +398,8 @@ class VlRandomizer VL_NOT_FINAL {
                           std::map<std::string, std::string>& solvedValuesr);
     bool readPhaseValues(VlSolverSession& sess, std::map<std::string, std::string>& solvedValuesr);
     bool parsePhaseValues(std::istream& is, std::map<std::string, std::string>& solvedValuesr);
+    // Record whether a constraint reads a member of a null handle
+    void nullReadCheck(const std::string& constraint, const char* filename, uint32_t linenum);
 
 public:
     // CONSTRUCTORS
@@ -978,6 +985,10 @@ public:
     void pin_frozen(const std::string& varName, std::string&& constraint) {
         m_frozenPins.emplace_back(varName, std::move(constraint));
     }
+    // Record that smtName, named name in the source, is a member of a null handle, which a
+    // constraint added after reads in an evaluation error that fails the next solve (IEEE
+    // 1800-2023 18.5.12), unless a guard keeps it out. Return smtName, standing in for it.
+    std::string null_read(const std::string& name, const std::string& smtName);
     void clearConstraints();
     void clearAll();  // Clear both constraints and variables
     // Unregister the fields of the objects in a class handle array

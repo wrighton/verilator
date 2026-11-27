@@ -1584,7 +1584,7 @@ class Cls;
         rarrayint i;
 
         ???? // CONSTRAINTEXPR
-        ((rarray[i[1:0]]) == (rmember1 + i))}
+        ((rarray[i]) == (rmember1 + i))}
     static constraint static_c {
 
         ???? // CONSTRAINTEXPR
