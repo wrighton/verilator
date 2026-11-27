@@ -1681,17 +1681,24 @@ public:
 // === AstNodeBlock ===
 class AstBegin final : public AstNodeBlock {
     // A 'begin'/'end' named block.
+    // @astgen ptr := m_disableCountp : Optional[AstVar]  // Count of disables (see V3LinkJump)
     const bool m_implied;  // Not inserted by user
+    const bool m_stmtLabel;  // Made from a statement label, not a named begin-end block
 public:
-    AstBegin(FileLine* fl, const string& name, AstNodeStmt* stmtsp, bool implied)
+    AstBegin(FileLine* fl, const string& name, AstNodeStmt* stmtsp, bool implied,
+             bool stmtLabel = false)
         : ASTGEN_SUPER_Begin(fl, name)
-        , m_implied{implied} {
+        , m_implied{implied}
+        , m_stmtLabel{stmtLabel} {
         addStmtsp(stmtsp);
     }
     ASTGEN_MEMBERS_AstBegin;
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     bool implied() const { return m_implied; }
+    bool stmtLabel() const { return m_stmtLabel; }
+    AstVar* disableCountp() const { return m_disableCountp; }
+    void disableCountp(AstVar* varp) { m_disableCountp = varp; }
 };
 class AstFork final : public AstNodeBlock {
     // A 'fork'/'join*' named block. Note that this is a strict superset of
