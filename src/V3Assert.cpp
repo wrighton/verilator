@@ -1035,50 +1035,87 @@ static AstVar* newReactiveTemp(const V3AssertReactive::Site& site, V3UniqueNames
 V3AssertReactive::Runner& V3AssertReactive::runnerFor(const Site& site, V3UniqueNames& names) {
     std::vector<Runner>& runners = m_runners[site.containerp];
     for (Runner& runner : runners) {
-        if (runner.runnerp->sentreep()->sameTree(site.senTreep)) return runner;
+        if (runner.clockp->sameTree(site.senTreep)) return runner;
     }
     FileLine* const flp = site.assertp->fileline();
+    // Runs when an evaluation of the model notes an action pending, and runs what is pending
+    // here, so costs nothing while nothing is pending. The note is in no variable, so is
+    // unordered between threads, and moves freely with the evaluation (see newPendingNotep).
+    AstSenTree* const senTreep
+        = new AstSenTree{flp, new AstSenItem{flp, VEdgeType::ET_POSEDGE,
+                                             new AstCExpr{flp, AstCExpr::Pure{},
+                                                          "vlSymsp->__Vm_assertActionPending.load("
+                                                          "std::memory_order_relaxed)",
+                                                          1}}};
+    AstIf* const bodyp = new AstIf{flp, new AstConst{flp, AstConst::BitFalse{}}};
+    bodyp->branchPred(VBranchPred::BP_UNLIKELY);
     // Output of the time step's earlier regions, queued by multithreaded tasks, comes first
-    AstNodeStmt* const flushp
-        = v3Global.opt.mtasks()
-              ? new AstCStmt{flp, "Verilated::endOfEval(vlSymsp->__Vm_evalMsgQp);"}
-              : nullptr;
-    runners.push_back(
-        {new AstAlwaysReactive{flp, site.senTreep->cloneTree(false), flushp},
-         new AstAlways{flp, VAlwaysKwd::ALWAYS, site.senTreep->cloneTree(false), nullptr},
-         {}});
-    Runner& runner = runners.back();
-    if (AstGenBlock* const genp = VN_CAST(site.containerp, GenBlock)) {
-        genp->addItemsp(runner.samplerp);
-        genp->addItemsp(runner.runnerp);
-    } else {
-        site.modp->addStmtsp(runner.samplerp);
-        site.modp->addStmtsp(runner.runnerp);
+    if (v3Global.opt.mtasks()) {
+        bodyp->addThensp(new AstCStmt{flp, "Verilated::endOfEval(vlSymsp->__Vm_evalMsgQp);"});
     }
-    return runner;
+    // Clear the note for the next evaluation, which the edge already took
+    AstAlwaysReactive* const runnerp = new AstAlwaysReactive{
+        flp, senTreep,
+        new AstCStmt{
+            flp, "vlSymsp->__Vm_assertActionPending.store(false, std::memory_order_relaxed);"}};
+    runnerp->addStmtsp(bodyp);
+    runners.push_back({runnerp, bodyp, site.senTreep, {}});
+    ++m_statRunners;
+    if (AstGenBlock* const genp = VN_CAST(site.containerp, GenBlock)) {
+        genp->addItemsp(runnerp);
+    } else {
+        site.modp->addStmtsp(runnerp);
+    }
+    return runners.back();
 }
 
-AstIf* V3AssertReactive::killIfp(const Site& site, Runner& runner, V3UniqueNames& names) {
-    AstIf*& ifpr = runner.killIfps[{site.assertp->userType(), site.assertp->directive()}];
-    if (ifpr) return ifpr;
+V3AssertReactive::KillCheck& V3AssertReactive::killCheck(const Site& site, Runner& runner,
+                                                         V3UniqueNames& names) {
+    KillCheck& checkr = runner.killChecks[{site.assertp->userType(), site.assertp->directive()}];
+    if (checkr.ifp) return checkr;
     FileLine* const flp = site.assertp->fileline();
-    const auto newKillp = [&]() {
-        return V3AssertCommon::newAssertCtlGetp(
-            flp, VAssertCtlQuery::KILL, site.assertp->userType(), site.assertp->directive(),
-            site.assertp->controlVarp());
-    };
-    // The count at the evaluation, sampled in the same region, against the count when the
+    // The count at the first evaluation making an action pending, against the count when the
     // runner runs, before any action
-    AstVar* const countp = newReactiveTemp(site, names, "KillCount");
-    runner.samplerp->addStmtsp(
-        new AstAssign{flp, new AstVarRef{flp, countp, VAccess::WRITE}, newKillp()});
-    ifpr = new AstIf{flp, new AstNeq{flp, new AstVarRef{flp, countp, VAccess::READ}, newKillp()}};
-    if (AstNode* const firstp = runner.runnerp->stmtsp()) {
-        firstp->addHereThisAsNext(ifpr);
+    ++m_statKillChecks;
+    checkr.armedp = newReactiveTemp(site, names, "KillArmed");
+    checkr.countp = newReactiveTemp(site, names, "KillCount");
+    checkr.ifp = new AstIf{flp, new AstNeq{flp, new AstVarRef{flp, checkr.countp, VAccess::READ},
+                                           newKillCountp(site)}};
+    AstIf* const armedIfp
+        = new AstIf{flp, new AstVarRef{flp, checkr.armedp, VAccess::READ},
+                    new AstAssign{flp, new AstVarRef{flp, checkr.armedp, VAccess::WRITE},
+                                  new AstConst{flp, 0}}};
+    armedIfp->addThensp(checkr.ifp);
+    // After the flush, before any action
+    AstNode* const firstp = runner.bodyp->thensp();
+    if (VN_IS(firstp, CStmt)) {
+        firstp->addNextHere(armedIfp);
+    } else if (firstp) {
+        firstp->addHereThisAsNext(armedIfp);
     } else {
-        runner.runnerp->addStmtsp(ifpr);
+        runner.bodyp->addThensp(armedIfp);
     }
-    return ifpr;
+    return checkr;
+}
+
+V3AssertReactive::~V3AssertReactive() {
+    V3Stats::addStatSum("Assertions, Reactive action runners", m_statRunners);
+    V3Stats::addStatSum("Assertions, Reactive action kill checks", m_statKillChecks);
+}
+
+bool V3AssertReactive::mayKill() {
+    // An assertion control of another model, as a hierarchical block, may also kill
+    return v3Global.opt.hierChild() || !v3Global.opt.libCreate().empty()
+           || v3Global.rootp()->exists([](const AstAssertCtl* ctlp) {
+                  return ctlp->ctlType() == VAssertCtlType::KILL
+                         || ctlp->ctlType() == VAssertCtlType::_TO_BE_EVALUATED;
+              });
+}
+
+AstNodeExpr* V3AssertReactive::newKillCountp(const Site& site) {
+    return V3AssertCommon::newAssertCtlGetp(site.assertp->fileline(), VAssertCtlQuery::KILL,
+                                            site.assertp->userType(), site.assertp->directive(),
+                                            site.assertp->controlVarp());
 }
 
 AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actionsp,
@@ -1092,21 +1129,46 @@ AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actions
             [&](AstScopeName* namep) { namep->scopeAttr(site.scope + namep->scopeAttr()); });
     }
     Runner& runnerr = runnerFor(site, names);
+    KillCheck* const checkp = m_killChecks ? &killCheck(site, runnerr, names) : nullptr;
     AstVar* const pendingp = newReactiveTemp(site, names, "Pending");
     // Run what is pending, unless an $assertkill came after it
-    killIfp(site, runnerr, names)
-        ->addThensp(new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
-                                  new AstConst{flp, 0}});
+    if (checkp) {
+        checkp->ifp->addThensp(new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
+                                             new AstConst{flp, 0}});
+    }
     AstLoop* const loopp = new AstLoop{flp};
     loopp->addStmtsp(new AstLoopTest{flp, loopp, new AstVarRef{flp, pendingp, VAccess::READ}});
     loopp->addStmtsp(new AstAssign{
         flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
         new AstSub{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}});
     loopp->addStmtsp(newSpawnedAction(actionsp));
-    runnerr.runnerp->addStmtsp(loopp);
-    return new AstAssign{
+    runnerr.bodyp->addThensp(loopp);
+    AstNodeExpr* const condp = runnerr.bodyp->condp()->unlinkFrBack();
+    AstVarRef* const pendingRefp = new AstVarRef{flp, pendingp, VAccess::READ};
+    if (VN_IS(condp, Const)) {
+        VL_DO_DANGLING(condp->deleteTree(), condp);
+        runnerr.bodyp->condp(pendingRefp);
+    } else {
+        runnerr.bodyp->condp(new AstLogOr{flp, condp, pendingRefp});
+    }
+    // pending++, noted for the runners; the first sets the count it is checked against
+    AstNodeStmt* const stmtsp = new AstAssign{
         flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
         new AstAdd{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}};
+    // Noting it sets one value, from any thread, so may move like a display
+    stmtsp->addNext(new AstCStmt{
+        flp, "vlSymsp->__Vm_assertActionPending.store(true, std::memory_order_relaxed);",
+        VCStmtType::ASSERT_ACTION_NOTE});
+    if (checkp) {
+        AstIf* const armp
+            = new AstIf{flp, new AstLogNot{flp, new AstVarRef{flp, checkp->armedp, VAccess::READ}},
+                        new AstAssign{flp, new AstVarRef{flp, checkp->armedp, VAccess::WRITE},
+                                      new AstConst{flp, 1}}};
+        armp->addThensp(new AstAssign{flp, new AstVarRef{flp, checkp->countp, VAccess::WRITE},
+                                      newKillCountp(site)});
+        stmtsp->addNext(armp);
+    }
+    return stmtsp;
 }
 
 bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
