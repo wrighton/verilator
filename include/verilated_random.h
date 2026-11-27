@@ -435,6 +435,18 @@ class VlRandomizer VL_NOT_FINAL {
                      std::string& elementr) const;
     bool parseModel(std::istream& is, size_t requested);
     // Keep each lower 32-bit key word intact and pad to the stored key width.
+    // Name of the element of struct array 'name' at 'indices' of 'idxWidths' bits
+    static std::string structElementName(const std::string& name,
+                                         const std::vector<IData>& indices,
+                                         const std::vector<size_t>& idxWidths) {
+        std::ostringstream oss;
+        oss << name;
+        for (size_t i = 0; i < indices.size(); ++i) {
+            oss << '.' << std::hex << std::setw(int(idxWidths[i] / 4)) << std::setfill('0')
+                << static_cast<int>(indices[i]);
+        }
+        return oss.str();
+    }
     static std::string assocStructKeySuffix(const std::vector<size_t>& words, size_t idxWidth) {
         std::ostringstream oss;
         for (size_t i = 0; i < words.size(); ++i) {
@@ -792,7 +804,7 @@ public:
     // Register user-defined struct variable by recursively writing members
     template <typename T>
     typename std::enable_if<VlIsCustomStruct<T>::value, void>::type
-    write_var(T& var, int width, const char* name, int dimension,
+    write_var(T& var, int width, const std::string& name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
         modifyMembers(var, var.memberIndices(), name, randmodeIdx);
     }
@@ -1005,17 +1017,9 @@ public:
     template <typename T>
     typename std::enable_if<VlContainsCustomStruct<T>::value, void>::type
     record_struct_arr(T& var, const std::string& name, int /*dimension*/,
-                      std::vector<IData> indices, std::vector<size_t> idxWidths,
+                      const std::vector<IData>& indices, const std::vector<size_t>& idxWidths,
                       std::uint32_t randmodeIdx) {
-        std::ostringstream oss;
-        for (size_t i = 0; i < indices.size(); ++i) {
-            oss << std::hex << std::setw(int(idxWidths[i] / 4)) << std::setfill('0')
-                << static_cast<int>(indices[i]);
-            if (i < indices.size() - 1) oss << ".";
-        }
-        write_var(var, 1ULL,
-                  oss.str().length() > 0 ? (name + "." + oss.str()).c_str() : name.c_str(), 1ULL,
-                  randmodeIdx);
+        write_var(var, 1ULL, structElementName(name, indices, idxWidths), 1ULL, randmodeIdx);
     }
 
     template <typename T>
@@ -1094,8 +1098,10 @@ public:
 
                 process_key(key, indexed_name, integral_index, name, idx_width);
                 const std::string result = assocStructKeySuffix(integral_index, idx_width);
-                record_struct_arr(var.atWrite(key), name + "." + result, dimension - 1, indices,
-                                  idxWidths, randmodeIdx);
+                // After the indices of the dimensions outside, as named by the constraints
+                record_struct_arr(var.atWrite(key),
+                                  structElementName(name, indices, idxWidths) + "." + result,
+                                  dimension - 1, {}, {}, randmodeIdx);
             }
         }
     }
