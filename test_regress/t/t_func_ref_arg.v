@@ -112,6 +112,7 @@ module t (
     input clk
 );
   int a, b;
+  const int mod_cm[int] = '{1: 2};
   int arr[1];
   int dyn_arr[];
   int dyn_arr_2d[][];
@@ -278,6 +279,8 @@ module t (
       `checkd(assoc.num(), 2);
       `checkd(get_val(cls.cm[3]), 0);
       `checkd(cls.cm.exists(3), 0);
+      `checkd(get_val(mod_cm[3]), 0);
+      `checkd(mod_cm.exists(3), 0);
       `checkd(sub_i.get_in_elem(3), 0);
       `checkd(in_aa.exists(3), 0);
     end
