@@ -152,6 +152,9 @@
 #include "V3Stats.h"
 #include "V3VNUserAllocator.h"
 
+#include <optional>
+#include <tuple>
+
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 //######################################################################
@@ -501,33 +504,435 @@ static AstVar* forceNetp(const AstPin* pinp, const AstNodeModule* modp) {
     return plain ? netp : nullptr;
 }
 
-// Variables whose value, z included, nodep's value carries: a z read only as e.g. a condition
-// or operator operand gives x, not z (IEEE 1800-2023 11.4). Set *xrefp if one is read through a
-// hierarchical reference.
-static void valueReads(AstNode* nodep, std::vector<AstVar*>& varps, bool* xrefp = nullptr) {
-    if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
-        varps.push_back(refp->varp());
-        if (xrefp && VN_IS(refp, VarXRef)) *xrefp = true;
-    } else if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
-        valueReads(selp->fromp(), varps, xrefp);
-    } else if (const AstArraySel* const aselp = VN_CAST(nodep, ArraySel)) {
-        valueReads(aselp->fromp(), varps, xrefp);
-    } else if (const AstStructSel* const sselp = VN_CAST(nodep, StructSel)) {
-        valueReads(sselp->fromp(), varps, xrefp);
-    } else if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
-        valueReads(concatp->lhsp(), varps, xrefp);
-        valueReads(concatp->rhsp(), varps, xrefp);
-    } else if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
-        valueReads(repp->srcp(), varps, xrefp);
-    } else if (const AstExtend* const extendp = VN_CAST(nodep, Extend)) {
-        valueReads(extendp->lhsp(), varps, xrefp);
-    } else if (const AstExtendS* const extendsp = VN_CAST(nodep, ExtendS)) {
-        valueReads(extendsp->lhsp(), varps, xrefp);
-    } else if (const AstCond* const condp = VN_CAST(nodep, Cond)) {
-        valueReads(condp->thenp(), varps, xrefp);
-        valueReads(condp->elsep(), varps, xrefp);
+// Bounds of the search for ports fed from inout ports, which past any of them finds fewer ports:
+// runs of a value, bits a run needs, and steps, fixed plus a number per node of the netlist.
+constexpr size_t FORCE_MAX_PIECES = 4096;
+constexpr size_t FORCE_MAX_REQS = 64;
+constexpr size_t FORCE_WORK_FIXED = 1 << 17;
+constexpr size_t FORCE_WORK_SCALE = 8;
+
+// Steps of the search; each loop takes its steps before their work and stops once past the limit
+class ForceWork final {
+    size_t m_used = 0;  // Steps taken
+    size_t m_limit = 0;  // Steps allowed
+
+public:
+    explicit ForceWork(size_t limit)
+        : m_limit{limit} {}
+    // Take n steps; false once past the limit, as is every later call
+    bool charge(size_t n = 1) {
+        m_used += n;
+        return m_used <= m_limit;
+    }
+    bool over() const { return m_used > m_limit; }
+    size_t used() const { return m_used; }
+    size_t limit() const { return m_limit; }
+};
+
+// A run of bits lo + i of a value, carrying bit reqLo + i * step (step 1, -1, or 0 for one bit
+// copied) of each requirement's variable; it carries an inout port's value when all of them do
+struct ForceReq final {
+    const AstVar* varp;
+    uint32_t lo;
+    int32_t step;
+    bool operator<(const ForceReq& rhs) const {
+        return std::tie(varp, lo, step) < std::tie(rhs.varp, rhs.lo, rhs.step);
+    }
+    bool operator==(const ForceReq& rhs) const {
+        return varp == rhs.varp && lo == rhs.lo && step == rhs.step;
+    }
+    // Bit of the variable carried to offset `offset` of the run
+    uint32_t at(uint64_t offset) const {
+        return static_cast<uint32_t>(lo + static_cast<int64_t>(offset) * step);
+    }
+};
+// Sort requirements and remove duplicates
+static void forceNormalizeReqs(std::vector<ForceReq>& reqs) {
+    std::sort(reqs.begin(), reqs.end());
+    reqs.erase(std::unique(reqs.begin(), reqs.end()), reqs.end());
+}
+struct ForcePiece final {
+    uint32_t lo;
+    uint32_t len;
+    std::vector<ForceReq> reqs;  // Sorted, without duplicates
+};
+// The runs of a value, disjoint and sorted by lo, at most FORCE_MAX_PIECES once merged, else it
+// carries none; each sub-expression has an allowance of its own, which can be conservative
+class ForcePieces final {
+    ForceWork* m_workp;  // Steps of the search
+    size_t m_budget;  // Runs that may still be added
+    bool m_overflowed = false;  // Past its runs, so carries none
+
+public:
+    std::vector<ForcePiece> runs;
+    explicit ForcePieces(ForceWork& work, size_t budget = FORCE_MAX_PIECES)
+        : m_workp{&work}
+        , m_budget{budget} {}
+    // Pieces for a sub-expression, with an allowance of their own
+    ForcePieces sub() const { return ForcePieces{*m_workp}; }
+    ForceWork& work() const { return *m_workp; }
+    // Whether no more runs can be found, by overflow or the search's limit
+    bool stopped() const { return m_overflowed || m_workp->over(); }
+    bool overflowed() const { return m_overflowed; }
+    void overflow() { m_overflowed = true; }
+    // Add a run, taking its steps unless the caller took them
+    void push(ForcePiece&& piece, bool charged = false) {
+        if (stopped() || (!charged && !m_workp->charge(1 + piece.reqs.size()))) return;
+        if (!piece.len || piece.reqs.empty()) return;
+        if (piece.reqs.size() > FORCE_MAX_REQS) return;  // Carries none
+        // Merge with the previous run where it continues each requirement
+        if (!runs.empty() && uint64_t{runs.back().lo} + runs.back().len == piece.lo
+            && runs.back().reqs.size() == piece.reqs.size()) {
+            ForcePiece& last = runs.back();
+            std::vector<int32_t> steps;
+            for (size_t i = 0; i < last.reqs.size(); ++i) {
+                const ForceReq& a = last.reqs[i];
+                const ForceReq& b = piece.reqs[i];
+                const int64_t delta = int64_t{b.lo} - a.lo;
+                const int32_t step = last.len > 1                ? a.step
+                                     : delta == 1 || delta == -1 ? static_cast<int32_t>(delta)
+                                                                 : 0;
+                if (a.varp != b.varp || !step || (last.len > 1 && b.lo != a.at(last.len))
+                    || (piece.len > 1 && b.step != step)) {
+                    steps.clear();
+                    break;
+                }
+                steps.push_back(step);
+            }
+            if (!steps.empty()) {
+                for (size_t i = 0; i < steps.size(); ++i) last.reqs[i].step = steps[i];
+                forceNormalizeReqs(last.reqs);
+                last.len += piece.len;
+                return;
+            }
+        }
+        if (!m_budget) {
+            m_overflowed = true;
+            return;
+        }
+        --m_budget;
+        runs.push_back(std::move(piece));
+    }
+};
+
+// Number of bits of varp whose drive state is tracked: its packed width, else none
+static uint32_t forceCarryWidth(const AstVar* varp) {
+    return varp->dtypep()->skipRefp()->isIntegralOrPacked() ? varp->width() : 0;
+}
+
+// Constant LSB of a select, or false
+static bool forceSelLsb(const AstSel* selp, uint64_t& lsb) {
+    const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
+    if (!lsbp || lsbp->num().isFourState() || !lsbp->num().fitsInUInt()) return false;
+    lsb = lsbp->toUInt();
+    return true;
+}
+
+// Append to outp the parts of runs in bits [lo, lo + len), moved to start at offset
+static void forceCopyPieces(const ForcePieces& pieces, uint64_t lo, uint64_t len, uint64_t offset,
+                            ForcePieces& outp) {
+    if (pieces.overflowed()) outp.overflow();
+    const std::vector<ForcePiece>& runs = pieces.runs;
+    auto it = std::upper_bound(runs.begin(), runs.end(), lo,
+                               [](uint64_t bit, const ForcePiece& piece) {
+                                   return bit < uint64_t{piece.lo} + piece.len;
+                               });
+    for (; it != runs.end() && it->lo < lo + len; ++it) {
+        if (outp.stopped() || !outp.work().charge(1 + it->reqs.size())) return;
+        const uint64_t start = std::max<uint64_t>(it->lo, lo);
+        const uint64_t end = std::min<uint64_t>(uint64_t{it->lo} + it->len, lo + len);
+        ForcePiece copy{static_cast<uint32_t>(offset + start - lo),
+                        static_cast<uint32_t>(end - start), it->reqs};
+        for (ForceReq& req : copy.reqs) req.lo = req.at(start - it->lo);
+        outp.push(std::move(copy), true);
     }
 }
+
+// Append to outp, at [lo, lo + len), the runs of one bit in pieces, each copying its bit
+static void forceFillPieces(ForcePieces& pieces, uint64_t lo, uint64_t len, ForcePieces& outp) {
+    for (ForcePiece& piece : pieces.runs) {
+        if (outp.stopped() || !outp.work().charge(1 + piece.reqs.size())) return;
+        for (ForceReq& req : piece.reqs) req.step = 0;
+        forceNormalizeReqs(piece.reqs);
+        outp.push({static_cast<uint32_t>(lo), static_cast<uint32_t>(len), std::move(piece.reqs)},
+                  true);
+    }
+}
+
+// Append to outp, at offset, the runs of nodep's value carrying variable bits (IEEE
+// 1800-2023 11.4, 11.5.1): constant selects, concatenations, replications, extensions, streams,
+// conditionals
+static void forceCarryPieces(const AstNode* nodep, ForcePieces& outp, uint64_t offset) {
+    if (outp.stopped() || !outp.work().charge()) return;
+    const uint64_t width = std::max(nodep->width(), 0);
+    if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+        const uint64_t len = std::min<uint64_t>(width, forceCarryWidth(refp->varp()));
+        outp.push(
+            {static_cast<uint32_t>(offset), static_cast<uint32_t>(len), {{refp->varp(), 0, 1}}});
+    } else if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+        uint64_t lsb;
+        if (!forceSelLsb(selp, lsb)) return;
+        ForcePieces fromPieces = outp.sub();
+        forceCarryPieces(selp->fromp(), fromPieces, 0);
+        forceCopyPieces(fromPieces, lsb, width, offset, outp);
+    } else if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+        forceCarryPieces(concatp->rhsp(), outp, offset);
+        forceCarryPieces(concatp->lhsp(), outp, offset + std::max(concatp->rhsp()->width(), 0));
+    } else if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+        const uint64_t srcWidth = std::max(repp->srcp()->width(), 0);
+        if (!srcWidth) return;
+        ForcePieces srcPieces = outp.sub();
+        forceCarryPieces(repp->srcp(), srcPieces, 0);
+        if (srcPieces.overflowed()) outp.overflow();
+        if (srcPieces.runs.empty()) return;
+        if (srcWidth == 1) {
+            forceFillPieces(srcPieces, offset, width, outp);
+            return;
+        }
+        for (uint64_t start = 0; start < width; start += srcWidth) {
+            if (outp.stopped() || !outp.work().charge()) return;
+            forceCopyPieces(srcPieces, 0, std::min(srcWidth, width - start), offset + start, outp);
+        }
+    } else if (const AstExtend* const extendp = VN_CAST(nodep, Extend)) {
+        forceCarryPieces(extendp->lhsp(), outp, offset);
+    } else if (const AstExtendS* const extendsp = VN_CAST(nodep, ExtendS)) {
+        const uint64_t lhsWidth = std::max(extendsp->lhsp()->width(), 0);
+        if (!lhsWidth) return;
+        ForcePieces lhsPieces = outp.sub();
+        forceCarryPieces(extendsp->lhsp(), lhsPieces, 0);
+        forceCopyPieces(lhsPieces, 0, lhsWidth, offset, outp);
+        if (width <= lhsWidth) return;
+        // The sign bits copy the MSB
+        ForcePieces signPieces = outp.sub();
+        forceCopyPieces(lhsPieces, lhsWidth - 1, 1, 0, signPieces);
+        forceFillPieces(signPieces, offset + lhsWidth, width - lhsWidth, outp);
+    } else if (const AstCond* const condp = VN_CAST(nodep, Cond)) {
+        ForcePieces thenPieces = outp.sub();
+        ForcePieces elsePieces = outp.sub();
+        forceCarryPieces(condp->thenp(), thenPieces, 0);
+        forceCarryPieces(condp->elsep(), elsePieces, 0);
+        if (thenPieces.overflowed() || elsePieces.overflowed()) outp.overflow();
+        // Runs where both carry, needing what both need, in one sweep of both
+        auto thenIt = thenPieces.runs.begin();
+        auto elseIt = elsePieces.runs.begin();
+        while (thenIt != thenPieces.runs.end() && elseIt != elsePieces.runs.end()) {
+            if (outp.stopped() || !outp.work().charge()) return;
+            const uint64_t thenEnd = uint64_t{thenIt->lo} + thenIt->len;
+            const uint64_t elseEnd = uint64_t{elseIt->lo} + elseIt->len;
+            const uint64_t start = std::max(thenIt->lo, elseIt->lo);
+            const uint64_t end = std::min(thenEnd, elseEnd);
+            if (start < end) {
+                if (!outp.work().charge(thenIt->reqs.size() + elseIt->reqs.size())) return;
+                ForcePiece piece{
+                    static_cast<uint32_t>(offset + start), static_cast<uint32_t>(end - start), {}};
+                for (const ForceReq& req : thenIt->reqs) {
+                    piece.reqs.push_back({req.varp, req.at(start - thenIt->lo), req.step});
+                }
+                for (const ForceReq& req : elseIt->reqs) {
+                    piece.reqs.push_back({req.varp, req.at(start - elseIt->lo), req.step});
+                }
+                forceNormalizeReqs(piece.reqs);
+                outp.push(std::move(piece), true);
+            }
+            if (thenEnd <= elseEnd) {
+                ++thenIt;
+            } else {
+                ++elseIt;
+            }
+        }
+    } else if (const AstNodeStream* const streamp = VN_CAST(nodep, NodeStream)) {
+        const AstConst* const slicep = VN_CAST(streamp->rhsp(), Const);
+        if (static_cast<uint64_t>(std::max(streamp->lhsp()->width(), 0)) != width) return;
+        ForcePieces srcPieces = outp.sub();
+        forceCarryPieces(streamp->lhsp(), srcPieces, 0);
+        if (VN_IS(streamp, StreamR)) {
+            forceCopyPieces(srcPieces, 0, width, offset, outp);
+            return;
+        }
+        if (srcPieces.overflowed()) outp.overflow();
+        if (!slicep || slicep->num().isFourState() || !slicep->num().fitsInUInt()) return;
+        // Slices from the LSB, the last one short, in reverse order, as V3Number::opStreamL
+        const uint64_t slice = std::min<uint64_t>(slicep->toUInt(), width);
+        if (!slice) return;
+        std::vector<ForcePiece> moved;
+        for (const ForcePiece& piece : srcPieces.runs) {
+            if (outp.stopped()) return;
+            if (slice == 1) {
+                // Reversed bits: one run reversing each requirement
+                if (!outp.work().charge(1 + piece.reqs.size())) return;
+                ForcePiece reversed{
+                    static_cast<uint32_t>(width - piece.lo - piece.len), piece.len, {}};
+                for (const ForceReq& req : piece.reqs) {
+                    reversed.reqs.push_back({req.varp, req.at(piece.len - 1), -req.step});
+                }
+                forceNormalizeReqs(reversed.reqs);
+                moved.push_back(std::move(reversed));
+                continue;
+            }
+            // Each slice of the run moves whole
+            for (uint64_t start = piece.lo / slice * slice; start < uint64_t{piece.lo} + piece.len;
+                 start += slice) {
+                if (moved.size() == FORCE_MAX_PIECES) {
+                    outp.overflow();
+                    return;
+                }
+                if (!outp.work().charge(1 + piece.reqs.size())) return;
+                const uint64_t outStart = width >= slice + start ? width - slice - start : 0;
+                const uint64_t from = std::max<uint64_t>(start, piece.lo);
+                const uint64_t to = std::min<uint64_t>(std::min(start + slice, width),
+                                                       uint64_t{piece.lo} + piece.len);
+                ForcePiece part{static_cast<uint32_t>(outStart + from - start),
+                                static_cast<uint32_t>(to - from), piece.reqs};
+                for (ForceReq& req : part.reqs) req.lo = req.at(from - piece.lo);
+                moved.push_back(std::move(part));
+            }
+        }
+        if (!outp.work().charge(moved.size())) return;
+        std::sort(moved.begin(), moved.end(),
+                  [](const ForcePiece& a, const ForcePiece& b) { return a.lo < b.lo; });
+        for (ForcePiece& piece : moved) {
+            if (outp.stopped()) return;
+            piece.lo += static_cast<uint32_t>(offset);
+            outp.push(std::move(piece));
+        }
+    }
+}
+
+// Bits [lo, lo + len) of a variable a writer writes
+struct ForceRun final {
+    const AstVar* varp;
+    uint32_t lo;
+    uint32_t len;
+};
+
+// Whether nodep is a target of module variables, constant selects wholly in range, or
+// concatenations; if so, the runs it writes, LSB first, into runsp if given
+static bool forceTargetRuns(const AstNode* nodep, std::vector<ForceRun>* runsp,
+                            ForceWork* workp = nullptr) {
+    if (workp && !workp->charge()) return false;
+    // A concatenation may come wrapped in a replication of one
+    while (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+        const AstConst* const countp = VN_CAST(repp->countp(), Const);
+        if (!countp || countp->num().isFourState() || countp->toUInt() != 1) break;
+        nodep = repp->srcp();
+    }
+    if (const AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
+        const uint32_t width = forceCarryWidth(refp->varp());
+        if (!width) return false;
+        if (runsp) runsp->push_back({refp->varp(), 0, width});
+        return true;
+    } else if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+        const AstVarRef* const refp = VN_CAST(selp->fromp(), VarRef);
+        uint64_t lsb;
+        if (!refp || !forceSelLsb(selp, lsb)
+            || lsb + selp->widthConst() > forceCarryWidth(refp->varp())) {
+            return false;
+        }
+        if (runsp) {
+            runsp->push_back({refp->varp(), static_cast<uint32_t>(lsb),
+                              static_cast<uint32_t>(selp->widthConst())});
+        }
+        return true;
+    } else if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+        return forceTargetRuns(concatp->rhsp(), runsp, workp)
+               && forceTargetRuns(concatp->lhsp(), runsp, workp);
+    }
+    return false;
+}
+
+// Disjoint, sorted ranges [first, second) of bits
+using ForceRanges = std::vector<std::pair<uint32_t, uint32_t>>;
+
+// A set of bits of one variable, as disjoint ranges. Each range visited takes a step of work.
+class ForceBitSet final {
+    std::map<uint32_t, uint32_t> m_ranges;  // Start of each range, and its end
+    // First range ending after bit
+    std::map<uint32_t, uint32_t>::const_iterator after(uint32_t bit) const {
+        auto it = m_ranges.upper_bound(bit);
+        if (it != m_ranges.begin() && std::prev(it)->second > bit) --it;
+        return it;
+    }
+
+public:
+    bool empty() const { return m_ranges.empty(); }
+    // Add [lo, hi), appending to newp the ranges not already in the set
+    void add(uint32_t lo, uint32_t hi, ForceRanges& newp, ForceWork& work) {
+        if (lo >= hi || !work.charge()) return;
+        auto it = m_ranges.upper_bound(lo);
+        if (it != m_ranges.begin() && std::prev(it)->second >= lo) --it;
+        uint32_t newLo = lo;
+        uint32_t newHi = hi;
+        uint32_t at = lo;
+        while (it != m_ranges.end() && it->first <= hi && work.charge()) {
+            if (it->first > at) newp.emplace_back(at, it->first);
+            at = std::max(at, it->second);
+            newLo = std::min(newLo, it->first);
+            newHi = std::max(newHi, it->second);
+            it = m_ranges.erase(it);
+        }
+        if (at < hi) newp.emplace_back(at, hi);
+        m_ranges.emplace(newLo, newHi);
+    }
+    // Append to outp the parts of [lo, hi) in the set
+    void intersect(uint32_t lo, uint32_t hi, ForceRanges& outp, ForceWork& work) const {
+        if (!work.charge()) return;
+        for (auto it = after(lo); it != m_ranges.end() && it->first < hi && work.charge(); ++it) {
+            outp.emplace_back(std::max(it->first, lo), std::min(it->second, hi));
+        }
+    }
+    // Whether every bit of [lo, hi) is in the set
+    bool covers(uint32_t lo, uint32_t hi) const {
+        const auto it = after(lo);
+        return it != m_ranges.end() && it->first <= lo && it->second >= hi;
+    }
+};
+
+// For each bit of one variable, the number of writes of it, and of those carrying a value of an
+// inout port, as runs of equal counts. Each run visited takes a step of work.
+class ForceBitCounts final {
+    // Start of each run, its writes and carrying writes, up to the next start
+    std::map<uint32_t, std::pair<uint32_t, uint32_t>> m_runs;
+    void split(uint32_t at) {
+        auto it = m_runs.upper_bound(at);
+        --it;
+        if (it->first != at) m_runs.emplace(at, it->second);
+    }
+
+public:
+    ForceBitCounts() { m_runs.emplace(0, std::make_pair(0, 0)); }
+    void add(uint32_t lo, uint32_t hi, uint32_t writes, uint32_t carrying, ForceWork& work) {
+        if (lo >= hi || !work.charge()) return;
+        split(lo);
+        split(hi);
+        for (auto it = m_runs.find(lo); it->first < hi && work.charge(); ++it) {
+            it->second.first += writes;
+            it->second.second += carrying;
+        }
+    }
+    // Append to outp the parts of [lo, hi) written, every write of which carries one, and, if
+    // writes is given, with that many writes
+    void carried(uint32_t lo, uint32_t hi, std::optional<uint32_t> writes, ForceRanges& outp,
+                 ForceWork& work) const {
+        if (!work.charge()) return;
+        auto it = m_runs.upper_bound(lo);
+        --it;
+        for (; it != m_runs.end() && it->first < hi && work.charge(); ++it) {
+            const auto next = std::next(it);
+            const uint32_t end = next == m_runs.end() ? hi : std::min(next->first, hi);
+            const uint32_t start = std::max(it->first, lo);
+            const std::pair<uint32_t, uint32_t>& counts = it->second;
+            if (start >= end || !counts.first || counts.second != counts.first
+                || (writes && counts.first != *writes)) {
+                continue;
+            }
+            if (!outp.empty() && outp.back().second == start) {
+                outp.back().second = end;
+            } else {
+                outp.emplace_back(start, end);
+            }
+        }
+    }
+};
 
 //######################################################################
 // Forced input net ports that may be one net with all their connections
@@ -569,12 +974,195 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
     std::unordered_map<const AstVar*, std::vector<AstVar*>> m_readInputActualps;
     std::unordered_set<const AstVar*> m_unsafeReadps;
     std::unordered_set<const AstVar*> m_aliasedps;  // Variables of an alias
-    // Nets a continuous assignment forwards each variable's value to
-    std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_forwardps;
-    // Nets an output connection or a hierarchical reference forwards a value to
-    std::unordered_set<const AstVar*> m_remoteps;
-    // Variables of each connection of each inout port
-    std::unordered_map<const AstVar*, std::vector<std::vector<const AstVar*>>> m_inoutVarps;
+    // Whether to find the ports fed from inout ports, see findRemote
+    bool m_findRemote = false;
+    // A continuous assignment or a connection, whose runs are found once an inout's value reaches
+    // it
+    struct Writer final {
+        const AstNode* nodep;  // AstAssignW or AstPin
+        bool counted;  // Its writes are counted in m_bitCounts
+        bool expanded;  // Its carry pieces are added
+    };
+    std::vector<Writer> m_writers;
+    // Writers reading each variable, and writing each variable
+    std::unordered_map<const AstVar*, std::vector<uint32_t>> m_varReaders;
+    std::unordered_map<const AstVar*, std::vector<uint32_t>> m_varWriters;
+    // A run a writer writes, or of an inout port a connection reads, and the part of it known to
+    // carry a value of an inout port
+    struct CarryPiece final {
+        const AstVar* destp;  // Variable written, nullptr for an inout connection
+        uint32_t conn;  // Index of the inout connection in m_connCarried
+        ForcePiece piece;  // In the bits of destp or the inout port
+        ForceBitSet carried;
+    };
+    std::vector<CarryPiece> m_carryPieces;
+    // Requirements reading each variable: carry piece and requirement indices
+    std::unordered_map<const AstVar*, std::vector<std::pair<uint32_t, uint32_t>>> m_pieceReaders;
+    std::unordered_map<const AstVar*, ForceBitCounts> m_bitCounts;  // Writes of each variable
+    // Variables written other than by writers, a force or an inout connection
+    std::unordered_set<const AstVar*> m_otherWrittenps;
+    // Bits [lo, hi) of a variable an inout connection may write
+    struct InoutWrite final {
+        const AstPin* pinp;  // The connection
+        const AstVar* varp;  // The variable
+        uint32_t lo;  // First bit
+        uint32_t hi;  // One past the last bit
+    };
+    // The bits inout connections may write, of each variable and by each connection
+    std::unordered_map<const AstVar*, std::vector<InoutWrite>> m_varInoutWrites;
+    std::unordered_map<const AstPin*, std::vector<InoutWrite>> m_pinInoutWrites;
+    bool m_inoutPinTarget = false;  // The inout connection being visited is a target
+    // Inout ports written or forced in their module other than by an inout connection, then also
+    // those an inout connection of theirs to a driven inout port may drive; inout ports forced in
+    // their module, and those forced only through hierarchical references, of some instances; and
+    // the inout ports of each module each inout port is connected to
+    std::unordered_set<const AstVar*> m_drivenInoutps;
+    std::unordered_set<const AstVar*> m_localForcedps;
+    std::unordered_set<const AstVar*> m_xrefForcedps;
+    std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_inoutParentps;
+    // A run of bits of a variable that inout connections write, see findDrivenInouts
+    struct DrivenRun final {
+        uint32_t hi;  // One past the last bit, from the key
+        const void* whop;  // The connection, or port, writing it, nullptr if more than one
+    };
+    using DrivenRuns = std::unordered_map<const AstVar*, std::map<uint32_t, DrivenRun>>;
+    // Of each variable, the runs connections of driven inout ports write, by connection; those
+    // connections of inout ports forced only through hierarchical references write, by port; and
+    // the bits either write
+    DrivenRuns m_drivenRuns;
+    DrivenRuns m_forcedRuns;
+    std::unordered_map<const AstVar*, ForceBitSet> m_drivenBits;
+    std::unordered_set<const AstNodeVarRef*> m_carryWriteps;  // Writes of writers
+    // Connections of each inout port an inout's value may reach, and for each its pin and the
+    // number of bits of the port it carries one to
+    std::unordered_map<const AstVar*, std::vector<uint32_t>> m_inoutConnps;
+    std::vector<const AstPin*> m_connPins;
+    std::vector<uint64_t> m_connCarried;
+    std::unordered_map<const AstNodeModule*, size_t> m_cellCounts;  // Instances of each module
+    std::unordered_map<const AstVar*, const AstNodeModule*> m_portModps;  // Module of each port
+    const AstPin* m_inoutPinp = nullptr;  // Connection of an inout port being visited
+    ForceWork m_work{0};  // Steps of the search for ports fed from inout ports
+    // Variables an inout's value may reach, those reached in order, the bits of each carrying
+    // one, those not yet passed to their readers, and the variables with such bits
+    std::unordered_set<const AstVar*> m_reachedps;
+    std::vector<const AstVar*> m_reachedOrderps;
+    // Bits carrying an inout's value, other than those an inout connection may drive; those, which
+    // only inout connections may read; and those of input ports, which a force may stop
+    std::unordered_map<const AstVar*, ForceBitSet> m_carriedBits;
+    std::unordered_map<const AstVar*, ForceBitSet> m_heldBits;
+    std::unordered_map<const AstVar*, ForceBitSet> m_inputBits;
+    // Of those carried and held bits, those not yet passed on, and their variables
+    std::unordered_map<const AstVar*, ForceBitSet> m_pendingBits;
+    std::unordered_map<const AstVar*, ForceBitSet> m_pendingHeld;
+    std::vector<const AstVar*> m_carryQueue;
+
+    void addWriter(const AstNode* nodep, const std::vector<const AstVar*>& readps,
+                   const std::vector<const AstVar*>& writtenps) {
+        const uint32_t id = m_writers.size();
+        m_writers.push_back({nodep, false, false});
+        for (const AstVar* const varp : readps) m_varReaders[varp].push_back(id);
+        for (const AstVar* const varp : writtenps) m_varWriters[varp].push_back(id);
+    }
+    static std::vector<const AstVar*> readVars(const AstNode* nodep) {
+        std::vector<const AstVar*> varps;
+        nodep->foreach([&](const AstNodeVarRef* refp) { varps.push_back(refp->varp()); });
+        return varps;
+    }
+    static bool isFourstate(const AstVar* varp) {
+        return varp->dtypep()->skipRefp()->isFourstate();
+    }
+    // The runs a writer writes, LSB first, and of its value the runs carrying variable bits
+    void writerRuns(const Writer& writer, std::vector<ForceRun>& targetRuns,
+                    ForcePieces* srcPiecesp) {
+        if (const AstAssignW* const assignp = VN_CAST(writer.nodep, AssignW)) {
+            forceTargetRuns(assignp->lhsp(), &targetRuns, &m_work);
+            if (srcPiecesp) forceCarryPieces(assignp->rhsp(), *srcPiecesp, 0);
+            return;
+        }
+        const AstPin* const pinp = VN_AS(writer.nodep, Pin);
+        const AstVar* const portp = pinp->modVarp();
+        const uint32_t width = forceCarryWidth(portp);
+        if (portp->declDirection() == VDirection::OUTPUT) {
+            forceTargetRuns(pinp->exprp(), &targetRuns, &m_work);
+            if (!srcPiecesp || !width) return;
+            // Bits of the connection beyond the port extend it, by its sign if signed
+            srcPiecesp->push({0, width, {{portp, 0, 1}}});
+            uint64_t targetWidth = 0;
+            if (m_work.over()) return;
+            // Each run took its step in forceTargetRuns
+            for (const ForceRun& run : targetRuns) targetWidth += run.len;
+            if (portp->isSigned() && targetWidth > width) {
+                srcPiecesp->push(
+                    {width, static_cast<uint32_t>(targetWidth - width), {{portp, width - 1, 0}}});
+            }
+            return;
+        }
+        if (!portp->isInout() && width) targetRuns.push_back({portp, 0, width});
+        if (srcPiecesp) forceCarryPieces(pinp->exprp(), *srcPiecesp, 0);
+    }
+    void countWrites(Writer& writer) {
+        if (writer.counted || !m_work.charge()) return;
+        writer.counted = true;
+        std::vector<ForceRun> targetRuns;
+        writerRuns(writer, targetRuns, nullptr);
+        for (const ForceRun& run : targetRuns) {
+            if (m_work.over()) return;
+            m_bitCounts[run.varp].add(run.lo, run.lo + run.len, 1, 0, m_work);
+        }
+    }
+    void addCarryPiece(const AstVar* destp, uint32_t conn, ForcePiece&& piece) {
+        if (!m_work.charge(1 + piece.reqs.size())) return;
+        const uint32_t id = m_carryPieces.size();
+        for (uint32_t index = 0; index < piece.reqs.size(); ++index) {
+            m_pieceReaders[piece.reqs[index].varp].emplace_back(id, index);
+        }
+        m_carryPieces.push_back({destp, conn, std::move(piece), {}});
+    }
+    // Add the carry pieces of a writer a value of an inout port may reach, and return the
+    // variables it writes
+    std::vector<const AstVar*> expand(Writer& writer) {
+        std::vector<const AstVar*> destps;
+        if (writer.expanded) return destps;
+        writer.expanded = true;
+        countWrites(writer);
+        std::vector<ForceRun> targetRuns;
+        ForcePieces srcPieces{m_work};
+        writerRuns(writer, targetRuns, &srcPieces);
+        const AstPin* const pinp = VN_CAST(writer.nodep, Pin);
+        if (pinp && pinp->modVarp()->isInout()) {
+            const AstVar* const portp = pinp->modVarp();
+            const uint32_t conn = m_connCarried.size();
+            m_connPins.push_back(pinp);
+            m_connCarried.push_back(0);
+            m_inoutConnps[portp].push_back(conn);
+            ForcePieces pieces{m_work};
+            forceCopyPieces(srcPieces, 0, forceCarryWidth(portp), 0, pieces);
+            if (pieces.stopped()) return destps;  // Carries none
+            for (ForcePiece& piece : pieces.runs) {
+                if (m_work.over()) break;
+                addCarryPiece(nullptr, conn, std::move(piece));
+            }
+            return destps;
+        }
+        uint64_t position = 0;
+        for (const ForceRun& run : targetRuns) {
+            if (!m_work.charge()) break;
+            destps.push_back(run.varp);
+            // A two-state variable is never z, so carries no drive state
+            if (isFourstate(run.varp)) {
+                ForcePieces pieces{m_work};
+                forceCopyPieces(srcPieces, position, run.len, run.lo, pieces);
+                if (!pieces.stopped()) {
+                    for (ForcePiece& piece : pieces.runs) {
+                        if (m_work.over()) break;
+                        addCarryPiece(run.varp, 0, std::move(piece));
+                    }
+                }
+            }
+            position += run.len;
+        }
+        return destps;
+    }
 
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_modp);
@@ -593,6 +1181,12 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
         }
         const AstVarRef* const rhsRefp = VN_CAST(rhsp, VarRef);
         AstVar* const inputRhsp = forceInputRhsVarp(nodep->rhsp());
+        // Inout ports this module forces, through any target
+        nodep->lhsp()->foreach([&](const AstVarRef* refp) {
+            if (refp->access().isWriteOrRW() && refp->varp()->isInout()) {
+                m_localForcedps.emplace(refp->varp());
+            }
+        });
         const bool localVar = VN_IS(lhsp, VarRef) && rhsRefp && !rhsRefp->varp()->isNet()
                               && !rhsRefp->varp()->isIO() && !rhsRefp->varp()->isForced();
         const bool known
@@ -607,14 +1201,19 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
     }
     void visit(AstRelease*) override {}
     void visit(AstAssignW* nodep) override {
-        std::vector<AstVar*> srcps;
-        bool xref = false;
-        valueReads(nodep->rhsp(), srcps, &xref);
-        nodep->lhsp()->foreach([&](const AstNodeVarRef* refp) {
-            if (!refp->access().isWriteOrRW() || !refp->varp()->isNet()) return;
-            if (xref) m_remoteps.emplace(refp->varp());
-            for (const AstVar* const srcp : srcps) m_forwardps[srcp].push_back(refp->varp());
-        });
+        // A strength may drop the inout's value, so such an assignment is another writer
+        if (m_findRemote && !nodep->strengthSpecp() && forceTargetRuns(nodep->lhsp(), nullptr)) {
+            std::vector<const AstVar*> writtenps;
+            nodep->lhsp()->foreach([&](const AstNodeVarRef* refp) {
+                m_carryWriteps.emplace(refp);
+                writtenps.push_back(refp->varp());
+            });
+            addWriter(nodep, readVars(nodep->rhsp()), writtenps);
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstCell* nodep) override {
+        ++m_cellCounts[nodep->modp()];
         iterateChildrenConst(nodep);
     }
     void visit(AstAlias* nodep) override {
@@ -627,15 +1226,31 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
     }
     void visit(AstVar* nodep) override {
         if (nodep->isPullup() || nodep->isPulldown()) m_pulledps.emplace(nodep);
+        if (nodep->isIO()) m_portModps.emplace(nodep, m_modp);
         iterateChildrenConst(nodep);
     }
     void visit(AstNodeVarRef* nodep) override {
+        // A connection that is not a target may write the whole of each variable it names
+        if (m_findRemote && m_inoutPinp && !m_inoutPinTarget) {
+            addInoutWrite({m_inoutPinp, nodep->varp(), 0,
+                           std::max<uint32_t>(forceCarryWidth(nodep->varp()), 1)});
+        }
         if (!nodep->access().isWriteOrRW()) return;
+        if (!m_inoutPinp) {
+            if (!m_carryWriteps.count(nodep)) m_otherWrittenps.emplace(nodep->varp());
+            if (nodep->varp()->isInout()) m_drivenInoutps.emplace(nodep->varp());
+        }
         m_writtenps.emplace(nodep->varp());
         if (VN_IS(nodep, VarXRef)) m_xrefWrittenps.emplace(nodep->varp());
     }
     void addPullActuals(const AstNodeExpr* exprp, const AstVar* portp) {
-        if (const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef)) {
+        if (const AstReplicate* const repp = VN_CAST(exprp, Replicate)) {
+            // A concatenation may come wrapped in a replication of one
+            const AstConst* const countp = VN_CAST(repp->countp(), Const);
+            if (countp && !countp->num().isFourState() && countp->toUInt() == 1) {
+                addPullActuals(repp->srcp(), portp);
+            }
+        } else if (const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef)) {
             if (refp->varp()->isNet()) m_pullActualps[portp].push_back(refp->varp());
         } else if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
             addPullActuals(selp->fromp(), portp);
@@ -648,23 +1263,32 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
             }
         }
     }
+    void addPinWriter(const AstPin* nodep) {
+        const AstVar* const portp = nodep->modVarp();
+        if (portp->declDirection() == VDirection::OUTPUT) {
+            if (!forceTargetRuns(nodep->exprp(), nullptr)) return;
+            std::vector<const AstVar*> writtenps;
+            nodep->exprp()->foreach([&](const AstNodeVarRef* refp) {
+                m_carryWriteps.emplace(refp);
+                writtenps.push_back(refp->varp());
+            });
+            addWriter(nodep, {portp}, writtenps);
+        } else if ((portp->declDirection() == VDirection::INPUT || portp->isInout())
+                   && isFourstate(portp)) {
+            addWriter(nodep, readVars(nodep->exprp()),
+                      portp->isInout() ? std::vector<const AstVar*>{}
+                                       : std::vector<const AstVar*>{portp});
+        }
+    }
     void visit(AstPin* nodep) override {
         const AstVar* const portp = nodep->modVarp();
         if (portp && nodep->exprp()) {
             if (portp->declDirection().isWritable()) {
                 nodep->exprp()->foreach([&](const AstNodeVarRef* refp) {
-                    if (!refp->access().isWriteOrRW()) return;
-                    m_cellOutputps.emplace(refp->varp());
-                    if (portp->declDirection() == VDirection::OUTPUT && refp->varp()->isNet()) {
-                        m_remoteps.emplace(refp->varp());
-                    }
+                    if (refp->access().isWriteOrRW()) m_cellOutputps.emplace(refp->varp());
                 });
             }
-            if (portp->isInout()) {
-                std::vector<const AstVar*>& varps = m_inoutVarps[portp].emplace_back();
-                nodep->exprp()->foreach(
-                    [&](const AstNodeVarRef* refp) { varps.push_back(refp->varp()); });
-            }
+            if (m_findRemote) addPinWriter(nodep);
             addPullActuals(VN_AS(nodep->exprp(), NodeExpr), portp);
             if (portp->isNonOutput()) {
                 nodep->exprp()->foreach([&](const AstNodeVarRef* refp) {
@@ -688,9 +1312,368 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
             pair.first->second &= netp != nullptr;
             if (netp) m_netps[portp].push_back(netp);
         }
+        VL_RESTORER(m_inoutPinp);
+        VL_RESTORER(m_inoutPinTarget);
+        m_inoutPinp = portp && portp->isInout() && nodep->exprp() ? nodep : nullptr;
+        m_inoutPinTarget = false;
+        if (m_findRemote && m_inoutPinp) {
+            // The bits of a target the connection may write, else see visit(AstNodeVarRef)
+            std::vector<ForceRun> runs;
+            m_inoutPinTarget = forceTargetRuns(nodep->exprp(), &runs);
+            if (m_inoutPinTarget) {
+                for (const ForceRun& run : runs) {
+                    addInoutWrite({nodep, run.varp, run.lo, run.lo + run.len});
+                }
+            }
+        }
         iterateChildrenConst(nodep);
     }
+    void addInoutWrite(const InoutWrite& write) {
+        m_varInoutWrites[write.varp].push_back(write);
+        m_pinInoutWrites[write.pinp].push_back(write);
+        if (write.varp->isInout()) m_inoutParentps[write.pinp->modVarp()].push_back(write.varp);
+    }
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+    // Ports fed from inout ports, whose drive state is resolved outside their module, so a force
+    // domain would read only the local one; the search stops, finding none, past m_work's limit
+    V3TristateForcePorts findRemote(size_t nodes) {
+        m_work = ForceWork{FORCE_WORK_FIXED + FORCE_WORK_SCALE * nodes};
+        V3TristateForcePorts remote = findRemoteWithin();
+        UINFO(4, "Force remote search: " << m_work.used() << " steps of " << m_work.limit()
+                                         << (m_work.over() ? ", over" : ""));
+        if (m_work.over()) return V3TristateForcePorts{};
+        if (debug() >= 4) {
+            for (const AstVar* const varp : remote.inputps) {
+                UINFO(4, "Force remote port: " << m_portModps[varp]->prettyName() << "."
+                                               << varp->prettyName());
+            }
+            for (const AstVar* const varp : remote.inoutps) {
+                UINFO(4, "Force remote port: " << m_portModps[varp]->prettyName() << "."
+                                               << varp->prettyName());
+            }
+        }
+        return remote;
+    }
+    static bool isInput(const AstVar* varp) {
+        return varp->isIO() && varp->declDirection() == VDirection::INPUT;
+    }
+    size_t instances(const AstVar* portp) {
+        const auto it = m_portModps.find(portp);
+        return it == m_portModps.end() ? 0 : m_cellCounts[it->second];
+    }
+    // Find the inout ports a driven or forced inout port connected to them may drive, and of each
+    // variable the runs those connections write. A port forced only through hierarchical
+    // references may be forced in one instance only, so does not drive the connections of its
+    // other instances, see otherInoutWriter.
+    void findDrivenInouts() {
+        for (const auto& pair : m_portModps) {
+            if (!m_work.charge()) return;
+            const AstVar* const varp = pair.first;
+            if (!varp->isInout() || !varp->isForced()) continue;
+            (m_localForcedps.count(varp) ? m_drivenInoutps : m_xrefForcedps).emplace(varp);
+        }
+        std::vector<const AstVar*> drivenps{m_drivenInoutps.begin(), m_drivenInoutps.end()};
+        drivenps.insert(drivenps.end(), m_xrefForcedps.begin(), m_xrefForcedps.end());
+        for (size_t index = 0; index < drivenps.size(); ++index) {
+            if (!m_work.charge()) return;
+            const auto it = m_inoutParentps.find(drivenps[index]);
+            if (it == m_inoutParentps.end()) continue;
+            for (const AstVar* const parentp : it->second) {
+                if (!m_work.charge()) return;
+                if (m_drivenInoutps.emplace(parentp).second) drivenps.push_back(parentp);
+            }
+        }
+        // The runs of each variable but an inout port, whose value is resolved with all of its
+        // connections
+        for (const auto& pair : m_varInoutWrites) {
+            if (pair.first->isInout()) continue;
+            std::vector<std::tuple<uint32_t, bool, const void*>> drivenEdges;
+            std::vector<std::tuple<uint32_t, bool, const void*>> forcedEdges;
+            ForceRanges unused;
+            for (const InoutWrite& write : pair.second) {
+                if (!m_work.charge()) return;
+                const AstVar* const portp = write.pinp->modVarp();
+                if (m_drivenInoutps.count(portp)) {
+                    drivenEdges.emplace_back(write.lo, true, write.pinp);
+                    drivenEdges.emplace_back(write.hi, false, write.pinp);
+                } else if (m_xrefForcedps.count(portp)) {
+                    forcedEdges.emplace_back(write.lo, true, portp);
+                    forcedEdges.emplace_back(write.hi, false, portp);
+                } else {
+                    continue;
+                }
+                m_drivenBits[pair.first].add(write.lo, write.hi, unused, m_work);
+            }
+            if (!addRuns(drivenEdges, m_drivenRuns[pair.first])
+                || !addRuns(forcedEdges, m_forcedRuns[pair.first])) {
+                return;
+            }
+        }
+    }
+    // Add to runs those of the writes starting and ending at edges, merging adjacent runs by the
+    // same writer; false past the limit
+    bool addRuns(std::vector<std::tuple<uint32_t, bool, const void*>>& edges,
+                 std::map<uint32_t, DrivenRun>& runs) {
+        if (!m_work.charge(edges.size())) return false;
+        std::sort(edges.begin(), edges.end());
+        std::map<const void*, uint32_t> active;  // Writes in progress by each writer
+        for (size_t index = 0; index < edges.size(); ++index) {
+            if (!m_work.charge()) return false;
+            const uint32_t at = std::get<0>(edges[index]);
+            const void* const whop = std::get<2>(edges[index]);
+            if (std::get<1>(edges[index])) {
+                ++active[whop];
+            } else if (!--active[whop]) {
+                active.erase(whop);
+            }
+            if (active.empty() || index + 1 == edges.size()) continue;
+            const uint32_t next = std::get<0>(edges[index + 1]);
+            if (next == at) continue;
+            const DrivenRun run{next, active.size() > 1 ? nullptr : active.begin()->first};
+            if (!runs.empty() && runs.rbegin()->second.hi == at
+                && runs.rbegin()->second.whop == run.whop) {
+                runs.rbegin()->second.hi = next;
+            } else {
+                runs.emplace(at, run);
+            }
+        }
+        return true;
+    }
+    // Whether no run of varp in runs overlapping [lo, hi) is by another writer than whop
+    bool onlyWriter(const DrivenRuns& allRuns, const AstVar* varp, uint32_t lo, uint32_t hi,
+                    const void* whop) {
+        const auto runsIt = allRuns.find(varp);
+        if (runsIt == allRuns.end()) return true;
+        const std::map<uint32_t, DrivenRun>& runs = runsIt->second;
+        auto it = runs.upper_bound(lo);
+        if (it != runs.begin() && std::prev(it)->second.hi > lo) --it;
+        for (; it != runs.end() && it->first < hi; ++it) {
+            if (!m_work.charge() || it->second.whop != whop) return false;
+        }
+        return true;
+    }
+    // Whether an inout connection other than pinp may drive bits [lo, hi) of varp; one of a port
+    // forced only through hierarchical references not if it is of the port of pinp
+    bool otherInoutWriter(const AstVar* varp, const AstPin* pinp, uint32_t lo, uint32_t hi) {
+        return !onlyWriter(m_drivenRuns, varp, lo, hi, pinp)
+               || !onlyWriter(m_forcedRuns, varp, lo, hi, pinp->modVarp());
+    }
+    // Count the writes of the writers of a variable an inout's value may reach
+    void reach(const AstVar* varp) {
+        if (!m_work.charge() || !m_reachedps.emplace(varp).second) return;
+        m_reachedOrderps.push_back(varp);
+        const auto it = m_varWriters.find(varp);
+        if (it == m_varWriters.end()) return;
+        for (const uint32_t id : it->second) {
+            if (!m_work.charge()) return;
+            countWrites(m_writers[id]);
+        }
+    }
+    // Add bits [lo, hi) of varp carrying an inout's value. A forced variable or input port holds
+    // its forced value instead, so passes nothing on, though an input port is still classified
+    // from them; a forced inout port passes them on, as it resolves its force with its other
+    // drivers. Bits a driven inout connection writes are held: only inout connections read them,
+    // see connCarries.
+    void carry(const AstVar* varp, uint32_t lo, uint32_t hi) {
+        const bool passes = !varp->isForced() || varp->isInout();
+        ForceRanges held;
+        const auto it = m_drivenBits.find(varp);
+        if (it != m_drivenBits.end()) it->second.intersect(lo, hi, held, m_work);
+        uint32_t at = lo;
+        for (const auto& range : held) {
+            if (m_work.over()) return;
+            if (at < range.first) addCarried(varp, at, range.first, passes);
+            if (passes) addPending(varp, range.first, range.second, true);
+            at = range.second;
+        }
+        if (at < hi) addCarried(varp, at, hi, passes);
+    }
+    void addCarried(const AstVar* varp, uint32_t lo, uint32_t hi, bool passes) {
+        ForceRanges unused;
+        if (isInput(varp)) m_inputBits[varp].add(lo, hi, unused, m_work);
+        if (passes) addPending(varp, lo, hi, false);
+    }
+    // Add carried or held bits [lo, hi) of varp, and the new ones to those to pass on
+    void addPending(const AstVar* varp, uint32_t lo, uint32_t hi, bool held) {
+        ForceRanges newRanges;
+        (held ? m_heldBits : m_carriedBits)[varp].add(lo, hi, newRanges, m_work);
+        if (newRanges.empty()) return;
+        ForceBitSet& pending = (held ? m_pendingHeld : m_pendingBits)[varp];
+        if (m_pendingBits[varp].empty() && m_pendingHeld[varp].empty()) {
+            m_carryQueue.push_back(varp);
+        }
+        ForceRanges unused;
+        for (const auto& range : newRanges) {
+            if (m_work.over()) return;
+            pending.add(range.first, range.second, unused, m_work);
+        }
+    }
+    // Whether an inout connection carries an inout's value to every bit of its port of width
+    // bits, with no other inout connection driving the bits of its actual it may drive
+    bool connCarries(uint32_t conn, uint32_t width) {
+        if (m_connCarried[conn] != width) return false;
+        const AstPin* const pinp = m_connPins[conn];
+        const auto it = m_pinInoutWrites.find(pinp);
+        if (it == m_pinInoutWrites.end()) return true;
+        for (const InoutWrite& write : it->second) {
+            if (!m_work.charge() || otherInoutWriter(write.varp, pinp, write.lo, write.hi)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Pass newly carried bits of srcp to the runs reading them, and held bits to inout connections
+    bool passOn(const AstVar* srcp) {
+        const ForceBitSet newBits = std::move(m_pendingBits[srcp]);
+        m_pendingBits[srcp] = ForceBitSet{};
+        const ForceBitSet newHeld = std::move(m_pendingHeld[srcp]);
+        m_pendingHeld[srcp] = ForceBitSet{};
+        const auto readersIt = m_pieceReaders.find(srcp);
+        if (readersIt == m_pieceReaders.end()) return true;
+        for (const auto& reader : readersIt->second) {
+            if (!m_work.charge()) return false;
+            CarryPiece& carryPiece = m_carryPieces[reader.first];
+            if (!passBits(carryPiece, reader.second, newBits)) return false;
+            // Held bits only to an inout connection
+            if (!carryPiece.destp && !newHeld.empty()
+                && !passBits(carryPiece, reader.second, newHeld)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Pass newBits of requirement index of a carry piece to it, where its other requirements carry
+    bool passBits(CarryPiece& carryPiece, uint32_t index, const ForceBitSet& newBits) {
+        const ForcePiece& piece = carryPiece.piece;
+        const ForceReq& req = piece.reqs[index];
+        // Offsets of the run whose bit of this requirement newly carries one, and of those
+        // the offsets every other requirement carries one to
+        ForceRanges offsets;
+        reqOffsets(req, piece.len, newBits, offsets, {0, piece.len});
+        for (const ForceReq& otherReq : piece.reqs) {
+            if (offsets.empty()) break;
+            if (!m_work.charge(offsets.size())) return false;
+            if (&otherReq == &req) continue;
+            const auto otherIt = m_carriedBits.find(otherReq.varp);
+            if (otherIt == m_carriedBits.end()) {
+                offsets.clear();
+                break;
+            }
+            ForceRanges kept;
+            for (const auto& range : offsets) {
+                if (m_work.over()) return false;
+                reqOffsets(otherReq, piece.len, otherIt->second, kept, range);
+            }
+            offsets = std::move(kept);
+        }
+        for (const auto& range : offsets) {
+            if (!m_work.charge()) return false;
+            ForceRanges newRanges;
+            carryPiece.carried.add(piece.lo + range.first, piece.lo + range.second, newRanges,
+                                   m_work);
+            const AstVar* const destp = carryPiece.destp;
+            for (const auto& newRange : newRanges) {
+                if (!m_work.charge()) return false;
+                if (!destp) {
+                    m_connCarried[carryPiece.conn] += newRange.second - newRange.first;
+                    continue;
+                }
+                // A writable public variable may also be written through VPI
+                if (m_otherWrittenps.count(destp) || m_pulledps.count(destp)
+                    || m_aliasedps.count(destp) || destp->isSigUserRWPublic()) {
+                    continue;
+                }
+                ForceBitCounts& counts = m_bitCounts[destp];
+                counts.add(newRange.first, newRange.second, 0, 1, m_work);
+                // A bit of an input port carries one when every instance connects one
+                if (isInput(destp) && !instances(destp)) continue;
+                ForceRanges carriedRanges;
+                counts.carried(newRange.first, newRange.second,
+                               isInput(destp) ? std::optional<uint32_t>{instances(destp)}
+                                              : std::nullopt,
+                               carriedRanges, m_work);
+                for (const auto& carriedRange : carriedRanges) {
+                    if (m_work.over()) return false;
+                    carry(destp, carriedRange.first, carriedRange.second);
+                }
+            }
+        }
+        return true;
+    }
+    // A variable bit carries an inout's value when every writer of it carries one and it has no
+    // other writer, pull or alias; an input port bit when every instance connects one
+    V3TristateForcePorts findRemoteWithin() {
+        findDrivenInouts();
+        for (const auto& pair : m_portModps) {
+            if (!m_work.charge()) return {};
+            if (pair.first->isInout()) reach(pair.first);
+        }
+        for (size_t index = 0; index < m_reachedOrderps.size(); ++index) {
+            if (!m_work.charge()) return {};
+            const auto it = m_varReaders.find(m_reachedOrderps[index]);
+            if (it == m_varReaders.end()) continue;
+            for (const uint32_t id : it->second) {
+                if (!m_work.charge()) return {};
+                for (const AstVar* const destp : expand(m_writers[id])) {
+                    if (m_work.over()) return {};
+                    reach(destp);
+                }
+            }
+        }
+        for (const auto& pair : m_portModps) {
+            if (!m_work.charge()) return {};
+            if (pair.first->isInout()) carry(pair.first, 0, forceCarryWidth(pair.first));
+        }
+        for (size_t index = 0; index < m_carryQueue.size(); ++index) {
+            if (!m_work.charge() || !passOn(m_carryQueue[index])) return {};
+        }
+        V3TristateForcePorts remote;
+        for (const auto& pair : m_inputBits) {
+            if (!m_work.charge()) return {};
+            const uint32_t width = forceCarryWidth(pair.first);
+            if (width && pair.second.covers(0, width)) { remote.inputps.emplace(pair.first); }
+        }
+        for (const auto& pair : m_inoutConnps) {
+            if (!m_work.charge(1 + pair.second.size())) return {};
+            const uint32_t width = forceCarryWidth(pair.first);
+            if (width && pair.second.size() == instances(pair.first)
+                && std::all_of(pair.second.begin(), pair.second.end(),
+                               [&](uint32_t conn) { return connCarries(conn, width); })) {
+                remote.inoutps.emplace(pair.first);
+            }
+        }
+        return remote;
+    }
+    // Append to outp the offsets in window, within a run of len bits, whose bit of req is in bits
+    void reqOffsets(const ForceReq& req, uint32_t len, const ForceBitSet& bits, ForceRanges& outp,
+                    std::pair<uint32_t, uint32_t> window) {
+        const uint32_t from = window.first;
+        const uint32_t to = std::min(window.second, len);
+        if (from >= to || !m_work.charge()) return;
+        if (!req.step) {
+            if (bits.covers(req.lo, req.lo + 1)) outp.emplace_back(from, to);
+            return;
+        }
+        // The variable bits of the window, and back
+        const uint32_t first = req.at(from);
+        const uint32_t last = req.at(to - 1);
+        const uint32_t lo = std::min(first, last);
+        const uint32_t hi = std::max(first, last) + 1;
+        ForceRanges parts;
+        bits.intersect(lo, hi, parts, m_work);
+        // Each part took its step in intersect
+        if (m_work.over()) return;
+        if (req.step > 0) {
+            for (const auto& part : parts) {
+                outp.emplace_back(part.first - req.lo, part.second - req.lo);
+            }
+        } else {
+            for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+                outp.emplace_back(req.lo + 1 - it->second, req.lo + 1 - it->first);
+            }
+        }
+    }
 
 public:
     struct Eligible final {
@@ -707,13 +1690,14 @@ public:
         std::unordered_map<const AstVar*, std::vector<AstVar*>> rhsInputActualps;
         std::unordered_set<const AstVar*> pulledps;  // Direct and propagated pulls for INOUT
         std::unordered_set<const AstVar*> xrefWrittenps;  // Written through a hierarchical ref
-        // Inout ports every connection of which carries a remote drive state, which keep the
-        // lowering of an ordinary port when forced
-        std::unordered_set<const AstVar*> remoteInoutps;
+        V3TristateForcePorts remote;  // Ports fed from inout ports
     };
-    static Eligible eligible(AstNetlist* netlistp) {
+    static Eligible eligible(AstNetlist* netlistp, const V3TristateForcePorts* knownp = nullptr) {
         TristateForcedInputVisitor visitor;
+        visitor.m_findRemote = !knownp;
         visitor.iterateConst(netlistp);
+        size_t nodes = 0;
+        if (!knownp) netlistp->foreach([&](const AstNode*) { ++nodes; });
         // Visit each pulled net once; repeated instances or port chains need no rescans.
         std::vector<const AstVar*> pulledps{visitor.m_pulledps.begin(), visitor.m_pulledps.end()};
         for (size_t index = 0; index < pulledps.size(); ++index) {
@@ -734,33 +1718,7 @@ public:
                 if (unsafeReadps.emplace(portp).second) pulledps.push_back(portp);
             }
         }
-        // Nets carrying, through value-transparent continuous assignments, the value of an inout
-        // port, an output connection or a hierarchical reference: a net of a force domain
-        // would read only their local drive state, so their ports keep their own nets.
-        std::vector<const AstVar*> remoteps{visitor.m_remoteps.begin(), visitor.m_remoteps.end()};
-        for (const auto& pair : visitor.m_forwardps) {
-            if (pair.first->isInout()) remoteps.push_back(pair.first);
-        }
-        std::unordered_set<const AstVar*> remoteSetps{remoteps.begin(), remoteps.end()};
-        for (size_t index = 0; index < remoteps.size(); ++index) {
-            const auto it = visitor.m_forwardps.find(remoteps[index]);
-            if (it == visitor.m_forwardps.end()) continue;
-            for (const AstVar* const destp : it->second) {
-                if (remoteSetps.emplace(destp).second) remoteps.push_back(destp);
-            }
-        }
-        // An input port connected to such a net, also through other input ports, carries it
-        for (bool changed = true; changed;) {
-            changed = false;
-            for (const auto& pair : visitor.m_netps) {
-                if (remoteSetps.count(pair.first)) continue;
-                if (std::any_of(pair.second.begin(), pair.second.end(),
-                                [&](const AstVar* netp) { return remoteSetps.count(netp); })) {
-                    remoteSetps.emplace(pair.first);
-                    changed = true;
-                }
-            }
-        }
+        const V3TristateForcePorts remote = knownp ? *knownp : visitor.findRemote(nodes);
         Eligible result;
         for (const auto& pair : visitor.m_rhsInputps) {
             for (const AstVar* const rhsp : pair.second) {
@@ -772,7 +1730,8 @@ public:
         for (const auto& pair : visitor.m_plainps) {
             bool ok = pair.second && !visitor.m_writtenps.count(pair.first)
                       && !visitor.m_pulledps.count(pair.first)
-                      && !visitor.m_aliasedps.count(pair.first) && !remoteSetps.count(pair.first);
+                      && !visitor.m_aliasedps.count(pair.first)
+                      && !remote.inputps.count(pair.first);
             for (const AstVar* const netp : visitor.m_netps[pair.first]) {
                 if (visitor.m_pulledps.count(netp) || visitor.m_aliasedps.count(netp)
                     || visitor.m_xrefWrittenps.count(netp)) {
@@ -790,16 +1749,7 @@ public:
             }
             if (ok) result.inputps.emplace(pair.first);
         }
-        for (const auto& pair : visitor.m_inoutVarps) {
-            if (std::all_of(pair.second.begin(), pair.second.end(),
-                            [&](const std::vector<const AstVar*>& varps) {
-                                return std::any_of(
-                                    varps.begin(), varps.end(),
-                                    [&](const AstVar* varp) { return remoteSetps.count(varp); });
-                            })) {
-                result.remoteInoutps.emplace(pair.first);
-            }
-        }
+        result.remote = std::move(remote);
         result.aliasps = std::move(visitor.m_aliasedps);
         result.rhsInputActualps = std::move(visitor.m_readInputActualps);
         result.pulledps = std::move(visitor.m_pulledps);
@@ -819,7 +1769,7 @@ class TristatePrepareForceVisitor final : public VNVisitor {
     void visit(AstPin* nodep) override {
         AstVar* const portp = nodep->modVarp();
         if (portp && !portp->isForceable()
-            && ((portp->isInout() && !m_eligible.remoteInoutps.count(portp))
+            && ((portp->isInout() && !m_eligible.remote.inoutps.count(portp))
                 || m_eligible.inputps.count(portp))) {
             if (AstVar* const actualp = forceNetp(nodep, m_modp)) {
                 if (!portp->isInout() || !m_eligible.pulledps.count(actualp)) {
@@ -837,8 +1787,9 @@ class TristatePrepareForceVisitor final : public VNVisitor {
     }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
-    explicit TristatePrepareForceVisitor(AstNetlist* nodep)
+    TristatePrepareForceVisitor(AstNetlist* nodep, V3TristateForcePorts& forcePorts)
         : m_eligible{TristateForcedInputVisitor::eligible(nodep)} {
+        forcePorts = m_eligible.remote;
         iterate(nodep);
         std::unordered_set<AstVar*> expandedps;
         for (size_t index = 0; index < m_pendingps.size(); ++index) {
@@ -852,7 +1803,9 @@ class TristatePrepareForceVisitor final : public VNVisitor {
     }
 
 public:
-    static void apply(AstNetlist* nodep) { TristatePrepareForceVisitor{nodep}; }
+    static void apply(AstNetlist* nodep, V3TristateForcePorts& forcePorts) {
+        TristatePrepareForceVisitor{nodep, forcePorts};
+    }
 };
 
 //######################################################################
@@ -897,7 +1850,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstVar* resolvedEnVarp = nullptr;
         // Ordinary INOUT relays read the parent resolver for a downstream prepared pin.
         AstVar* inoutReadRelayp = nullptr;
-        // Pull-aware read enable of a pulled net read by INOUT pins, forced with the net
+        // Pull-aware read enable of a pulled net read by INOUT pins or, forced, by case
+        // equality, forced with the net
         AstVar* pullReadEnVarp = nullptr;
     };
 
@@ -974,8 +1928,11 @@ class TristateVisitor final : public TristateBaseVisitor {
     std::unordered_set<const AstVar*> m_inoutPulledps;
     // Nets with an alias or a hierarchical writer, which tristate resolution cannot represent
     std::unordered_set<const AstVar*> m_unresolvedWriterps;
-    // Inout ports kept off force domains, see TristateForcedInputVisitor::Eligible
+    // Inout ports kept off force domains, see TristateForcedInputVisitor::findRemote
     std::unordered_set<const AstVar*> m_remoteInoutps;
+    // Forced pulled nets with a pull-aware read enable, and the mask of its pulled bits, which
+    // is set once the pulls of all modules are known, see newForcedReadEnp
+    std::vector<std::pair<AstVar*, AstConst*>> m_forcedPullMasks;
     // Wired net, or element of an unpacked array of wired nets, by net and unpacked indices
     using WiredElem = std::pair<AstVar*, std::vector<int>>;
     std::map<WiredElem, Assigns> m_wiredAssigns;  // Continuous drivers of wired elements
@@ -1147,6 +2104,43 @@ class TristateVisitor final : public TristateBaseVisitor {
         refp->classOrPackagep(origp->classOrPackagep());
         return refp;
     }
+    // Enable of a read of a forced net with a pull: the pulled bits of an undriven net are not z
+    // (IEEE 1800-2023 6.6.5, 28.10), but a force overrides the pull (10.6.2), so the read takes
+    // the net's pull-aware read enable, which a force or release of the net forces or releases
+    AstNodeExpr* newForcedReadEnp(const AstNodeVarRef* refp, AstNodeExpr* enp) {
+        AstVar* const varp = refp->varp();
+        if (!varp->isForced() || varp->isIO() || !m_inoutPulledps.count(varp)) return enp;
+        AuxAstVar& aux = m_varAux(varp);
+        if (!aux.pullReadEnVarp) {
+            AstVar* const enVarp = getCreateEnVarp(varp, false);
+            FileLine* const flp = varp->fileline();
+            AstVar* const readEnp
+                = new AstVar{flp, VVarType::MODULETEMP, varp->name() + "__VpullReadEn", enVarp};
+            readEnp->isContinuously(true);
+            AstNodeModule* const modp = findParentModule(varp);
+            modp->addStmtsp(readEnp);
+            AstConst* const maskp = newAllZerosOrOnes(varp, false);
+            AstAssignW* const assignp
+                = new AstAssignW{flp, new AstVarRef{flp, readEnp, VAccess::WRITE},
+                                 new AstOr{flp, new AstVarRef{flp, enVarp, VAccess::READ}, maskp}};
+            assignp->user2Or(U2_BOTH);
+            modp->addStmtsp(new AstAlways{assignp});
+            aux.pullReadEnVarp = readEnp;
+            m_forcedPullMasks.emplace_back(varp, maskp);
+        }
+        FileLine* const flp = enp->fileline();
+        AstNodeExpr* newp;
+        if (const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
+            newp = newVarXRef(flp, aux.pullReadEnVarp, xrefp->dotted(), VAccess::READ,
+                              xrefp->inlinedDots());
+        } else {
+            AstVarRef* const newRefp = new AstVarRef{flp, aux.pullReadEnVarp, VAccess::READ};
+            newRefp->classOrPackagep(VN_AS(refp, VarRef)->classOrPackagep());
+            newp = newRefp;
+        }
+        VL_DO_DANGLING(enp->deleteTree(), enp);
+        return newp;
+    }
     AstConst* getNonZConstp(AstConst* const constp) {
         FileLine* const fl = constp->fileline();
         V3Number numz{constp, constp->width()};
@@ -1175,11 +2169,11 @@ class TristateVisitor final : public TristateBaseVisitor {
                 && !m_tgraph.isTristate(varp)) {
                 return newAllZerosOrOnes(nodep, true);
             }
-            return newEnVarRefp(varrefp);
+            return newForcedReadEnp(varrefp, newEnVarRefp(varrefp));
         } else if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
             AstVar* const enVarp = getCreateForceEnVarp(xrefp->varp());
-            return newVarXRef(xrefp->fileline(), enVarp, xrefp->dotted(), VAccess::READ,
-                              xrefp->inlinedDots());
+            return newForcedReadEnp(xrefp, newVarXRef(xrefp->fileline(), enVarp, xrefp->dotted(),
+                                                      VAccess::READ, xrefp->inlinedDots()));
         } else if (AstConst* const constp = VN_CAST(nodep, Const)) {
             return getNonZConstp(constp);
         } else if (AstExtend* const extendp = VN_CAST(nodep, Extend)) {
@@ -2496,6 +3490,31 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
     }
 
+    static void valueReads(AstNode* nodep, std::vector<AstVar*>& varps) {
+        // Variables whose value, z included, nodep's value carries: a z read only as e.g. a
+        // condition or operator operand gives x, not z (IEEE 1800-2023 11.4)
+        if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+            varps.push_back(refp->varp());
+        } else if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+            valueReads(selp->fromp(), varps);
+        } else if (const AstArraySel* const aselp = VN_CAST(nodep, ArraySel)) {
+            valueReads(aselp->fromp(), varps);
+        } else if (const AstStructSel* const sselp = VN_CAST(nodep, StructSel)) {
+            valueReads(sselp->fromp(), varps);
+        } else if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+            valueReads(concatp->lhsp(), varps);
+            valueReads(concatp->rhsp(), varps);
+        } else if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+            valueReads(repp->srcp(), varps);
+        } else if (const AstExtend* const extendp = VN_CAST(nodep, Extend)) {
+            valueReads(extendp->lhsp(), varps);
+        } else if (const AstExtendS* const extendsp = VN_CAST(nodep, ExtendS)) {
+            valueReads(extendsp->lhsp(), varps);
+        } else if (const AstCond* const condp = VN_CAST(nodep, Cond)) {
+            valueReads(condp->thenp(), varps);
+            valueReads(condp->elsep(), varps);
+        }
+    }
     void propagateResolvedInoutReads(AstNodeModule* modp) {
         // A prepared INOUT can carry Z from the parent even when no local driver supplies it.
         // Mark value-transparent forwarding destinations so the read enable follows the data.
@@ -3994,7 +5013,8 @@ class TristateVisitor final : public TristateBaseVisitor {
                     nodep->user1p(newVarXRef(fl, enVarp, xrefp->dotted(), VAccess::READ,
                                              xrefp->inlinedDots()));
                 } else {
-                    nodep->user1p(new AstVarRef{fl, enVarp, VAccess::READ});
+                    nodep->user1p(
+                        newForcedReadEnp(nodep, new AstVarRef{fl, enVarp, VAccess::READ}));
                 }
             }
         }
@@ -4209,7 +5229,7 @@ class TristateVisitor final : public TristateBaseVisitor {
 
 public:
     // CONSTRUCTORS
-    explicit TristateVisitor(AstNetlist* netlistp) {
+    TristateVisitor(AstNetlist* netlistp, const V3TristateForcePorts& forcePorts) {
         m_tgraph.clearAndCheck();
         // Interface identity must be known while force RHS connections are classified.
         std::vector<AstNodeModule*> ifacesp;
@@ -4230,10 +5250,10 @@ public:
             return VN_IS(nodep, AssignForce) || VN_IS(nodep, Release);
         });
         TristateForcedInputVisitor::Eligible eligible
-            = haveForce ? TristateForcedInputVisitor::eligible(netlistp)
+            = haveForce ? TristateForcedInputVisitor::eligible(netlistp, &forcePorts)
                         : TristateForcedInputVisitor::Eligible{};
         m_inoutPulledps = std::move(eligible.pulledps);
-        m_remoteInoutps = std::move(eligible.remoteInoutps);
+        m_remoteInoutps = std::move(eligible.remote.inoutps);
         m_unresolvedWriterps = std::move(eligible.xrefWrittenps);
         m_unresolvedWriterps.insert(eligible.aliasps.begin(), eligible.aliasps.end());
         std::unordered_set<const AstVar*> inputps;
@@ -4300,6 +5320,11 @@ public:
         // Then the rest in the historical order; interfaces are skipped (already done).
         iterateChildrenBackwardsConst(netlistp);
 
+        for (const auto& pair : m_forcedPullMasks) {
+            const AuxAstVar& aux = m_varAux(pair.first);
+            if (aux.pullp) pair.second->num().setAllBits1();
+            for (const auto& pull : aux.bitPulls) pair.second->num().setBit(pull.first, 1);
+        }
         pairForceEnables();
         // Combine interface tristate contributions after all modules processed
         combineIfaceContribs();
@@ -4328,18 +5353,20 @@ public:
 //######################################################################
 // Tristate class functions
 
-void V3Tristate::prepareForcePorts(AstNetlist* nodep) {
+void V3Tristate::prepareForcePorts(AstNetlist* nodep, V3TristateForcePorts& forcePorts) {
+    // Without a forced port, no port is kept off force domains
+    forcePorts = V3TristateForcePorts{};
     if (!nodep->exists([](const AstVar* varp) {
             return varp->isIO() && varp->isForced() && !varp->isForceable()
                    && !varp->isFuncLocalSticky();
         })) {
         return;
     }
-    TristatePrepareForceVisitor::apply(nodep);
+    TristatePrepareForceVisitor::apply(nodep, forcePorts);
 }
 
-void V3Tristate::tristateAll(AstNetlist* nodep) {
+void V3Tristate::tristateAll(AstNetlist* nodep, const V3TristateForcePorts& forcePorts) {
     UINFO(2, __FUNCTION__ << ":");
-    { TristateVisitor{nodep}; }  // Destruct before checking
+    { TristateVisitor{nodep, forcePorts}; }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("tristate", 0, dumpTreeEitherLevel() >= 3);
 }

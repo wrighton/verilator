@@ -82,6 +82,14 @@ module tri_upward_src;
   initial #1 force t.n12 = t.s12.q;
 endmodule
 
+module tri_pulled_down;
+  tri0 n;
+  wire n_z = n === 1'bz;
+  wire [2:0] p;
+  pulldown (p[0]);
+  pullup (p[2]);
+endmodule
+
 interface tri_strength_if;
   wire [1:0] value;
   assign (weak0, weak1) value = 2'b10;
@@ -354,6 +362,33 @@ module t;
     release u14.n;
     #1;
     `checkh(u14.n, 7'h35);
+  end
+
+  // A pulled-down net reads its pull while not forced, and a forced value while forced, also
+  // through a hierarchical reference (IEEE 1800-2023 6.6.5, 10.6.2)
+  tri_pulled_down u16 ();
+  tri0 n16;
+  wire n16_hz = u16.n === 1'bz;
+  initial begin
+    #1;
+    `checkh({n16 === 1'bz, u16.n === 1'bz, u16.n_z, n16_hz}, 4'b0000);
+    `checkh({u16.p[2] === 1'bz, u16.p[0] === 1'bz}, 2'b00);
+    `checkh({n16, u16.n, u16.p[2], u16.p[0]}, 4'b0010);
+    force n16 = 1'b1;
+    force u16.n = 1'bz;
+    force u16.p[1] = 1'b1;
+    force u16.p[0] = 1'bz;
+    #1;
+    `checkh({n16 === 1'bz, u16.n === 1'bz, u16.n_z, n16_hz}, 4'b0111);
+    `checkh({u16.p[2] === 1'bz, u16.p[1] === 1'bz, u16.p[0] === 1'bz}, 3'b001);
+    `checkh({n16, u16.p[2], u16.p[1]}, 3'b111);
+    release n16;
+    release u16.n;
+    release u16.p;
+    #1;
+    `checkh({n16 === 1'bz, u16.n === 1'bz, u16.n_z, n16_hz}, 4'b0000);
+    `checkh({u16.p[2] === 1'bz, u16.p[1] === 1'bz, u16.p[0] === 1'bz}, 3'b010);
+    `checkh({n16, u16.n, u16.p[2], u16.p[0]}, 4'b0010);
   end
 
   initial begin

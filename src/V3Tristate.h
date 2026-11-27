@@ -20,14 +20,31 @@
 #include "config_build.h"
 #include "verilatedos.h"
 
+#include <unordered_set>
+
 class AstNetlist;
+class AstVar;
+
+//============================================================================
+
+// Ports every instance of which connects a value carried from an inout port, found by
+// V3Tristate::prepareForcePorts before constants fold the expressions carrying them, for
+// V3Tristate::tristateAll: input ports that do not collapse with their connections, and inout
+// ports that keep the lowering of an ordinary port when forced
+class V3TristateForcePorts final {
+public:
+    std::unordered_set<const AstVar*> inputps;
+    std::unordered_set<const AstVar*> inoutps;
+};
 
 //============================================================================
 
 class V3Tristate final {
 public:
-    static void prepareForcePorts(AstNetlist* nodep) VL_MT_DISABLED;
-    static void tristateAll(AstNetlist* nodep) VL_MT_DISABLED;
+    static void prepareForcePorts(AstNetlist* nodep,
+                                  V3TristateForcePorts& forcePorts) VL_MT_DISABLED;
+    static void tristateAll(AstNetlist* nodep,
+                            const V3TristateForcePorts& forcePorts) VL_MT_DISABLED;
 };
 
 #endif  // Guard

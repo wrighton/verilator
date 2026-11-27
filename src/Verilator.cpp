@@ -251,7 +251,8 @@ static void process() {
         } else {
             V3LinkLevel::nonWrapTop(v3Global.rootp());
         }
-        V3Tristate::prepareForcePorts(v3Global.rootp());
+        V3TristateForcePorts forcePorts;
+        V3Tristate::prepareForcePorts(v3Global.rootp(), forcePorts);
 
         if (!v3Global.opt.serializeOnly()) {
             // Insert generic code coverage before dead code elimination and
@@ -314,7 +315,7 @@ static void process() {
 
             // Expand inouts, stage 2
             // Also simplify pin connections to always be AssignWs in prep for V3Unknown
-            V3Tristate::tristateAll(v3Global.rootp());
+            V3Tristate::tristateAll(v3Global.rootp(), forcePorts);
         }
 
         if (!v3Global.opt.serializeOnly()) {

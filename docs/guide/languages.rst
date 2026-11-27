@@ -385,11 +385,53 @@ connection is unsupported when a force or release targets that instance's
 port. An unconnected forced inout port is supported only without local
 drivers; release leaves it floating.
 
+An input or inout net port is not eligible for a force domain when every
+instance connects every bit of it to a bit of an inout port carried
+unchanged, as the domain would see only the drive state within the port's
+module. Such a port behaves as without force domains: it can read as high
+impedance while a driven value reaches it, a forced input port can compare
+equal to high impedance, and a force of such an inout port, or a read of such
+a forced input port, that cannot be represented that way is unsupported. A
+bit is carried through continuous assignments without a strength, buf gates
+included, to a net or four-state variable of the module, a constant select of
+it wholly in range, or a concatenation of those; through output, input and
+inout connections; and through hierarchical references read in those. It may
+pass constant selects, concatenations, replications, extensions, streaming
+concatenations, and conditionals whose arms both carry it (Verilator does not
+model the x an unknown condition gives there, IEEE 1800-2023 11.4.11). A
+variable that is pulled, aliased, writable public (``public_flat_rw``), or
+written otherwise, including by a procedural block, a hierarchical
+reference, or another instance's inout connection whose port is driven or
+written in its module, directly or through its own instances, or forced,
+carries nothing further on the bits so written, as does any other construct;
+a port forced only through hierarchical references does not so count for the
+connections of other instances of its module, as the force may name only
+one of them.
+An inout connection writes the bits of its actual when that is a variable, a
+constant select of one or a concatenation of those, and the whole of each
+variable it names otherwise; and a driven port counts as driving its whole
+actual, whichever bits it drives. A forced variable or input port carries
+nothing further either, as it is assumed to hold its forced value, while a
+forced inout port still carries, as it resolves its force with its other
+drivers. Forces are known only per variable of a module, not per instance or
+over time, so this holds whenever and wherever the variable is forced: a port
+fed through a variable or input port that some force names keeps its force
+domain in every instance of the module, before the force runs, after its
+release, and in instances never forced, and a port fed through a forced inout
+port stays out of a force domain while it is forced. The search does bounded
+work, past which ports stay eligible, as do ports with any instance that is
+unconnected or does not carry every bit.
+
+A forced net with a pull reads its pull, not high impedance, on its
+undriven bits while it is not forced (IEEE 1800-2023 6.6.5, 28.10).
+
 An input net port that is only forced or released can share that domain
 with its eligible wire connections (IEEE 1800-2023 23.3.3.7). This optional
 collapse applies only when all instances have compatible whole-net
 connections without pulls or hierarchical drivers and each force has a
-supported drive state. Otherwise, the input remains a separate port.
+supported drive state, and not when every instance connects a value carried
+from an inout port, as described above. Otherwise, the input remains a
+separate port.
 
 A continuously written net input that any instance connects to a value,
 such as a variable, a hierarchical reference to a variable, a select by a

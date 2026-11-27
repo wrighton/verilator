@@ -1,0 +1,66 @@
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:115:15: Unsupported tristate construct (not in propagation graph): VARXREF 'p'
+                                                               : ... note: In instance 't'
+  115 |     force m.l.p = 1'b0;
+      |               ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:116:16: Unsupported tristate construct (not in propagation graph): VARXREF 'p'
+                                                               : ... note: In instance 't'
+  116 |     force sm.l.p = 1'b0;
+      |                ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:117:16: Unsupported tristate construct (not in propagation graph): VARXREF 'p'
+                                                               : ... note: In instance 't'
+  117 |     force bm.l.p = 1'b0;
+      |                ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:118:16: Unsupported tristate construct (not in propagation graph): VARXREF 'p'
+                                                               : ... note: In instance 't'
+  118 |     force tm.l.p = 'z;
+      |                ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:118:5: Unsupported tristate construct: ASSIGNFORCE
+                                                              : ... note: In instance 't'
+  118 |     force tm.l.p = 'z;
+      |     ^~~~~
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:119:17: Unsupported tristate construct (not in propagation graph): VARXREF 'x'
+                                                               : ... note: In instance 't'
+  119 |     force wm.t1.x = 1'b0;
+      |                 ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:115:15: Unsupported tristate construct: hierarchical driver of non-interface tri signal: 'p'
+                                                               : ... note: In instance 't'
+  115 |     force m.l.p = 1'b0;
+      |               ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:116:16: Unsupported tristate construct: hierarchical driver of non-interface tri signal: 'p'
+                                                               : ... note: In instance 't'
+  116 |     force sm.l.p = 1'b0;
+      |                ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:117:16: Unsupported tristate construct: hierarchical driver of non-interface tri signal: 'p'
+                                                               : ... note: In instance 't'
+  117 |     force bm.l.p = 1'b0;
+      |                ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:118:16: Unsupported tristate construct: hierarchical driver of non-interface tri signal: 'p'
+                                                               : ... note: In instance 't'
+  118 |     force tm.l.p = 'z;
+      |                ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:119:17: Unsupported tristate construct: hierarchical driver of non-interface tri signal: 'x'
+                                                               : ... note: In instance 't'
+  119 |     force wm.t1.x = 1'b0;
+      |                 ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:15:16: Unsupported tristate construct (in graph; not converted): VAR 'p'
+                                                              : ... note: In instance 't.m.l'
+   15 |     inout wire p
+      |                ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:63:16: Unsupported tristate construct (in graph; not converted): VAR 'p'
+                                                              : ... note: In instance 't.sm.l'
+   63 |     inout wire p
+      |                ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:81:16: Unsupported tristate construct (in graph; not converted): VAR 'p'
+                                                              : ... note: In instance 't.bm.l'
+   81 |     inout wire p
+      |                ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:95:22: Unsupported tristate construct (in graph; not converted): VAR 'p'
+                                                              : ... note: In instance 't.tm.l'
+   95 |     inout wire [2:0] p
+      |                      ^
+%Error-UNSUPPORTED: t/t_force_inout_read_sibling_unsup.v:30:16: Unsupported tristate construct (in graph; not converted): VAR 'x'
+                                                              : ... note: In instance 't.wm.t2'
+   30 |     inout wire x
+      |                ^
+%Error: Exiting due to
