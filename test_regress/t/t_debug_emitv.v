@@ -804,6 +804,7 @@ module t (/*AUTOARG*/
   dump_value_input dump_return (.p({dump_net}), .value(in));
   dump_value_input dump_value (.p({1{in}}), .value(in));
 
+  initial disable assert_observed_deferred_immediate;
 endmodule
 
 module param_mod #(

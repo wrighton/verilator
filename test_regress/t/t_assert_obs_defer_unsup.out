@@ -19,14 +19,18 @@
                                                      : ... note: In instance 't'
    41 |       cover #0 (1) $display("REPORT");
       |       ^~~~~
-%Error-UNSUPPORTED: t/t_assert_obs_defer_unsup.v:47:7: Unsupported: Observed deferred immediate assertion in fork...join_any or fork...join_none.
+%Error-UNSUPPORTED: t/t_assert_obs_defer_unsup.v:44:13: Unsupported: Observed deferred immediate assertion in a task or function.
+                                                      : ... note: In instance 't'
+   44 |       lbl : assert #0 (1) $display("REPORT");
+      |             ^~~~~~
+%Error-UNSUPPORTED: t/t_assert_obs_defer_unsup.v:51:7: Unsupported: Observed deferred immediate assertion in fork...join_any or fork...join_none.
                                                      : ... note: In instance 't'
-   47 |       assert #0 (1) $display("REPORT");
+   51 |       assert #0 (1) $display("REPORT");
       |       ^~~~~~
-%Error-UNSUPPORTED: t/t_assert_obs_defer_unsup.v:64:20: Unsupported: Observed deferred immediate assertion action.
-   64 |     assert #0 (1) q.delete();
+%Error-UNSUPPORTED: t/t_assert_obs_defer_unsup.v:68:20: Unsupported: Observed deferred immediate assertion action.
+   68 |     assert #0 (1) q.delete();
       |                    ^
-%Error-UNSUPPORTED: t/t_assert_obs_defer_unsup.v:65:19: Unsupported: Observed deferred immediate assertion action.
-   65 |     assert #0 (1) $timeformat(-9, digits, " ns", 0);
+%Error-UNSUPPORTED: t/t_assert_obs_defer_unsup.v:69:19: Unsupported: Observed deferred immediate assertion action.
+   69 |     assert #0 (1) $timeformat(-9, digits, " ns", 0);
       |                   ^~~~~~~~~~~
 %Error: Exiting due to
