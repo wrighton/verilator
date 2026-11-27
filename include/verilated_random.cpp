@@ -589,8 +589,6 @@ static void warnSolverReply(const std::string& reply) {
     VL_WARN_MT(__FILE__, __LINE__, "randomize", msg.c_str());
 }
 
-// Read one solver status; only a print-success echo may precede it. A check under a
-// resource limit may stop short, so its unknown is not warned.
 // Whether a status is unknown with a reason, an upper-case word in parentheses
 static bool isUnknownReason(const std::string& line) {
     static const std::string prefix = "unknown (";
@@ -604,7 +602,10 @@ static bool isUnknownReason(const std::string& line) {
     return true;
 }
 
-static VlSolverStatus readStatus(std::istream& is, bool limited) {
+// Read one solver status; only a print-success echo may precede it. A check under a
+// resource limit may stop short, so its unknown is not warned. A reply that is not a
+// status is returned in replyr, for the caller to warn of.
+static VlSolverStatus readStatus(std::istream& is, bool limited, std::string& replyr) {
     std::string line;
     while (readLine(is, line)) {
         if (line == "success") continue;
@@ -623,7 +624,7 @@ static VlSolverStatus readStatus(std::istream& is, bool limited) {
         }
         // Consume the whole error, so the next read starts on a reply boundary
         if (isSolverError(line)) finishErrorReply(is, line);
-        warnSolverReply(line);
+        replyr = line;
         return VlSolverStatus::FAIL;
     }
     return VlSolverStatus::FAIL;
@@ -694,18 +695,56 @@ class VlSolverSession final {
     bool m_warnedRestart VL_GUARDED_BY(m_mutex) = false;
     bool m_takesLimit VL_GUARDED_BY(m_mutex) = false;  // Takes :reproducible-resource-limit
     bool m_limited VL_GUARDED_BY(m_mutex) = false;  // Checks are under a resource limit
+    bool m_broke VL_GUARDED_BY(m_mutex) = false;  // A transaction of this call broke the solver
+    bool m_holdReplies VL_GUARDED_BY(m_mutex) = false;  // Hold reply warnings (warnReply)
+    std::string m_heldReply VL_GUARDED_BY(m_mutex);  // First reply warning held
 
 public:
     std::iostream& os() VL_REQUIRES(m_mutex) { return m_proc; }
     // The pipe may hold bytes of an abandoned reply, so replace the solver
     void abandon() VL_REQUIRES(m_mutex) { m_dirty = true; }
+    // A reply failed, was abandoned or never came, in this transaction
+    bool failed() const VL_REQUIRES(m_mutex) { return m_stale || m_dirty || m_proc.fail(); }
+    // Start a randomize() call
+    void beginCall() VL_REQUIRES(m_mutex) { m_broke = false; }
+    // End a randomize() call. One returning 1 has its solution, so is not a failed one even if
+    // the solver broke after finding it; one returning 0 because the solver broke says so.
+    void endCall(bool result) VL_REQUIRES(m_mutex) {
+        if (result) {
+            m_consecFails = 0;
+        } else if (m_broke && !m_warnedRestart) {
+            m_warnedRestart = true;
+            VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                       "Solver died or replied unreadably, so this randomize() returned 0; "
+                       "restarting it, warned once");
+        }
+    }
+    // Warn of a reply that is not the one asked for. While a solution is spread the warning
+    // is held, for nextRandomize() to give if the call returns 0: a call that keeps its
+    // solution returns 1, and warns that the spreading failed instead.
+    void warnReply(const std::string& reply) VL_REQUIRES(m_mutex) {
+        if (!m_holdReplies) {
+            warnSolverReply(reply);
+        } else if (m_heldReply.empty()) {
+            m_heldReply = reply;
+        }
+    }
+    void holdReplies(bool hold) VL_REQUIRES(m_mutex) { m_holdReplies = hold; }
+    // The reply warning held, which is then cleared
+    std::string takeHeldReply() VL_REQUIRES(m_mutex) {
+        std::string reply;
+        reply.swap(m_heldReply);
+        return reply;
+    }
 
     // Read a check-sat status; once one fails, so does every later read until resync()
     VlSolverStatus readStatus() VL_REQUIRES(m_mutex) {
         // The failed read may have taken an error answering an earlier command of the batch
         // (SMT-LIB 2.6 section 4.1.2), so later replies cannot be matched to their commands
         if (m_stale) return VlSolverStatus::FAIL;
-        const VlSolverStatus status = ::readStatus(m_proc, m_limited);
+        std::string reply;  // A reply that is not a status
+        const VlSolverStatus status = ::readStatus(m_proc, m_limited, reply);
+        if (!reply.empty()) warnReply(reply);
         m_stale = status == VlSolverStatus::FAIL;
         return status;
     }
@@ -727,17 +766,10 @@ public:
     // Start a transaction, spawning or respawning the solver as needed
     bool begin() VL_REQUIRES(m_mutex) {
         m_dirty = false;
-        if (m_state == State::BROKEN) {
-            if (m_consecFails >= MAX_CONSEC_FAILS) {
-                m_state = State::DISABLED;
-                VL_WARN_MT(__FILE__, __LINE__, "randomize",
-                           "Solver failed repeatedly, so randomize() returns 0 from now on");
-            } else if (!m_warnedRestart) {
-                m_warnedRestart = true;
-                VL_WARN_MT(__FILE__, __LINE__, "randomize",
-                           "Solver died or replied unreadably, so this randomize() returned 0; "
-                           "restarting it, warned once");
-            }
+        if (m_state == State::BROKEN && m_consecFails >= MAX_CONSEC_FAILS) {
+            m_state = State::DISABLED;
+            VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                       "Solver failed repeatedly, so randomize() returns 0 from now on");
         }
         if (m_state == State::UNSTARTED || m_state == State::BROKEN) spawn();
         return m_state == State::LIVE;
@@ -757,6 +789,7 @@ public:
         } else {
             m_proc.terminate();
             m_state = State::BROKEN;
+            m_broke = true;
             ++m_consecFails;
         }
         m_dirty = false;
@@ -2159,12 +2192,25 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
 
     // Pinned vars make phase ordering moot; skip phased path in check-only.
     bool result;
+    m_spreadFailed = false;
+    sess.beginCall();
     if (!m_checkOnly && !m_solveBefore.empty()) {
         result = nextPhased(rngr, sess, uniqueExprs);
     } else {
         result = nextFlat(rngr, sess, uniqueExprs);
     }
     m_vars.insert(hidden.begin(), hidden.end());
+    // The solution found before the spreading failed satisfies the constraints, so it is
+    // returned (IEEE 1800-2023 18.6.3), though less random
+    const std::string heldReply = sess.takeHeldReply();
+    if (!result && !heldReply.empty()) warnSolverReply(heldReply);
+    if (result && (m_spreadFailed || !heldReply.empty()) && !m_warnedSpreadFailed) {
+        m_warnedSpreadFailed = true;
+        VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                   "Solver failed while spreading the solution, so this randomize() returned "
+                   "it less random; warned once per object.");
+    }
+    sess.endCall(result);
     m_ug2.rngReseeds = rngr.reseeds();
     m_checkOnly = false;
     m_sizeSolve = false;
@@ -2365,7 +2411,12 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
         if (!applyModel(sess)) return false;
 
         if (!m_checkOnly) {
-            if (!solverSamples()) solveDiversity(rngr, sess, nullptr, &uniqueExprs);
+            if (!solverSamples()) {
+                sess.holdReplies(true);
+                solveDiversity(rngr, sess, nullptr, &uniqueExprs);
+                sess.holdReplies(false);
+                m_spreadFailed |= sess.failed();
+            }
             // Check-only must not advance randc cycle state.
             recordRandcValues();
         }
@@ -2712,7 +2763,9 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             terms.push_back({var.second.get(), j, 0, width, static_cast<int>(terms.size())});
         }
     }
-    if (spreadTerms(rngr, sess, std::move(terms), uniqueExprsp)) applyModel(sess);
+    if (spreadTerms(rngr, sess, std::move(terms), uniqueExprsp) && !applyModel(sess)) {
+        m_spreadFailed = true;
+    }
 }
 
 // Into targetsr, each scalar's values by its range constraints, as nextFast reads them, where
@@ -2868,7 +2921,10 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
         for (const PinTerm& term : conflicted) emitTerm(term);
         os << "))\n";
         std::vector<std::string> values;
-        if (!readValues(sess, values) || values.size() != conflicted.size()) return false;
+        if (!readValues(sess, values) || values.size() != conflicted.size()) {
+            m_spreadFailed = true;
+            return false;
+        }
         for (size_t k = 0; k < conflicted.size(); ++k) {
             os << "(declare-fun __Va" << lits + k << " () Bool)\n";
             os << "(assert (= __Va" << lits + k << " (not (=";
@@ -2991,7 +3047,7 @@ void VlRandomizer::resolveFresh(VlRNG& rngr, VlSolverSession& sess,
         return sess.readStatus();
     }();
     if (status == VlSolverStatus::SAT) {
-        applyModel(sess);
+        m_spreadFailed |= !applyModel(sess);
         return;
     }
     // Hashed out, cut short or failed: solve without them as before, at the incremental cost
@@ -3213,7 +3269,7 @@ bool VlRandomizer::readValues(VlSolverSession& sess, std::vector<std::string>& v
     std::string reply;
     if (!sess.readSExpr(reply)) return false;
     if (isSolverError(reply)) {
-        warnSolverReply(reply);
+        sess.warnReply(reply);
         return false;
     }
     // Each value is the last token directly inside its (term value) pair
@@ -3301,7 +3357,7 @@ std::vector<int> VlRandomizer::readUnsatAssumptions(VlSolverSession& sess)
     std::string reply;
     if (!sess.readSExpr(reply)) return {};
     if (isSolverError(reply)) {
-        warnSolverReply(reply);
+        sess.warnReply(reply);
         return {};
     }
     // The response lists only "__Va<N>" literals; collect each full integer run.
@@ -3327,7 +3383,7 @@ void VlRandomizer::reportUnsatCore(VlSolverSession& sess) VL_REQUIRES(sess.m_mut
     std::string reply;
     if (!sess.readSExpr(reply)) return;
     if (isSolverError(reply)) {
-        warnSolverReply(reply);
+        sess.warnReply(reply);
         return;
     }
     const std::vector<int> numbers = scanIntRuns(reply);
@@ -3399,7 +3455,7 @@ bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
     // Whether a reply is an error, warned of
     const auto rejected = [&](const std::string& reply) {
         if (!isSolverError(reply)) return false;
-        warnSolverReply(reply);
+        sess.warnReply(reply);
         return true;
     };
     std::unordered_set<std::string> whole;  // The arrays asked whole
@@ -4279,7 +4335,10 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
                 std::set<std::string> fixed;  // Variables of the earlier layers
                 for (size_t i = 0; i < phase; ++i)
                     fixed.insert(layers[i].begin(), layers[i].end());
+                sess.holdReplies(true);
                 solveDiversity(rngr, sess, &fixed);
+                sess.holdReplies(false);
+                m_spreadFailed |= sess.failed();
             }
         } else if (!solvePhaseValues(sess, rngr, layers[phase], layerValues)) {
             return false;
@@ -4464,6 +4523,7 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
     // solver, and the solver's choice within the parity remains (a residual too). The values
     // are then read again, with the elements up to the sizes.
     if (!solverSamples()) {
+        sess.holdReplies(true);
         std::vector<PinTerm> spread;
         // A layer can hold an array and some of its elements by name: each element is spread
         // once, as first written
@@ -4507,19 +4567,25 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
         if (diverse) {
             // An unusable reply leaves the baseline values
             std::map<std::string, std::string> rechecked;
+            bool read = false;
             if (fixedTerms.empty()) {
-                if (readSized(rechecked)) values.swap(rechecked);
+                read = readSized(rechecked);
             } else {
                 os << "(get-value (" << fixedTerms << "))\n";
-                if (readPhaseValues(sess, fixedTerms, rechecked) && readSized(rechecked)) {
-                    values.swap(rechecked);
-                }
+                read = readPhaseValues(sess, fixedTerms, rechecked) && readSized(rechecked);
+            }
+            if (read) {
+                values.swap(rechecked);
+            } else {
+                m_spreadFailed = true;
             }
         } else if (unanswered) {
             // Only the diversity commands can be unanswered, and the next phase starts with a
             // (reset), so get back in step here and keep the baseline values
+            m_spreadFailed |= sess.failed();
             sess.resync();
         }
+        sess.holdReplies(false);
     }
     for (const auto& entry : values) solvedValuesr[entry.first] = entry.second;
     return true;
@@ -4531,7 +4597,7 @@ bool VlRandomizer::readPhaseValues(VlSolverSession& sess, const std::string& ter
     std::string reply;
     if (!sess.readSExpr(reply)) return false;
     if (isSolverError(reply)) {
-        warnSolverReply(reply);
+        sess.warnReply(reply);
         return false;
     }
     std::istringstream is{reply};
