@@ -336,6 +336,8 @@ class VlRandomizer VL_NOT_FINAL {
     // Arrays of the array elements that solve-before pairs name
     std::map<std::string, const VlRandomVar*> m_solveBeforeArrays;
     bool m_checkOnly = false;  // Set for randomize(null)
+    bool m_spreadFailed = false;  // A solver failure cut this call's spreading short
+    bool m_warnedSpreadFailed = false;  // Warned of a spreading cut short
     // Members of null handles constraints may read, by solver name, with their source names
     std::vector<std::pair<std::string, std::string>> m_nullReads;
     // Why this randomize() fails without solving, e.g. a constraint reading one of them;

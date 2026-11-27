@@ -50,9 +50,9 @@ runs = [
     ('err_trunc', 2, 0),  # unterminated error, then the pipe closes
     ('err_unbal', 2, 15),  # a rejection error closing more parens than it opens
     ('err_unbal_cont', 2, 15),  # a rejection error with the extra paren on a continuation line
-    # A bare word in place of the unsat assumptions, of each solver started: phased calls
-    # read cores too, so each restarted solver fails its next call, until it is given up
-    ('garbage_assume', 1, 4),
+    # A bare word in place of the unsat assumptions, of each solver started: each call keeps
+    # the solution found before spreading, so the solver is restarted but never given up
+    ('garbage_assume', 1, 16),
     ('garbage_model', 1, 15),  # half-valid model must not reach the variables
     ('garbage_status', 2, 15),  # a word that is not a status
     ('garbage_status', 15, 15),  # a phased check-sat that does not answer with a status
@@ -61,8 +61,9 @@ runs = [
     ('low_digit', 1, 15),  # a character below any digit or letter
     ('model_trunc', 1, 0),  # unterminated model, then the pipe closes
     # Unterminated reply to a spreading query, then the pipe closes, in each solver started: a
-    # phased call spreads each layer, so a restarted solver dies in its next one, until given up
-    ('model_trunc', 4, 5),
+    # flat call keeps the solution found before spreading, and a phased call, which spreads
+    # each layer, fails, but the solver is restarted and never given up
+    ('model_trunc', 4, 12),
     ('multiline', 1, 16),  # S-expression split one token per line
     ('no_digits', 1, 15),  # a base marker with no digits after it
     ('octal', 1, 16),  # octal values
