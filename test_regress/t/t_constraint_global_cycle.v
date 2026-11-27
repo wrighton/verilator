@@ -183,6 +183,8 @@ module t;
       `checkd(randomize_result, 1);
       foreach (ring.b[i]) `checkd(ring.b[i] < 7'd3, 1'b1);
     end
+    // Break the cycle, so that its objects are freed and runtime leak checking stays clean
+    r2.next = null;
     // Cycles through other classes
     repeat (5) begin
       randomize_result = tp.randomize();
@@ -205,6 +207,8 @@ module t;
         `checkd(randomize_result, 1);
         `checkd(cd.vb < 7'd3, 1'b1);
       end
+      // Break the cycle, so that its objects are freed and runtime leak checking stays clean
+      cd.x = null;
     end
     begin
       automatic BinExpr be = new;
@@ -251,6 +255,9 @@ module t;
         `checkd(aa.bs[1].w < 7'd3, 1'b1);
         `checkd(aa.post_count, i);
       end
+      // Break the cycles, so that their objects are freed and runtime leak checking stays clean
+      ab.as.delete();
+      aa.kids[0] = null;
     end
     begin
       automatic CrossA ca = new;
@@ -262,6 +269,8 @@ module t;
         `checkd(ca.b.w > 7'd5, 1'b1);
         `checkd(ca.b.w < ca.v, 1'b1);
       end
+      // Break the cycle, so that its objects are freed and runtime leak checking stays clean
+      ca.b.as[0] = null;
     end
     $write("*-* All Finished *-*\n");
     $finish;
