@@ -28,6 +28,7 @@
 
 #include "verilated.h"
 
+#include <functional>
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
@@ -510,6 +511,22 @@ class VlRandomizer VL_NOT_FINAL {
     void fastTargets(std::unordered_map<const void*, FastTarget>& targetsr) const;
     static QData fastTargetValue(VlRNG& rngr, const FastTarget& target);
     std::vector<FastConstraint> m_fastConstraints;
+    // A rand array whose elements its constraints read only one at a time, each against
+    // constants, so they are sampled here rather than solved (see native_begin)
+    struct NativeArray final {
+        int width;  // Of its elements
+        bool isSigned;
+        std::vector<FastConstraint> items;  // Its constraints, in order, datap unused
+        // Write each element from a sampler, or tell whether every element fits a domain
+        std::function<void(const std::function<QData()>&)> fill;
+        std::function<bool(const FastRanges&)> check;
+    };
+    std::unordered_map<const void*, NativeArray> m_nativeArrays;  // By its storage
+    FastConstraint* m_nativeLastp = nullptr;  // The constraint native_range adds to
+    // Variables of native arrays registered for every randomize(), as fixed-size ones are,
+    // out of the solve until the next one sets up its constraints
+    std::vector<std::pair<std::string, std::shared_ptr<const VlRandomVar>>> m_nativeHidden;
+    std::vector<const void*> m_nativeOrder;  // Its keys, in the order registered
     bool m_fastDisabled = false;  // At least one original item cannot be represented
     static bool fastPinned(const FastConstraint& constraint);
     static bool fastView(FastDomain& domain);
@@ -518,6 +535,47 @@ class VlRandomizer VL_NOT_FINAL {
     int nextFast(VlRNG& rngr);
     static FastRanges fastIntersect(const FastRanges& a, const FastRanges& b);
     static FastRanges fastUnion(FastRanges ranges);
+    static bool solverSamplesOn();
+    // A native array's domain and retained distribution, as nextFast forms a scalar's
+    static void nativeDomain(const NativeArray& array, FastRanges& rangesr,
+                             const FastConstraint*& distpr);
+    void nativeFill(VlRNG& rngr);
+    bool nativeCheck() const;
+    template <typename T, size_t N_MaxSize>
+    static T& nativeElem(VlQueue<T, N_MaxSize>& array, size_t index) {
+        return array.atWrite(static_cast<int32_t>(index));
+    }
+    template <typename T, std::size_t N_Depth>
+    static T& nativeElem(VlUnpacked<T, N_Depth>& array, size_t index) {
+        return array[index];
+    }
+    template <typename T_Array>
+    void nativeArray(T_Array& array, int width, bool isSigned) {
+        const auto it = m_nativeArrays.find(&array);
+        if (it != m_nativeArrays.end()) return;
+        m_nativeOrder.push_back(&array);
+        NativeArray& entry = m_nativeArrays[&array];
+        entry.width = width;
+        entry.isSigned = isSigned;
+        T_Array* const arrayp = &array;
+        entry.fill = [arrayp](const std::function<QData()>& sample) {
+            const size_t size = arrayp->size();
+            for (size_t i = 0; i < size; ++i) nativeElem(*arrayp, i) = sample();
+        };
+        entry.check = [arrayp, width, isSigned](const FastRanges& ranges) {
+            const size_t size = arrayp->size();
+            for (size_t i = 0; i < size; ++i) {
+                QData key = static_cast<QData>(nativeElem(*arrayp, i)) & VL_MASK_Q(width);
+                if (isSigned) key ^= QData{1} << (width - 1);
+                if (std::none_of(ranges.begin(), ranges.end(), [key](const FastRange& range) {
+                        return range.lo <= key && key <= range.hi;
+                    })) {
+                    return false;
+                }
+            }
+            return true;
+        };
+    }
     static bool fastSample(VlRNG& rngr, const FastRanges& domain, const FastConstraint* distp,
                            QData& valuer);
 
@@ -570,6 +628,7 @@ class VlRandomizer VL_NOT_FINAL {
     void recordRandcValues();  // Record solved randc values for future exclusion
     size_t hashConstraints(const std::vector<std::string>& extras, bool randcOnly = false) const;
     bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly, bool sizeSolve = false);
+    bool nextSolve(VlRNGReseeds& rngr, bool checkOnly, bool sizeSolve);
     // "(distinct ...)" expression per unique-constrained array
     std::vector<std::string> buildUniqueExprs() const;
     // Add constraints that the names of a variable registered under several have one value
@@ -727,6 +786,45 @@ public:
                 constraint.ranges.push_back({lo, hi, weight, scale});
             }
         }
+    }
+    /// Start one constraint of a native array's elements (see SolverScalarArrayVisitor),
+    /// unless the solver samples
+    template <typename T, size_t N_MaxSize>
+    void native_begin(VlQueue<T, N_MaxSize>& array, int width, bool isSigned, bool isSoft,
+                      bool isDist, bool rangeMass) {
+        nativeBegin(array, width, isSigned, isSoft, isDist, rangeMass);
+    }
+    template <typename T, std::size_t N_Depth>
+    void native_begin(VlUnpacked<T, N_Depth>& array, int width, bool isSigned, bool isSoft,
+                      bool isDist, bool rangeMass) {
+        nativeBegin(array, width, isSigned, isSoft, isDist, rangeMass);
+    }
+    template <typename T_Array>
+    void nativeBegin(T_Array& array, int width, bool isSigned, bool isSoft, bool isDist,
+                     bool rangeMass) {
+        if (solverSamplesOn()) return;
+        nativeArray(array, width, isSigned);
+        for (auto it = m_vars.begin(); it != m_vars.end();) {
+            if (it->second->VlRandomVar::datap(0) == &array) {
+                m_nativeHidden.emplace_back(*it);
+                it = m_vars.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        m_nativeArrays[&array].items.push_back(
+            {nullptr, width, isSigned, isSoft, isDist, rangeMass, false, {}});
+        m_nativeLastp = &m_nativeArrays[&array].items.back();
+    }
+    /// Add an interval, its weight and the weight's scale to the current native constraint
+    void native_range(QData lo, QData hi, QData weight, QData scale) {
+        if (m_nativeLastp && lo <= hi && weight)
+            m_nativeLastp->ranges.push_back({lo, hi, weight, scale});
+    }
+    /// Whether the array's elements are sampled natively, not solved, in this randomize()
+    template <typename T_Array>
+    bool native_on(const T_Array& array) const {
+        return m_nativeArrays.count(&array);
     }
     /// Record a single-range procedural pick at its original evaluation point.
     template <typename T>
@@ -931,6 +1029,7 @@ public:
     typename std::enable_if<!VlContainsCustomStruct<T>::value, void>::type
     write_var(VlQueue<T, N_MaxSize>& var, int width, const char* name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        if (native_on(var)) return;  // Sampled, not solved
         if (m_vars.find(name) == m_vars.end()) {
             m_vars[name] = std::make_shared<const VlRandomArrayVarTemplate<VlQueue<T, N_MaxSize>>>(
                 name, width, &var, dimension, randmodeIdx);
@@ -956,6 +1055,7 @@ public:
     write_var(VlUnpacked<T, N_Depth>& var, uint32_t width, const std::string& name,
               uint32_t dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        if (native_on(var)) return;  // Sampled, not solved
         if (m_vars.find(name) == m_vars.end()) {
             m_vars[name]
                 = std::make_shared<const VlRandomArrayVarTemplate<VlUnpacked<T, N_Depth>>>(

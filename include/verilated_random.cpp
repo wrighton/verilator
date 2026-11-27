@@ -2069,6 +2069,62 @@ bool VlRandomizer::fastDomains(std::vector<FastDomain>& domains,
     return true;
 }
 
+bool VlRandomizer::solverSamplesOn() { return solverSamples(); }
+
+void VlRandomizer::nativeDomain(const NativeArray& array, FastRanges& rangesr,
+                                const FastConstraint*& distpr) {
+    rangesr = {{0, VL_MASK_Q(array.width), 1, 1}};
+    distpr = nullptr;
+    // The compiler proves the hard constraints together satisfiable, see
+    // SolverScalarArrayVisitor, so an element never lacks a value
+    for (const FastConstraint& item : array.items) {
+        if (item.isSoft) continue;
+        rangesr = fastIntersect(rangesr, fastUnion(item.ranges));
+        if (item.isDist) distpr = &item;
+    }
+    // IEEE 1800-2023 18.5.13: a soft constraint is kept iff it fits the hard ones and the
+    // later softs already kept
+    for (auto it = array.items.rbegin(); it != array.items.rend(); ++it) {
+        if (!it->isSoft) continue;
+        FastRanges intersection = fastIntersect(rangesr, fastUnion(it->ranges));
+        if (!intersection.empty()) rangesr = std::move(intersection);
+    }
+}
+
+void VlRandomizer::nativeFill(VlRNG& rngr) {
+    for (const void* const keyp : m_nativeOrder) {
+        const NativeArray& array = m_nativeArrays.at(keyp);
+        FastRanges ranges;
+        const FastConstraint* distp;
+        nativeDomain(array, ranges, distp);
+        const QData signBit = array.isSigned ? QData{1} << (array.width - 1) : 0;
+        // A full 64-bit range is the one domain fastSample does not number
+        const bool full = !distp && ranges.size() == 1 && !ranges[0].lo
+                          && ranges[0].hi == VL_MASK_Q(array.width);
+        array.fill([&]() {
+            QData key = 0;
+            if (full) {
+                key = VL_RANDOM_RNG_Q(rngr) & VL_MASK_Q(array.width);
+            } else {
+                fastSample(rngr, ranges, distp, key);
+            }
+            return key ^ signBit;
+        });
+    }
+}
+
+bool VlRandomizer::nativeCheck() const {
+    for (const void* const keyp : m_nativeOrder) {
+        const NativeArray& array = m_nativeArrays.at(keyp);
+        FastRanges ranges = {{0, VL_MASK_Q(array.width), 1, 1}};
+        for (const FastConstraint& item : array.items) {
+            if (!item.isSoft) ranges = fastIntersect(ranges, fastUnion(item.ranges));
+        }
+        if (!array.check(ranges)) return false;
+    }
+    return true;
+}
+
 int VlRandomizer::nextFast(VlRNG& rngr) {
     if (solverSamples() || m_fastDisabled || m_fastConstraints.empty() || m_vars.empty()
         || !m_randcVarNames.empty() || !m_uniqueArrays.empty() || !m_frozenPins.empty()
@@ -2134,6 +2190,14 @@ int VlRandomizer::nextFast(VlRNG& rngr) {
 
 bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
     m_unsat = false;
+    // A native array is not solved: checked before the solve, or sampled once it succeeds
+    if (checkOnly && !nativeCheck()) return false;
+    if (!nextSolve(rngr, checkOnly, sizeSolve)) return false;
+    if (!checkOnly && !sizeSolve) nativeFill(rngr);
+    return true;
+}
+
+bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
     if (VL_UNLIKELY(failed())) {
         static bool s_warned = false;
         if (!m_failWarned && !s_warned) {
@@ -4148,6 +4212,11 @@ void VlRandomizer::emitChainDefines(std::ostream& os) const {
 }
 
 void VlRandomizer::clearConstraints() {
+    for (auto& hidden : m_nativeHidden) m_vars.emplace(std::move(hidden));
+    m_nativeHidden.clear();
+    m_nativeArrays.clear();
+    m_nativeOrder.clear();
+    m_nativeLastp = nullptr;
     m_ghostElems.clear();
     m_chainElems.clear();
     m_nullReads.clear();
