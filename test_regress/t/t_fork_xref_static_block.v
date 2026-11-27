@@ -25,9 +25,25 @@ endmodule
 module t;
   localparam realtime STEP = 1;
   int got_sib, got_rel, got_abs, got_any, got_cnt;
-  int got_mid, got_mid_abs, got_mid2, got_auto, got_outer;
+  int got_mid, got_mid_abs, got_mid2, got_auto, got_outer, got_unnamed;
   int k;
   other u_other ();
+
+  // The same through an unnamed block, which is not in the path
+  initial begin : outer2
+    fork
+      begin
+        begin : am2
+          automatic int w;
+          w = 4;
+          for (int i = 0; i < 1; i++) begin
+            #(STEP);
+            got_unnamed = outer2.am2.w;
+          end
+        end
+      end
+    join_none
+  end
 
   // An automatic variable of a fork branch, from a block enclosing the fork
   initial begin : outer
@@ -113,6 +129,7 @@ module t;
     `checkd(got_cnt, 13);
     `checkd(got_auto, 8);
     `checkd(got_outer, 6);
+    `checkd(got_unnamed, 4);
     `checkd(got_mid, 101);
     `checkd(got_mid_abs, 101);
     `checkd(got_mid2, 3 + 101);

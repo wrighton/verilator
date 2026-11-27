@@ -623,7 +623,8 @@ class ForkAutomaticXRefVisitor final : public VNVisitor {
             if (m_scopes[index - 1].m_name != dotted.substr(begin, end - begin)) return false;
             if (!begin) return true;
             end = begin - 1;
-            --index;
+            // Unnamed blocks are not in paths
+            do { --index; } while (index && m_scopes[index - 1].m_name.empty());
         }
     }
 
