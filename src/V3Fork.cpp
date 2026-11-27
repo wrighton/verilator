@@ -250,6 +250,38 @@ private:
     }
 };
 
+// A class handle or a virtual interface: writing through it writes the object or the interface
+// instance it designates, not the variable that holds it
+static bool isHandleValue(const AstNodeExpr* const nodep) {
+    if (nodep->isClassHandleValue()) return true;
+    const AstIfaceRefDType* const dtypep = VN_CAST(nodep->dtypep()->skipRefp(), IfaceRefDType);
+    return dtypep && dtypep->isVirtual();
+}
+// Whether the target of an NBA uses a variable of a function or task, so the NBA needs a process
+// of its own to keep the variable. A member of an object or interface instance that a handle
+// designates uses none, as the variable only holds the handle, unless the NBA has an
+// intra-assignment delay: its process then keeps the handle until the update.
+static bool nbaUsesLocal(const AstNodeExpr* const nodep, const bool delayed) {
+    if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+        return refp->varp()->isFuncLocal();
+    }
+    if (const AstMemberRef* const selp = VN_CAST(nodep, MemberRef)) {
+        return (delayed || !isHandleValue(selp->fromp())) && nbaUsesLocal(selp->fromp(), delayed);
+    }
+    if (const AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) {
+        return nbaUsesLocal(selp->fromp(), delayed);
+    }
+    if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+        return nbaUsesLocal(selp->fromp(), delayed);
+    }
+    if (const AstStructSel* const selp = VN_CAST(nodep, StructSel)) {
+        return nbaUsesLocal(selp->fromp(), delayed);
+    }
+    return nodep->exists([](const AstVarRef* const refp) {
+        return refp->access().isWriteOrRW() && refp->varp()->isFuncLocal();
+    });
+}
+
 //######################################################################
 // Dynamic scope visitor, creates classes and objects for dynamic scoping of variables and
 // replaces references to variables that need a dynamic scope with references to object's
@@ -278,6 +310,7 @@ class DynScopeVisitor final : public VNVisitor {
                                         // i.e. not immediately followed by 'disable fork'
     bool m_afterTimingControl = false;  // A timing control might've be executed in the current
                                         // process
+    const AstNodeExpr* m_nbaLhsp = nullptr;  // Target of the NBA in a fork of its own visited
     size_t m_id = 0;  // Unique ID for a frame
     size_t m_class_id = 0;  // Unique ID for a frame class
 
@@ -349,12 +382,19 @@ class DynScopeVisitor final : public VNVisitor {
         }
     }
 
+    // Whether the reference in the target or value of an NBA in a fork of its own reads its
+    // variable, as a value or as a handle that the target goes through. The NBA evaluates them as
+    // its statement runs (IEEE 1800-2023 10.4.2), so they are copied when its process is spawned.
+    bool isNbaRead(const AstVarRef* const refp) const {
+        return m_nbaLhsp && refp != m_nbaLhsp
+               && (refp->access().isReadOnly() || isHandleValue(refp));
+    }
     bool needsDynScope(const AstVarRef* refp) const {
         const AstVar* const varp = refp->varp();
         return
             // Can this variable escape the scope
             ((m_forkDepth > varp->user1()) && varp->isFuncLocal())
-            && varp->lifetime().isAutomatic()
+            && varp->lifetime().isAutomatic() && !isNbaRead(refp)
             && (
                 // Is it mutated
                 (varp->isClassHandleValue() ? refp->user2() : refp->access().isWriteOrRW())
@@ -459,10 +499,7 @@ class DynScopeVisitor final : public VNVisitor {
     }
     void visit(AstAssignDly* nodep) override {
         if (m_procp && !nodep->user2()  // Unhandled AssignDly in function/task
-            && nodep->lhsp()->exists(  // And writes to a local variable
-                [](AstVarRef* refp) {
-                    return refp->access().isWriteOrRW() && refp->varp()->isFuncLocal();
-                })) {
+            && nbaUsesLocal(nodep->lhsp(), nodep->timingControlp())) {
             nodep->user2(true);
             // Put it in a fork to prevent lifetime issues with the local
             FileLine* const flp = nodep->fileline();
@@ -470,6 +507,15 @@ class DynScopeVisitor final : public VNVisitor {
             nodep->replaceWith(forkp);
             forkp->addForksp(new AstForkItem{flp, nodep});
             UINFO(9, "assign new fork " << forkp);
+        } else if (nodep->user2()) {
+            if (nodep->isTimingControl()) m_afterTimingControl = true;
+            {
+                VL_RESTORER(m_nbaLhsp);
+                m_nbaLhsp = nodep->lhsp();
+                iterateAndNextNull(nodep->rhsp());
+                iterateAndNextNull(nodep->lhsp());
+            }
+            iterateAndNextNull(nodep->timingControlp());
         } else {
             visit(static_cast<AstNodeStmt*>(nodep));
         }
@@ -727,7 +773,7 @@ class ForkVisitor final : public VNVisitor {
         // If this ref is to a variable that will move into the task, then nothing to do
         if (m_forkLocalsp.count(varp)) return;
 
-        if (nodep->access().isWriteOrRW() && (!nodep->isClassHandleValue() || nodep->user2())
+        if (nodep->access().isWriteOrRW() && (!isHandleValue(nodep) || nodep->user2())
             && !m_inInitStmt) {
             nodep->v3warn(
                 E_LIFETIME,
@@ -744,7 +790,7 @@ class ForkVisitor final : public VNVisitor {
         nodep->varp(capture(nodep));
     }
     void visit(AstAssign* nodep) override {
-        if (VN_IS(nodep->lhsp(), VarRef) && nodep->lhsp()->isClassHandleValue()) {
+        if (VN_IS(nodep->lhsp(), VarRef) && isHandleValue(nodep->lhsp())) {
             nodep->lhsp()->user2(true);
         }
         iterateChildren(nodep);
