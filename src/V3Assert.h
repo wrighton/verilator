@@ -141,7 +141,7 @@ private:
     size_t m_statRunners = 0;  // Statistic tracking
     size_t m_statKillChecks = 0;  // Statistic tracking
     // An $assertkill may run, so pending actions are checked against it
-    const bool m_killChecks = mayKill();
+    const bool m_killChecks;
     static bool mayKill() VL_MT_DISABLED;
 
     Runner& runnerFor(const Site& site, V3UniqueNames& names) VL_MT_DISABLED;
@@ -149,6 +149,7 @@ private:
     static AstNodeExpr* newKillCountp(const Site& site) VL_MT_DISABLED;
 
 public:
+    V3AssertReactive() VL_MT_DISABLED : m_killChecks{mayKill()} {}
     ~V3AssertReactive() VL_MT_DISABLED;
     // Return what makes actionsp pending at the evaluation, or actionsp if it stays there
     AstNodeStmt* newPending(const Site& site, AstNodeStmt* actionsp,
