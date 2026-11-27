@@ -447,6 +447,81 @@ public:
 };
 
 //######################################################################
+// Values a dist range of constant bounds selects
+
+// Key of a constant bound among the keys 0..2^width-1 that order the values of a width-bit
+// expression as the bound compares with them; -1 if below all of them, 1 if above
+static int distConstKey(const AstConst* constp, int width, bool isSigned, uint64_t& keyr) {
+    const V3Number& num = constp->num();
+    if (!isSigned) {
+        if (static_cast<int>(num.mostSetBitP1()) > width) return 1;
+        keyr = num.toUQuad();
+        return 0;
+    }
+    int64_t value;
+    if (num.width() <= VL_QUADSIZE) {
+        value = num.toSQuad();
+    } else {
+        V3Number magnitude{num};
+        if (num.isNegative()) magnitude.opNegate(num);
+        if (magnitude.mostSetBitP1() >= VL_QUADSIZE) return num.isNegative() ? -1 : 1;
+        value = static_cast<int64_t>(magnitude.toUQuad());
+        if (num.isNegative()) value = -value;
+    }
+    const uint64_t half = 1ULL << (width - 1);
+    if (width < VL_QUADSIZE) {
+        if (value < -static_cast<int64_t>(half)) return -1;
+        if (value >= static_cast<int64_t>(half)) return 1;
+    }
+    keyr = (static_cast<uint64_t>(value) + half) & VL_MASK_Q(width);
+    return 0;
+}
+
+// Consecutive values of a dist expression
+struct DistRun final {
+    uint64_t first;  // First value
+    uint64_t count;  // Number of values, 0 for all 2^64
+};
+
+// The values of a width-bit dist expression, of 1 to 64 bits, that '[lo : hi]' of constant
+// bounds selects, as each bound compares with the expression (IEEE 1800-2023 18.5.3, 11.4.4).
+// Bounds compared in one order select at most one run; a signed and an unsigned comparison can
+// select two.
+static std::vector<DistRun> distConstRuns(int width, bool exprSigned, const AstConst* lop,
+                                          const AstConst* hip) {
+    UASSERT_OBJ(width >= 1 && width <= VL_QUADSIZE, lop, "Dist expression wider than 64 bits");
+    const bool loSigned = exprSigned && lop->isSigned();
+    const bool hiSigned = exprSigned && hip->isSigned();
+    const uint64_t mask = VL_MASK_Q(width);
+    const uint64_t half = 1ULL << (width - 1);
+    std::vector<DistRun> runs;
+    uint64_t loKey = 0;
+    uint64_t hiKey = mask;
+    const int loState = distConstKey(lop, width, loSigned, loKey);
+    const int hiState = distConstKey(hip, width, hiSigned, hiKey);
+    if (loState > 0 || hiState < 0) return runs;
+    if (loState < 0) loKey = 0;
+    if (hiState > 0) hiKey = mask;
+    // Add the run of keys first..last of the lower bound's order from loKey on
+    const auto addRun = [&](uint64_t first, uint64_t last) {
+        const uint64_t firstKey = std::max(loKey, first);
+        if (firstKey > last) return;
+        runs.push_back({firstKey ^ (loSigned ? half : 0), last - firstKey + 1});
+    };
+    // The keys 0..hiKey of the upper bound, as keys of the lower bound's order, which are
+    // offset by half when the orders differ
+    if (loSigned == hiSigned) {
+        addRun(0, hiKey);
+    } else if (hiKey <= mask - half) {
+        addRun(half, half + hiKey);
+    } else {
+        addRun(half, mask);
+        addRun(0, hiKey - (mask - half) - 1);
+    }
+    return runs;
+}
+
+//######################################################################
 // Structured fast-domain lowering, before dist is rewritten to a procedural
 // bucket draw plus SMT membership/soft choices. Unsupported original items
 // explicitly disable the optimization for the whole invocation. The runtime
@@ -696,24 +771,42 @@ class FastConstraintBuilder final {
             const AstConst* const lop = constant(rangep ? rangep->lhsp() : itemp->rangep());
             const AstConst* const hip = constant(rangep ? rangep->rhsp() : itemp->rangep());
             if (!lop || !hip) return {};
-            // Bounds are already context-sized by V3Width. Reject rather than
-            // truncate wider bounds, which could admit values outside the SV set.
-            if (lop->width() != m_viewWidth || hip->width() != m_viewWidth) {
-                m_supported = false;
-                return {};
+            // The same values as the bound comparisons of the solver's membership
+            const std::vector<DistRun> runs
+                = distConstRuns(m_viewWidth, distp->exprp()->isSigned(), lop, hip);
+            const uint64_t weight = weightp->toUQuad();
+            if (runs.empty() || !weight) continue;
+            // Each run as ranges of keys of the view, which wrap past the largest key; the
+            // scale of each is the number of its values, 0 for 2^64
+            Ranges pieces;
+            uint64_t count = 0;
+            for (const DistRun& run : runs) {
+                count += run.count;
+                const uint64_t lo = key(run.first);
+                const uint64_t hi = (lo + run.count - 1) & mask();
+                if (!run.count || lo <= hi) {
+                    pieces.push_back(
+                        {run.count ? lo : 0, run.count ? hi : mask(), weight, run.count});
+                } else {
+                    pieces.push_back({lo, mask(), weight, mask() - lo + 1});
+                    pieces.push_back({0, hi, weight, hi + 1});
+                }
             }
-            const uint64_t lo = key(lop->toUQuad());
-            const uint64_t hi = key(hip->toUQuad());
-            if (lo > hi || !weightp->toUQuad()) continue;
             if (rangeMass(distp)) {
-                ranges.push_back({lo, hi, weightp->toUQuad(), itemp->isWhole() ? 1 : hi - lo + 1});
-                continue;
+                // A := piece weighs its values; a :/ item weighs once, so it must be one piece
+                if (itemp->isWhole() && pieces.size() > 1) {
+                    m_supported = false;
+                    return {};
+                }
+                if (itemp->isWhole()) pieces.front().scale = 1;
+            } else {
+                if (itemp->isWhole() && !count) {
+                    m_supported = false;  // The original :/ cardinality is 2^64
+                    return {};
+                }
+                for (Range& piece : pieces) piece.scale = itemp->isWhole() ? count : 1;
             }
-            if (itemp->isWhole() && hi - lo == std::numeric_limits<uint64_t>::max()) {
-                m_supported = false;  // The original :/ cardinality is 2^64
-                return {};
-            }
-            ranges.push_back({lo, hi, weightp->toUQuad(), itemp->isWhole() ? hi - lo + 1 : 1});
+            ranges.insert(ranges.end(), pieces.begin(), pieces.end());
         }
         if (ranges.empty()) m_supported = false;  // Preserve the existing all-zero dist policy
         return ranges;
@@ -1053,6 +1146,21 @@ class FastConstraintBuilder final {
         }
         return valuep;
     }
+    // Snapshot of a dist bound, extended to the dist expression as their comparison extends
+    // it, with sign only if both are signed (IEEE 1800-2023 11.4.4)
+    AstNodeExpr* snapshotOperandBound(AstBegin* blockp, AstNodeExpr* boundp, int width) {
+        if (boundp->width() == width) return snapshotBound(blockp, boundp, boundp->dtypep());
+        FileLine* const fl = boundp->fileline();
+        const bool isSigned = m_viewSigned && boundp->isSigned();
+        AstNodeExpr* const extendp
+            = isSigned ? static_cast<AstNodeExpr*>(
+                             new AstExtendS{fl, boundp->cloneTreePure(false), width})
+                       : new AstExtend{fl, boundp->cloneTreePure(false), width};
+        AstNodeExpr* const snapshotp = snapshotBound(
+            blockp, extendp, boundp->findLogicDType(width, width, VSigning::fromBool(isSigned)));
+        VL_DO_DANGLING(extendp->deleteTree(), extendp);
+        return snapshotp;
+    }
     AstNodeStmt* newStateDistp(AstConstraintExpr* exprp, AstDist* distp) {
         if (!isTarget(distp->exprp())) return nullptr;
         const bool needsNative
@@ -1077,7 +1185,7 @@ class FastConstraintBuilder final {
             AstNodeExpr* const loSourcep = sourcep ? sourcep->lhsp() : itemp->rangep();
             AstNodeExpr* const hiSourcep = sourcep ? sourcep->rhsp() : itemp->rangep();
             AstNodeExpr* const weightSourcep = itemp->weightp();
-            if (loSourcep->width() != operandWidth || hiSourcep->width() != operandWidth
+            if (loSourcep->width() > operandWidth || hiSourcep->width() > operandWidth
                 || weightSourcep->width() > 64 || !stateExpression(loSourcep)
                 || !stateExpression(hiSourcep) || !stateExpression(weightSourcep)
                 || checkedReceiver(loSourcep) || checkedReceiver(hiSourcep)
@@ -1088,8 +1196,8 @@ class FastConstraintBuilder final {
             }
             const AstConst* const weightConstp = VN_CAST(weightSourcep, Const);
             hasPositiveWeight |= !weightConstp || !weightConstp->isZero();
-            AstNodeExpr* const lop = snapshotBound(blockp, loSourcep, loSourcep->dtypep());
-            AstNodeExpr* const hip = snapshotBound(blockp, hiSourcep, hiSourcep->dtypep());
+            AstNodeExpr* const lop = snapshotOperandBound(blockp, loSourcep, operandWidth);
+            AstNodeExpr* const hip = snapshotOperandBound(blockp, hiSourcep, operandWidth);
             // Opposite-sign values outside the common nonnegative range need
             // legacy comparison semantics, not an empty soft-domain shortcut.
             for (AstNodeExpr* const boundp : {lop, hip}) {
@@ -9048,64 +9156,171 @@ class SolverSmtLowering final : public V3SolverLowering {
         });
     }
 
-    // (distExpr >= lo) && (distExpr <= hi); signed comparisons for signed vars
+    // nodep truncated or extended to width, with its sign if isSigned
+    static AstNodeExpr* newResized(FileLine* fl, AstNodeExpr* nodep, int width, bool isSigned) {
+        if (nodep->width() > width) return new AstSel{fl, nodep, 0, width};
+        if (nodep->width() == width) return nodep;
+        if (isSigned) return new AstExtendS{fl, nodep, width};
+        return new AstExtend{fl, nodep, width};
+    }
+
+    // 'exprp type valuep' compared as the explicit operator would compare them
+    static AstNodeExpr* newDistCompare(FileLine* fl, VNType type, AstNodeExpr* exprp,
+                                       AstNodeExpr* valuep) {
+        AstNodeExpr* const lhsp = exprp->cloneTreePure(false);
+        AstNodeExpr* const rhsp = valuep->cloneTreePure(false);
+        // An extension depends on randomized variables as its operand does
+        const bool lhsRand = lhsp->user1();
+        const bool rhsRand = rhsp->user1();
+        AstNodeBiop* const cmpp = AstNodeBiop::newTypedCompare(type, fl, lhsp, rhsp);
+        cmpp->lhsp()->user1(lhsRand);
+        cmpp->rhsp()->user1(rhsRand);
+        cmpp->user1(true);
+        return cmpp;
+    }
+
+    // (distExpr >= lo) && (distExpr <= hi), each bound compared as the explicit operator
     static AstNodeExpr* newDistRangeMembership(AstDist* distp, const AstInsideRange* irp) {
         FileLine* const fl = distp->fileline();
-        const bool isSigned = distp->exprp()->isSigned();
-        AstNodeExpr* const distExprGtep = distp->exprp()->cloneTreePure(false);
-        AstNodeExpr* const distExprLtep = distp->exprp()->cloneTreePure(false);
-        AstNodeExpr* const gep
-            = isSigned ? static_cast<AstNodeExpr*>(
-                             new AstGteS{fl, distExprGtep, irp->lhsp()->cloneTreePure(false)})
-                       : static_cast<AstNodeExpr*>(
-                             new AstGte{fl, distExprGtep, irp->lhsp()->cloneTreePure(false)});
-        AstNodeExpr* const lep
-            = isSigned ? static_cast<AstNodeExpr*>(
-                             new AstLteS{fl, distExprLtep, irp->rhsp()->cloneTreePure(false)})
-                       : static_cast<AstNodeExpr*>(
-                             new AstLte{fl, distExprLtep, irp->rhsp()->cloneTreePure(false)});
-        gep->user1(true);
-        lep->user1(true);
-        AstNodeExpr* const andp = new AstLogAnd{fl, gep, lep};
+        AstNodeExpr* const andp
+            = new AstLogAnd{fl, newDistCompare(fl, VNType::Gte, distp->exprp(), irp->lhsp()),
+                            newDistCompare(fl, VNType::Lte, distp->exprp(), irp->rhsp())};
         andp->user1(true);
         return andp;
     }
 
-    // Number of values in the range, as a 64-bit expression (0 for all 2^64 values)
-    static AstNodeExpr* newDistRangeSize(FileLine* fl, const AstInsideRange* irp) {
-        const bool isSigned = irp->lhsp()->isSigned();
-        const AstConst* const lopCp = VN_CAST(irp->lhsp(), Const);
-        const AstConst* const hipCp = VN_CAST(irp->rhsp(), Const);
+    // Number of values from lop to hip, as a 64-bit expression (0 for all 2^64 values)
+    static AstNodeExpr* newDistRangeSize(FileLine* fl, const AstInsideRange* irp, bool loSigned,
+                                         bool hiSigned) {
+        AstNodeExpr* const lop = irp->lhsp();
+        AstNodeExpr* const hip = irp->rhsp();
+        const AstConst* const lopCp = VN_CAST(lop, Const);
+        const AstConst* const hipCp = VN_CAST(hip, Const);
         if (lopCp && hipCp && lopCp->num().mostSetBitP1() <= 64
             && hipCp->num().mostSetBitP1() <= 64) {
             // Bounds wider than 64 bits are non-negative here
-            const bool sext = isSigned && lopCp->width() <= 64;
-            const uint64_t lo = sext ? lopCp->num().toSQuad() : lopCp->toUQuad();
-            const uint64_t hi = sext ? hipCp->num().toSQuad() : hipCp->toUQuad();
+            const uint64_t lo
+                = loSigned && lopCp->width() <= 64 ? lopCp->num().toSQuad() : lopCp->toUQuad();
+            const uint64_t hi
+                = hiSigned && hipCp->width() <= 64 ? hipCp->num().toSQuad() : hipCp->toUQuad();
             return new AstConst{fl, AstConst::Unsized64{}, hi - lo + 1};
         }
-        if (irp->lhsp()->width() > 64 || irp->rhsp()->width() > 64) {
+        if (lop->width() > 64 || hip->width() > 64) {
             irp->v3warn(E_UNSUPPORTED, "Unsupported: dist range bound wider than 64 bits");
             return new AstConst{fl, AstConst::Unsized64{}, 1};
         }
-        AstNodeExpr* const lo64p
-            = isSigned ? static_cast<AstNodeExpr*>(
-                             new AstExtendS{fl, irp->lhsp()->cloneTreePure(false), 64})
-                       : static_cast<AstNodeExpr*>(
-                             new AstExtend{fl, irp->lhsp()->cloneTreePure(false), 64});
-        AstNodeExpr* const hi64p
-            = isSigned ? static_cast<AstNodeExpr*>(
-                             new AstExtendS{fl, irp->rhsp()->cloneTreePure(false), 64})
-                       : static_cast<AstNodeExpr*>(
-                             new AstExtend{fl, irp->rhsp()->cloneTreePure(false), 64});
         return new AstAdd{fl, new AstConst{fl, AstConst::Unsized64{}, 1ULL},
-                          new AstSub{fl, hi64p, lo64p}};
+                          new AstSub{fl, newResized(fl, hip->cloneTreePure(false), 64, hiSigned),
+                                     newResized(fl, lop->cloneTreePure(false), 64, loSigned)}};
+    }
+
+    // Consecutive values of the dist expression in a range, for its weight and pick
+    struct DistPiece final {
+        AstNodeExpr* firstp;  // First value, at the dist expression width
+        AstNodeExpr* countp;  // Number of values, 64 bits
+    };
+    // Delete the clone templates of a piece
+    void deletePiece(DistPiece& piece) {
+        VL_DO_DANGLING(pushDeletep(piece.firstp), piece.firstp);
+        VL_DO_DANGLING(pushDeletep(piece.countp), piece.countp);
+    }
+
+    // The values of the dist expression that a range or value selects (IEEE 1800-2023 18.5.3),
+    // as the bound comparisons of newDistRangeMembership do. Bounds of one signedness select
+    // one piece in their order; constant bounds of mixed signedness can select two.
+    std::vector<DistPiece> newDistPieces(AstDist* distp, AstNodeExpr* rangep) {
+        FileLine* const fl = distp->fileline();
+        AstInsideRange* const irp = VN_CAST(rangep, InsideRange);
+        AstNodeExpr* const lop = irp ? irp->lhsp() : rangep;
+        AstNodeExpr* const hip = irp ? irp->rhsp() : rangep;
+        const int width = distp->exprp()->width();
+        const bool loSigned = distp->exprp()->isSigned() && lop->isSigned();
+        const bool hiSigned = distp->exprp()->isSigned() && hip->isSigned();
+        // A bound with x or z bits is computed at runtime, as base did
+        const auto twoStatep = [](AstNodeExpr* exprp) -> const AstConst* {
+            const AstConst* const constp = VN_CAST(exprp, Const);
+            return constp && !constp->num().isFourState() ? constp : nullptr;
+        };
+        const AstConst* const loConstp = twoStatep(lop);
+        const AstConst* const hiConstp = twoStatep(hip);
+        std::vector<DistPiece> pieces;
+        if (width > VL_QUADSIZE
+            || (!(loConstp && hiConstp)
+                && (lop->width() > VL_QUADSIZE || hip->width() > VL_QUADSIZE))) {
+            // 64-bit weights: the lower bound at the expression width, count unclamped
+            AstNodeExpr* const countp = !irp ? new AstConst{fl, AstConst::Unsized64{}, 1}
+                                             : newDistRangeSize(fl, irp, loSigned, hiSigned);
+            pieces.push_back({newResized(fl, lop->cloneTreePure(false), width, loSigned), countp});
+            return pieces;
+        }
+        // The expression has at most 64 bits from here
+        const uint64_t mask = VL_MASK_Q(width);
+        const uint64_t half = 1ULL << (width - 1);
+        if (loConstp && hiConstp) {
+            for (const DistRun& run :
+                 distConstRuns(width, distp->exprp()->isSigned(), loConstp, hiConstp)) {
+                V3Number first{distp, width, 0};
+                first.setQuad(run.first);
+                pieces.push_back(
+                    {new AstConst{fl, first}, new AstConst{fl, AstConst::Unsized64{}, run.count}});
+            }
+            return pieces;
+        }
+        // Within each half of the values, a bound compares with keys of its order that are the
+        // values offset by a constant, so each half holds one piece. Keys are 64 bits, and a
+        // signed key is the value offset by 2^63. A key comparison, or its folding, may be
+        // constant.
+        static constexpr uint64_t SIGNED_KEY_BIAS = 1ULL << (VL_QUADSIZE - 1);
+        FileLine* const keyFl = new FileLine{fl};
+        keyFl->modifyWarnOff(V3ErrorCode::UNSIGNED, true);
+        keyFl->modifyWarnOff(V3ErrorCode::CMPCONST, true);
+        const auto newConstp
+            = [&](uint64_t value) { return new AstConst{keyFl, AstConst::Unsized64{}, value}; };
+        const auto newKeyp = [&](AstNodeExpr* boundp, bool isSigned) -> AstNodeExpr* {
+            AstNodeExpr* const keyp
+                = newResized(keyFl, boundp->cloneTreePure(false), VL_QUADSIZE, isSigned);
+            if (!isSigned) return keyp;
+            return new AstXor{keyFl, keyp, newConstp(SIGNED_KEY_BIAS)};
+        };
+        AstNodeExpr* const loKeyp = newKeyp(lop, loSigned);
+        AstNodeExpr* const hiKeyp = newKeyp(hip, hiSigned);
+        for (const bool negative : {false, true}) {
+            const uint64_t first = negative ? half : 0;
+            const uint64_t last = negative ? mask : half - 1;
+            const uint64_t signedOffset = SIGNED_KEY_BIAS - (negative ? half << 1 : 0);
+            const uint64_t loOffset = loSigned ? signedOffset : 0;
+            const uint64_t hiOffset = hiSigned ? signedOffset : 0;
+            AstNodeExpr* const startp = new AstCond{
+                fl, new AstLte{keyFl, loKeyp->cloneTreePure(false), newConstp(first + loOffset)},
+                newConstp(first),
+                new AstSub{keyFl, loKeyp->cloneTreePure(false), newConstp(loOffset)}};
+            AstNodeExpr* const endp = new AstCond{
+                fl, new AstGte{keyFl, hiKeyp->cloneTreePure(false), newConstp(last + hiOffset)},
+                newConstp(last),
+                new AstSub{keyFl, hiKeyp->cloneTreePure(false), newConstp(hiOffset)}};
+            AstNodeExpr* const emptyp = new AstLogOr{
+                keyFl,
+                new AstLogOr{
+                    fl, new AstGt{keyFl, loKeyp->cloneTreePure(false), newConstp(last + loOffset)},
+                    new AstLt{keyFl, hiKeyp->cloneTreePure(false), newConstp(first + hiOffset)}},
+                new AstGt{keyFl, startp, endp}};
+            AstNodeExpr* const countp
+                = new AstCond{keyFl, emptyp, newConstp(0),
+                              new AstAdd{keyFl, newConstp(1),
+                                         new AstSub{keyFl, endp->cloneTreePure(false),
+                                                    startp->cloneTreePure(false)}}};
+            pieces.push_back({new AstCCast{keyFl, startp->cloneTreePure(false), width}, countp});
+        }
+        VL_DO_DANGLING(loKeyp->deleteTree(), loKeyp);
+        VL_DO_DANGLING(hiKeyp->deleteTree(), hiKeyp);
+        return pieces;
     }
 
     struct DistBucket final {
         AstNodeExpr* rangep;  // A single value or an InsideRange
         AstNodeExpr* weightExprp;  // Effective 64-bit weight (range weight scaled by size)
         AstNodeExpr* itemWeightp;  // The item's own weight, in the AstDist
+        std::vector<DistPiece> pieces;  // Values of an InsideRange
     };
 
     // Non-zero-weight buckets with each weight extended to 64 bits.
@@ -9118,22 +9333,42 @@ class SolverSmtLowering final : public V3SolverLowering {
             if (const AstConst* const constp = VN_CAST(ditemp->weightp(), Const)) {
                 if (constp->toUQuad() == 0) continue;
             }
+            const AstInsideRange* const irp = VN_CAST(ditemp->rangep(), InsideRange);
+            std::vector<DistPiece> pieces = newDistPieces(distp, ditemp->rangep());
             AstNodeExpr* weightExprp
                 = new AstExtend{fl, ditemp->weightp()->cloneTreePure(false), 64};
-            // := on a range weights every element, so scale by the range size.
-            if (!ditemp->isWhole()) {
-                if (const AstInsideRange* const irp = VN_CAST(ditemp->rangep(), InsideRange)) {
-                    AstNodeExpr* sizep = newDistRangeSize(fl, irp);
-                    if (VN_IS(sizep, Const) && VN_AS(sizep, Const)->isZero()) {
-                        // All 2^64 values, saturate
-                        VL_DO_DANGLING(pushDeletep(sizep), sizep);
-                        sizep = new AstConst{fl, AstConst::Unsized64{},
-                                             std::numeric_limits<uint64_t>::max()};
-                    }
-                    weightExprp = new AstMul{fl, weightExprp, sizep};
+            const auto addCount = [&](AstNodeExpr* sump, const DistPiece& piece) -> AstNodeExpr* {
+                AstNodeExpr* const countp = piece.countp->cloneTreePure(false);
+                return sump ? new AstAdd{fl, sump, countp} : countp;
+            };
+            AstNodeExpr* sizep = nullptr;
+            for (const DistPiece& piece : pieces) sizep = addCount(sizep, piece);
+            if (!sizep) sizep = new AstConst{fl, AstConst::Unsized64{}, 0};
+            if (pieces.empty()) {
+                // No value of the expression is in the range, so it has no weight
+                VL_DO_DANGLING(pushDeletep(weightExprp), weightExprp);
+                weightExprp = sizep->cloneTreePure(false);
+            } else if (!ditemp->isWhole() && irp) {
+                // := on a range weights every element, so scale by the range size.
+                if (VN_IS(sizep, Const) && VN_AS(sizep, Const)->isZero()) {
+                    // All 2^64 values, saturate
+                    VL_DO_DANGLING(pushDeletep(sizep), sizep);
+                    sizep = new AstConst{fl, AstConst::Unsized64{},
+                                         std::numeric_limits<uint64_t>::max()};
                 }
+                weightExprp = new AstMul{fl, weightExprp, sizep->cloneTreePure(false)};
+            } else if (!VN_IS(sizep, Const)) {
+                weightExprp = new AstCond{fl,
+                                          new AstEq{fl, sizep->cloneTreePure(false),
+                                                    new AstConst{fl, AstConst::Unsized64{}, 0}},
+                                          new AstConst{fl, AstConst::Unsized64{}, 0}, weightExprp};
             }
-            buckets.push_back({ditemp->rangep(), weightExprp, ditemp->weightp()});
+            VL_DO_DANGLING(pushDeletep(sizep), sizep);
+            if (!irp) {
+                for (DistPiece& piece : pieces) deletePiece(piece);
+                pieces.clear();
+            }
+            buckets.push_back({ditemp->rangep(), weightExprp, ditemp->weightp(), pieces});
         }
         return buckets;
     }
@@ -9143,11 +9378,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         if (const AstInsideRange* const irp = VN_CAST(rangep, InsideRange)) {
             return newDistRangeMembership(distp, irp);
         }
-        FileLine* const fl = distp->fileline();
-        AstNodeExpr* const eqExprp = distp->exprp()->cloneTreePure(false);
-        AstNodeExpr* const eqp = new AstEq{fl, eqExprp, rangep->cloneTreePure(false)};
-        eqp->user1(true);
-        return eqp;
+        return newDistCompare(distp->fileline(), VNType::Eq, distp->exprp(), rangep);
     }
 
     // Hard constraint that the dist value is in a range with a nonzero weight.
@@ -9322,18 +9553,16 @@ class SolverSmtLowering final : public V3SolverLowering {
         return new AstConstraintIf{fl, new AstRedOr{fl, gatep}, chainp, nullptr};
     }
 
-    AstNodeExpr* newUniformRangePick(AstDist* distp, const AstInsideRange* irp, bool recordPick) {
+    // A value of a piece: its first value and a random offset among its values
+    AstNodeExpr* newPieceValue(AstDist* distp, const DistPiece& piece) {
         FileLine* const fl = distp->fileline();
-        AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
         const int distWidth = distp->exprp()->width();
-        AstNodeExpr* const rangeSzp = newDistRangeSize(fl, irp);
         AstNodeExpr* offsetp = new AstRand{fl, nullptr, false};
         offsetp->dtypeSetUInt64();
-        if (VN_IS(rangeSzp, Const) && VN_AS(rangeSzp, Const)->isZero()) {
+        if (VN_IS(piece.countp, Const) && VN_AS(piece.countp, Const)->isZero()) {
             // All 2^64 values, any random value is in the range
-            VL_DO_DANGLING(pushDeletep(rangeSzp), rangeSzp);
         } else {
-            offsetp = new AstModDiv{fl, offsetp, rangeSzp};
+            offsetp = new AstModDiv{fl, offsetp, piece.countp->cloneTreePure(false)};
         }
         // Evaluate the 64-bit offset once before wide expansion can duplicate operands.
         // A C cast is only to a basic C type; a wider result needs zero extension.
@@ -9353,7 +9582,30 @@ class SolverSmtLowering final : public V3SolverLowering {
         } else {
             offsetp = new AstCCast{fl, offsetp, distWidth};
         }
-        AstNodeExpr* valuep = new AstAdd{fl, irp->lhsp()->cloneTreePure(false), offsetp};
+        return new AstAdd{fl, piece.firstp->cloneTreePure(false), offsetp};
+    }
+
+    // Soft pick of a value uniformly among the pieces of a range: a piece by its share of
+    // the values, then a value within it, from independent draws
+    AstNodeExpr* newUniformRangePick(AstDist* distp, const std::vector<DistPiece>& pieces,
+                                     bool recordPick) {
+        FileLine* const fl = distp->fileline();
+        AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
+        AstNodeExpr* valuep = newPieceValue(distp, pieces.front());
+        if (pieces.size() > 1) {
+            AstNodeExpr* const rand64p = new AstRand{fl, nullptr, false};
+            rand64p->dtypeSetUInt64();
+            AstNodeExpr* const totalp = new AstAdd{fl, pieces[0].countp->cloneTreePure(false),
+                                                   pieces[1].countp->cloneTreePure(false)};
+            // A count may be constant
+            FileLine* const countFl = new FileLine{fl};
+            countFl->modifyWarnOff(V3ErrorCode::UNSIGNED, true);
+            countFl->modifyWarnOff(V3ErrorCode::CMPCONST, true);
+            valuep = new AstCond{fl,
+                                 new AstLt{countFl, new AstModDiv{fl, rand64p, totalp},
+                                           pieces[0].countp->cloneTreePure(false)},
+                                 valuep, newPieceValue(distp, pieces[1])};
+        }
         const auto fastIt = m_fastDistGens.find(distp);
         if (recordPick && fastIt != m_fastDistGens.end()) {
             // Record at the original RHS evaluation point, not hoisted across a
@@ -9398,15 +9650,16 @@ class SolverSmtLowering final : public V3SolverLowering {
         for (int i = static_cast<int>(buckets.size()) - 1; i >= 0; --i) {
             AstNodeExpr* constraintExprp;
             const AstInsideRange* const irp = VN_CAST(buckets[i].rangep, InsideRange);
-            if (irp && (distBoundRefsRandVar(irp->lhsp()) || distBoundRefsRandVar(irp->rhsp()))) {
+            if (irp
+                && (distBoundRefsRandVar(irp->lhsp()) || distBoundRefsRandVar(irp->rhsp())
+                    || buckets[i].pieces.empty())) {
                 constraintExprp = newDistRangeMembership(distp, irp);
             } else if (irp) {
-                constraintExprp = newUniformRangePick(distp, irp, buckets.size() == 1);
-            } else {
-                AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
                 constraintExprp
-                    = new AstEq{fl, distExprCopyp, buckets[i].rangep->cloneTreePure(false)};
-                constraintExprp->user1(true);
+                    = newUniformRangePick(distp, buckets[i].pieces, buckets.size() == 1);
+            } else {
+                constraintExprp
+                    = newDistCompare(fl, VNType::Eq, distp->exprp(), buckets[i].rangep);
             }
             if (!chainp) {
                 chainp = constraintExprp;
@@ -9563,6 +9816,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             // Clean up nodes used only as clone templates (never inserted into tree)
             for (auto& bucket : buckets) {
                 VL_DO_DANGLING(pushDeletep(bucket.weightExprp), bucket.weightExprp);
+                for (DistPiece& piece : bucket.pieces) deletePiece(piece);
             }
             VL_DO_DANGLING(pushDeletep(runningSump), runningSump);
             // Last cumSum is unused (last bucket is unconditional default)

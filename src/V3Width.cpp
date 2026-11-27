@@ -5673,15 +5673,77 @@ class WidthVisitor final : public VNVisitor {
             VL_DO_DANGLING(userIterate(itemp, WidthVP{CONTEXT_DET, PRELIM}.p()), itemp);
         }
 
-        AstBasicDType* dtypep = VN_CAST(nodep->exprp()->dtypep(), BasicDType);
-        AstNodeDType* subDTypep = nullptr;
+        // Width warnings are those of one common type for the expression and items. The
+        // comparisons and picks then type their own operands, from copies of them as they were
+        // before, whose width warnings are off.
+        AstDist* const prelimp = nodep->cloneTree(false);
+        widthDistCommon(nodep);
+        AstNodeExpr* const finalExprp = nodep->exprp();
+        finalExprp->replaceWith(prelimp->exprp()->unlinkFrBack());
+        VL_DO_DANGLING(pushDeletep(finalExprp), finalExprp);
+        pushDeletep(nodep->itemsp()->unlinkFrBackWithNext());
+        nodep->addItemsp(prelimp->itemsp()->unlinkFrBackWithNext());
+        VL_DO_DANGLING(prelimp->deleteTree(), prelimp);
+        nodep->foreach([](AstNode* np) {
+            np->fileline(new FileLine{np->fileline()});
+            np->fileline()->modifyWarnOff(V3ErrorCode::WIDTHEXPAND, true);
+            np->fileline()->modifyWarnOff(V3ErrorCode::WIDTHTRUNC, true);
+        });
         nodep->dtypeSetBit();
 
+        // Inside a constraint, V3Randomize handles dist lowering with proper weights,
+        // but only for simple scalar/range items. Container-type items (queues, arrays)
+        // must be lowered here via insideItem() which knows how to expand them.
+        if (m_inConstraintExpr) {
+            bool canLower = nodep->exprp()->dtypep()->skipRefp()->isIntegralOrPacked();
+            for (AstDistItem* const ditemp : nodep->itemspList()) {
+                if (VN_IS(ditemp->rangep(), InsideRange)) continue;
+                // An integral item is a plain equality on either path, so it may be
+                // non-constant.  Testing for AstConst here instead would silently drop
+                // the weights of a dist whose items are state variables.  Compound
+                // items (containers, strings) still need insideItem(), and an impure
+                // item must not be cloned into the bucket chain.
+                const AstNodeDType* const itemDtp = ditemp->rangep()->dtypep()->skipRefp();
+                if (!itemDtp->isIntegralOrPacked() || !ditemp->rangep()->isPure()) {
+                    canLower = false;
+                    break;
+                }
+            }
+            if (canLower) {
+                widthDistOperands(nodep);
+                return;
+            }
+        }
+
+        // Lower to inside operations (ignores weights)
+        AstNodeExpr* newp = nullptr;
+        for (AstDistItem* const itemp : nodep->itemspList()) {
+            AstNodeExpr* const insidep
+                = new AstInside{itemp->fileline(), nodep->exprp()->cloneTreePure(false),
+                                itemp->rangep()->unlinkFrBack()};
+            AstNodeExpr* const cmpp
+                = new AstGt{itemp->fileline(), itemp->weightp()->unlinkFrBack(),
+                            new AstConst{itemp->fileline(), 0}};
+            cmpp->fileline()->modifyWarnOff(V3ErrorCode::UNSIGNED, true);
+            cmpp->fileline()->modifyWarnOff(V3ErrorCode::CMPCONST, true);
+            AstNodeExpr* const inewp = new AstLogAnd{itemp->fileline(), cmpp, insidep};
+            newp = newp ? new AstLogOr{nodep->fileline(), newp, inewp} : inewp;
+        }
+        if (!newp) newp = new AstConst{nodep->fileline(), AstConst::BitFalse{}};
+        // The replacement is not always iterated, so type it now
+        newp = VN_AS(userIterateSubtreeReturnEdits(newp, WidthVP{SELF, BOTH}.p()), NodeExpr);
+
+        UINFOTREE(9, nodep, "", "dist-out");
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    // Type a dist expression and its items as one common type
+    void widthDistCommon(AstDist* nodep) {
+        const AstBasicDType* const dtypep = VN_CAST(nodep->exprp()->dtypep(), BasicDType);
+        AstNodeDType* subDTypep;
         if (dtypep && dtypep->isString()) {
-            nodep->dtypeSetString();
             subDTypep = nodep->findStringDType();
         } else if (dtypep && dtypep->isDouble()) {
-            nodep->dtypeSetDouble();
             subDTypep = nodep->findDoubleDType();
         } else {
             // Take width as maximum across all items
@@ -5697,7 +5759,6 @@ class WidthVisitor final : public VNVisitor {
             subDTypep = nodep->findBitOrLogicDType(
                 width, mwidth, nodep->exprp()->dtypep()->numeric(), isFourstate);
         }
-
         iterateCheck(nodep, "Dist expression", nodep->exprp(), CONTEXT_DET, FINAL, subDTypep,
                      EXTEND_EXP);
         for (AstDistItem* const ditemp : nodep->itemspList()) {
@@ -5708,47 +5769,31 @@ class WidthVisitor final : public VNVisitor {
                 iterateCheck(nodep, "Dist Item", itemp, CONTEXT_DET, FINAL, subDTypep, EXTEND_EXP);
             }
         }
-
-        // Inside a constraint, V3Randomize handles dist lowering with proper weights,
-        // but only for simple scalar/range items. Container-type items (queues, arrays)
-        // must be lowered here via insideItem() which knows how to expand them.
-        if (m_inConstraintExpr) {
-            bool canLower = true;
-            for (AstDistItem* const ditemp : nodep->itemspList()) {
-                if (VN_IS(ditemp->rangep(), InsideRange)) continue;
-                // An integral item is a plain equality on either path, so it may be
-                // non-constant.  Testing for AstConst here instead would silently drop
-                // the weights of a dist whose items are state variables.  Compound
-                // items (containers, strings) still need insideItem(), and an impure
-                // item must not be cloned into the bucket chain.
-                const AstNodeDType* const itemDtp = ditemp->rangep()->dtypep()->skipRefp();
-                if (!itemDtp->isIntegralOrPacked() || !ditemp->rangep()->isPure()) {
-                    canLower = false;
-                    break;
+    }
+    // Type the operands of a dist that V3Randomize lowers. The expression is compared with each
+    // value or bound as by its own '==', '>=' or '<=' (IEEE 1800-2023 18.5.3, 11.4.13), so each
+    // keeps its own type.
+    void widthDistOperands(AstDist* nodep) {
+        iterateCheckSelf(nodep, "Dist expression", nodep->exprp(), SELF, FINAL);
+        for (AstDistItem* const ditemp : nodep->itemspList()) {
+            AstInsideRange* const rangep = VN_CAST(ditemp->rangep(), InsideRange);
+            for (AstNode* const valuep :
+                 {rangep ? rangep->lhsp() : ditemp->rangep(), rangep ? rangep->rhsp() : nullptr}) {
+                if (!valuep || VN_IS(valuep, Unbounded)) continue;
+                iterateCheckSelf(nodep, "Dist Item", valuep, SELF, FINAL);
+                // Weights and picks of constant ranges are computed at compile time. Any other
+                // bound, including one with x or z bits, stays as written for later checks.
+                AstNodeExpr* const foldedp
+                    = V3Const::constifyEdit(VN_AS(valuep, NodeExpr)->cloneTree(false));
+                const AstConst* const constp = VN_CAST(foldedp, Const);
+                if (constp && !constp->num().isFourState()) {
+                    valuep->replaceWith(foldedp);
+                    VL_DO_DANGLING(pushDeletep(valuep), valuep);
+                } else {
+                    VL_DO_DANGLING(foldedp->deleteTree(), foldedp);
                 }
             }
-            if (canLower) return;
         }
-
-        // Outside constraint: lower to inside (ignores weights)
-        AstNodeExpr* newp = nullptr;
-        for (AstDistItem* const itemp : nodep->itemspList()) {
-            AstNodeExpr* inewp
-                = insideItem(nodep, nodep->exprp()->cloneTreePure(false), itemp->rangep());
-            if (!inewp) continue;
-            AstNodeExpr* const cmpp
-                = new AstGt{itemp->fileline(), itemp->weightp()->unlinkFrBack(),
-                            new AstConst{itemp->fileline(), 0}};
-            cmpp->fileline()->modifyWarnOff(V3ErrorCode::UNSIGNED, true);
-            cmpp->fileline()->modifyWarnOff(V3ErrorCode::CMPCONST, true);
-            inewp = new AstLogAnd{itemp->fileline(), cmpp, inewp};
-            newp = newp ? new AstLogOr{nodep->fileline(), newp, inewp} : inewp;
-        }
-        if (!newp) newp = new AstConst{nodep->fileline(), AstConst::BitFalse{}};
-
-        UINFOTREE(9, nodep, "", "dist-out");
-        nodep->replaceWith(newp);
-        VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
     void visit(AstInside* nodep) override {
