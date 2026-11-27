@@ -38,10 +38,27 @@ class FourState #(
   }
 endclass
 
+class FourStateBounds;
+  localparam logic [7:0] LOW_X = 8'b1x00_0000;
+  localparam logic [7:0] HIGH_Z = 8'b1111_00zz;
+  rand bit [7:0] d_high, d_value, i_low, i_high, i_low_lit, i_high_lit;
+  constraint c_bounds {
+    d_high dist {[8'd3 : HIGH_Z] :/ 1};
+    d_value dist {8'b1z00_0000 := 1, 8'd3 := 1};
+    i_low inside {[LOW_X : 8'd250]};
+    i_high inside {[8'd3 : HIGH_Z]};
+    i_low_lit inside {[8'b1x00_0000 : 8'd250]};
+    i_high_lit inside {[8'd1 : 8'b1111_000z]};
+  }
+endclass
+
 module t;
   initial begin
     FourState #() c;
+    FourStateBounds b;
     c = new;
     void'(c.randomize());
+    b = new;
+    void'(b.randomize());
   end
 endmodule
