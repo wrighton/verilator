@@ -83,6 +83,15 @@ module t (
   assert property (@(posedge clk) (e_x ##1 e_b) |-> e_z) pass_end++;
   else fail_end++;
 
+  // A sequence with both actions: at ph 2 the attempt of ph 0 matches as those of ph 1 and 2
+  // fail, and at ph 3 that of ph 3 fails. Replaying the fail action for the second failure at
+  // ph 2 does not run the pass action again.
+  wire e_p = ph == 0 || ph == 1;
+  wire e_r = ph == 2;
+  int pass_seq_both = 0, fail_seq_both = 0;
+  assert property (@(posedge clk) e_p ##1 e_b ##1 e_r) pass_seq_both++;
+  else fail_seq_both++;
+
   always @(negedge clk) begin
     if (cyc == 200) begin
       // 50 epochs
@@ -98,6 +107,8 @@ module t (
       `checkd(fail_impl_else, ref_fail_impl);
       `checkd(pass_followed, ref_followed);
       `checkd(pass_seq, ref_seq);
+      `checkd(pass_seq_both, 50);
+      `checkd(fail_seq_both, 150);
       $write("*-* All Finished *-*\n");
       $finish;
     end

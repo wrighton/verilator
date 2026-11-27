@@ -3416,22 +3416,6 @@ class AssertNfaVisitor final : public VNVisitor {
     void attachActionHandlers(AstAssert* const assertp, AstNodeExpr* matchExprp,
                               AstSenTree* const threadFailReplaySenTreep,
                               AstNodeExpr* const threadFailCountp) {
-        // Gate pass handler on match to prevent vacuous-pass firings.
-        if (matchExprp) {
-            // needMatch implies passsp() was non-null when evaluated above;
-            // lowering does not mutate the assert's pass-action between the
-            // two reads, so passsp() is still non-null here.
-            AstNodeStmt* passsp = assertp->passsp();
-            UASSERT_OBJ(passsp, assertp, "needMatch set but passsp is null");
-            passsp->unlinkFrBackWithNext();
-            FileLine* const flp = assertp->fileline();
-            AstIf* const ifp = new AstIf{flp, matchExprp, passsp, nullptr};
-            assertp->addPasssp(ifp);
-            // Fail-handler prefix for overlapping instances (IEEE 16.12):
-            // fires when reject=1 && match=1 in the same cycle.
-            assertp->prependFailsp(V3AssertCommon::cloneAction(ifp, m_actionNames));
-        }
-
         if (threadFailCountp) {
             UASSERT_OBJ(threadFailReplaySenTreep, assertp,
                         "Thread fail count missing sensitivity tree");
@@ -3463,6 +3447,22 @@ class AssertNfaVisitor final : public VNVisitor {
             replayStmtsp->addNext(replayLoopp);
             m_modp->addStmtsp(
                 newAssertAlways(flp, VAlwaysKwd::ALWAYS, threadFailReplaySenTreep, replayStmtsp));
+        }
+        // Gate pass handler on match to prevent vacuous-pass firings. This follows the
+        // replays, as they clone the fail action, which must not run the pass action again.
+        if (matchExprp) {
+            // needMatch implies passsp() was non-null when evaluated above;
+            // lowering does not mutate the assert's pass-action between the
+            // two reads, so passsp() is still non-null here.
+            AstNodeStmt* passsp = assertp->passsp();
+            UASSERT_OBJ(passsp, assertp, "needMatch set but passsp is null");
+            passsp->unlinkFrBackWithNext();
+            FileLine* const flp = assertp->fileline();
+            AstIf* const ifp = new AstIf{flp, matchExprp, passsp, nullptr};
+            assertp->addPasssp(ifp);
+            // Fail-handler prefix for overlapping instances (IEEE 16.12):
+            // fires when reject=1 && match=1 in the same cycle.
+            assertp->prependFailsp(V3AssertCommon::cloneAction(ifp, m_actionNames));
         }
     }
 

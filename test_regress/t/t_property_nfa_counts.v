@@ -193,7 +193,7 @@ module t (
     if (cyc == 12) begin
       `checkd(imp_pass, 11);
       `checkd(imp_fail, 1);
-      `checkd(chain_pass, 2);
+      `checkd(chain_pass, 1);
       `checkd(chain_fail, 11);
       `checkd(range_pass, 1);
       `checkd(range_fail, 10);
