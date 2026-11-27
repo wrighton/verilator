@@ -1384,11 +1384,13 @@ class SvaNfaBuilder final {
     // attempts entering p on different ticks once per tick. A ranged or unbounded end rejects
     // through its ring at the match vertex, which p does not reach, and the attempts in an
     // unbounded state share it, so they would fail together once, and so does an accept_on,
-    // whose acceptance ends p at any tick. A 'not' of a multi-cycle sequence is no boolean leaf.
+    // whose acceptance ends p at any tick. A 'not' of a multi-cycle sequence, other than of an
+    // implication lowered by buildBoolOrNegatedImplication, is no boolean leaf.
     static bool boolOrKeepsMerge(const AstNodeExpr* boolp, const AstNodeExpr* propp) {
         if (VN_IS(boolp, Const)) return false;
         if (VN_IS(propp, LogNot)
-            && propp->exists([](const AstNodeExpr* np) { return np->isMultiCycleSva(); })) {
+            && propp->exists([](const AstNodeExpr* np) { return np->isMultiCycleSva(); })
+            && !negatedFixedImplication(propp)) {
             return true;
         }
         return propp->exists([](const AstNode* np) {
@@ -1409,6 +1411,19 @@ class SvaNfaBuilder final {
         });
     }
 
+    // The implication of `not (x |-> s)`, with a boolean x and a fixed-length sequence s of
+    // boolean checks, else nullptr
+    static const AstImplication* negatedFixedImplication(const AstNodeExpr* nodep) {
+        const AstLogNot* const notp = VN_CAST(nodep, LogNot);
+        const AstImplication* const implp = notp ? VN_CAST(notp->lhsp(), Implication) : nullptr;
+        if (!implp || implp->isFollowedBy() || !isPlainBoolean(implp->lhsp())
+            || implp->rhsp()->exists([](const AstImplication*) { return true; })) {
+            return nullptr;
+        }
+        std::map<int, std::vector<AstNodeExpr*>> checks;
+        if (!flattenFixedSeq(implp->rhsp(), 0, checks)) return nullptr;
+        return implp;
+    }
     // Whether an implication decides its vacuous pass on its first tick, with a boolean
     // antecedent and no other implication
     static bool isVacuousAtEntry(const AstImplication* implp) {
@@ -1446,11 +1461,16 @@ class SvaNfaBuilder final {
         // A constant b holds on every attempt, or never so that only p decides
         if (const AstConst* const constp = VN_CAST(boolp, Const)) {
             if (!constp->isZero()) return {entryVtxp, boolp->cloneTreePure(false), {}};
-            if (!vacuousAtEntry) return buildExpr(propp, entryVtxp, /*isTopLevelStep=*/true);
+            if (!vacuousAtEntry && !negatedFixedImplication(propp)) {
+                return buildExpr(propp, entryVtxp, /*isTopLevelStep=*/true);
+            }
         }
         SvaStateVertex* const propEntryp = scopedCreateVertex();
         guardedLink(entryVtxp, propEntryp,
                     new AstLogNot{flp, sampled(boolp->cloneTreePure(false))}, flp);
+        if (const AstImplication* const negImplp = negatedFixedImplication(propp)) {
+            return buildBoolOrNegatedImplication(boolp, negImplp, entryVtxp, propEntryp, flp);
+        }
         const BuildResult prop = buildExpr(propp, propEntryp, /*isTopLevelStep=*/true);
         if (!prop.valid()) return prop;
         SvaStateVertex* const propTermp = prop.termVertexp;
@@ -1479,6 +1499,42 @@ class SvaNfaBuilder final {
             edgep->m_rejectOnFail = true;
         }
         freeUnlinkedCondp(prop.finalCondp);
+        return {mergeVtxp, nullptr, {}};
+    }
+
+    // Build `b or not (x |-> s)` from propEntryp, entered when b is false. The negation holds
+    // when x holds and s does not match (IEEE 1800-2023 16.12.3, 16.12.7), so it passes on the
+    // first check of s that fails, and fails when x does not hold or s matches.
+    BuildResult buildBoolOrNegatedImplication(AstNodeExpr* boolp, const AstImplication* implp,
+                                              SvaStateVertex* entryVtxp,
+                                              SvaStateVertex* propEntryp, FileLine* flp) {
+        FixedOrOperand seq;
+        flattenFixedSeq(implp->rhsp(), implp->isOverlapped() ? 0 : 1, seq.checks);
+        SvaStateVertex* const mergeVtxp = scopedCreateVertex();
+        guardedLink(entryVtxp, mergeVtxp, sampled(boolp->cloneTreePure(false)), flp);
+        SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+        sinkVtxp->m_isRejectSink = true;
+        const auto rejectUnless = [&](SvaStateVertex* fromp, AstNodeExpr* condp) {
+            m_graph.addLink(fromp, sinkVtxp, condp)->m_rejectOnFail = true;
+        };
+        rejectUnless(propEntryp, sampled(newLeafCondp(implp->lhsp())));
+        SvaStateVertex* currentp = scopedCreateVertex();
+        guardedLink(propEntryp, currentp, sampled(newLeafCondp(implp->lhsp())), flp);
+        int offset = 0;
+        for (auto it = seq.checks.begin(); it != seq.checks.end(); ++it) {
+            currentp = addDelayChain(currentp, it->first - offset, flp);
+            offset = it->first;
+            AstNodeExpr* const condp = newOperandCondp(seq, offset, flp);
+            guardedLink(currentp, mergeVtxp, new AstLogNot{flp, condp->cloneTreePure(false)}, flp);
+            if (std::next(it) == seq.checks.end()) {
+                // s matches: the negation fails
+                rejectUnless(currentp, new AstLogNot{flp, condp});
+            } else {
+                SvaStateVertex* const nextp = scopedCreateVertex();
+                guardedLink(currentp, nextp, condp, flp);
+                currentp = nextp;
+            }
+        }
         return {mergeVtxp, nullptr, {}};
     }
 
@@ -2314,17 +2370,17 @@ public:
         return true;
     }
     // Whether an 'or' at the root of an asserted property is of a boolean and an implication
-    // of a boolean antecedent and a fixed-length consequent, which buildBoolOrProp lowers with
-    // one state per attempt, and whether its attempts can match on one tick
+    // of a boolean antecedent and a fixed-length consequent, or its negation, which
+    // buildBoolOrProp lowers with one state per attempt, and whether its attempts can match on
+    // one tick
     static bool isBoolOrImplication(const AstSOr* orp, bool* mixedLengthsp = nullptr) {
-        const AstImplication* implp = VN_CAST(orp->rhsp(), Implication);
         const AstNodeExpr* boolp = orp->lhsp();
-        if (!implp) {
-            implp = VN_CAST(orp->lhsp(), Implication);
-            boolp = orp->rhsp();
-        }
-        if (!isVacuousAtEntry(implp) || !isPlainBoolean(boolp)) return false;
-        if (boolOrKeepsMerge(boolp, implp)) return false;
+        const AstNodeExpr* propp = orp->rhsp();
+        if (!isPlainBoolean(boolp)) std::swap(boolp, propp);
+        if (!isPlainBoolean(boolp) || boolOrKeepsMerge(boolp, propp)) return false;
+        const AstImplication* implp = VN_CAST(propp, Implication);
+        if (!isVacuousAtEntry(implp)) implp = negatedFixedImplication(propp);
+        if (!implp) return false;
         std::map<int, std::vector<AstNodeExpr*>> checks;
         if (!flattenFixedSeq(implp->rhsp(), 0, checks)) return false;
         if (mixedLengthsp) {
