@@ -388,6 +388,12 @@ class WidthVisitor final : public VNVisitor {
     const AstEnumItem* m_enumItemp = nullptr;  // Current enum item
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstProperty* m_propertyp = nullptr;  // Current property
+    bool m_underConcAssert = false;  // Visiting a concurrent assertion expression
+    const AstNodeSchema* m_assertDeclp = nullptr;  // Property or sequence declaration widthed
+    // Non-static class members referenced by each property or sequence declaration, reported
+    // where it is instanced
+    std::unordered_map<const AstNodeSchema*, std::vector<const AstNode*>> m_declMembers;
+    std::unordered_set<const AstNode*> m_reportedMembers;  // Members of declarations reported
     AstNodeModule* m_modep = nullptr;  // Current module
     const AstConstraint* m_constraintp = nullptr;  // Current constraint
     AstNodeProcedure* m_procedurep = nullptr;  // Current final/always
@@ -5093,6 +5099,35 @@ class WidthVisitor final : public VNVisitor {
         nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
+    // Report a non-static class member referenced in a concurrent assertion. One in a property
+    // or sequence declaration is reported where the declaration is instanced, as only there is
+    // it part of a concurrent assertion.
+    void checkConcAssertClassMember(const AstNode* nodep) {
+        if (m_underConcAssert && m_assertDeclp) {
+            m_declMembers[m_assertDeclp].push_back(nodep);
+        } else if (m_underConcAssert) {
+            reportConcAssertMember(nodep);
+        }
+    }
+    static void reportConcAssertMember(const AstNode* nodep) {
+        nodep->v3error("Concurrent assertion expression references non-static class member "
+                       << nodep->prettyNameQ() << " (IEEE 1800-2023 16.6).");
+    }
+    // At an instance of property or sequence declaration declp, its members
+    void addDeclInstanceMembers(const AstNodeSchema* declp) {
+        // Copied, as adding them to an enclosing declaration may rehash
+        const std::vector<const AstNode*> memberps = m_declMembers[declp];
+        for (const AstNode* const memberp : memberps) addDeclMember(memberp);
+    }
+    // A member of a declaration instanced here: one of the enclosing declaration, if any, else
+    // reported, once for all instances
+    void addDeclMember(const AstNode* memberp) {
+        if (m_assertDeclp) {
+            m_declMembers[m_assertDeclp].push_back(memberp);
+        } else if (m_reportedMembers.insert(memberp).second) {
+            reportConcAssertMember(memberp);
+        }
+    }
     bool memberRefClass(AstMemberRef* nodep, AstClassRefDType* adtypep) {
         if (nodep->name() == "rand_mode" || nodep->name() == "randomize") {
             AstMethodCall* const newp = new AstMethodCall{
@@ -5126,6 +5161,7 @@ class WidthVisitor final : public VNVisitor {
                                                           << nodep->prettyNameQ()
                                                           << " (IEEE 1800-2023 6.20.6)");
                     }
+                    checkConcAssertClassMember(nodep);
                     nodep->dtypep(foundp->dtypep());
                     nodep->varp(varp);
                     nodep->didWidth(true);
@@ -6236,6 +6272,7 @@ class WidthVisitor final : public VNVisitor {
                     // Resolved here, as a caller may not iterate the replacement
                     userIterate(newp, m_vup);
                 } else {
+                    checkConcAssertClassMember(nodep);
                     nodep->taskp(ftaskp);
                     nodep->dtypeFrom(ftaskp);
                     nodep->classOrPackagep(classp);
@@ -7605,9 +7642,16 @@ class WidthVisitor final : public VNVisitor {
                 untilp->replaceWith(new AstConst{untilp->fileline(), AstConst::BitFalse{}});
                 VL_DO_DANGLING(pushDeletep(untilp), untilp);
             }
-            iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);
+            {
+                VL_RESTORER(m_underConcAssert);
+                m_underConcAssert = true;
+                iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);
+            }
             userIterateAndNext(nodep->sensesp(), nullptr);
             if (nodep->disablep()) {
+                // Part of the concurrent assertion (IEEE 1800-2023 16.12)
+                VL_RESTORER(m_underConcAssert);
+                m_underConcAssert = true;
                 iterateCheckBool(nodep, "Disable", nodep->disablep(),
                                  BOTH);  // it's like an if() condition.
             }
@@ -8708,6 +8752,9 @@ class WidthVisitor final : public VNVisitor {
             nodep->didWidth(true);
             return;
         }
+        // A body widthed from a call in an assertion is not part of the assertion expression
+        VL_RESTORER(m_underConcAssert);
+        m_underConcAssert = false;
         if (nodep->classMethod() && nodep->name() == "rand_mode") {
             nodep->v3error("The 'rand_mode' method is built-in and cannot be overridden"
                            " (IEEE 1800-2023 18.8)");
@@ -8855,6 +8902,8 @@ class WidthVisitor final : public VNVisitor {
         // Temporaries made for the body are property-local variables, promoted per instance
         VL_RESTORER(m_propertyp);
         m_propertyp = nodep;
+        VL_RESTORER(m_assertDeclp);
+        m_assertDeclp = nodep;
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "PropSpec", nodep->specp(), SELF, BOTH);
         nodep->didWidth(true);
@@ -8875,6 +8924,11 @@ class WidthVisitor final : public VNVisitor {
             const AstBasicDType* const basicp = VN_CAST(varp->childDTypep(), BasicDType);
             if (basicp && basicp->implicit()) m_seqUntypedFormals.insert(varp);
         }
+        // The body is a sequence expression, whatever the context of the instance widthing it
+        VL_RESTORER(m_underConcAssert);
+        m_underConcAssert = true;
+        VL_RESTORER(m_assertDeclp);
+        m_assertDeclp = nodep;
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "SeqBody", nodep->exprp(), SELF, BOTH);
         nodep->didWidth(true);
@@ -8882,6 +8936,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstSchemaRef* nodep) override {
         if (nodep->didWidth()) return;
         userIterate(nodep->schemap(), nullptr);
+        // A property or sequence instance is part of the assertion instancing it
+        addDeclInstanceMembers(nodep->schemap());
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
             const AstVar* const portp = tconnect.first;
             const AstArg* const argp = tconnect.second;
