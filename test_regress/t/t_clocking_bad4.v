@@ -44,4 +44,13 @@ module t (
     output out3;
   endclocking
   always {cb1.out, cb3.out3} <= ##1 2'b11;
+
+  logic in4;
+  clocking cb4 @(posedge clk);
+    input #1 in4;
+  endclocking
+  // Only an input clockvar with a #1step skew can be sampled
+  assert property (@(posedge clk) cb1.in);
+  assert property (@(posedge clk) cb4.in4);
+  always @(posedge clk) if ($rose(cb4.in4)) $display(cb4.in4);
 endmodule
