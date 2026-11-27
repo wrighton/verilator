@@ -399,6 +399,26 @@ sensitivities of an ``always_comb`` either (IEEE 1800-2023 9.2.2.2.1):
 V3Assert marks the references there, and V3Task those of the bodies it
 inlines for calls there, with ``inAssertAction``.
 
+A process writing and reading parts of the same variable is no such cycle
+if the bits it reads, other than those it assigned before (in tree order),
+are not among the bits it may write, as for members of a packed structure
+written by different processes.
+``V3Sched::util::computeImplicitSensitivities`` tracks the bits of constant
+or bounded position selects, of packed values and of the elements of
+unpacked arrays, and makes such a process hybrid logic up front, with the
+bits it reads as explicit sensitivities, unless it has timing controls, or
+reads an unpacked array before writing any of it: many such processes, one
+per element, are cheaper ordered as the cycle they are when considering
+whole variables. A process that wrote bits of a variable before reading
+any, so was not sensitive to it when considering whole variables, is made
+hybrid logic also if it may write bits it reads at a position not known. If
+it reads too many parts of the variable to check one by one, it is run by a
+change of any bit of it. A cycle of such processes through bits of
+variables is not reported, but fails to converge when run. The bits a write
+at a position not known may write stay sensitivities, unlike with the
+longest static prefix of IEEE 1800-2023 9.2.2.2.1, which changes when the
+process runs, not its results.
+
 Hybrid logic is handled by ``V3Order`` mostly in the same way as
 combinational logic, with two exceptions:
 

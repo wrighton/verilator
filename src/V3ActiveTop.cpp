@@ -28,6 +28,7 @@
 #include "V3ActiveTop.h"
 
 #include "V3Const.h"
+#include "V3Sched.h"
 #include "V3SenTree.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -44,18 +45,21 @@ class ActiveTopVisitor final : public VNVisitor {
 
     // METHODS
     static bool isInitial(AstNode* nodep) {
-        const VNUser1InUse user1InUse;
+        // Bits of each variable written so far
+        std::unordered_map<const AstVarScope*, V3Sched::util::BitRanges> written;
         // Return true if no variables that read.
         return nodep->forall([&](const AstVarRef* refp) -> bool {
-            AstVarScope* const vscp = refp->varScopep();
-            // Note: Use same heuristic as ordering does to ignore written variables
+            const V3Sched::util::BitRange bits = V3Sched::util::accessedBits(refp);
+            V3Sched::util::BitRanges& writtenBits = written[refp->varScopep()];
+            // Note: Use same heuristic as ordering does to ignore written variables, of the bits
+            // written (see V3Sched::util::computeImplicitSensitivities)
             // TODO: Use live variable analysis.
             if (refp->access().isWriteOnly()) {
-                vscp->user1(true);
+                writtenBits.add(bits);
                 return true;
             }
             // Read or ReadWrite: OK if written before
-            return vscp->user1();
+            return writtenBits.covers(bits);
         });
     }
 

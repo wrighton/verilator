@@ -244,10 +244,11 @@ LogicClasses gatherLogicClasses(AstNetlist* netlistp) {
                 procp->unlinkFrBack();
                 // Only combinational logic has implicit sensitivities
                 std::unordered_set<const AstVarScope*> implicitSensitivities;
+                util::ReadRangesList triggers;
                 if (senTreep->hasCombo()) {
                     const size_t excludedBefore = selfWritten;
-                    implicitSensitivities
-                        = util::computeImplicitSensitivities(procp, soleWriters, selfWritten);
+                    implicitSensitivities = util::computeImplicitSensitivities(
+                        procp, soleWriters, selfWritten, triggers);
                     const AstAlways* const alwaysp = VN_CAST(procp, Always);
                     if (alwaysp && alwaysp->userComb() && selfWritten != excludedBefore) {
                         // An always_comb reading what it writes runs once at time zero, and then
@@ -257,18 +258,26 @@ LogicClasses gatherLogicClasses(AstNetlist* netlistp) {
                         // changes only, which also run once at time zero, when the 'act' region
                         // first runs; it is not settled in 'stl', which would run it again. One
                         // sensitive to nothing runs at time zero only.
-                        if (implicitSensitivities.empty()) {
+                        if (implicitSensitivities.empty() && triggers.empty()) {
                             result.m_initial.add({scopep, senTreep, procp, {}});
                         } else {
                             result.m_changed.add(
                                 {scopep,
-                                 util::changeSenTree(finder, procp, implicitSensitivities),
+                                 util::changeSenTree(finder, procp, implicitSensitivities,
+                                                     triggers),
                                  procp,
                                  {}});
                         }
                         continue;
                     }
                 }
+                // Logic run by changes of bits of variables it writes is hybrid logic
+                if (!triggers.empty() && logicClassp == &result.m_comb) {
+                    result.m_hybrid.add({scopep, util::changeSenTree(finder, procp, {}, triggers),
+                                         procp, std::move(implicitSensitivities)});
+                    continue;
+                }
+                for (const auto& pair : triggers) implicitSensitivities.emplace(pair.first);
                 logicClassp->add({scopep, senTreep, procp, std::move(implicitSensitivities)});
             }
             VL_DO_DANGLING(deleter.pushDeletep(activep->unlinkFrBack()), activep);

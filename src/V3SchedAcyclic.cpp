@@ -518,7 +518,9 @@ void breakCycles(AstNetlist* netlistp, LogicClasses& logicClasses) {
     if (dumpLevel() >= 6) dumpSccs(graphp.get());
 
     // Fix cuts by converting dependent logic to use hybrid sensitivities
-    logicClasses.m_hybrid = fixCuts(netlistp, logicClasses.m_comb, cutVertices);
+    for (Process& process : fixCuts(netlistp, logicClasses.m_comb, cutVertices)) {
+        logicClasses.m_hybrid.add(std::move(process));
+    }
 }
 
 }  // namespace V3Sched

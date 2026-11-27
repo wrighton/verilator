@@ -223,8 +223,156 @@ void splitCheck(AstCFunc* const ofuncp) {
     if (subFuncp) splitCheckFinishSubFunc(ofuncp, subFuncp, argVscps);
 }
 
+namespace {
+
+// The largest value an expression of a select position can have, or -1 if not known to be small
+int64_t maxPositionOf(const AstNodeExpr* nodep) {
+    constexpr int64_t LIMIT = std::numeric_limits<int32_t>::max();
+    if (const AstConst* const constp = VN_CAST(nodep, Const)) {
+        if (constp->isWide() || constp->num().isFourState()) return -1;
+        const uint64_t value = constp->toUQuad();
+        return value <= static_cast<uint64_t>(LIMIT) ? static_cast<int64_t>(value) : -1;
+    }
+    if (const AstExtend* const extendp = VN_CAST(nodep, Extend)) {
+        return maxPositionOf(extendp->lhsp());
+    }
+    if (const AstAdd* const addp = VN_CAST(nodep, Add)) {
+        const int64_t lhs = maxPositionOf(addp->lhsp());
+        const int64_t rhs = maxPositionOf(addp->rhsp());
+        if (lhs < 0 || rhs < 0 || lhs + rhs > LIMIT) return -1;
+        // The sum must not wrap around in the width of the addition
+        if (nodep->width() < 31 && lhs + rhs >= (int64_t{1} << nodep->width())) return -1;
+        return lhs + rhs;
+    }
+    if (nodep->width() < 31) return (int64_t{1} << nodep->width()) - 1;
+    return -1;
+}
+
+// The smallest value an expression of a select position can have, with a known largest value
+int64_t minPositionOf(const AstNodeExpr* nodep) {
+    if (const AstConst* const constp = VN_CAST(nodep, Const)) return maxPositionOf(constp);
+    if (const AstExtend* const extendp = VN_CAST(nodep, Extend)) {
+        return minPositionOf(extendp->lhsp());
+    }
+    if (const AstAdd* const addp = VN_CAST(nodep, Add)) {
+        return minPositionOf(addp->lhsp()) + minPositionOf(addp->rhsp());
+    }
+    return 0;
+}
+
+// The number of bits of a value of the data type, with those of the elements of an unpacked
+// array in order, or 0 if it is of another, unpacked type
+int flatWidthOf(const AstNodeDType* dtypep) {
+    dtypep = dtypep->skipRefp();
+    if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        const int64_t width = int64_t{flatWidthOf(arrayp->subDTypep())} * arrayp->elementsConst();
+        return width <= std::numeric_limits<int32_t>::max() ? static_cast<int>(width) : 0;
+    }
+    return dtypep->isIntegralOrPacked() ? dtypep->width() : 0;
+}
+
+// Call 'f' on each part of bits [lo, hi) of a value of the data type (see flatWidthOf), with
+// the indices of the elements of unpacked arrays holding it, and its data type and bits: a
+// whole value, or bits of a packed value
+void foreachBitsPart(
+    const AstNodeDType* dtypep, int lo, int hi, std::vector<int>& indices,
+    const std::function<void(const std::vector<int>&, const AstNodeDType*, int, int)>& f) {
+    dtypep = dtypep->skipRefp();
+    const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType);
+    const int elemWidth = arrayp ? flatWidthOf(arrayp->subDTypep()) : 0;
+    if (elemWidth && (lo != 0 || hi != flatWidthOf(dtypep))) {
+        for (int index = lo / elemWidth; index * elemWidth < hi; ++index) {
+            const int elemLo = index * elemWidth;
+            indices.push_back(index);
+            foreachBitsPart(arrayp->subDTypep(), std::max(lo, elemLo) - elemLo,
+                            std::min(hi, elemLo + elemWidth) - elemLo, indices, f);
+            indices.pop_back();
+        }
+        return;
+    }
+    f(indices, dtypep, lo, hi);
+}
+
+// The number of parts foreachBitsPart calls its function on, counted up to just over 'limit'
+size_t countBitsParts(const AstNodeDType* dtypep, int lo, int hi, size_t limit) {
+    dtypep = dtypep->skipRefp();
+    const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType);
+    const int elemWidth = arrayp ? flatWidthOf(arrayp->subDTypep()) : 0;
+    if (!elemWidth || (lo == 0 && hi == flatWidthOf(dtypep))) return 1;
+    size_t count = 0;
+    for (int index = lo / elemWidth; index * elemWidth < hi && count <= limit; ++index) {
+        const int elemLo = index * elemWidth;
+        count += countBitsParts(arrayp->subDTypep(), std::max(lo, elemLo) - elemLo,
+                                std::min(hi, elemLo + elemWidth) - elemLo, limit - count);
+    }
+    return count;
+}
+
+}  // namespace
+
+BitRange accessedBits(const AstVarRef* refp, bool* exactp) {
+    if (exactp) *exactp = true;
+    const AstNodeDType* dtypep = refp->varScopep()->dtypep()->skipRefp();
+    const int width = flatWidthOf(dtypep);
+    if (!width) return {0, 1};  // As a whole
+    int64_t lo = 0;
+    int64_t hi = width;
+    const AstNode* fromp = refp;
+    // Elements of unpacked arrays: each index selects an element of 'elemWidth' bits
+    while (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        const AstArraySel* const aselp = VN_CAST(fromp->backp(), ArraySel);
+        if (!aselp || aselp->fromp() != fromp) {
+            // A slice selects some of the elements
+            if (exactp && VN_IS(fromp->backp(), SliceSel)) *exactp = false;
+            return {lo, hi};
+        }
+        if (exactp) *exactp = false;
+        const int64_t maxIndex = maxPositionOf(aselp->bitp());
+        const int64_t minIndex = minPositionOf(aselp->bitp());
+        const int64_t elemWidth = flatWidthOf(arrayp->subDTypep());
+        if (maxIndex < 0 || minIndex >= arrayp->elementsConst()) return {lo, hi};
+        hi = lo + std::min<int64_t>(maxIndex + 1, arrayp->elementsConst()) * elemWidth;
+        lo += minIndex * elemWidth;
+        if (minIndex != maxIndex) return {lo, hi};
+        if (exactp) *exactp = true;
+        dtypep = arrayp->subDTypep()->skipRefp();
+        fromp = aselp;
+    }
+    // Zero extensions of the value keep the positions of its bits
+    while (const AstExtend* const extendp = VN_CAST(fromp->backp(), Extend)) {
+        if (extendp->lhsp() != fromp) break;
+        fromp = extendp;
+    }
+    const AstSel* const selp = VN_CAST(fromp->backp(), Sel);
+    if (!selp || selp->fromp() != fromp) return {lo, hi};
+    // Positions not known to be small may be anywhere in the value
+    const int64_t valueWidth = hi - lo;
+    const int64_t maxLsb = maxPositionOf(selp->lsbp());
+    const int64_t minLsb = maxLsb < 0 ? 0 : minPositionOf(selp->lsbp());
+    const int64_t selLo = std::min<int64_t>(std::max<int64_t>(minLsb, 0), valueWidth);
+    const int64_t selHi
+        = maxLsb < 0 ? valueWidth : std::min<int64_t>(maxLsb + selp->widthConst(), valueWidth);
+    if (selLo >= selHi) {
+        if (exactp) *exactp = false;
+        return {lo, hi};
+    }
+    if (exactp) *exactp = *exactp && maxLsb >= 0 && minLsb == maxLsb;
+    return {static_cast<int>(lo + selLo), static_cast<int>(lo + selHi)};
+}
+
+size_t bitsSenItemCount(const AstVarScope* vscp, const std::vector<BitRange>& ranges,
+                        size_t limit) {
+    size_t count = 0;
+    for (const BitRange& bits : ranges) {
+        if (count > limit) break;
+        count += countBitsParts(vscp->dtypep(), bits.first, bits.second, limit - count);
+    }
+    return count;
+}
+
 AstSenTree* changeSenTree(SenTreeFinder& finder, const AstNodeProcedure* procp,
-                          const std::unordered_set<const AstVarScope*>& vscps) {
+                          const std::unordered_set<const AstVarScope*>& vscps,
+                          const ReadRangesList& triggers) {
     FileLine* const flp = procp->fileline();
     AstSenItem* senItemsp = nullptr;
     std::unordered_set<const AstVarScope*> added;
@@ -235,6 +383,25 @@ AstSenTree* changeSenTree(SenTreeFinder& finder, const AstNodeProcedure* procp,
         senItemsp
             = AstNode::addNext(senItemsp, new AstSenItem{flp, VEdgeType::ET_HYBRID, newRefp});
     });
+    std::vector<int> indices;
+    for (const auto& pair : triggers) {
+        AstVarScope* const vscp = pair.first;
+        for (const BitRange& bits : pair.second) {
+            foreachBitsPart(vscp->dtypep(), bits.first, bits.second, indices,
+                            [&](const std::vector<int>& elemIndices, const AstNodeDType* dtypep,
+                                int lo, int hi) {
+                                AstNodeExpr* exprp = new AstVarRef{flp, vscp, VAccess::READ};
+                                for (const int index : elemIndices) {
+                                    exprp = new AstArraySel{flp, exprp, index};
+                                }
+                                if (lo != 0 || hi != flatWidthOf(dtypep)) {
+                                    exprp = new AstSel{flp, exprp, lo, hi - lo};
+                                }
+                                senItemsp = AstNode::addNext(
+                                    senItemsp, new AstSenItem{flp, VEdgeType::ET_HYBRID, exprp});
+                            });
+        }
+    }
     AstSenTree* const senTreep = new AstSenTree{flp, senItemsp};
     AstSenTree* const resultp = finder.getSenTree(senTreep);
     // SenTreeFinder::getSenTree clones, so clean up
@@ -274,7 +441,7 @@ SoleWriterMap computeSoleWriters(AstNetlist* netlistp) {
 
 std::unordered_set<const AstVarScope*>
 computeImplicitSensitivities(const AstNodeProcedure* procp, const SoleWriterMap& soleWriters,
-                             size_t& excludedr) {
+                             size_t& excludedr, ReadRangesList& triggersr) {
     // Dangerous assumption:
     // A variable read after the process assigned it earlier (in tree order, with a read-write
     // reference counting as an assignment) is not an implicit sensitivity, considering it
@@ -285,10 +452,17 @@ computeImplicitSensitivities(const AstNodeProcedure* procp, const SoleWriterMap&
     //      if (sometimes) foo = 1
     //      foo = foo + 1
     // TODO: Do this properly with liveness analysis (i.e.: if live, it's an implicit sensitivity)
+    // The assignment covers only the bits it may write, so a read of other bits of the variable,
+    // such as of another member of a packed structure written by another process, still is one.
     const AstAlways* const alwaysp = VN_CAST(procp, Always);
     const bool userComb = alwaysp && alwaysp->userComb();
     std::unordered_set<const AstVarScope*> implicitSensitivities;
-    std::unordered_set<const AstVarScope*> assigned;
+    std::unordered_map<const AstVarScope*, BitRanges> assigned;  // Bits it may assign so far
+    std::unordered_map<const AstVarScope*, BitRanges> exactAssigned;  // Bits it assigns all of
+    std::unordered_map<const AstVarScope*, BitRanges> readFirst;  // Bits read, unassigned
+    std::vector<AstVarScope*> readOrder;  // Variables in 'readFirst', in order
+    std::unordered_set<const AstVarScope*> readBeforeAssigned;  // Read before assigning any bit
+    constexpr size_t MAX_BITS_SENSITIVITIES = 64;  // Of a variable, see below
     // "Expressions used in assertion action blocks do not contribute to the implicit sensitivity
     // list of an always_comb" (IEEE 1800-2023 9.2.2.2.1). Variables read only there:
     std::unordered_set<const AstVarScope*> actionReads;
@@ -297,18 +471,31 @@ computeImplicitSensitivities(const AstNodeProcedure* procp, const SoleWriterMap&
     // between runs, so an always_comb reading one is not idempotent.
     std::unordered_set<const AstVarScope*> internalReads;
     const size_t excludedBefore = excludedr;
+    // A process with timing controls, even if only in forked processes, is not run on changes
+    // (see below), so for one keep considering whole variables
+    const bool precise = !procp->isSuspendable() && !procp->exists([](const AstNode* nodep) {
+        return VN_IS(nodep, Fork) || VN_IS(nodep, CAwait);
+    });
+    const BitRange wholeBits{0, std::numeric_limits<int>::max()};
     procp->foreach([&](const AstVarRef* refp) {
-        const AstVarScope* const vscp = refp->varScopep();
+        AstVarScope* const vscp = refp->varScopep();
+        bool exact = true;
+        const BitRange bits = precise ? accessedBits(refp, &exact) : wholeBits;
         if (refp->access().isWriteOrRW() && !refp->varp()->ignoreSchedWrite()) {
-            assigned.emplace(vscp);
+            assigned[vscp].add(bits);
+            if (exact) exactAssigned[vscp].add(bits);
         }
-        if (refp->access().isReadOrRW() && !assigned.count(vscp)) {
+        if (refp->access().isReadOrRW() && !assigned[vscp].covers(bits)) {
             if (refp->varp()->isInternal() && refp->varp()->ignoreSchedWrite()) {
                 internalReads.emplace(vscp);
             } else if (userComb && refp->inAssertAction()) {
                 actionReads.emplace(vscp);
             } else {
-                implicitSensitivities.emplace(vscp);
+                if (implicitSensitivities.emplace(vscp).second) readOrder.push_back(vscp);
+                if (assigned[vscp].empty()) readBeforeAssigned.emplace(vscp);
+                for (const BitRange& part : assigned[vscp].uncovered(bits)) {
+                    readFirst[vscp].add(part);
+                }
             }
         }
     });
@@ -324,9 +511,10 @@ computeImplicitSensitivities(const AstNodeProcedure* procp, const SoleWriterMap&
         unexcluded = implicitSensitivities;
         unexcluded.insert(actionReads.begin(), actionReads.end());
         unexcluded.insert(internalReads.begin(), internalReads.end());
-        for (const AstVarScope* const vscp : assigned) {
+        for (const auto& pair : assigned) {
+            const AstVarScope* const vscp = pair.first;
             const auto it = soleWriters.find(vscp);
-            if (it != soleWriters.end() && it->second == procp
+            if (!pair.second.empty() && it != soleWriters.end() && it->second == procp
                 && implicitSensitivities.erase(vscp)) {
                 ++excludedr;
             }
@@ -351,6 +539,44 @@ computeImplicitSensitivities(const AstNodeProcedure* procp, const SoleWriterMap&
     VarScopeSet forceReadEdgeIgnores;
     collectForceReadEdgeIgnores(procp, forceReadEdgeIgnores);
     for (const AstVarScope* const vscp : forceReadEdgeIgnores) implicitSensitivities.erase(vscp);
+    // A variable the process also writes is a combinational cycle through the process, unless
+    // the bits it reads are not ones it may write ('assigned' now has all of those): it then only
+    // reads bits other processes write. Instead of being ordered after its writers, the process
+    // is then run on changes of those bits. Not so for an unpacked array: processes each reading
+    // elements before writing others are cheaper as the cycle they are when considering whole
+    // variables, which is correct for them. A process that wrote bits of the variable before
+    // reading any, so was not sensitive to it when considering whole variables, which is the
+    // case this fixes, is run on changes of the bits it reads also if it may write some of them
+    // at a position not known, which would otherwise newly be a cycle. It is run on changes of
+    // the bits it reads other than those it writes at known positions, as it is not sensitive to
+    // what it writes itself (IEEE 1800-2023 9.2.2.2.1), though it is to the bits a write at an
+    // unknown position may write, unlike with the longest static prefix of IEEE, which changes
+    // when it runs, not what it computes. Such processes in a cycle through bits of variables
+    // are not reported as one, but fail to converge when run.
+    for (AstVarScope* const vscp : readOrder) {
+        const BitRanges& writtenBits = assigned[vscp];
+        const BitRanges& readBits = readFirst[vscp];
+        if (!precise || !implicitSensitivities.count(vscp) || writtenBits.empty()) continue;
+        if (readBeforeAssigned.count(vscp)
+            && (writtenBits.intersects(readBits)
+                || VN_IS(vscp->dtypep()->skipRefp(), UnpackArrayDType))) {
+            continue;
+        }
+        std::vector<BitRange> bits;
+        for (const BitRange& range : readBits.ranges()) {
+            for (const BitRange& part : exactAssigned[vscp].uncovered(range)) {
+                bits.push_back(part);
+            }
+        }
+        implicitSensitivities.erase(vscp);
+        if (bits.empty()) continue;
+        // Too many to check one by one, as across many elements of an unpacked array: run it on
+        // a change of any bit, so also again after a change it makes itself
+        if (bitsSenItemCount(vscp, bits, MAX_BITS_SENSITIVITIES) > MAX_BITS_SENSITIVITIES) {
+            bits = {{0, flatWidthOf(vscp->dtypep())}};
+        }
+        triggersr.emplace_back(vscp, std::move(bits));
+    }
     return implicitSensitivities;
 }
 
