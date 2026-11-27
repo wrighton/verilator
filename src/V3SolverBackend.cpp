@@ -109,3 +109,10 @@ AstNodeDType* RandomizeUtil::arrayElementDTypep(AstNodeDType* dtypep) {
     while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefToEnump();
     return dtypep;
 }
+
+bool RandomizeUtil::isClassHandleArray(AstVar* varp) {
+    AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+    if (!dtypep->isNonPackedArray()) return false;
+    while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
+    return VN_IS(dtypep, ClassRefDType);
+}
