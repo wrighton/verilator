@@ -114,13 +114,14 @@
 //
 // Ordinary non-wired, non-I/O interface NETs also retain each driver's computed DATA/EN and
 // captured strength0/strength1. Asymmetric continuous drivers first split their enable into
-// EN&~DATA at strength0 and EN&DATA at strength1. Within one module/target/dotted/inlined/modport
+// EN&~DATA at strength0 and EN&DATA at strength1. Within one module/target/instance/modport
 // source context, actual-rank buckets then OR DATA&EN and EN, emitting one pair per occupied rank.
 // Local rank pairs live in the interface; external pairs write interface contribution slots.
 // The receiver masks weaker contributions per bit with cumulative higher-rank active enables.
 // Equal-rank DATA uses the existing two-state OR approximation, not general X resolution.
-// Distinct inlined contexts, including generate iterations, are not coalesced; repeated instances
-// of one driving module on one target can still share template slots.
+// An instance is identified by its path from the module, so drivers in different named blocks or
+// generate iterations reaching one instance share a source context; repeated instances of one
+// driving module on one target can still share template slots.
 //
 // There is a possible problem with equally strong assignments, because multiple assignments with
 // the same strength, but different values should result in x value, but these values are
@@ -533,6 +534,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     //
     AstNodeModule* m_modp = nullptr;  // Current module
     AstCell* m_cellp = nullptr;  // current cell
+    std::unordered_set<string> m_declNames;  // Names declared in current module, as flattened
     VarMap m_lhsmap;  // Tristate left-hand-side driver map
     VarToAssignsMap m_assigns;  // Assigns in current module
     // Variables the assignments in current module forward each variable's value to
@@ -614,6 +616,22 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstVarXRef* const xrefp = new AstVarXRef{fl, varp, dotted, access};
         xrefp->inlinedDots(inlinedDots);
         return xrefp;
+    }
+    // Return the path from the module to the instance a reference starts from, to group the
+    // drivers of one instance. Like V3LinkDot's findInlinedDotsSym and findDotted, look up the
+    // first dotted component in the nearest enclosing scope declaring it, from the innermost
+    // block in inlinedDots outward to the module (IEEE 1800-2023 23.9).
+    string ifaceInstancePath(const AstVarXRef* xrefp) const {
+        const string dotted = xrefp->dotted();
+        const string first = dotted.substr(0, dotted.find('.'));
+        string scope = xrefp->inlinedDots();
+        while (!scope.empty() && !m_declNames.count(scope + "__DOT__" + first)) {
+            const size_t pos = scope.rfind("__DOT__");
+            scope.resize(pos == string::npos ? 0 : pos);
+        }
+        if (!scope.empty()) return AstNode::dedotName(scope) + "." + dotted;
+        // Declared nowhere in the module, so the path may start with the module's own name
+        return first == m_modp->origName() ? dotted.substr(first.size() + 1) : dotted;
     }
     // Check if a module accesses an interface through a modport, by looking up
     // the first component of the dotted path among the module's interface port vars.
@@ -1204,21 +1222,24 @@ class TristateVisitor final : public TristateBaseVisitor {
                     // Mark here too, so a net made tristate only by an external 'z driver
                     // still captures a plain cross-hierarchy driver processed later.
                     m_varAux(invarp).ifaceTristate = true;
-                    // Interface tristate vars: drivers from different interface instances
-                    // (different VarXRef dotted paths) must be processed separately.
+                    // Interface tristate vars: drivers of different interface instances must be
+                    // processed separately, and drivers of one instance together.
                     // E.g. io_ifc.d and io_ifc_local.d both target the same AstVar d in
                     // the ifc interface, but each instance needs its own contribution slot.
-                    using IfacePath = std::pair<string, string>;  // Dotted and inlined paths
-                    std::map<IfacePath, RefStrengthVec> partitions;
+                    std::map<string, RefStrengthVec> partitions;  // By path from the module
                     for (const RefStrength& rs : *refsp) {
                         // Before Scope, a reference to another module is a resolved VarXRef.
-                        AstVarXRef* const xrefp = VN_AS(rs.m_varrefp, VarXRef);
-                        partitions[{xrefp->dotted(), xrefp->inlinedDots()}].push_back(rs);
+                        partitions[ifaceInstancePath(VN_AS(rs.m_varrefp, VarXRef))].push_back(rs);
                     }
                     for (auto& kv : partitions) {
-                        insertTristatesSignal(nodep, invarp, &kv.second, true, kv.first.first,
-                                              kv.first.second,
-                                              findModportForDotted(nodep, kv.first.first));
+                        // Slot writes reuse a driver's dotted path and scope, so V3LinkDot
+                        // resolves them like that driver's path. The grouping relies on
+                        // ifaceInstancePath matching V3LinkDot, see the shadow tests.
+                        const AstVarXRef* const xrefp
+                            = VN_AS(kv.second.front().m_varrefp, VarXRef);
+                        insertTristatesSignal(nodep, invarp, &kv.second, true, xrefp->dotted(),
+                                              xrefp->inlinedDots(),
+                                              findModportForDotted(nodep, kv.first));
                     }
                 } else if (VN_IS(nodep, Iface) && !invarp->isIO()) {
                     // Local driver in an interface module - use contribution mechanism
@@ -3413,6 +3434,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstVarXRef* nodep) override { handleNodeVarRef(nodep); }
 
     void visit(AstVar* nodep) override {
+        m_declNames.emplace(nodep->name());
         iterateChildren(nodep);
         UINFO(9, dbgState() << nodep);
         if (m_graphing) {
@@ -3454,6 +3476,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         VL_RESTORER(m_modp);
         VL_RESTORER(m_graphing);
         VL_RESTORER(m_unique);
+        VL_RESTORER_CLEAR(m_declNames);
         VL_RESTORER_CLEAR(m_lhsmap);
         VL_RESTORER_CLEAR(m_assigns);
         VL_RESTORER_CLEAR(m_valueReaders);
@@ -3521,8 +3544,10 @@ class TristateVisitor final : public TristateBaseVisitor {
         VL_RESTORER(m_alhs);
         m_cellp = nodep;
         m_alhs = false;
+        m_declNames.emplace(nodep->name());
         iterateChildren(nodep);
     }
+    void visit(AstCellInline* nodep) override { m_declNames.emplace(nodep->name()); }
 
     // Default: Just iterate
     // A constant index of a dynamic, queue or associative array element drives nothing, so its
