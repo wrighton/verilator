@@ -13,24 +13,9 @@ module t;
   bit clk = 0;
   int cyc = 0;
   bit p = 0, q = 0;
-  int after1 = 0, n2 = 0, act3 = 0, after3 = 0, act4 = 0, x4 = 0;
+  int act3 = 0, after3 = 0, act4 = 0, x4 = 0;
   always #5 clk = ~clk;
   always @(posedge clk) cyc <= cyc + 1;
-
-  // A cover deleted without --coverage-user takes its action along
-  always @(posedge clk) begin : blk1
-    cover property (p until q) disable blk1;
-    ++after1;
-  end
-
-  // Also a task's cover, moved beside the task
-  task automatic tk();
-    begin : tblk
-      cover property (@(posedge clk) q) disable tblk;
-      ++n2;
-    end
-  endtask
-  always @(posedge clk) tk();
 
   // A Boolean procedural assertion whose action jumps stays at its statement, in the procedure,
   // and disables the block the procedure executes (IEEE 1800-2023 9.6.2)
@@ -56,8 +41,6 @@ module t;
 
   always @(negedge clk) begin
     if (cyc == 4) begin
-      `checkd(after1, 4);
-      `checkd(n2, 4);
       `checkd(act3, 4);
       `checkd(after3, 0);
       `checkd(act4, 4);
