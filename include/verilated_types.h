@@ -613,6 +613,136 @@ template <typename T_Class>
 class VlClassRef;
 
 //===================================================================
+// Elements of dynamically sized containers passed to ref arguments
+//
+// IEEE 1800-2023 13.5.2 requires such a reference to stay bound to its element: the element
+// continues to exist until the call completes, also when it is removed from the container, as
+// an outdated reference whose changes are not seen in the container. The call passes a
+// VlRefPin, a temporary of the call's full-expression, so it lives until the call completes,
+// across any suspension, and links the element to the VlRefState of its container, which the
+// container allocates with its first pin. Before an operation would destroy a pinned element,
+// or move one to another place in the storage, the container gives its whole storage to a
+// VlRefKept shared by all its pins, outdating them, and continues with a copy. The work for
+// pinned elements is in functions that only pins refer to, so it is compiled only for the
+// containers whose elements a model passes by reference; work that does not depend on the
+// type is in verilated.cpp.
+
+class VlRefCounts;
+class VlRefState;
+
+// What keeps outdated elements alive; deleted with the last pin referring to it
+class VlRefKept VL_NOT_FINAL {
+public:
+    size_t m_pins = 0;  // Pins referring to it
+    virtual ~VlRefKept() = default;
+};
+
+// Element passed to a ref argument, see VlRefPin
+class VlRefPinBase VL_NOT_FINAL {
+    friend class VlRefState;
+    const void* const m_elemp;  // Element passed by reference
+    VlRefState* m_statep;  // Pins of the container, nullptr once outdated
+    VlRefPinBase* m_prevp = nullptr;  // Previous pin of the container, nullptr if the first
+    VlRefPinBase* m_nextp = nullptr;  // Next pin of the container
+    VlRefKept* m_keptp = nullptr;  // What keeps the element alive, once outdated
+    void release() VL_MT_UNSAFE;
+
+protected:
+    inline VlRefPinBase(VlRefState& state, const void* elemp) VL_MT_UNSAFE;
+    inline ~VlRefPinBase() VL_MT_UNSAFE;
+    const void* elemp() const { return m_elemp; }
+
+public:
+    VlRefPinBase(const VlRefPinBase&) = delete;
+    VlRefPinBase& operator=(const VlRefPinBase&) = delete;
+};
+
+// Element passed to a ref argument; T_Value is const for a const ref argument
+template <typename T_Value>
+class VlRefPin final : public VlRefPinBase {
+public:
+    VlRefPin(VlRefState& state, T_Value& elem)
+        : VlRefPinBase{state, &elem} {}
+    operator T_Value&() const { return elem(); }
+    // The element, also for a select within it, e.g. of a member of a struct element
+    T_Value& elem() const { return *const_cast<T_Value*>(static_cast<const T_Value*>(elemp())); }
+};
+
+// Pins of the elements of a container
+class VlRefState final {
+    friend class VlRefPinBase;
+    // Pins found by walking the list; with more, the number of pins of each element is kept
+    static constexpr size_t MAX_WALKED_PINS = 8;
+    VlRefPinBase* m_pinsp = nullptr;  // Most recent pin
+    size_t m_pins = 0;  // Number of pins
+    VlRefCounts* m_countsp = nullptr;  // Pins of each element, once there were more than walked
+
+    void link(VlRefPinBase* pinp) VL_MT_UNSAFE {
+        pinp->m_nextp = m_pinsp;
+        if (m_pinsp) m_pinsp->m_prevp = pinp;
+        m_pinsp = pinp;
+        if (VL_UNLIKELY(++m_pins > MAX_WALKED_PINS || m_countsp)) count(pinp->m_elemp);
+    }
+    void unlink(VlRefPinBase* pinp) VL_MT_UNSAFE {
+        if (pinp->m_prevp) {
+            pinp->m_prevp->m_nextp = pinp->m_nextp;
+        } else {
+            m_pinsp = pinp->m_nextp;
+        }
+        if (pinp->m_nextp) pinp->m_nextp->m_prevp = pinp->m_prevp;
+        --m_pins;
+        if (VL_UNLIKELY(m_countsp)) uncount(pinp->m_elemp);
+    }
+    void count(const void* elemp) VL_MT_UNSAFE;
+    void uncount(const void* elemp) VL_MT_UNSAFE;
+    bool counted(const void* elemp) const VL_MT_UNSAFE;
+
+public:
+    const void* const m_opsp;  // Functions of the container for pinned elements
+
+    explicit VlRefState(const void* opsp)
+        : m_opsp{opsp} {}
+    ~VlRefState();
+    VlRefState(const VlRefState&) = delete;
+    VlRefState& operator=(const VlRefState&) = delete;
+    bool any() const { return m_pinsp; }
+    // Whether an element is pinned
+    bool has(const void* elemp) const VL_MT_UNSAFE {
+        if (VL_UNLIKELY(m_countsp)) return counted(elemp);
+        for (const VlRefPinBase* pinp = m_pinsp; pinp; pinp = pinp->m_nextp) {
+            if (pinp->m_elemp == elemp) return true;
+        }
+        return false;
+    }
+    // Outdate all pins, giving them keptp
+    void outdate(VlRefKept* keptp) VL_MT_UNSAFE;
+    // Append the pinned elements, sorted, to an empty vector
+    void pinnedElements(std::vector<const void*>& elemps) const VL_MT_UNSAFE;
+};
+
+VlRefPinBase::VlRefPinBase(VlRefState& state, const void* elemp) VL_MT_UNSAFE : m_elemp{elemp},
+                                                                                m_statep{&state} {
+    state.link(this);
+}
+
+VlRefPinBase::~VlRefPinBase() VL_MT_UNSAFE {
+    if (VL_LIKELY(m_statep)) {
+        m_statep->unlink(this);
+    } else {
+        release();
+    }
+}
+
+// Storage of outdated elements
+template <typename T_Storage>
+class VlRefStorage final : public VlRefKept {
+public:
+    T_Storage m_storage;  // The storage, its pinned elements where they were
+    explicit VlRefStorage(T_Storage&& from)
+        : m_storage{std::move(from)} {}
+};
+
+//===================================================================
 // Verilog queue and dynamic array container
 // There are no multithreaded locks on this; the base variable must
 // be protected by other means
@@ -637,12 +767,131 @@ private:
     // MEMBERS
     Deque m_deque;  // State of the assoc array
     T_Value m_defaultValue{};  // Default value
+    // Pins of elements passed by reference, from the first, see VlRefState
+    mutable std::unique_ptr<VlRefState> m_refsp;
 
     // METHODS
+    // Functions for pinned elements, called through the pins' state rather than directly so
+    // that only the containers whose elements are passed by reference compile them
+    struct RefOps final {
+        void (*outdate)(VlQueue& q, bool keepContents);
+        void (*erase)(VlQueue& q, int32_t index);
+        void (*insert)(VlQueue& q, int32_t index, const T_Value& value);
+    };
+    static const RefOps s_refOps;
+    const RefOps& refOps() const { return *static_cast<const RefOps*>(m_refsp->m_opsp); }
+    VlRefState& refState() const {
+        if (VL_UNLIKELY(!m_refsp)) m_refsp.reset(new VlRefState{&s_refOps});
+        return *m_refsp;
+    }
+    // Give the storage to the pins, outdating them, and continue with a copy of it, or nothing
+    static void refOutdate(VlQueue& q, bool keepContents) {
+        VlRefStorage<Deque>* const keptp = new VlRefStorage<Deque>{std::move(q.m_deque)};
+        q.m_deque = keepContents ? keptp->m_storage : Deque{};
+        refTrim(*q.m_refsp, keptp->m_storage);
+        q.m_refsp->outdate(keptp);
+    }
+    // Erase the elements of a kept storage before the first and after the last pinned one, so
+    // that what repeated removals keep is the pinned elements, with what the deque keeps to
+    // index its blocks; erasing at the ends of a deque leaves the other elements in place
+    static void refTrim(const VlRefState& state, Deque& kept) {
+        std::vector<const void*> pinned;
+        state.pinnedElements(pinned);
+        const std::less<const void*> less;
+        const size_t size = kept.size();
+        size_t first = size;  // Index of the first pinned element
+        size_t last = 0;  // Index of the last pinned element
+        // Walk the runs of contiguous elements, finding the pinned elements in each
+        typename Deque::const_iterator it = kept.cbegin();
+        size_t index = 0;
+        while (index < size) {
+            const T_Value* const runp = &*it;
+            size_t count = 1;
+            for (++it; index + count < size && &*it == runp + count; ++it) ++count;
+            const auto lo = std::lower_bound(pinned.begin(), pinned.end(), runp, less);
+            const auto hi = std::lower_bound(lo, pinned.end(), runp + count, less);
+            if (lo != hi) {
+                if (first == size) first = index + (static_cast<const T_Value*>(*lo) - runp);
+                last = index + (static_cast<const T_Value*>(*(hi - 1)) - runp);
+            }
+            index += count;
+        }
+        if (first == size) return kept.clear();
+        kept.erase(kept.begin() + last + 1, kept.end());
+        kept.erase(kept.begin(), kept.begin() + first);
+    }
+    // Whether an element at an index in [first, last) is pinned
+    bool refPinnedIn(size_t first, size_t last) const {
+        for (size_t i = first; i < last; ++i) {
+            if (m_refsp->has(&m_deque[i])) return true;
+        }
+        return false;
+    }
+    // Move the element at index 'from' to index 'to', shifting the elements between
+    void refMove(size_t from, size_t to) {
+        T_Value value{std::move(m_deque[from])};
+        for (; from > to; --from) m_deque[from] = std::move(m_deque[from - 1]);
+        for (; from < to; ++from) m_deque[from] = std::move(m_deque[from + 1]);
+        m_deque[to] = std::move(value);
+    }
+    // Erase or insert by shifting the side holding no pinned element, so the references to the
+    // others stay bound. If both sides hold one, all references are outdated instead, as a deque
+    // cannot keep them all in place, which deviates from IEEE 1800-2023 7.10.3.
+    static void refErase(VlQueue& q, int32_t index) {
+        const size_t size = q.m_deque.size();
+        if (q.m_refsp->has(&q.m_deque[index])) {
+            refOutdate(q, true);
+            q.m_deque.erase(q.m_deque.begin() + index);
+        } else if (!q.refPinnedIn(0, index)) {
+            q.refMove(index, 0);
+            q.m_deque.pop_front();
+        } else if (!q.refPinnedIn(index + 1, size)) {
+            q.refMove(index, size - 1);
+            q.m_deque.pop_back();
+        } else {
+            refOutdate(q, true);
+            q.m_deque.erase(q.m_deque.begin() + index);
+        }
+    }
+    static void refInsert(VlQueue& q, int32_t index, const T_Value& value) {
+        const size_t size = q.m_deque.size();
+        if (!q.refPinnedIn(0, index)) {
+            q.m_deque.push_front(value);
+            q.refMove(0, index);
+        } else if (!q.refPinnedIn(index, size)) {
+            q.m_deque.push_back(value);
+            q.refMove(size, index);
+        } else {
+            refOutdate(q, true);
+            q.m_deque.insert(q.m_deque.begin() + index, value);
+        }
+    }
+    // Before the storage is replaced: outdate the pins, keeping the contents or not
+    VL_ATTR_NOINLINE void refReplacing(bool keepContents) {
+        if (m_refsp->any()) refOps().outdate(*this, keepContents);
+        m_refsp.reset();
+    }
+    // Before the elements at indices in [first, last) are removed: outdate the pins if any of
+    // them is pinned, as a pinned element continues to exist
+    VL_ATTR_NOINLINE void refRemoving(size_t first, size_t last) {
+        if (m_refsp->any() && refPinnedIn(first, last)) refOps().outdate(*this, true);
+        if (!m_refsp->any()) m_refsp.reset();
+    }
+    VL_ATTR_NOINLINE void refErasing(int32_t index) {
+        if (m_refsp->any()) return refOps().erase(*this, index);
+        m_refsp.reset();
+        m_deque.erase(m_deque.begin() + index);
+    }
+    VL_ATTR_NOINLINE void refInserting(int32_t index, const T_Value& value) {
+        if (m_refsp->any()) return refOps().insert(*this, index, value);
+        m_refsp.reset();
+        m_deque.insert(m_deque.begin() + index, value);
+    }
     // Discard elements beyond the bound, with the warning IEEE 1800-2023 7.10.5 requires
     void applyBound() {
         if (VL_UNLIKELY(N_MaxSize && N_MaxSize < m_deque.size())) {
             Verilated::queueBoundError(N_MaxSize, m_deque.size());
+            if (VL_UNLIKELY(m_refsp)) refRemoving(N_MaxSize, m_deque.size());
             m_deque.resize(N_MaxSize);
         }
     }
@@ -686,11 +935,35 @@ public:
     // CONSTRUCTORS
     // cppcheck-suppress uninitMemberVar // m_defaultValue isn't defaulted, caller must
     VlQueue() = default;
-    ~VlQueue() = default;
-    VlQueue(const VlQueue&) = default;
-    VlQueue(VlQueue&&) = default;
-    VlQueue& operator=(const VlQueue&) = default;
-    VlQueue& operator=(VlQueue&&) = default;
+    ~VlQueue() {
+        if (VL_UNLIKELY(m_refsp)) refReplacing(false);
+    }
+    // Pins stay with the storage they are in, so they are not copied or moved
+    VlQueue(const VlQueue& rhs)
+        : m_deque{rhs.m_deque}
+        , m_defaultValue{rhs.m_defaultValue} {}
+    VlQueue(VlQueue&& rhs)
+        : m_defaultValue{rhs.m_defaultValue} {
+        if (VL_UNLIKELY(rhs.m_refsp)) rhs.refReplacing(true);
+        m_deque = std::move(rhs.m_deque);
+    }
+    VlQueue& operator=(const VlQueue& rhs) {
+        if (this != &rhs) {
+            if (VL_UNLIKELY(m_refsp)) refReplacing(false);
+            m_deque = rhs.m_deque;
+            m_defaultValue = rhs.m_defaultValue;
+        }
+        return *this;
+    }
+    VlQueue& operator=(VlQueue&& rhs) {
+        if (this != &rhs) {
+            if (VL_UNLIKELY(m_refsp)) refReplacing(false);
+            if (VL_UNLIKELY(rhs.m_refsp)) rhs.refReplacing(true);
+            m_deque = std::move(rhs.m_deque);
+            m_defaultValue = rhs.m_defaultValue;
+        }
+        return *this;
+    }
 
     // Template constuctors that construct from containers holding sub-classes
     template <typename T_Subclass>
@@ -741,6 +1014,7 @@ public:
     // Also must allow conversion from a different N_MaxSize queue
     template <size_t N_RhsMaxSize = 0>
     VlQueue operator=(const VlQueue<T_Value, N_RhsMaxSize>& rhs) {
+        if (VL_UNLIKELY(m_refsp)) refReplacing(false);
         m_deque = rhs.privateDeque();
         applyBound();
         return *this;
@@ -754,10 +1028,14 @@ public:
     // Size. Verilog: function int size(), or int num()
     int size() const { return m_deque.size(); }
     // Clear array. Verilog: function void delete([input index])
-    void clear() { m_deque.clear(); }
+    void clear() {
+        if (VL_UNLIKELY(m_refsp)) refReplacing(false);
+        m_deque.clear();
+    }
     void erase(int32_t index) {
-        if (VL_LIKELY(index >= 0 && index < m_deque.size()))
-            m_deque.erase(m_deque.begin() + index);
+        if (VL_UNLIKELY(index < 0 || index >= m_deque.size())) return;
+        if (VL_UNLIKELY(m_refsp)) return refErasing(index);
+        m_deque.erase(m_deque.begin() + index);
     }
 
     // Dynamic array new[] becomes a renew()
@@ -770,6 +1048,7 @@ public:
         if (size == 0) {
             clear();
         } else {
+            if (VL_UNLIKELY(m_refsp)) refReplacing(&rhs == this);
             *this = rhs;
             resize(size);
         }
@@ -779,6 +1058,7 @@ public:
     void renew_copy(size_t size, const VlUnpacked<T_UnpackedValue, N_UnpackedDepth>& rhs);
 
     void resize(size_t size) {
+        if (VL_UNLIKELY(m_refsp) && size < m_deque.size()) refRemoving(size, m_deque.size());
         if (VlIsEvent<T_Value>::value) {
             m_deque.resize(size);
         } else {
@@ -788,6 +1068,7 @@ public:
     // Assign the elements of a range, as DPI does from a C layout copy
     template <typename T_Iterator>
     void assign(const T_Iterator& first, const T_Iterator& last) {
+        if (VL_UNLIKELY(m_refsp)) refReplacing(false);
         m_deque.assign(first, last);
         applyBound();
     }
@@ -805,6 +1086,7 @@ public:
     // function value_t q.pop_front();
     T_Value pop_front() {
         if (m_deque.empty()) return m_defaultValue;
+        if (VL_UNLIKELY(m_refsp)) refRemoving(0, 1);
         T_Value v = m_deque.front();
         m_deque.pop_front();
         return v;
@@ -812,6 +1094,7 @@ public:
     // function value_t q.pop_back();
     T_Value pop_back() {
         if (m_deque.empty()) return m_defaultValue;
+        if (VL_UNLIKELY(m_refsp)) refRemoving(m_deque.size() - 1, m_deque.size());
         T_Value v = m_deque.back();
         m_deque.pop_back();
         return v;
@@ -851,11 +1134,23 @@ public:
     // Access with an index counted from end (e.g. q[$])
     T_Value& atWriteAppendBack(int32_t index) { return atWriteAppend(m_deque.size() - 1 - index); }
     const T_Value& atBack(int32_t index) const { return at(m_deque.size() - 1 - index); }
+    // Element passed to a ref argument, see VlRefPin
+    VlRefPin<T_Value> atWriteRef(int32_t index) { return {refState(), atWrite(index)}; }
+    VlRefPin<T_Value> atWriteAppendRef(int32_t index) {
+        return {refState(), atWriteAppend(index)};
+    }
+    VlRefPin<T_Value> atWriteAppendBackRef(int32_t index) {
+        return {refState(), atWriteAppendBack(index)};
+    }
 
     // function void q.insert(index, value);
     void insert(int32_t index, const T_Value& value) {
         if (VL_UNLIKELY(index < 0 || index > m_deque.size())) return;
-        m_deque.insert(m_deque.begin() + index, value);
+        if (VL_UNLIKELY(m_refsp)) {
+            refInserting(index, value);
+        } else {
+            m_deque.insert(m_deque.begin() + index, value);
+        }
         applyBound();
     }
 
@@ -1995,6 +2290,10 @@ std::string VL_TO_STRING(const VlUnpacked<T_Value, N_Depth>& obj) {
 
 template <typename T_Value, std::size_t N_Depth>
 struct VlContainsCustomStruct<VlUnpacked<T_Value, N_Depth>> : VlContainsCustomStruct<T_Value> {};
+
+template <typename T_Value, size_t N_MaxSize>
+const typename VlQueue<T_Value, N_MaxSize>::RefOps VlQueue<T_Value, N_MaxSize>::s_refOps
+    = {&refOutdate, &refErase, &refInsert};
 
 template <typename T_Value, size_t N_MaxSize>
 template <typename T_UnpackedValue, std::size_t N_UnpackedDepth>

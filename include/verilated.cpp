@@ -68,6 +68,7 @@
 #include <list>
 #include <memory>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 
 #include <sys/stat.h>  // mkdir
@@ -4137,6 +4138,60 @@ void Verilated::queueBoundError(size_t maxSize, size_t attemptedSize) VL_MT_SAFE
                             + " exceeds maximum size " + std::to_string(maxSize)
                             + ", discarding out-of-bounds elements (IEEE 1800-2023 7.10.5)";
     VL_WARN_MT("", 0, "", msg.c_str());
+}
+
+//===========================================================================
+// Elements of dynamically sized containers passed to ref arguments (see verilated_types.h)
+
+class VlRefCounts final {
+public:
+    std::unordered_map<const void*, size_t> m_counts;  // Pins of each pinned element
+};
+
+void VlRefPinBase::release() VL_MT_UNSAFE {
+    if (--m_keptp->m_pins == 0) delete m_keptp;
+}
+
+VlRefState::~VlRefState() { delete m_countsp; }
+
+void VlRefState::count(const void* elemp) VL_MT_UNSAFE {
+    if (m_countsp) {
+        ++m_countsp->m_counts[elemp];
+        return;
+    }
+    m_countsp = new VlRefCounts;
+    for (const VlRefPinBase* pinp = m_pinsp; pinp; pinp = pinp->m_nextp) {
+        ++m_countsp->m_counts[pinp->m_elemp];
+    }
+}
+
+void VlRefState::uncount(const void* elemp) VL_MT_UNSAFE {
+    const auto it = m_countsp->m_counts.find(elemp);
+    if (--it->second == 0) m_countsp->m_counts.erase(it);
+}
+
+bool VlRefState::counted(const void* elemp) const VL_MT_UNSAFE {
+    return m_countsp->m_counts.count(elemp);
+}
+
+void VlRefState::pinnedElements(std::vector<const void*>& elemps) const VL_MT_UNSAFE {
+    elemps.reserve(m_pins);
+    for (const VlRefPinBase* pinp = m_pinsp; pinp; pinp = pinp->m_nextp) {
+        elemps.push_back(pinp->m_elemp);
+    }
+    std::sort(elemps.begin(), elemps.end(), std::less<const void*>{});
+}
+
+void VlRefState::outdate(VlRefKept* keptp) VL_MT_UNSAFE {
+    for (VlRefPinBase* pinp = m_pinsp; pinp; pinp = pinp->m_nextp) {
+        pinp->m_statep = nullptr;
+        pinp->m_keptp = keptp;
+        ++keptp->m_pins;
+    }
+    m_pinsp = nullptr;
+    m_pins = 0;
+    VL_DO_CLEAR(delete m_countsp, m_countsp = nullptr);
+    if (!keptp->m_pins) delete keptp;
 }
 
 void Verilated::scTimePrecisionError(int sc_prec, int vl_prec) VL_MT_SAFE {
