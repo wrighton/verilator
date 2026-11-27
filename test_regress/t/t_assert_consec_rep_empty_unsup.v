@@ -11,5 +11,6 @@ module t (
 
   // Legal, never matches (IEEE 1800-2023 16.9.2.1), but [*0] next to ##0 is unsupported
   assert property (@(posedge clk) a [*0] ##0 a |-> 1);
+  assert property (@(posedge clk) a ##1 a [*0] ##0 a |-> 1);
 
 endmodule
