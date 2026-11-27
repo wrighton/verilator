@@ -1300,7 +1300,8 @@ class AstCvtArrayToArray final : public AstNodeExpr {
     // @astgen op1 := fromp : AstNodeExpr
 private:
     const bool m_reverse;  // whether ordering gets reversed in this operation (ex: {<<{expr}})
-    const int m_blockSize;  // num bits per block in a streaming operation (ex: 4 in {<<4{expr}}))
+    const uint32_t
+        m_blockSize;  // num bits per block in a streaming operation (ex: 4 in {<<4{expr}}))
     const int m_dstElementBits;  // num bits in lhs (ex: 8 if to byte-queue, 1 if to bit-queue)
     const int m_srcElementBits;  // num bits in rhs (ex 8 if from byte-queue, 1 if from bit-queue)
 
@@ -1308,7 +1309,7 @@ public:
     // cppcheck-suppress constParameterPointer
     // cppcheck-suppress constParameterCallback
     AstCvtArrayToArray(FileLine* fl, AstNodeExpr* fromp, AstNodeDType* dtp, bool reverse,
-                       int blockSize, int dstElementBits, int srcElementBits)
+                       uint32_t blockSize, int dstElementBits, int srcElementBits)
         : ASTGEN_SUPER_CvtArrayToArray(fl)
         , m_reverse{reverse}
         , m_blockSize{blockSize}
@@ -1330,7 +1331,7 @@ public:
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return true; }
     bool reverse() const { return m_reverse; }
-    int blockSize() const { return m_blockSize; }
+    uint32_t blockSize() const { return m_blockSize; }
     int dstElementBits() const { return m_dstElementBits; }
     int srcElementBits() const { return m_srcElementBits; }
 };

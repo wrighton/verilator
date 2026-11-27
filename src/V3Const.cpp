@@ -1008,6 +1008,10 @@ class ConstVisitor final : public VNVisitor {
         return !numv.isNumber() ? numv : V3Number{nodep, nodep->width(), numv};
     }
 
+    // The slice size of a stream, which V3Width made a positive 32-bit constant
+    static uint32_t streamBlockSize(const AstNodeStream* streamp) {
+        return VN_AS(streamp->rhsp(), Const)->toUInt();
+    }
     static bool lowerAsFixedAggregate(const AstNodeDType* const dtypep) {
         return dtypep->isStreamableFixedAggregate() && dtypep->containsUnpackedStruct();
     }
@@ -2762,12 +2766,7 @@ class ConstVisitor final : public VNVisitor {
             if ((VN_IS(srcDTypep, UnpackArrayDType) || VN_IS(srcDTypep, QueueDType)
                  || VN_IS(srcDTypep, DynArrayDType))
                 && (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType))) {
-                int blockSize = 1;
-                if (const AstConst* const constp
-                    = VN_CAST(VN_AS(streamp, StreamL)->rhsp(), Const)) {
-                    blockSize = constp->toSInt();
-                    if (VL_UNLIKELY(blockSize <= 0)) blockSize = 1;
-                }
+                const uint32_t blockSize = streamBlockSize(VN_AS(streamp, StreamL));
                 int srcElementBits = 0;
                 if (const AstNodeDType* const elemDtp = srcDTypep->subDTypep()) {
                     srcElementBits = elemDtp->width();
@@ -2916,24 +2915,7 @@ class ConstVisitor final : public VNVisitor {
                 const bool dynamicDst
                     = VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType);
                 if (dynamicDst || !VN_IS(srcDTypep, UnpackArrayDType)) {
-                    int blockSize = 1;
-                    if (const AstConst* const constp = VN_CAST(streamp->rhsp(), Const)) {
-                        blockSize = constp->toSInt();
-                        if (VL_UNLIKELY(blockSize <= 0)) {
-                            // Not reachable due to higher level checks when parsing stream
-                            // operators commented out to not fail v3error-coverage-checks.
-                            // nodep->v3error("Stream block size must be positive, got " <<
-                            // blockSize); nodep->v3error("Stream block size must be positive, got
-                            // " << blockSize);
-                            blockSize = 1;
-                        }
-                    }
-                    // Not reachable due to higher level checks when parsing stream operators
-                    // commented out to not fail v3error-coverage-checks.
-                    // else {
-                    // nodep->v3error("Stream block size must be constant (got " <<
-                    // streamp->rhsp()->prettyTypeNameQ() << ")");
-                    // }
+                    const uint32_t blockSize = streamBlockSize(streamp);
                     int srcElementBits = 0;
                     if (const AstNodeDType* const elemDtp = srcDTypep->subDTypep()) {
                         srcElementBits = elemDtp->width();
@@ -3859,24 +3841,9 @@ class ConstVisitor final : public VNVisitor {
             AstNodeExpr* srcp = streamp->lhsp();
             const AstNodeDType* const srcDTypep = srcp->dtypep()->skipRefp();
             AstNodeDType* const dstDTypep = nodep->dtypep()->skipRefp();
-            if (VN_IS(srcDTypep, QueueDType) && VN_IS(dstDTypep, QueueDType)) {
-                int blockSize = 1;
-                if (const AstConst* const constp = VN_CAST(streamp->rhsp(), Const)) {
-                    blockSize = constp->toSInt();
-                    if (VL_UNLIKELY(blockSize <= 0)) {
-                        // Not reachable due to higher level checks when parsing stream
-                        // operators commented out to not fail v3error-coverage-checks.
-                        // nodep->v3error("Stream block size must be positive, got " <<
-                        // blockSize);
-                        blockSize = 1;
-                    }
-                }
-                // Not reachable due to higher level checks when parsing stream operators
-                // commented out to not fail v3error-coverage-checks.
-                // else {
-                //    nodep->v3error("Stream block size must be constant (got " <<
-                //    streamp->rhsp()->prettyTypeNameQ() << ")");
-                // }
+            if ((VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType))
+                && VN_IS(dstDTypep, QueueDType)) {
+                const uint32_t blockSize = streamBlockSize(streamp);
                 int srcElementBits = 0;
                 if (const AstNodeDType* const elemDtp = srcDTypep->subDTypep()) {
                     srcElementBits = elemDtp->width();

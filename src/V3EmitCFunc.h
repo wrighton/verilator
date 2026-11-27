@@ -539,14 +539,13 @@ public:
     }
 
     void visit(AstCvtArrayToArray* nodep) override {
-        if (nodep->reverse()) {
-            puts("VL_REVCLONE_Q(");
-        } else {
-            puts("VL_CLONE_Q(");
-        }
+        // The result type, as its elements may differ from the source's
+        puts(nodep->reverse() ? "VL_REVCLONE_Q<" : "VL_CLONE_Q<");
+        puts(nodep->dtypep()->cType("", false, false));
+        puts(">(");
         iterateAndNextConstNull(nodep->fromp());
         puts(", ");
-        puts(cvtToStr(nodep->blockSize()));
+        puts(cvtToStr(nodep->blockSize()) + "U");
         puts(", ");
         puts(cvtToStr(nodep->srcElementBits()));
         puts(", ");
@@ -768,7 +767,7 @@ public:
             rhs = false;
             iterateAndNextConstNull(castp->fromp());
             puts(", ");
-            puts(cvtToStr(castp->blockSize()));
+            puts(cvtToStr(castp->blockSize()) + "U");
             puts(", ");
             puts(cvtToStr(castp->srcElementBits()));
             puts(", ");
