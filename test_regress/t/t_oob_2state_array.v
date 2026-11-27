@@ -250,8 +250,8 @@ module t;
     srows = sa2[idx + 1];
     `checkh(srows[1].f, idx == 0 ? 3 : 0);
     `checkh(sa2[idx + 1][1].f, idx == 0 ? 3 : 0);
-    // No default value of a struct with a queue is built, so element 0 is read
+    // So does one of a struct with a queue
     qrow = q2[idx + 1];
-    `checkh(qrow[1].q.size(), idx == 0 ? 2 : 1);
+    `checkh(qrow[1].q.size(), idx == 0 ? 2 : 0);
   end
 endmodule

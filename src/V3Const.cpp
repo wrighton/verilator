@@ -5255,10 +5255,11 @@ uint32_t ConstVisitor::s_globalPassNum = 0;
 //######################################################################
 // Const class functions
 
-AstNodeExpr* V3Const::newDTypeDefaultp(AstNode* const nodep, AstNodeDType* dtypep) {
+AstNodeExpr* V3Const::newDTypeDefaultp(AstNode* const nodep, AstNodeDType* dtypep,
+                                       const OtherDefaultFunc& otherDefaultp) {
     dtypep = dtypep->skipRefp();
     if (AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
-        AstNodeExpr* const elemp = newDTypeDefaultp(nodep, arrayp->subDTypep());
+        AstNodeExpr* const elemp = newDTypeDefaultp(nodep, arrayp->subDTypep(), otherDefaultp);
         return elemp ? new AstConsArray{nodep->fileline(), arrayp, elemp} : nullptr;
     }
     AstStructDType* const structp = VN_CAST(dtypep, StructDType);
@@ -5267,7 +5268,7 @@ AstNodeExpr* V3Const::newDTypeDefaultp(AstNode* const nodep, AstNodeDType* dtype
         for (AstMemberDType* const memberp : structp->memberspList()) {
             AstNodeExpr* const memberValuep
                 = memberp->valuep() ? VN_AS(memberp->valuep(), NodeExpr)->cloneTree(false)
-                                    : newDTypeDefaultp(nodep, memberp->subDTypep());
+                                    : newDTypeDefaultp(nodep, memberp->subDTypep(), otherDefaultp);
             if (!memberValuep) {
                 VL_DO_DANGLING(newp->deleteTree(), newp);
                 return nullptr;
@@ -5278,7 +5279,7 @@ AstNodeExpr* V3Const::newDTypeDefaultp(AstNode* const nodep, AstNodeDType* dtype
     }
     // An event has no value to read instead.
     if (!(dtypep->isIntegralOrPacked() || VN_IS(dtypep, BasicDType)) || dtypep->isEvent()) {
-        return nullptr;
+        return otherDefaultp ? otherDefaultp(dtypep) : nullptr;
     }
     V3Number xnum{nodep, dtypep->width()};
     if (dtypep->isDouble()) {
@@ -5311,8 +5312,10 @@ static AstNodeExpr* memberInitializerp(const AstNodeExpr* exprp, VMemberMap& mem
 
 AstNodeExpr* V3Const::newSelectedDefaultp(AstNodeExpr* const readp,
                                           AstNodeExpr* const boundedElementp,
-                                          VMemberMap& memberMap) {
-    AstNodeExpr* defaultp = newDTypeDefaultp(boundedElementp, boundedElementp->dtypep());
+                                          VMemberMap& memberMap,
+                                          const OtherDefaultFunc& otherDefaultp) {
+    AstNodeExpr* defaultp
+        = newDTypeDefaultp(boundedElementp, boundedElementp->dtypep(), otherDefaultp);
     AstNodeExpr* prefixp = boundedElementp;
     if (!defaultp && readp != boundedElementp) {
         // Follow from operands, not back pointers, to retain only this selected value's path.
@@ -5331,7 +5334,7 @@ AstNodeExpr* V3Const::newSelectedDefaultp(AstNodeExpr* const readp,
             defaultp = memberInitializerp(*it, memberMap)->cloneTree(false);
             prefixp = *it;
         }
-        if (!defaultp) return newDTypeDefaultp(readp, readp->dtypep());
+        if (!defaultp) return newDTypeDefaultp(readp, readp->dtypep(), otherDefaultp);
     }
     if (!defaultp || readp == prefixp) return defaultp;
     // Keep symbolic remaining indices as owned expressions; Const only folds constant parts.

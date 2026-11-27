@@ -56,16 +56,21 @@ public:
     static AstNode* constifyExpensiveEdit(AstNode* nodep) VL_MT_DISABLED;
     // Construct an owned default value for a resolved dtype (IEEE 1800-2023 7.4.5, Table 7-1).
     // Unpacked struct member declaration initializers take precedence (7.2.2).
-    // Return nullptr for types without a representable value in this builder.
-    static AstNodeExpr* newDTypeDefaultp(AstNode* nodep, AstNodeDType* dtypep) VL_MT_DISABLED;
+    // Return nullptr for types without a representable value in this builder, or the default
+    // that 'otherDefaultp', if given, returns for such a type.
+    using OtherDefaultFunc = std::function<AstNodeExpr*(AstNodeDType*)>;
+    static AstNodeExpr* newDTypeDefaultp(AstNode* nodep, AstNodeDType* dtypep,
+                                         const OtherDefaultFunc& otherDefaultp
+                                         = nullptr) VL_MT_DISABLED;
     // Borrow the from operand of NodeSel/Sel/StructSel 'exprp', a selection of a read path.
     // The caller retains ownership and checks purity.
     static AstNodeExpr* selectionFromp(const AstNodeExpr* exprp) VL_MT_DISABLED;
     // Default of a pure read-selection/getter path rooted at boundedElementp, using
     // selectionFromp. Return a new owned AST, preserving declaration initializers and symbolic
     // remaining indices.
-    static AstNodeExpr* newSelectedDefaultp(AstNodeExpr* readp, AstNodeExpr* boundedElementp,
-                                            VMemberMap& memberMap) VL_MT_DISABLED;
+    static AstNodeExpr*
+    newSelectedDefaultp(AstNodeExpr* readp, AstNodeExpr* boundedElementp, VMemberMap& memberMap,
+                        const OtherDefaultFunc& otherDefaultp = nullptr) VL_MT_DISABLED;
     // Append the leaves of a value to 'termps' leftmost first: the elements and members of an
     // unpacked array or struct, selected from copies of it that warn if impure and 'warnImpure',
     // else the value itself, as its 64 bits if a real and 'packReal'

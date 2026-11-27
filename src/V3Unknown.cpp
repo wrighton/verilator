@@ -115,6 +115,9 @@ class UnknownVisitor final : public VNVisitor {
     V3UniqueNames m_lvboundNames;  // For generating unique temporary variable names
     std::unique_ptr<V3UniqueNames> m_xrandNames;  // For generating unique temporary variable names
     VMemberMap m_memberMap;  // Member lookup; dtype declarations stay intact during this pass
+    // Never-written variable of each queue or dynamic, associative or wildcard array type, of the
+    // current module or task
+    std::unordered_map<const AstNodeDType*, AstVar*> m_emptyVarps;
 
     // STATE - for current visit position (use VL_RESTORER)
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -249,6 +252,28 @@ class UnknownVisitor final : public VNVisitor {
         return fromp == nodep ? VN_AS(backp, NodeExpr) : nullptr;
     }
 
+    // Default of a type V3Const::newDTypeDefaultp does not build, or nullptr: null for a class
+    // handle or a virtual interface, and for a queue or a dynamic, associative or wildcard array
+    // a read of a variable of its type never written, so empty, whose nonexistent elements read
+    // the default the variable's type gives them, as of member initializers
+    AstNodeExpr* newOtherDefaultp(FileLine* flp, AstNodeDType* dtypep) {
+        if (VN_IS(dtypep, ClassRefDType) || VN_IS(dtypep, IfaceRefDType)) {
+            AstConst* const nullp = new AstConst{flp, AstConst::Null{}};
+            nullp->dtypep(dtypep);
+            return nullp;
+        }
+        if (!VN_IS(dtypep, QueueDType) && !VN_IS(dtypep, DynArrayDType)
+            && !VN_IS(dtypep, AssocArrayDType) && !VN_IS(dtypep, WildcardArrayDType)) {
+            return nullptr;
+        }
+        AstVar*& varpr = m_emptyVarps[dtypep];
+        if (!varpr) {
+            varpr = new AstVar{flp, VVarType::XTEMP, m_xrandNames->get("empty"), dtypep};
+            addVar(varpr);
+        }
+        return new AstVarRef{flp, varpr, VAccess::READ};
+    }
+
     AstVar* createAddTemp(const AstNodeExpr* const nodep) {
         AstVar* const varp = new AstVar{nodep->fileline(), VVarType::XTEMP,
                                         m_xrandNames->get(nodep), nodep->dtypep()};
@@ -337,6 +362,7 @@ class UnknownVisitor final : public VNVisitor {
     void visit(AstNodeModule* nodep) override {
         UINFO(4, " MOD   " << nodep);
         VL_RESTORER(m_modp);
+        VL_RESTORER_CLEAR(m_emptyVarps);
         VL_RESTORER(m_constXCvt);
         VL_RESTORER(m_allowXUnique);
         auto xrandNames = std::make_unique<V3UniqueNames>(s_xrandPrefix);
@@ -353,6 +379,7 @@ class UnknownVisitor final : public VNVisitor {
     }
     void visit(AstNodeFTask* nodep) override {
         VL_RESTORER(m_ftaskp);
+        VL_RESTORER_CLEAR(m_emptyVarps);
         m_ftaskp = nodep;
         iterateChildren(nodep);
     }
@@ -872,8 +899,12 @@ class UnknownVisitor final : public VNVisitor {
                 }
             }
             // Note below has null backp(); the Edit function knows how to deal with that.
+            const auto otherDefaultp = [&](AstNodeDType* dtypep) {
+                return newOtherDefaultp(nodep->fileline(), dtypep);
+            };
             AstNodeExpr* const defaultp
-                = lvalue ? nullptr : V3Const::newSelectedDefaultp(readp, nodep, m_memberMap);
+                = lvalue ? nullptr
+                         : V3Const::newSelectedDefaultp(readp, nodep, m_memberMap, otherDefaultp);
             if (defaultp) {
                 // ARRAYSEL(...) -> COND(LT(bit<maxbit), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
