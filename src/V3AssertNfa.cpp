@@ -83,6 +83,8 @@ public:
     bool m_isFixedDelayRing = false;
     unsigned m_delayRingSize = 0;  // Number of ring slots. Range: max-min+1.
     AstNodeExpr* m_delayRingClearCondp = nullptr;  // local RHS for pure-boolean range
+    // OWNED; of the wait ring of `##[M:$] b` in a property, the boolean b ending its attempts
+    AstNodeExpr* m_unboundedWaitCondp = nullptr;
     AstNodeExpr* m_delayRingAdvanceCondp = nullptr;  // Advance only when this condition holds
     bool m_replayAbortReject = false;  // Compressed repetition needs per-thread abort replay
     // OWNED; enclosing-abort fire condition clearing state or suppressing guard rejection
@@ -116,6 +118,8 @@ public:
         for (AstNodeExpr* cp : m_throughoutConds) VL_DO_DANGLING(cp->deleteTree(), cp);
         if (m_delayRingClearCondp)
             VL_DO_DANGLING(m_delayRingClearCondp->deleteTree(), m_delayRingClearCondp);
+        if (m_unboundedWaitCondp)
+            VL_DO_DANGLING(m_unboundedWaitCondp->deleteTree(), m_unboundedWaitCondp);
         if (m_delayRingAdvanceCondp)
             VL_DO_DANGLING(m_delayRingAdvanceCondp->deleteTree(), m_delayRingAdvanceCondp);
         if (m_abortClearp) VL_DO_DANGLING(m_abortClearp->deleteTree(), m_abortClearp);
@@ -744,6 +748,9 @@ class SvaNfaBuilder final {
             // The ring's live count is updated in NBA, so this link retains the previous
             // tick's live attempts alongside new arrivals for the next tick.
             guardedLink(waitRingp, waitRingp, flp);
+            if (!m_isCoverSeq && !m_inAntecedent && !rhsExprp->isMultiCycleSva()) {
+                waitRingp->m_unboundedWaitCondp = rhsExprp->cloneTreePure(false);
+            }
             SvaStateVertex* const mergeVtxp = scopedCreateVertex();
             guardedLink(currentp, mergeVtxp, flp);
             guardedLink(waitRingp, mergeVtxp, flp);
@@ -4028,6 +4035,10 @@ class SvaNfaLowering final {
                 updateBodyp->addNext(writeIncomingp);
             } else {
                 VL_DO_DANGLING(oldAfterOutgoingp->deleteTree(), oldAfterOutgoingp);
+                // Only a cover sequence counting its matches reports an overflow
+                if (incomingOverflowp) {
+                    VL_DO_DANGLING(incomingOverflowp->deleteTree(), incomingOverflowp);
+                }
             }
             // Cache the outgoing slot for the next index after the write. Reading after
             // writing also handles one-slot rings and two-slot range rings without alias cases.
@@ -4077,6 +4088,13 @@ class SvaNfaLowering final {
             clearCountp->addNext(new AstAssignDly{c.flp,
                                                   new AstVarRef{c.flp, idxp, VAccess::WRITE},
                                                   newTypedConstp(c.flp, idxp->dtypep(), 0)});
+            if (size == 1) {
+                // The output of a one-slot ring is its slot on any tick, so empty it too
+                AstVar* const headp = vtxp->datap()->delayRingHeadVarp;
+                clearCountp->addNext(new AstAssignDly{c.flp,
+                                                      new AstVarRef{c.flp, headp, VAccess::WRITE},
+                                                      newTypedConstp(c.flp, headp->dtypep(), 0)});
+            }
             updateBodyp = new AstIf{c.flp, clearCondp, clearCountp, updateBodyp};
 
             addStateAlways(c, updateBodyp, asyncDisable ? clearCountp->cloneTree(true) : nullptr);
@@ -5147,7 +5165,53 @@ class SvaNfaLowering final {
     }
 
     // Number of attempts completing this tick, or nullptr if threads cannot tell
+    // The vertex merging the first tick of `##[M:$] b` with its wait ring, if it is a final
+    // step of the property, ending each attempt waiting in the ring on the match of b, the
+    // final condition: the ring then holds one thread of each attempt waiting (see
+    // countedWaitRingp)
+    static const SvaStateVertex* waitMergep(const SvaGraph& graph, const SvaStateVertex* ringp,
+                                            const AstNodeExpr* matchCondp) {
+        if (!ringp->m_unboundedWaitCondp || !matchCondp
+            || !ringp->m_unboundedWaitCondp->sameTree(matchCondp)) {
+            return nullptr;
+        }
+        const SvaStateVertex* mergep = nullptr;
+        for (const V3GraphEdge& edger : ringp->outEdges()) {
+            const SvaStateVertex* const top = static_cast<const SvaStateVertex*>(edger.top());
+            if (top == ringp) continue;
+            if (mergep) return nullptr;
+            mergep = top;
+        }
+        if (!mergep || mergep->m_delayRingSize || mergep->datap()->stateVarp) return nullptr;
+        for (const V3GraphEdge& edger : mergep->outEdges()) {
+            const SvaTransEdge& tedger = static_cast<const SvaTransEdge&>(edger);
+            if (tedger.toVtxp() != graph.m_matchVertexp || tedger.m_condp) return nullptr;
+        }
+        return mergep;
+    }
+    // The wait ring a terminal vertex merges, if counted, see waitMergep
+    static const SvaStateVertex* countedWaitRingp(const SvaStateVertex* mergep) {
+        for (const V3GraphEdge& edger : mergep->inEdges()) {
+            const SvaStateVertex* const fromp = static_cast<const SvaStateVertex*>(edger.fromp());
+            if (fromp->m_unboundedWaitCondp && fromp->datap()->delayRingCounts) return fromp;
+        }
+        return nullptr;
+    }
+
     AstNodeExpr* newAttemptMatchCountp(LowerCtx& c) {
+        // With exact counts, each thread completing is an attempt
+        if (c.exactCounts) {
+            AstNodeExpr* countp = nullptr;
+            for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
+                if (tedgep->toVtxp() != c.graph.m_matchVertexp) continue;
+                // Only a range, which has several threads, links to the match conditionally
+                UASSERT_OBJ(!tedgep->m_condp, tedgep->fromVtxp(), "Conditional exact match");
+                countp
+                    = addCountp(c.flp, countp,
+                                tedgep->fromVtxp()->datap()->stateCountSigp->cloneTreePure(false));
+            }
+            return countp;
+        }
         // On a tick, all threads of one offset from the attempt start belong to one attempt.
         // So when all terminal vertices have one fixed offset, their threads are one attempt.
         // A range ring fed from that offset holds attempts at larger offsets, one per slot.
@@ -5156,14 +5220,24 @@ class SvaNfaLowering final {
         const std::vector<int> offsets = vertexOffsets(c.graph);
         std::set<int> attemptOffsets;
         const SvaStateVertex* ringp = nullptr;
+        AstNodeExpr* waitCountp = nullptr;
         std::vector<const SvaTransEdge*> fixedEdgeps;
         for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
             if (tedgep->toVtxp() != c.graph.m_matchVertexp) continue;
             const SvaStateVertex* const fromVtxp = tedgep->fromVtxp();
             // The ring must clear exactly when the final condition holds, which an enclosing
             // operator such as throughout can extend, so compare the two conditions
-            if (fromVtxp->m_delayRingClearCondp
-                && fromVtxp->m_delayRingClearCondp->sameTree(c.matchCondp)) {
+            if (const SvaStateVertex* const waitp = countedWaitRingp(fromVtxp)) {
+                // The attempts reaching the first tick of the wait, and those waiting
+                for (const V3GraphEdge& edger : fromVtxp->inEdges()) {
+                    if (edger.fromp() != waitp) {
+                        attemptOffsets.insert(offsets[edger.fromp()->color()]);
+                    }
+                }
+                waitCountp = addCountp(c.flp, waitCountp,
+                                       fromVtxp->datap()->stateCountSigp->cloneTreePure(false));
+            } else if (fromVtxp->m_delayRingClearCondp
+                       && fromVtxp->m_delayRingClearCondp->sameTree(c.matchCondp)) {
                 UASSERT_OBJ(!ringp, fromVtxp, "Second range ring linked to the match");
                 UASSERT_OBJ(!tedgep->m_condp, fromVtxp, "Range ring Link has a condition");
                 ringp = fromVtxp;
@@ -5174,7 +5248,15 @@ class SvaNfaLowering final {
                 fixedEdgeps.push_back(tedgep);
             }
         }
-        if (attemptOffsets.size() != 1 || *attemptOffsets.begin() < 0) return nullptr;
+        if (attemptOffsets.size() != 1 || *attemptOffsets.begin() < 0) {
+            if (waitCountp) VL_DO_DANGLING(waitCountp->deleteTree(), waitCountp);
+            return nullptr;
+        }
+        if (waitCountp) {
+            UASSERT_OBJ(fixedEdgeps.empty() && !ringp, c.graph.m_matchVertexp,
+                        "Wait ring beside another terminal");
+            return waitCountp;
+        }
         // The first tick of a range is a terminal vertex of its own
         UASSERT_OBJ(!fixedEdgeps.empty(), c.graph.m_matchVertexp,
                     "Range ring without its first tick");
@@ -5930,6 +6012,19 @@ public:
         std::vector<SvaVertexData> vertexData(N);
         for (int i = 0; i < N; ++i) vtx[i]->userp(&vertexData[i]);
 
+        // A wait ring of `##[M:$] b` counts its attempts to run the pass action of each, and
+        // then ends them on the match of b, as each passes
+        std::vector<bool> countedWaits(N);
+        if (countAttemptPasses) {
+            for (int i = 0; i < N; ++i) {
+                if (vtx[i]->m_delayRingClearCondp || !waitMergep(graph, vtx[i], matchCondp)) {
+                    continue;
+                }
+                countedWaits[i] = true;
+                vtx[i]->m_delayRingClearCondp = matchCondp->cloneTreePure(false);
+            }
+        }
+
         // Identify registered vertices (targets of clocked edges).
         for (int i = 0; i < N; ++i) {
             for (const V3GraphEdge& edger : vtx[i]->outEdges()) {
@@ -6004,7 +6099,7 @@ public:
             if (vtx[i]->m_delayRingSize) {
                 const std::string base = baseName + "__d" + std::to_string(i);
                 const bool storesCounts
-                    = (countMatches && ringNeedsMultiplicity[i]) || exactCounts;
+                    = (countMatches && ringNeedsMultiplicity[i]) || exactCounts || countedWaits[i];
                 AstNodeDType* ringDTypep = nullptr;
                 if (storesCounts) {
                     // int unsigned ring [size];
@@ -8419,6 +8514,18 @@ class AssertNfaVisitor final : public VNVisitor {
         return !nodep->exists([](const AstNodeExpr* exprp) { return exprp->isMultiCycleSva(); });
     }
 
+    // True if each attempt of a consequent has at most one thread at a time, as of a sequence
+    // with one (see oneThreadPerAttempt), or an until or s_eventually of booleans, waiting in
+    // one state until it resolves
+    static bool oneThreadPerConsequent(const AstNodeExpr* nodep) {
+        while (const AstSEventually* const evp = VN_CAST(nodep, SEventually)) nodep = evp->exprp();
+        if (const AstUntil* const untilp = VN_CAST(nodep, Until)) {
+            return oneThreadPerAttempt(untilp->lhsp(), false)
+                   && oneThreadPerAttempt(untilp->rhsp(), false);
+        }
+        return oneThreadPerAttempt(nodep, false);
+    }
+
     // Count the implications of the tree, and find whether it has another property operator
     static void findAttemptKinds(const SvaAttemptNode& node, int& implications, bool& other) {
         using Kind = SvaAttemptNode::Kind;
@@ -8789,14 +8896,17 @@ class AssertNfaVisitor final : public VNVisitor {
         const bool replayPasses
             = assertAssertp && assertAssertp->passsp() && !parts.hasImplication && negated;
         const bool replayThreads = replayFails || replayPasses;
-        // Counting threads counts the failed attempts when each attempt has one thread
+        // Counting threads counts the failed attempts when each attempt has one thread, and
+        // the passing ones of an implication whose consequent has one too.
         // The wait state of an until holds the threads of several attempts, so they are counted,
         // also after an antecedent starting at most one thread of the attempt, a boolean
         const bool countsConsequent = !parts.hasImplication
                                       || (isUntilConsequent(seqBodyp) && !parts.isFollowedBy
                                           && isBoolean(parts.triggerExprp));
         const bool exactCounts
-            = replayFails && countsConsequent && oneThreadPerAttempt(seqBodyp, true);
+            = (replayFails && countsConsequent && oneThreadPerAttempt(seqBodyp, true))
+              || (countAttemptPasses && parts.hasImplication
+                  && oneThreadPerConsequent(parts.seqExprp));
         // A match and a vacuous success of its operand on one tick both fail a negated property
         const bool replaySuccesses = assertAssertp && assertAssertp->failsp() && negated;
         const auto signals
@@ -8813,6 +8923,11 @@ class AssertNfaVisitor final : public VNVisitor {
         if (result.finalCondp && !result.finalCondp->backp()) pushDeletep(result.finalCondp);
         AstNodeExpr* failCountp = replayFails ? signals.threadFailCountp : signals.successCountp;
         AstNodeExpr* const passCountp = replayPasses ? signals.threadFailCountp : nullptr;
+        // Exact counts count the failed threads also of an implication counting its passes
+        if (signals.threadFailCountp && !replayThreads) {
+            AstNodeExpr* unusedp = signals.threadFailCountp;
+            VL_DO_DANGLING(unusedp->deleteTree(), unusedp);
+        }
         // Without the counts, a vacuous success of some attempts
         AstNodeExpr* antecedentEndp = signals.antecedentEndCountp;
         if (antecedentEndp && attemptPasses) {
