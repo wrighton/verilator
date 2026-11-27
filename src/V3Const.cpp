@@ -1012,6 +1012,22 @@ class ConstVisitor final : public VNVisitor {
     static uint32_t streamBlockSize(const AstNodeStream* streamp) {
         return VN_AS(streamp->rhsp(), Const)->toUInt();
     }
+    // Whether a fixed-size unpacked array of integral or packed elements, streamed as a queue of
+    // its elements
+    static bool isStreamableUnpackArray(const AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        return VN_IS(dtypep, UnpackArrayDType)
+               && dtypep->subDTypep()->skipRefp()->isIntegralOrPacked();
+    }
+    // Return a queue of the elements of fixed-size unpacked array 'srcp', left index first
+    static AstNodeExpr* newUnpackToQueuep(AstNodeExpr* srcp) {
+        FileLine* const flp = srcp->fileline();
+        AstQueueDType* const queueDTypep
+            = new AstQueueDType{flp, srcp->dtypep()->skipRefp()->subDTypep(), nullptr};
+        queueDTypep->dtypep(queueDTypep);  // The queue itself, not its elements
+        v3Global.rootp()->typeTablep()->addTypesp(queueDTypep);
+        return new AstCvtUnpackToQueue{flp, srcp, queueDTypep};
+    }
     static bool lowerAsFixedAggregate(const AstNodeDType* const dtypep) {
         return dtypep->isStreamableFixedAggregate() && dtypep->containsUnpackedStruct();
     }
@@ -2701,7 +2717,9 @@ class ConstVisitor final : public VNVisitor {
                        || VN_IS(VN_AS(nodep->rhsp(), StreamR)->lhsp()->dtypep()->skipRefp(),
                                 QueueDType)
                        || VN_IS(VN_AS(nodep->rhsp(), StreamR)->lhsp()->dtypep()->skipRefp(),
-                                DynArrayDType))) {
+                                DynArrayDType)
+                       || isStreamableUnpackArray(
+                           VN_AS(nodep->rhsp(), StreamR)->lhsp()->dtypep()))) {
             // The right-streaming operator on rhs of assignment does not
             // change the order of bits. Eliminate stream but keep its lhsp.
             // Add a cast if needed.
@@ -2727,6 +2745,16 @@ class ConstVisitor final : public VNVisitor {
                 } else {
                     srcp = new AstCvtArrayToPacked{srcp->fileline(), srcp, nodep->dtypep()};
                 }
+            } else if (isStreamableUnpackArray(srcDTypep)
+                       && (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType))) {
+                // Into a queue or dynamic array, as a queue of the same elements
+                srcp = new AstCvtArrayToArray{srcp->fileline(),
+                                              newUnpackToQueuep(srcp),
+                                              nodep->dtypep(),
+                                              false,
+                                              1,
+                                              dstDTypep->subDTypep()->width(),
+                                              srcDTypep->subDTypep()->width()};
             } else if (VN_IS(srcDTypep, UnpackArrayDType)) {
                 // Pack to the width of the whole array; the lhs width is matched below.
                 const int elementsNum = srcDTypep->arrayUnpackedElements();
@@ -2929,9 +2957,14 @@ class ConstVisitor final : public VNVisitor {
                         dstElementBits = elemDtp->width();
                     }
                     streamp->unlinkFrBack();
+                    srcp->unlinkFrBack();
+                    // A fixed-size source into a queue is reversed as a queue of its elements
+                    if (dynamicDst && isStreamableUnpackArray(srcDTypep)) {
+                        srcp = newUnpackToQueuep(srcp);
+                    }
                     srcp = new AstCvtArrayToArray{
-                        srcp->fileline(), srcp->unlinkFrBack(), arrayDTypep,   true,
-                        blockSize,        dstElementBits,       srcElementBits};
+                        srcp->fileline(), srcp,           arrayDTypep,   true,
+                        blockSize,        dstElementBits, srcElementBits};
                     if (!dynamicDst) {
                         srcp = new AstCvtArrayToPacked{srcp->fileline(), srcp, dstDTypep};
                     }
@@ -3841,7 +3874,8 @@ class ConstVisitor final : public VNVisitor {
             AstNodeExpr* srcp = streamp->lhsp();
             const AstNodeDType* const srcDTypep = srcp->dtypep()->skipRefp();
             AstNodeDType* const dstDTypep = nodep->dtypep()->skipRefp();
-            if ((VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType))
+            const bool fixedSrc = isStreamableUnpackArray(srcDTypep);
+            if ((VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType) || fixedSrc)
                 && VN_IS(dstDTypep, QueueDType)) {
                 const uint32_t blockSize = streamBlockSize(streamp);
                 int srcElementBits = 0;
@@ -3853,9 +3887,12 @@ class ConstVisitor final : public VNVisitor {
                     dstElementBits = elemDtp->width();
                 }
                 streamp->unlinkFrBack();
+                srcp->unlinkFrBack();
+                // A fixed-size source as a queue of its elements, left index first
+                if (fixedSrc) srcp = newUnpackToQueuep(srcp);
                 AstNodeExpr* newp = new AstCvtArrayToArray{
-                    srcp->fileline(), srcp->unlinkFrBack(), dstDTypep,     isReverse,
-                    blockSize,        dstElementBits,       srcElementBits};
+                    srcp->fileline(), srcp,           dstDTypep,     isReverse,
+                    blockSize,        dstElementBits, srcElementBits};
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(streamp), streamp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);

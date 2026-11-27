@@ -377,6 +377,7 @@ class WidthVisitor final : public VNVisitor {
     WidthVP* m_vup = nullptr;  // Current node state
     bool m_underFork = false;  // Visiting under a fork
     bool m_underCast = false;  // Visiting the expression of a size or integral type cast
+    bool m_castToQueue = false;  // Under a cast to a queue type, for its stream operand
     bool m_underSExpr = false;  // Visiting under a sequence expression
     bool m_underPackedArray = false;  // Visiting under a AstPackArrayDType
     bool m_underMemberRef = false;  // Viting under a MemberRef
@@ -1345,7 +1346,16 @@ class WidthVisitor final : public VNVisitor {
             }
             // So it has the width of its bits when it concatenates values, or in another stream
             // or a cast
-            if (nested || VN_IS(nodep->lhsp(), Concat) || currentStreamUse() == STREAM_USE_CAST) {
+            // A fixed-size array cast to a queue is streamed as a queue of its elements, as
+            // when assigned (IEEE 1800-2023 6.24.3)
+            const AstNodeDType* const operandDtypep = nodep->lhsp()->dtypep()->skipRefp();
+            const bool arrayToQueue
+                = !nested && m_castToQueue && currentStreamUse() == STREAM_USE_CAST
+                  && VN_IS(operandDtypep, UnpackArrayDType)
+                  && operandDtypep->subDTypep()->skipRefp()->isIntegralOrPacked();
+            if (!arrayToQueue
+                && (nested || VN_IS(nodep->lhsp(), Concat)
+                    || currentStreamUse() == STREAM_USE_CAST)) {
                 packStreamOperand(nodep);
             }
         }
@@ -3559,7 +3569,9 @@ class WidthVisitor final : public VNVisitor {
             }
             {
                 VL_RESTORER(m_underCast);
+                VL_RESTORER(m_castToQueue);
                 m_underCast = nodep->dtypep()->skipRefp()->isIntegralOrPacked();
+                m_castToQueue = VN_IS(nodep->dtypep()->skipRefp(), QueueDType);
                 // Braces, parsed as a replication, cast to an unpacked array are an unpacked
                 // array concatenation, as if assigned (IEEE 1800-2023 10.8, 10.10.2)
                 if (VN_IS(nodep->fromp(), Replicate)
