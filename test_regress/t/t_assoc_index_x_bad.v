@@ -10,5 +10,7 @@ module t;
   initial begin
     r = a[32'bx];
     a[32'bz] = 1;
+    r = a.exists(32'bx);
+    a.delete(32'bz);
   end
 endmodule
