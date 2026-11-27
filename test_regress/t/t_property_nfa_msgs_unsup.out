@@ -55,7 +55,7 @@
       |                                           ^~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:69:43: Unsupported: implication inside another property operator in a negated property
                                                        : ... note: In instance 't'
-   69 |   assert property (@(posedge clk) not ((a |=> b) or c));
+   69 |   assert property (@(posedge clk) not ((a |=> b [* 1:2]) or c));
       |                                           ^~~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:72:65: Unsupported: 'not' of a multi-cycle operand inside another property operator
                                                        : ... note: In instance 't'

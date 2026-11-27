@@ -233,6 +233,23 @@ struct BuildResult final {
     static BuildResult failWithError() { return {nullptr, nullptr, {}, true}; }
 };
 
+// An operator tree of a property whose operands each resolve within a fixed number of ticks of
+// the attempt start, so the attempts in flight differ by their start tick, see
+// SvaNfaLowering::lowerAttempts
+struct SvaAttemptNode final {
+    enum class Kind : uint8_t { SEQUENCE, IMPLICATION, NOT, AND, OR, ACCEPT, REJECT };
+    Kind kind = Kind::SEQUENCE;
+    AstNodeExpr* condp = nullptr;  // Antecedent of an implication, condition of an abort
+    std::map<int, std::vector<AstNodeExpr*>> checks;  // Sequence: boolean checks by tick offset
+    std::unique_ptr<SvaAttemptNode> lhsp;  // Operand, consequent of an implication
+    std::unique_ptr<SvaAttemptNode> rhsp;  // Second operand of 'and' and 'or'
+    int delay = 0;  // Implication: ticks from its start to the start of its consequent
+    bool followedBy = false;  // Implication: a followed-by, failing without its antecedent
+    int latency = 0;  // Ticks from its start to the last tick it can resolve on
+    // Most ticks of latency of a property lowered per attempt, a vector bit for each
+    static constexpr int MAX_LATENCY = 255;
+};
+
 // Parser-marked SAnd of overlapped implications: a property if/else/case.
 static bool hasPropertyControlConjunction(const AstNodeExpr* nodep) {
     return nodep->exists([](const AstSAnd* andp) { return andp->propertyControl(); });
@@ -2220,6 +2237,19 @@ class SvaNfaBuilder final {
             }
             return flattenFixedSeq(sexprp->exprp(), baseOffset + preLen + delayCycles, out);
         }
+        if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            // N iterations, each starting on the tick after the previous one ends
+            // (IEEE 1800-2023 16.9.2)
+            const int len = fixedLength(repp->exprp());
+            const int count = repp->maxCountp() || repp->unbounded()
+                                  ? 0
+                                  : static_cast<int>(getConstUInt(repp->countp()));
+            if (len < 0 || !count) return false;
+            for (int i = 0; i < count; ++i) {
+                if (!flattenFixedSeq(repp->exprp(), baseOffset + i * (len + 1), out)) return false;
+            }
+            return true;
+        }
         if (AstSThroughout* const throughp = VN_CAST(nodep, SThroughout)) {
             // Over a single-cycle sequence, both conditions hold at that tick (IEEE 1800-2023
             // 16.9.9)
@@ -2247,6 +2277,8 @@ class SvaNfaBuilder final {
         out[baseOffset].push_back(nodep);
         return true;
     }
+
+public:
     // Condition of a leaf that flattenFixedSeq collected
     static AstNodeExpr* newLeafCondp(AstNodeExpr* leafp) {
         const AstImplication* const implp = VN_CAST(leafp, Implication);
@@ -2262,6 +2294,7 @@ class SvaNfaBuilder final {
         return condp;
     }
 
+private:
     // Conjoin two fixed-length sequences starting together into one sequence, or null
     static AstNodeExpr* conjoinFixedSeqs(AstNodeExpr* lhsp, AstNodeExpr* rhsp, FileLine* flp) {
         // At each clock offset AND the boolean checks of both operands. The result ends with the
@@ -2807,6 +2840,55 @@ class SvaNfaBuilder final {
     }
 
 public:
+    // The attempt tree of a property, or nullptr if an operand of it does not resolve within a
+    // fixed number of ticks
+    static std::unique_ptr<SvaAttemptNode> buildAttemptTree(AstNodeExpr* nodep) {
+        using Kind = SvaAttemptNode::Kind;
+        std::unique_ptr<SvaAttemptNode> treep{new SvaAttemptNode};
+        AstNodeExpr* lhsp = nullptr;
+        AstNodeExpr* rhsp = nullptr;
+        if (isPlainBoolean(nodep)) {
+            treep->checks[0].push_back(nodep);
+            return nodep->isPure() ? std::move(treep) : nullptr;
+        }
+        if (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            if (!isPlainBoolean(implp->lhsp()) || !implp->lhsp()->isPure()) return nullptr;
+            treep->kind = Kind::IMPLICATION;
+            treep->condp = implp->lhsp();
+            treep->delay = implp->isOverlapped() ? 0 : 1;
+            treep->followedBy = implp->isFollowedBy();
+            lhsp = implp->rhsp();
+        } else if (const AstAbortOn* const abortp = VN_CAST(nodep, AbortOn)) {
+            if (!isPlainBoolean(abortp->condp()) || !abortp->condp()->isPure()) return nullptr;
+            treep->kind = abortp->kind().isAccept() ? Kind::ACCEPT : Kind::REJECT;
+            treep->condp = abortp->condp();
+            lhsp = abortp->propp();
+        } else if (const AstLogNot* const notp = VN_CAST(nodep, LogNot)) {
+            treep->kind = Kind::NOT;
+            lhsp = notp->lhsp();
+        } else if (VN_IS(nodep, SAnd) || VN_IS(nodep, SOr) || VN_IS(nodep, LogOr)) {
+            const AstSAnd* const andp = VN_CAST(nodep, SAnd);
+            if (andp && andp->propertyControl()) return nullptr;
+            treep->kind = andp ? Kind::AND : Kind::OR;
+            lhsp = VN_AS(nodep, NodeBiop)->lhsp();
+            rhsp = VN_AS(nodep, NodeBiop)->rhsp();
+        } else {
+            // A sequence of boolean checks on fixed ticks
+            if (!nodep->isPure() || !flattenFixedSeq(nodep, 0, treep->checks)) return nullptr;
+            treep->latency = treep->checks.rbegin()->first;
+            return treep;
+        }
+        treep->lhsp = buildAttemptTree(lhsp);
+        if (!treep->lhsp) return nullptr;
+        treep->latency = treep->delay + treep->lhsp->latency;
+        if (rhsp) {
+            treep->rhsp = buildAttemptTree(rhsp);
+            if (!treep->rhsp) return nullptr;
+            treep->latency = std::max(treep->latency, treep->rhsp->latency);
+        }
+        return treep;
+    }
+
     unsigned maxDepth() const { return m_maxDepth; }
     // Free a dropped sub-result condition that is not linked into the AST
     // (abort folds synthesize unparented finalCondp trees).
@@ -3288,6 +3370,8 @@ class SvaNfaLowering final {
         AstNodeExpr* successCountp = nullptr;  // Matches and vacuous successes on this tick
         // An antecedent ending without a match this tick, a vacuous success, if tracked
         AstNodeExpr* antecedentEndp = nullptr;
+        AstNodeExpr* attemptPassCountp = nullptr;  // Attempts succeeding on this tick
+        AstNodeExpr* attemptNonvacuousPassCountp = nullptr;  // Of those, the nonvacuous ones
     };
 
     // Disable condition also aborts attempts between clock events. A constant disable
@@ -3580,6 +3664,355 @@ class SvaNfaLowering final {
                                assertKillGet(c.controlVarp, c.flp, c.assertType, c.directiveType)};
         m_modp->addStmtsp(
             newAssertAlways(c.flp, VAlwaysKwd::ALWAYS, c.senTreep->cloneTree(false), ackp));
+    }
+
+    // Per-attempt lowering, see lowerAttempts. Bit k of a vector is the attempt that started k
+    // ticks ago; a null vector has no bit set.
+    struct AttemptEvents final {
+        AstVar* succVacp = nullptr;  // Attempts succeeding vacuously on this tick
+        AstVar* succp = nullptr;  // Attempts succeeding nonvacuously on this tick
+        AstVar* failVacp = nullptr;  // Attempts failing vacuously on this tick
+        AstVar* failp = nullptr;  // Attempts failing nonvacuously on this tick
+        AstVar* nonvacp = nullptr;  // Attempts known to be nonvacuous on this tick
+    };
+    // True if the attempts of a node are nonvacuous (IEEE 1800-2023 16.14.8 a, d-f)
+    static bool alwaysNonvacuous(const SvaAttemptNode& node) {
+        using Kind = SvaAttemptNode::Kind;
+        switch (node.kind) {
+        case Kind::SEQUENCE: return true;
+        case Kind::NOT: return alwaysNonvacuous(*node.lhsp);
+        case Kind::AND:
+        case Kind::OR: return alwaysNonvacuous(*node.lhsp) || alwaysNonvacuous(*node.rhsp);
+        default: return false;
+        }
+    }
+    struct AttemptCtx final {
+        LowerCtx& c;
+        const int width;  // Vector width: one more than the latency of the property
+        AstNodeDType* const vecDTypep;  // Vector data type
+        const std::string baseName;  // Prefix of the variables
+        int vars = 0;  // Variables so far
+        AstNodeStmt* combsp = nullptr;  // Statements computing this tick's vectors, in order
+        AstNodeStmt* regsp = nullptr;  // Clocked updates of the registers
+        AstNodeStmt* clearsp = nullptr;  // Clears of the registers on a rising disable
+        size_t regBits = 0;  // Register bits, for statistics
+    };
+    AstVar* newAttemptVar(AttemptCtx& a, AstNodeDType* dtypep) {
+        AstVar* const varp = new AstVar{a.c.flp, VVarType::MODULETEMP,
+                                        a.baseName + std::to_string(a.vars++), dtypep};
+        varp->lifetime(VLifetime::STATIC_EXPLICIT);
+        m_modp->addStmtsp(varp);
+        return varp;
+    }
+    // A constant of dtypep with only bit k set, or none if k is negative
+    static AstNodeExpr* newAttemptConstp(FileLine* flp, const AstNodeDType* dtypep, int k) {
+        AstConst* const constp = new AstConst{flp, AstConst::DTyped{}, dtypep};
+        if (k >= 0) constp->num().setBit(k, 1);
+        return constp;
+    }
+    static AstNodeExpr* newAttemptBitp(const AttemptCtx& a, int k) {
+        return newAttemptConstp(a.c.flp, a.vecDTypep, k);
+    }
+    // A vector of all bits equal to the boolean condp
+    static AstNodeExpr* newAttemptAllp(const AttemptCtx& a, AstNodeExpr* condp) {
+        if (condp->width() != 1) condp = new AstRedOr{a.c.flp, condp};
+        return new AstReplicate{a.c.flp, condp, static_cast<uint32_t>(a.width)};
+    }
+    static AstNodeExpr* newAttemptRefp(const AttemptCtx& a, AstVar* varp) {
+        return varp ? static_cast<AstNodeExpr*>(new AstVarRef{a.c.flp, varp, VAccess::READ})
+                    : newAttemptBitp(a, -1);
+    }
+    // A temporary holding valuep on this tick
+    AstVar* newAttemptTempp(AttemptCtx& a, AstNodeExpr* valuep) {
+        AstVar* const varp = newAttemptVar(a, valuep->dtypep());
+        a.combsp = AstNode::addNextNull<AstNodeStmt>(
+            a.combsp,
+            new AstAssign{a.c.flp, new AstVarRef{a.c.flp, varp, VAccess::WRITE}, valuep});
+        return varp;
+    }
+    // The vector OR of the vectors, or null if none
+    AstVar* newAttemptOrp(AttemptCtx& a, AstVar* lhsp, AstVar* rhsp) {
+        if (!lhsp || !rhsp) return lhsp ? lhsp : rhsp;
+        return newAttemptTempp(
+            a, new AstOr{a.c.flp, newAttemptRefp(a, lhsp), newAttemptRefp(a, rhsp)});
+    }
+    // Vector of the attempts of an event, masked with maskp, or null if none
+    AstVar* newAttemptMaskedp(AttemptCtx& a, AstVar* eventp, AstVar* maskp) {
+        if (!eventp) return nullptr;
+        return newAttemptTempp(
+            a, new AstAnd{a.c.flp, newAttemptRefp(a, eventp), newAttemptRefp(a, maskp)});
+    }
+    // A register holding the attempts in flight on this tick, to be set by setAttemptRegp
+    AstVar* newAttemptRegp(AttemptCtx& a, AstNodeDType* dtypep) {
+        AstVar* const varp = newAttemptVar(a, dtypep);
+        a.regBits += dtypep->width();
+        if (isAsyncDisable(a.c.disableExprp)) {
+            a.clearsp = AstNode::addNextNull<AstNodeStmt>(
+                a.clearsp, new AstAssignDly{a.c.flp, new AstVarRef{a.c.flp, varp, VAccess::WRITE},
+                                            newAttemptConstp(a.c.flp, dtypep, -1)});
+        }
+        return varp;
+    }
+    // Set a register to nextp on the next tick, a vector being one tick older then
+    void setAttemptRegp(AttemptCtx& a, AstVar* regp, AstNodeExpr* nextp) {
+        FileLine* const flp = a.c.flp;
+        if (regp->width() == a.width) {
+            nextp = new AstShiftL{flp, nextp, new AstConst{flp, 1}, a.width};
+        }
+        // Disabled and killed attempts are not in flight
+        AstNodeExpr* okp = notKillActive(a.c);
+        if (a.c.disableExprp) {
+            okp = new AstLogAnd{flp, okp,
+                                new AstLogNot{flp, a.c.disableExprp->cloneTreePure(false)}};
+        }
+        nextp = new AstCond{flp, okp, nextp, newAttemptConstp(flp, regp->dtypep(), -1)};
+        a.regsp = AstNode::addNextNull<AstNodeStmt>(
+            a.regsp, new AstAssignDly{flp, new AstVarRef{flp, regp, VAccess::WRITE}, nextp});
+    }
+    // The sampled boolean value of the expression condp, which it takes
+    static AstNodeExpr* newAttemptCondp(AstNodeExpr* condp) {
+        return sampled(condp->width() == 1 ? condp : new AstRedOr{condp->fileline(), condp});
+    }
+
+    // The attempt that started startOffset ticks ago, if startVarp holds
+    AstNodeExpr* newAttemptStartp(const AttemptCtx& a, int startOffset, AstVar* startVarp) {
+        FileLine* const flp = a.c.flp;
+        return new AstAnd{flp, newAttemptBitp(a, startOffset),
+                          newAttemptAllp(a, new AstVarRef{flp, startVarp, VAccess::READ})};
+    }
+    // The sampled conjunction of the checks of a tick
+    static AstNodeExpr* newAttemptChecksp(FileLine* flp, const std::vector<AstNodeExpr*>& checks) {
+        AstNodeExpr* condp = new AstConst{flp, AstConst::BitTrue{}};
+        for (AstNodeExpr* const checkp : checks) condp = newAttemptAndCheckp(flp, condp, checkp);
+        return condp;
+    }
+    static AstNodeExpr* newAttemptAndCheckp(FileLine* flp, AstNodeExpr* condp,
+                                            AstNodeExpr* checkp) {
+        return new AstLogAnd{flp, condp, newAttemptCondp(SvaNfaBuilder::newLeafCondp(checkp))};
+    }
+    // failAtp with the attempt of the checks of a tick of a sequence starting startOffset ticks
+    // after the attempt start added, if they do not hold
+    static AstNodeExpr*
+    newAttemptFailAtp(const AttemptCtx& a, AstNodeExpr* failAtp, int startOffset,
+                      const std::pair<const int, std::vector<AstNodeExpr*>>& offsetChecks) {
+        FileLine* const flp = a.c.flp;
+        const int k = startOffset + offsetChecks.first;
+        AstNodeExpr* const condp = newAttemptChecksp(flp, offsetChecks.second);
+        return new AstOr{
+            flp, failAtp,
+            new AstAnd{flp, newAttemptBitp(a, k), newAttemptAllp(a, new AstLogNot{flp, condp})}};
+    }
+    // A sequence fails on its first check that does not hold, else succeeds on its last
+    AttemptEvents lowerAttemptSequence(AttemptCtx& a, const SvaAttemptNode& node, int startOffset,
+                                       AstVar* startVarp) {
+        FileLine* const flp = a.c.flp;
+        AttemptEvents events;
+        events.nonvacp = newAttemptTempp(a, newAttemptStartp(a, startOffset, startVarp));
+        AstNodeExpr* pendingp = newAttemptRefp(a, events.nonvacp);
+        AstVar* pendingRegp = nullptr;
+        if (node.latency) {
+            pendingRegp = newAttemptRegp(a, a.vecDTypep);
+            pendingp = new AstOr{flp, pendingp, newAttemptRefp(a, pendingRegp)};
+        }
+        AstVar* const pendingVarp = newAttemptTempp(a, pendingp);
+        AstNodeExpr* failAtp = newAttemptBitp(a, -1);  // Attempt ages whose check does not hold
+        for (const auto& checks : node.checks)
+            failAtp = newAttemptFailAtp(a, failAtp, startOffset, checks);
+        AstNodeExpr* const lastCondp = newAttemptChecksp(flp, node.checks.rbegin()->second);
+        events.failp
+            = newAttemptTempp(a, new AstAnd{flp, newAttemptRefp(a, pendingVarp), failAtp});
+        events.succp = newAttemptTempp(
+            a, new AstAnd{flp,
+                          new AstAnd{flp, newAttemptRefp(a, pendingVarp),
+                                     newAttemptBitp(a, startOffset + node.latency)},
+                          newAttemptAllp(a, lastCondp)});
+        if (pendingRegp) {
+            AstNodeExpr* const resolvedp
+                = new AstOr{flp, newAttemptRefp(a, events.failp), newAttemptRefp(a, events.succp)};
+            setAttemptRegp(
+                a, pendingRegp,
+                new AstAnd{flp, newAttemptRefp(a, pendingVarp), new AstNot{flp, resolvedp}});
+        }
+        return events;
+    }
+    // Vacuous without its antecedent, else its consequent (IEEE 1800-2023 16.12.7, 16.12.9)
+    AttemptEvents lowerAttemptImplication(AttemptCtx& a, const SvaAttemptNode& node,
+                                          int startOffset, AstVar* startVarp) {
+        FileLine* const flp = a.c.flp;
+        const auto startRefp = [&]() { return new AstVarRef{flp, startVarp, VAccess::READ}; };
+        AstVar* const antVarp
+            = newAttemptTempp(a, newAttemptCondp(node.condp->cloneTreePure(false)));
+        AstNodeExpr* consStartp
+            = new AstLogAnd{flp, startRefp(), new AstVarRef{flp, antVarp, VAccess::READ}};
+        if (node.delay) {
+            AstVar* const regp = newAttemptRegp(a, m_modp->findBitDType());
+            setAttemptRegp(a, regp, consStartp);
+            consStartp = new AstVarRef{flp, regp, VAccess::READ};
+        }
+        AttemptEvents events = lowerAttempt(a, *node.lhsp, startOffset + node.delay, consStartp);
+        // Nonvacuous with its antecedent if its consequent is (16.14.8 h-k)
+        if (alwaysNonvacuous(*node.lhsp)) {
+            events.nonvacp = newAttemptTempp(
+                a, new AstAnd{flp, newAttemptBitp(a, startOffset),
+                              newAttemptAllp(
+                                  a, new AstLogAnd{flp, startRefp(),
+                                                   new AstVarRef{flp, antVarp, VAccess::READ}})});
+        }
+        AstVar* const noAntp = newAttemptTempp(
+            a,
+            new AstAnd{flp, newAttemptBitp(a, startOffset),
+                       newAttemptAllp(
+                           a, new AstLogAnd{flp, startRefp(),
+                                            new AstLogNot{flp, new AstVarRef{flp, antVarp,
+                                                                             VAccess::READ}}})});
+        // A followed-by fails without its antecedent, vacuously (16.14.8 j, k)
+        if (node.followedBy) {
+            events.failVacp = newAttemptOrp(a, events.failVacp, noAntp);
+        } else {
+            events.succVacp = newAttemptOrp(a, events.succVacp, noAntp);
+        }
+        return events;
+    }
+    // 'and' fails on the first failure and succeeds on the second success of its operands, 'or'
+    // the other way round (IEEE 1800-2023 16.12.4, 16.12.5). Its attempt is nonvacuous if an
+    // operand known so far is (16.14.8 e, f).
+    AttemptEvents lowerAttemptAndOr(AttemptCtx& a, const SvaAttemptNode& node, int startOffset,
+                                    AstVar* startVarp) {
+        using Kind = SvaAttemptNode::Kind;
+        FileLine* const flp = a.c.flp;
+        const auto startRefp = [&]() { return new AstVarRef{flp, startVarp, VAccess::READ}; };
+        AttemptEvents events;
+        const bool isAnd = node.kind == Kind::AND;
+        const AttemptEvents lhs = lowerAttempt(a, *node.lhsp, startOffset, startRefp());
+        const AttemptEvents rhs = lowerAttempt(a, *node.rhsp, startOffset, startRefp());
+        // The outcome deciding on the first operand to resolve with it, and the other one
+        AstVar* const lhsFirstp = isAnd ? newAttemptOrp(a, lhs.failVacp, lhs.failp)
+                                        : newAttemptOrp(a, lhs.succVacp, lhs.succp);
+        AstVar* const rhsFirstp = isAnd ? newAttemptOrp(a, rhs.failVacp, rhs.failp)
+                                        : newAttemptOrp(a, rhs.succVacp, rhs.succp);
+        AstVar* const lhsSecondp = isAnd ? newAttemptOrp(a, lhs.succVacp, lhs.succp)
+                                         : newAttemptOrp(a, lhs.failVacp, lhs.failp);
+        AstVar* const rhsSecondp = isAnd ? newAttemptOrp(a, rhs.succVacp, rhs.succp)
+                                         : newAttemptOrp(a, rhs.failVacp, rhs.failp);
+        events.nonvacp = newAttemptOrp(a, lhs.nonvacp, rhs.nonvacp);
+        // Registers: resolved attempts, operands resolved with the second outcome, and
+        // attempts known to be nonvacuous
+        AstVar* const resolvedRegp = newAttemptRegp(a, a.vecDTypep);
+        AstVar* const lhsSecondRegp = newAttemptRegp(a, a.vecDTypep);
+        AstVar* const rhsSecondRegp = newAttemptRegp(a, a.vecDTypep);
+        AstVar* const nonvacRegp = newAttemptRegp(a, a.vecDTypep);
+        AstVar* const lhsSecondSoFarp = newAttemptTempp(
+            a, new AstOr{flp, newAttemptRefp(a, lhsSecondRegp), newAttemptRefp(a, lhsSecondp)});
+        AstVar* const rhsSecondSoFarp = newAttemptTempp(
+            a, new AstOr{flp, newAttemptRefp(a, rhsSecondRegp), newAttemptRefp(a, rhsSecondp)});
+        AstVar* const nonvacSoFarp = newAttemptTempp(
+            a, new AstOr{flp, newAttemptRefp(a, nonvacRegp), newAttemptRefp(a, events.nonvacp)});
+        AstVar* const unresolvedp
+            = newAttemptTempp(a, new AstNot{flp, newAttemptRefp(a, resolvedRegp)});
+        AstVar* const firstNowp
+            = newAttemptTempp(a, new AstAnd{flp, newAttemptRefp(a, unresolvedp),
+                                            new AstOr{flp, newAttemptRefp(a, lhsFirstp),
+                                                      newAttemptRefp(a, rhsFirstp)}});
+        AstNodeExpr* const secondBothp = new AstOr{
+            flp,
+            new AstAnd{flp, newAttemptRefp(a, lhsSecondp), newAttemptRefp(a, rhsSecondSoFarp)},
+            new AstAnd{flp, newAttemptRefp(a, rhsSecondp), newAttemptRefp(a, lhsSecondSoFarp)}};
+        AstVar* const secondNowp = newAttemptTempp(
+            a, new AstAnd{flp, secondBothp,
+                          new AstAnd{flp, newAttemptRefp(a, unresolvedp),
+                                     new AstNot{flp, newAttemptRefp(a, firstNowp)}}});
+        AstVar* const firstNonvacp = newAttemptMaskedp(a, firstNowp, nonvacSoFarp);
+        AstVar* const firstVacp
+            = newAttemptTempp(a, new AstAnd{flp, newAttemptRefp(a, firstNowp),
+                                            new AstNot{flp, newAttemptRefp(a, nonvacSoFarp)}});
+        AstVar* const secondNonvacp = newAttemptMaskedp(a, secondNowp, nonvacSoFarp);
+        AstVar* const secondVacp
+            = newAttemptTempp(a, new AstAnd{flp, newAttemptRefp(a, secondNowp),
+                                            new AstNot{flp, newAttemptRefp(a, nonvacSoFarp)}});
+        if (isAnd) {
+            events = {secondVacp, secondNonvacp, firstVacp, firstNonvacp, events.nonvacp};
+        } else {
+            events = {firstVacp, firstNonvacp, secondVacp, secondNonvacp, events.nonvacp};
+        }
+        setAttemptRegp(a, resolvedRegp,
+                       new AstOr{flp, newAttemptRefp(a, resolvedRegp),
+                                 new AstOr{flp, newAttemptRefp(a, firstNowp),
+                                           newAttemptRefp(a, secondNowp)}});
+        setAttemptRegp(a, lhsSecondRegp, newAttemptRefp(a, lhsSecondSoFarp));
+        setAttemptRegp(a, rhsSecondRegp, newAttemptRefp(a, rhsSecondSoFarp));
+        setAttemptRegp(a, nonvacRegp, newAttemptRefp(a, nonvacSoFarp));
+        return events;
+    }
+    // The condition holding on a tick of an attempt in flight resolves it, vacuously, before
+    // its operand (IEEE 1800-2023 16.12.14, 16.14.8 ab-ae)
+    AttemptEvents lowerAttemptAbort(AttemptCtx& a, const SvaAttemptNode& node, int startOffset,
+                                    AstVar* startVarp) {
+        using Kind = SvaAttemptNode::Kind;
+        FileLine* const flp = a.c.flp;
+        AttemptEvents events;
+        const AttemptEvents opEvents = lowerAttempt(a, *node.lhsp, startOffset,
+                                                    new AstVarRef{flp, startVarp, VAccess::READ});
+        AstVar* const startedRegp = newAttemptRegp(a, a.vecDTypep);
+        AstVar* const resolvedRegp = newAttemptRegp(a, a.vecDTypep);
+        AstVar* const startedp
+            = newAttemptTempp(a, new AstOr{flp, newAttemptRefp(a, startedRegp),
+                                           newAttemptStartp(a, startOffset, startVarp)});
+        AstVar* const abortedp = newAttemptTempp(
+            a, new AstAnd{flp,
+                          new AstAnd{flp, newAttemptRefp(a, startedp),
+                                     new AstNot{flp, newAttemptRefp(a, resolvedRegp)}},
+                          newAttemptAllp(a, newAttemptCondp(node.condp->cloneTreePure(false)))});
+        AstVar* const livep
+            = newAttemptTempp(a, new AstNot{flp, new AstOr{flp, newAttemptRefp(a, resolvedRegp),
+                                                           newAttemptRefp(a, abortedp)}});
+        events.succVacp = newAttemptMaskedp(a, opEvents.succVacp, livep);
+        events.succp = newAttemptMaskedp(a, opEvents.succp, livep);
+        events.failVacp = newAttemptMaskedp(a, opEvents.failVacp, livep);
+        events.failp = newAttemptMaskedp(a, opEvents.failp, livep);
+        AstVar* const resolvedNowp
+            = newAttemptOrp(a, newAttemptOrp(a, events.succVacp, events.succp),
+                            newAttemptOrp(a, events.failVacp, events.failp));
+        // Nonvacuous when its operand resolves so without the condition (16.14.8 ab-ae)
+        events.nonvacp = newAttemptOrp(a, events.succp, events.failp);
+        if (node.kind == Kind::ACCEPT) {
+            events.succVacp = newAttemptOrp(a, events.succVacp, abortedp);
+        } else {
+            events.failVacp = newAttemptOrp(a, events.failVacp, abortedp);
+        }
+        setAttemptRegp(a, startedRegp, newAttemptRefp(a, startedp));
+        setAttemptRegp(a, resolvedRegp,
+                       new AstOr{flp, newAttemptRefp(a, resolvedRegp),
+                                 new AstOr{flp, newAttemptRefp(a, abortedp),
+                                           newAttemptRefp(a, resolvedNowp)}});
+        return events;
+    }
+    // The outcomes on this tick of the attempts of node, which starts startOffset ticks after
+    // the attempt start, of the attempt started startOffset ticks ago if startp holds
+    AttemptEvents lowerAttempt(AttemptCtx& a, const SvaAttemptNode& node, int startOffset,
+                               AstNodeExpr* startp) {
+        using Kind = SvaAttemptNode::Kind;
+        AstVar* startVarp;
+        if (const AstVarRef* const refp = VN_CAST(startp, VarRef)) {
+            startVarp = refp->varp();
+            VL_DO_DANGLING(startp->deleteTree(), startp);
+        } else {
+            startVarp = newAttemptTempp(a, startp);
+        }
+        switch (node.kind) {
+        case Kind::SEQUENCE: return lowerAttemptSequence(a, node, startOffset, startVarp);
+        case Kind::IMPLICATION: return lowerAttemptImplication(a, node, startOffset, startVarp);
+        case Kind::NOT: {
+            // Swaps success and failure, keeping the vacuity (IEEE 1800-2023 16.12.3, 16.14.8 d)
+            AttemptEvents events = lowerAttempt(a, *node.lhsp, startOffset,
+                                                new AstVarRef{a.c.flp, startVarp, VAccess::READ});
+            std::swap(events.succVacp, events.failVacp);
+            std::swap(events.succp, events.failp);
+            return events;
+        }
+        case Kind::AND:
+        case Kind::OR: return lowerAttemptAndOr(a, node, startOffset, startVarp);
+        default: return lowerAttemptAbort(a, node, startOffset, startVarp);
+        }
     }
 
     // Add the threads of a terminal Link that reach their final check this tick
@@ -4294,6 +4727,67 @@ class SvaNfaLowering final {
     }
 
 public:
+    // Lower a property per attempt: each operand of it resolves within a fixed number of ticks
+    // of the attempt start, so its attempts in flight are kept as vectors by start tick.
+    SignalSet lowerAttempts(AstAssert* const assertp, const SvaAttemptNode& tree,
+                            AstSenTree* const senTreep, AstNodeExpr* const disableExprp) {
+        FileLine* const flp = assertp->fileline();
+        const std::string baseName = m_names.get("");
+        AstVar* const killVarp
+            = new AstVar{flp, VVarType::MODULETEMP, baseName + "__kill", m_u32DTypep};
+        killVarp->lifetime(VLifetime::STATIC_EXPLICIT);
+        m_modp->addStmtsp(killVarp);
+        SvaGraph graph;  // None
+        LowerCtx c{flp,
+                   senTreep,
+                   disableExprp,
+                   nullptr,
+                   assertp->userType(),
+                   assertp->directive(),
+                   killVarp,
+                   assertp->controlVarp(),
+                   graph,
+                   false,
+                   nullptr,
+                   false};
+        // One bit more than the latency, and two at least, as a register of a bit is not a vector
+        const int width = std::max(tree.latency + 1, 2);
+        AttemptCtx a{c, width, m_modp->findBitDType(width, width, VSigning::UNSIGNED),
+                     baseName + "__t"};
+        // Attempts start while the assertion is on, and not killed or disabled
+        AstNodeExpr* okp = notKillActive(c);
+        if (disableExprp) {
+            okp = new AstLogAnd{flp, okp, new AstLogNot{flp, disableExprp->cloneTreePure(false)}};
+        }
+        AstVar* const okVarp = newAttemptTempp(a, okp);
+        const AttemptEvents events = lowerAttempt(
+            a, tree, 0,
+            new AstLogAnd{flp, assertOnCond(c.controlVarp, flp, c.assertType, c.directiveType),
+                          new AstVarRef{flp, okVarp, VAccess::READ}});
+        const auto newOutcomep = [&](AstVar* vacp, AstVar* nonvacp) {
+            AstVar* const allp = newAttemptOrp(a, vacp, nonvacp);
+            return newAttemptTempp(
+                a, new AstAnd{flp, newAttemptRefp(a, allp),
+                              newAttemptAllp(a, new AstVarRef{flp, okVarp, VAccess::READ})});
+        };
+        AstVar* const failsp = newOutcomep(events.failVacp, events.failp);
+        AstVar* const passesp = newOutcomep(events.succVacp, events.succp);
+        AstVar* const nonvacPassesp = newOutcomep(nullptr, events.succp);
+        m_modp->addStmtsp(newAssertAlways(flp, VAlwaysKwd::ALWAYS_COMB, nullptr, a.combsp));
+        if (a.regsp) addStateAlways(c, a.regsp, a.clearsp);
+        emitKillAckNba(c);
+        V3Stats::addStatSum("Assertions, NFA per-attempt properties", 1);
+        V3Stats::addStatSum("Assertions, NFA per-attempt register bits", a.regBits);
+
+        SignalSet sigs;
+        sigs.requiredStepRejectp
+            = new AstNeq{flp, newAttemptRefp(a, failsp), newAttemptBitp(a, -1)};
+        sigs.threadFailCountp = new AstCountOnes{flp, newAttemptRefp(a, failsp)};
+        sigs.attemptPassCountp = new AstCountOnes{flp, newAttemptRefp(a, passesp)};
+        sigs.attemptNonvacuousPassCountp = new AstCountOnes{flp, newAttemptRefp(a, nonvacPassesp)};
+        return sigs;
+    }
+
     // Combine terminal/reject signals into final output expression.
     static AstNodeExpr* assembleResult(AstNodeCoverOrAssert* const assertp, const bool negated,
                                        AstNodeExpr* const matchCondp, const SignalSet& sigs,
@@ -6423,8 +6917,15 @@ class AssertNfaVisitor final : public VNVisitor {
 
     // Run stmtp once per count above one on each tick; the assertion runs it the first time
     void addActionReplay(AstSenTree* const senTreep, AstNodeExpr* const countp,
-                         AstNodeStmt* const stmtp) {
+                         AstNodeStmt* stmtp) {
         FileLine* const flp = stmtp->fileline();
+        // Each run is of another attempt, so one that suspends does not hold back the others
+        if (v3Global.opt.timing().isSetTrue() && V3AssertCommon::procSuspends(stmtp)) {
+            AstFork* const forkp = new AstFork{flp, VJoinType::JOIN_NONE};
+            forkp->immediateStart(true);
+            forkp->addForksp(new AstForkItem{flp, new AstBegin{flp, "", stmtp, true}});
+            stmtp = forkp;
+        }
         AstVar* const remainingCountVarp
             = new AstVar{flp, VVarType::MODULETEMP, m_failCountNames.get(""),
                          m_modp->findBasicDType(VBasicDTypeKwd::UINT32)};
@@ -6485,6 +6986,56 @@ class AssertNfaVisitor final : public VNVisitor {
             // fires when reject=1 && match=1 in the same cycle.
             prependFailAction(assertp, m_modp, V3AssertCommon::cloneAction(ifp, m_actionNames));
         }
+    }
+
+    // Run the pass action once per attempt succeeding on a tick, of the counts it takes, under
+    // the pass control of its vacuity
+    void attachAttemptPassActions(AstAssert* const assertp, AstSenTree* const senTreep,
+                                  AstNodeExpr* attemptPassCountp,
+                                  AstNodeExpr* attemptNonvacuousPassCountp) {
+        if (!assertp->passsp()) {
+            VL_DO_DANGLING(attemptPassCountp->deleteTree(), attemptPassCountp);
+            VL_DO_DANGLING(attemptNonvacuousPassCountp->deleteTree(), attemptNonvacuousPassCountp);
+            return;
+        }
+        FileLine* const flp = assertp->fileline();
+        AstNodeStmt* const passsp = assertp->passsp()->unlinkFrBackWithNext();
+        const auto newPassOnp = [&](bool vacuous) {
+            return assertPassOnCond(assertp->controlVarp(), flp, assertp->userType(),
+                                    assertp->directive(), vacuous);
+        };
+        const auto newReplayp = [&](bool vacuous) {
+            return newPassOnIf(assertp->controlVarp(), flp, new AstConst{flp, AstConst::BitTrue{}},
+                               V3AssertCommon::cloneAction(passsp, m_actionNames),
+                               assertp->userType(), assertp->directive(), vacuous);
+        };
+        const AstNodeDType* const countDTypep = attemptPassCountp->dtypep();
+        const auto newZerop = [&]() { return newTypedConstp(flp, countDTypep, 0); };
+        AstNodeExpr* const vacuousCountp = new AstSub{
+            flp, attemptPassCountp, attemptNonvacuousPassCountp->cloneTreePure(false)};
+        AstNodeExpr* const nonvacuousp
+            = new AstNeq{flp, attemptNonvacuousPassCountp->cloneTreePure(false), newZerop()};
+        // The assertion runs the pass action once, under the pass control of a nonvacuous
+        // success if any, tested once. The replays run the other passes, a replay running once
+        // per count above one. The fail action prefix is the same pass.
+        AstIf* const firstp = new AstIf{
+            flp,
+            new AstCond{flp, nonvacuousp, newPassOnp(false),
+                        new AstLogAnd{
+                            flp, new AstNeq{flp, vacuousCountp->cloneTreePure(false), newZerop()},
+                            newPassOnp(true)}},
+            passsp};
+        firstp->isBoundsCheck(true);
+        firstp->user1(true);
+        addActionReplay(senTreep, attemptNonvacuousPassCountp, newReplayp(false));
+        // The vacuous count, one more when the assertion ran a nonvacuous pass
+        addActionReplay(senTreep,
+                        new AstAdd{flp, vacuousCountp,
+                                   new AstCond{flp, nonvacuousp->cloneTreePure(false),
+                                               newTypedConstp(flp, countDTypep, 1), newZerop()}},
+                        newReplayp(true));
+        assertp->addPasssp(firstp);
+        prependFailAction(assertp, m_modp, V3AssertCommon::cloneAction(firstp, m_actionNames));
     }
 
     void makeActionsReactive(AstNodeCoverOrAssert* assertp, AstSenTree* senTreep) {
@@ -6865,6 +7416,41 @@ class AssertNfaVisitor final : public VNVisitor {
         return !nodep->exists([](const AstNodeExpr* exprp) { return exprp->isMultiCycleSva(); });
     }
 
+    // Count the implications of the tree, and find whether it has another property operator
+    static void findAttemptKinds(const SvaAttemptNode& node, int& implications, bool& other) {
+        using Kind = SvaAttemptNode::Kind;
+        if (node.kind == Kind::IMPLICATION) {
+            ++implications;
+        } else if (node.kind != Kind::SEQUENCE) {
+            other = true;
+        }
+        if (node.lhsp) findAttemptKinds(*node.lhsp, implications, other);
+        if (node.rhsp) findAttemptKinds(*node.rhsp, implications, other);
+    }
+    // The tree to lower per attempt of an asserted property with an implication and another
+    // property operator, which may be another implication, if each operand of it resolves
+    // within a fixed number of ticks
+    static std::unique_ptr<SvaAttemptNode> attemptTree(const AstNodeCoverOrAssert* assertp,
+                                                       AstNodeExpr* bodyp, bool localValues) {
+        // A match item or future value is not on a tick of the attempt
+        if (!VN_IS(assertp, Assert) || localValues || bodyp->exists([](const AstNode* np) {
+                return VN_IS(np, ExprStmt) || isFutureValueFn(np);
+            })) {
+            return nullptr;
+        }
+        std::unique_ptr<SvaAttemptNode> treep = SvaNfaBuilder::buildAttemptTree(bodyp);
+        if (!treep) return nullptr;
+        int implications = 0;
+        bool other = false;
+        findAttemptKinds(*treep, implications, other);
+        if (!implications || (!other && implications < 2)) return nullptr;
+        if (treep->latency > SvaAttemptNode::MAX_LATENCY) {
+            V3Stats::addStatSum("Assertions, NFA per-attempt properties over width limit", 1);
+            return nullptr;
+        }
+        return treep;
+    }
+
     void processAssertion(AstNodeCoverOrAssert* assertp) {
         if (assertp->immediate()) return;
 
@@ -6999,6 +7585,24 @@ class AssertNfaVisitor final : public VNVisitor {
         }
 
         FileLine* const flp = assertp->fileline();
+
+        if (const std::unique_ptr<SvaAttemptNode> treep
+            = attemptTree(assertp, propp->propp(), !localValueps.empty())) {
+            const auto signals
+                = m_loweringp->lowerAttempts(assertAssertp, *treep, senTreep, disableExprp);
+            AstNodeExpr* failCountp = signals.threadFailCountp;
+            if (!assertAssertp->failsp()) VL_DO_DANGLING(failCountp->deleteTree(), failCountp);
+            finishDirective(
+                assertp, PropertyParts{}, senTreep,
+                SvaNfaLowering::assembleResult(assertp, false, nullptr, signals, nullptr), nullptr,
+                nullptr, failCountp, nullptr, nullptr);
+            // After the replays, which clone the fail action without the pass action prefix
+            attachAttemptPassActions(assertAssertp, senTreep, signals.attemptPassCountp,
+                                     signals.attemptNonvacuousPassCountp);
+            VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
+            UINFO(4, "Per-attempt converted assertion at " << flp << endl);
+            return;
+        }
 
         SvaGraph graph;
         // A vacuous success fails a negated assertion (IEEE 1800-2023 16.12.3), so a cover,
