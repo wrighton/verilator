@@ -16,8 +16,9 @@ if not test.have_solver:
 
 test.compile(verilator_flags2=['--stats', '-Wno-UNSATCONSTR', '-Wno-WIDTH'])
 
-# idx, y, fixed_a and grow; not arr of a merged object, nor whole and elems solved together
-test.file_grep(test.stats, r'Randomize, scalarized arrays\s+(\d+)', 4)
+# idx, y, fixed_a, grow, and of Last and Ordered idx, y and q; not arr of a merged object, nor
+# whole and elems solved together
+test.file_grep(test.stats, r'Randomize, scalarized arrays\s+(\d+)', 7)
 
 log = test.obj_dir + "/solver.log"
 test.execute(all_run_flags=['+verilator+solver+file+' + log])
@@ -34,5 +35,7 @@ test.file_grep_not(log, r'elems__V[sg]')
 test.file_grep(log, r'\(let \(.*\(arr h\.arr\)')
 # The table lookups are solved without arrays
 test.file_grep(log, r'\(set-logic QF_BV\)')
+# q[$] of a queue whose size is solved is the element at the solver's index
+test.file_grep(log, r'\(define-fun idx__Vc00000000 \(\) \(_ BitVec 8\) \(ite ')
 
 test.passes()

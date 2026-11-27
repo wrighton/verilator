@@ -2989,6 +2989,26 @@ private:
         return newp;
     }
 
+    // Replace selp, the SMT select of an element of scalar array varp at an index the solver
+    // gives, '(select <array> <index>)', with the element's term at that index term, or at
+    // indexp's if given, as the select's may be a name bound only where it is (editLetBound)
+    AstSFormatF* replaceWithElemChainp(AstSFormatF* selp, AstVar* varp, AstNodeExpr* indexp) {
+        FileLine* const fl = selp->fileline();
+        if (!indexp) indexp = VN_AS(selp->exprsp()->nextp(), NodeExpr)->unlinkFrBack();
+        AstSFormatF* const indexTextp = new AstSFormatF{fl, "%s", false, indexp};
+        indexTextp->dtypeSetString();
+        AstCMethodHard* const termp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_ELEM_CHAIN,
+            new AstConst{fl, AstConst::String{}, SmtUtil::smtSymbol(varp->name())}};
+        termp->addPinsp(indexTextp);
+        termp->dtypeSetString();
+        AstSFormatF* const newp = new AstSFormatF{fl, "%s", false, termp};
+        newp->dtypeSetString();
+        selp->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(selp), selp);
+        return newp;
+    }
     // Create SFormatF for array dereference inside solver
     AstSFormatF* createSolverArrDerefp(FileLine* const fl, AstNodeExpr* const arrExprp,
                                        AstNodeExpr* const idxExprp) {
@@ -8444,9 +8464,12 @@ private:
                     AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
                     nodep->addPinsp(newSmtIndexp(pinp, pinp->isSigned()));
                 }
-                AstVar* const scalarVarp = indexIsRand ? nullptr : scalarArrayVarp(nodep->fromp());
+                AstVar* const scalarVarp = scalarArrayVarp(nodep->fromp());
+                // An index of solver terms, as q[$] of a queue whose size is solved has (see
+                // visit(AstCMethodHard) for ARRAY_AT_BACK), selects through elemChain
+                const bool solverIndex = indexIsRand || nodep->pinsp()->user1();
                 AstNodeExpr* scalarIndexp
-                    = scalarVarp ? nodep->pinsp()->cloneTreePure(false) : nullptr;
+                    = scalarVarp && !solverIndex ? nodep->pinsp()->cloneTreePure(false) : nullptr;
                 iterateChildren(nodep);
                 AstNodeExpr* pinp = nodep->pinsp()->unlinkFrBack();
                 AstSFormatF* newp;
@@ -8496,7 +8519,10 @@ private:
                 }
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(nodep->deleteTree(), nodep);
-                if (scalarVarp && !m_structSel) {
+                if (scalarVarp && !m_structSel && solverIndex) {
+                    newp = replaceWithElemChainp(newp, scalarVarp,
+                                                 smtGuardp ? pinp->cloneTreePure(false) : nullptr);
+                } else if (scalarVarp && !m_structSel) {
                     newp = replaceWithElemTermp(newp, scalarVarp, scalarIndexp);
                     scalarIndexp = nullptr;
                 }
@@ -9000,6 +9026,7 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
     std::unordered_set<AstVar*> m_randArgs;  // Variables randomize() is called with
     std::unordered_set<const AstNode*> m_selectedRefs;  // References selected at known indices
     std::vector<std::pair<AstVar*, const AstNodeExpr*>> m_indices;  // Select indices to check
+    std::vector<std::pair<AstVar*, const AstNodeExpr*>> m_offsets;  // Offsets from '$' to check
     // The classes whose constraints reference each array other than as a select of a
     // non-random array, which the solver reads as a value
     std::unordered_map<AstVar*, std::vector<AstClass*>> m_arrayRefs;
@@ -9030,11 +9057,12 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
         const AstNodeDType* const elemp = dtypep->subDTypep()->skipRefp();
         return elemp->isIntegralOrPacked() && elemp->width() <= VL_QUADSIZE;
     }
-    // Whether an index's value is known before the solve
-    bool knownIndex(const AstNodeExpr* indexp) const {
-        return indexp->forall([this](const AstNode* np) {
+    // Whether an index's value is known before the solve, or if 'solved', is an expression of
+    // variables the solver may give
+    bool knownIndex(const AstNodeExpr* indexp, bool solved = false) const {
+        return indexp->forall([this, solved](const AstNode* np) {
             if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
-                return !refp->varp()->isRand() && !m_randArgs.count(refp->varp());
+                return solved || (!refp->varp()->isRand() && !m_randArgs.count(refp->varp()));
             }
             return VN_IS(np, NodeExpr) && !VN_IS(np, NodeFTaskRef) && !VN_IS(np, CMethodHard)
                    && !VN_IS(np, MethodCall) && !VN_IS(np, MemberRef) && !VN_IS(np, LambdaArgRef);
@@ -9184,6 +9212,10 @@ class SolverScalarArrayVisitor final : public VNVisitorConst {
                     if (nodep->method() == VCMethod::ARRAY_AT) {
                         m_selectedRefs.insert(refp);
                         m_indices.emplace_back(refp->varp(), nodep->pinsp());
+                    } else if (nodep->method() == VCMethod::ARRAY_AT_BACK) {
+                        // q[$ - k], at an index the solver may give, see elemChain
+                        m_selectedRefs.insert(refp);
+                        m_offsets.emplace_back(refp->varp(), nodep->pinsp());
                     } else if (nodep->method() == VCMethod::DYN_SIZE) {
                         m_selectedRefs.insert(refp);  // The size is a variable of its own
                     }
@@ -9233,6 +9265,9 @@ public:
         iterateConst(netlistp);
         for (const auto& pair : m_indices) {
             if (!knownIndex(pair.second)) exclude(pair.first);
+        }
+        for (const auto& pair : m_offsets) {
+            if (!knownIndex(pair.second, true)) exclude(pair.first);
         }
         excludeMixed();
         for (AstVar* const varp : m_candidates) varp->solverScalar(true);
