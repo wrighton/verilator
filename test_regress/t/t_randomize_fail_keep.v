@@ -13,6 +13,13 @@
 `define checkp(gotv,expv_s) do begin string gotv_s; gotv_s = $sformatf("%p", gotv); if ((gotv_s) != (expv_s)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv_s), (expv_s)); `stop; end end while(0);
 // verilog_format: on
 
+// An object of a rand handle, with constraints and an array of its own
+class Small;
+  rand int v;
+  rand int q[$];
+  constraint c { v inside {[0 : 9]}; }
+endclass
+
 // A dynamic array and a queue of one solved size, whose elements can reach the sum only
 // with a size above need
 class Ball;
@@ -54,13 +61,48 @@ class Outer;
   endfunction
 endclass
 
+// Holds a rand handle and a fixed-size array of rand handles, the objects not constrained here
+class Holder;
+  rand int a[];
+  rand int unsigned n;
+  rand Small o;
+  rand Small oa[2];
+  bit inf;
+  constraint c {
+    a.size() == n;
+    n inside {[2 : 4]};
+    foreach (a[i]) a[i] == i + 1;
+    inf -> n == 100;
+  }
+  function new;
+    o = new;
+    foreach (oa[i]) oa[i] = new;
+  endfunction
+endclass
+
+// Sizes an array with unconstrained elements, so has no size phase
+class SizeOnly;
+  rand int a[];
+  rand int unsigned n;
+  bit inf;
+  constraint c {
+    a.size() == n;
+    n inside {[1 : 3]};
+    inf -> n == 50;
+  }
+endclass
+
 module t;
   initial begin
     Ball b;
     Outer o;
+    SizeOnly z;
+    Holder h;
     int ok;
     b = new;
     o = new;
+    z = new;
+    h = new;
     repeat (4) begin
       // Feasible only with sizes not allowed
       b.need = 16;
@@ -107,6 +149,34 @@ module t;
       `checkd(o.sub.st, 9);
       `checkd(o.s, 3);
     end
+    h.a = '{7, 7, 7};
+    h.n = 3;
+    h.o.v = 77;
+    h.oa[0].v = 55;
+    h.oa[1].v = 66;
+    h.inf = 1;
+    ok = h.randomize();
+    `checkd(ok, 0);
+    `checkp(h.a, "'{'h7, 'h7, 'h7}");
+    `checkd(h.o.v, 77);
+    `checkd(h.oa[0].v, 55);
+    `checkd(h.oa[1].v, 66);
+    h.inf = 0;
+    ok = h.randomize();
+    `checkd(ok, 1);
+    if (h.a.size() != h.n || h.o.v > 9 || h.oa[0].v > 9 || h.oa[1].v > 9) `stop;
+
+    z.a = '{1, 2};
+    z.n = 2;
+    z.inf = 1;
+    ok = z.randomize();
+    `checkd(ok, 0);
+    `checkp(z.a, "'{'h1, 'h2}");
+    `checkd(z.n, 2);
+    z.inf = 0;
+    ok = z.randomize();
+    `checkd(ok, 1);
+    `checkd(z.a.size(), z.n);
     $write("*-* All Finished *-*\n");
     $finish;
   end
