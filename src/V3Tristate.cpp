@@ -49,6 +49,12 @@
 // to an input and the __out port carries the output driver signal and
 // the __en port carried the output enable for that driver.
 //
+// Interface nets: a net of an interface that other modules drive across hierarchy is resolved in
+// its interface from the contributions, a value and an enable each, of the driving modules. Its
+// own drivers, the continuous assignments in the interface where it is not tristate itself,
+// become contributions too when their values cannot be 'z (TristateMayZVisitor); else the net
+// keeps the lowering in which the external contributions replace them.
+//
 // Note 1800-2012 adds user defined resolution functions. This suggests
 // long term this code should be scoped-based and resolve all nodes at once
 // rather than hierarchically. If/when that is done, make sure to avoid
@@ -449,6 +455,139 @@ public:
 };
 
 //######################################################################
+// Finds which of the given variables may be 'z after tristate lowering, i.e. are written from or
+// connected to a value that may be 'z. As elsewhere, tasks, functions and classes are not tracked.
+
+class TristateMayZVisitor final : public VNVisitorConst {
+    using WriteVars = std::vector<std::pair<uint32_t, uint32_t>>;  // (write, variable index)
+
+    const std::function<bool(AstVar*)> m_isSource;  // Whether a variable may be 'z
+    std::vector<AstVar*> m_varps;  // Variables in writes
+    std::unordered_map<const AstVar*, uint32_t> m_indexes;  // Index of each in m_varps
+    WriteVars m_writtenVars;  // Variables written by each write
+    WriteVars m_readVars;  // Variables read by each write
+    std::vector<bool> m_mayZ;  // Per variable, whether written a value that may be 'z
+    uint32_t m_writes = 0;  // Number of writes
+    uint32_t m_write = 0;  // Current write
+    bool m_inLhs = false;  // In the written side of the current write
+    bool m_inWrite = false;  // In a write
+
+    uint32_t indexOf(AstVar* varp) {
+        const auto pair = m_indexes.emplace(varp, m_varps.size());
+        if (pair.second) m_varps.push_back(varp);
+        return pair.first->second;
+    }
+    void visitWrite(AstNode* lhsp, AstNode* rhsp) {
+        VL_RESTORER(m_inLhs);
+        VL_RESTORER(m_inWrite);
+        VL_RESTORER(m_write);
+        m_write = m_writes++;
+        m_inWrite = true;
+        m_inLhs = true;
+        iterateAndNextConstNull(lhsp);
+        m_inLhs = false;
+        iterateAndNextConstNull(rhsp);
+    }
+    void visit(AstNodeAssign* nodep) override { visitWrite(nodep->lhsp(), nodep->rhsp()); }
+    void visit(AstPin* nodep) override {
+        if (nodep->modVarp()->isInput()) {
+            visitWrite(nullptr, nodep->exprp());
+            m_writtenVars.emplace_back(m_writes - 1, indexOf(nodep->modVarp()));
+        } else {
+            visitWrite(nodep->exprp(), nullptr);
+            m_readVars.emplace_back(m_writes - 1, indexOf(nodep->modVarp()));
+        }
+    }
+    void visitRef(AstVar* varp, VAccess access) {
+        if (!m_inWrite) return;
+        if (!m_inLhs) {
+            m_readVars.emplace_back(m_write, indexOf(varp));
+        } else if (access.isWriteOrRW()) {
+            m_writtenVars.emplace_back(m_write, indexOf(varp));
+        }
+    }
+    void visit(AstNodeVarRef* nodep) override { visitRef(nodep->varp(), nodep->access()); }
+    void visit(AstClass*) override {}
+    void visit(AstNodeFTask*) override {}
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+    // Group the pairs by write or by variable: the others of key k are at
+    // [startr[k], startr[k + 1]) in othersr
+    static void group(const WriteVars& pairs, size_t keys, bool byWrite,
+                      std::vector<uint32_t>& startr, std::vector<uint32_t>& othersr) {
+        startr.assign(keys + 1, 0);
+        for (const auto& pair : pairs) ++startr[(byWrite ? pair.first : pair.second) + 1];
+        for (size_t key = 0; key < keys; ++key) startr[key + 1] += startr[key];
+        std::vector<uint32_t> nexts{startr};
+        othersr.resize(pairs.size());
+        for (const auto& pair : pairs) {
+            othersr[nexts[byWrite ? pair.first : pair.second]++]
+                = byWrite ? pair.second : pair.first;
+        }
+    }
+
+public:
+    TristateMayZVisitor(AstNetlist* nodep, std::function<bool(AstVar*)> isSource,
+                        const std::vector<AstVar*>& queryps)
+        : m_isSource{isSource} {
+        iterateConst(nodep);
+        const size_t vars = m_varps.size();
+        // The variables the given ones depend on: read by writes of them, transitively
+        std::vector<uint32_t> writesStart, writesOf;  // Writes of each variable
+        std::vector<uint32_t> readStart, readOf;  // Variables read by each write
+        group(m_writtenVars, vars, false, writesStart, writesOf);
+        group(m_readVars, m_writes, true, readStart, readOf);
+        std::vector<bool> needed(vars);
+        std::vector<uint32_t> work;
+        for (AstVar* const varp : queryps) {
+            const auto it = m_indexes.find(varp);
+            if (it == m_indexes.end() || needed[it->second]) continue;
+            needed[it->second] = true;
+            work.push_back(it->second);
+        }
+        while (!work.empty()) {
+            const uint32_t var = work.back();
+            work.pop_back();
+            for (uint32_t i = writesStart[var]; i < writesStart[var + 1]; ++i) {
+                const uint32_t write = writesOf[i];
+                for (uint32_t j = readStart[write]; j < readStart[write + 1]; ++j) {
+                    if (needed[readOf[j]]) continue;
+                    needed[readOf[j]] = true;
+                    work.push_back(readOf[j]);
+                }
+            }
+        }
+        // Propagate 'z from the sources among them through their writes
+        std::vector<uint32_t> readersStart, readersOf;  // Writes reading each variable
+        std::vector<uint32_t> writtenStart, writtenOf;  // Variables written by each write
+        group(m_readVars, vars, false, readersStart, readersOf);
+        group(m_writtenVars, m_writes, true, writtenStart, writtenOf);
+        m_mayZ.assign(vars, false);
+        for (uint32_t var = 0; var < vars; ++var) {
+            if (needed[var] && m_isSource(m_varps[var])) work.push_back(var);
+        }
+        while (!work.empty()) {
+            const uint32_t var = work.back();
+            work.pop_back();
+            for (uint32_t i = readersStart[var]; i < readersStart[var + 1]; ++i) {
+                const uint32_t write = readersOf[i];
+                for (uint32_t j = writtenStart[write]; j < writtenStart[write + 1]; ++j) {
+                    const uint32_t written = writtenOf[j];
+                    if (!needed[written] || m_mayZ[written]) continue;
+                    m_mayZ[written] = true;
+                    work.push_back(written);
+                }
+            }
+        }
+    }
+    // Whether one of the given variables is written from or connected to a value that may be 'z
+    bool isWrittenMayZ(AstVar* varp) const {
+        const auto it = m_indexes.find(varp);
+        return it != m_indexes.end() && m_mayZ[it->second];
+    }
+};
+
+//######################################################################
 
 class TristateVisitor final : public TristateBaseVisitor {
     // NODE STATE
@@ -471,6 +610,8 @@ class TristateVisitor final : public TristateBaseVisitor {
                                      // drives this var across hierarchy with a plain (non-Z)
                                      // assign be recognised as a tristate contributor even
                                      // though that module's own graph has no Z on the net.
+        // A source of 'z where read: tristate in its module, or a port connected to such a value
+        bool zSource = false;
         std::map<int, int> bitPulls;  // Per-bit pull: bit_index -> direction (1=up, 0=down)
     };
 
@@ -518,7 +659,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         U2_GRAPHING = 1,  // bit[0] if did m_graphing visit
         U2_NONGRAPH = 2,  // bit[1] if did !m_graphing visit
         U2_BOTH = 3,  // Both visit bits set
-        U2_PULL_UNSUPPORTED = 4  // Pull propagation already diagnosed this node
+        U2_PULL_UNSUPPORTED = 4,  // Pull propagation already diagnosed this node
+        U2_PIN_ASSIGN = 8  // Assignment of a port connection's output
     };
 
     // MEMBERS
@@ -543,6 +685,15 @@ class TristateVisitor final : public TristateBaseVisitor {
     TristateGraph m_tgraph;  // Logic graph
     // Map: interface AstVar* -> list of per-module (enVarp, outVarp) contribution pairs
     std::map<AstVar*, std::vector<std::pair<AstVar*, AstVar*>>> m_ifaceContribs;
+    // Drivers of an interface net that decide whether its own drivers become contributions
+    struct IfaceOwn final {
+        std::vector<AstAssignW*> driverps;  // Its own drivers (see file header)
+        bool otherDriver = false;  // A driver that is neither own nor a contribution
+        // A contribution an own driver of the whole net cannot disconnect: one that is no
+        // continuous assignment of the whole net without delay
+        bool fixedContrib = false;
+    };
+    std::unordered_map<const AstVar*, IfaceOwn> m_ifaceOwn;  // Per interface net
 
     // STATS
     VDouble0 m_statTriSigs;  // stat tracking
@@ -2321,7 +2472,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             UINFOTREE(9, enpinp, "", "pin-ena");
 
             // Create new output pin
-            const AstAssignW* outAssignp = nullptr;  // If reconnected, the related assignment
+            AstAssignW* outAssignp = nullptr;  // If reconnected, the related assignment
             AstPin* outpinp = nullptr;
             AstVar* const outModVarp = m_varAux(nodep->modVarp()).outVarp;
             if (!outModVarp) {
@@ -2352,6 +2503,9 @@ class TristateVisitor final : public TristateBaseVisitor {
                 UINFOTREE(9, outpinp, "", "pin-opr");
                 outAssignp = V3Inst::pinReconnectSimple(outpinp, m_cellp,
                                                         true);  // Note may change outpinp->exprp()
+                // A port connection is no continuous assignment the own drivers of an
+                // interface net could disconnect (IfaceOwn::fixedContrib)
+                if (outAssignp) outAssignp->user2Or(U2_PIN_ASSIGN);
                 UINFOTREE(9, outpinp, "", "pin-out");
                 UINFOTREE(9, outAssignp, "", "pin-oas");
                 // Must still iterate the outAssignp, as need to build output equation
@@ -2421,10 +2575,28 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (nodep->user2() & U2_NONGRAPH) return;  // This pin is already expanded
             nodep->user2Or(U2_NONGRAPH);
             UINFO(9, " " << nodep);
+            if (nodep->exprp() && m_tgraph.isTristate(nodep->exprp())
+                && nodep->modVarp()->isInput()) {
+                m_varAux(nodep->modVarp()).zSource = true;
+            }
             iteratePinGuts(nodep);
         }
     }
 
+    // Record a driver of an interface net, see IfaceOwn
+    void recordPlainDriver(AstNodeVarRef* nodep) {
+        IfaceOwn& own = m_ifaceOwn[nodep->varp()];
+        AstAssignW* const assignp = VN_CAST(m_assignp, AssignW);
+        // A delayed driver would need a delayed enable
+        if (VN_IS(nodep, VarRef) && assignp && !assignp->strengthSpecp()
+            && !assignp->timingControlp()) {
+            if (assignp->lhsp() == nodep || VN_IS(assignp->lhsp(), Sel)) {
+                own.driverps.push_back(assignp);
+                return;
+            }
+        }
+        own.otherDriver = true;
+    }
     void handleNodeVarRef(AstNodeVarRef* nodep) {
         UINFO(9, dbgState() << nodep);
         UASSERT_OBJ(nodep->varp(), nodep, "Unlinked");
@@ -2443,6 +2615,22 @@ class TristateVisitor final : public TristateBaseVisitor {
         } else {
             if (nodep->user2() & U2_NONGRAPH) return;  // Processed
             nodep->user2Or(U2_NONGRAPH);
+            if (nodep->access().isWriteOrRW() && (VN_IS(m_modp, Iface) || VN_IS(nodep, VarXRef))) {
+                if (!m_tgraph.isTristate(nodep->varp())) {
+                    recordPlainDriver(nodep);
+                } else if (VN_IS(nodep, VarXRef)) {
+                    IfaceOwn& own = m_ifaceOwn[nodep->varp()];
+                    if (!VN_IS(m_assignp, AssignW) || !m_assignp->lhsp()->user1p()) {
+                        // A force, a procedural driver (of a net only with PROCASSWIRE off),
+                        // or a plain driver across hierarchy: a contribution if processed after
+                        // external drivers made the net tristate, else a plain write
+                        own.otherDriver = true;
+                    } else if (m_assignp->lhsp() != nodep || m_assignp->timingControlp()
+                               || (m_assignp->user2() & U2_PIN_ASSIGN)) {
+                        own.fixedContrib = true;
+                    }
+                }
+            }
             // Detect all var lhs drivers and adds them to the
             // VarMap so that after the walk through the module we can expand
             // any tristate logic on the driver.
@@ -2489,6 +2677,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstVar* nodep) override {
         iterateChildren(nodep);
         UINFO(9, dbgState() << nodep);
+        if (!m_graphing && m_tgraph.isTristate(nodep)) m_varAux(nodep).zSource = true;
         if (m_graphing) {
             // If tri0/1 force a pullup
             if (nodep->user2() & U2_GRAPHING) return;  // Already processed
@@ -2597,10 +2786,109 @@ class TristateVisitor final : public TristateBaseVisitor {
         checkUnhandled(nodep);
     }
 
+    // Whether a variable may be 'z where read, before writes are considered: a net, an
+    // interface tristate signal, or a variable marked AuxAstVar::zSource
+    bool isMayZSource(AstVar* varp) {
+        return (varp->user3p() && m_varAux(varp).zSource) || m_ifaceContribs.count(varp)
+               || varp->isNet();
+    }
+    // Whether the own drivers of an unwired interface net may become contributions, before the
+    // variables they read (queryps, needsMayZ) are known not to be 'z (TristateMayZVisitor)
+    bool isOwnCandidate(AstVar* invarp, bool& needsMayZ, std::vector<AstVar*>& queryps) {
+        const auto it = m_ifaceOwn.find(invarp);
+        if (it == m_ifaceOwn.end()) return false;
+        const IfaceOwn& own = it->second;
+        if (own.driverps.empty() || own.otherDriver || invarp->isWiredNet()) return false;
+        if (own.fixedContrib && hasWholeOwnDriver(own)) return false;
+        bool reads = false;
+        for (const AstAssignW* const assignp : own.driverps) {
+            if (assignp->rhsp()->exists([&](const AstNodeVarRef* refp) {
+                    reads = true;
+                    queryps.push_back(refp->varp());
+                    return isMayZSource(refp->varp());
+                })) {
+                return false;
+            }
+        }
+        needsMayZ = reads;
+        return true;
+    }
+    // Whether the own drivers of a candidate (isOwnCandidate) read no variable written a value
+    // that may be 'z
+    bool isOwnContrib(const TristateMayZVisitor& mayZ, AstVar* invarp) {
+        for (const AstAssignW* const assignp : m_ifaceOwn.at(invarp).driverps) {
+            if (assignp->rhsp()->exists(
+                    [&](const AstNodeVarRef* refp) { return mayZ.isWrittenMayZ(refp->varp()); })) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Whether an own driver writes the whole net. As in a module, where it already removed the
+    // other own drivers of the whole net (removeAssignmentsNotStrongerThanNonTristate), it
+    // disconnects the external contributions, which are not stronger.
+    static bool hasWholeOwnDriver(const IfaceOwn& own) {
+        return std::any_of(own.driverps.begin(), own.driverps.end(),
+                           [](const AstAssignW* assignp) { return !VN_IS(assignp->lhsp(), Sel); });
+    }
+    // Make each own driver of an interface net a contribution, enabled for the bits it drives
+    void addOwnContribs(AstNodeModule* ifaceModp, AstVar* invarp,
+                        std::vector<std::pair<AstVar*, AstVar*>>& contribs) {
+        FileLine* const fl = invarp->fileline();
+        size_t n = contribs.size();  // Names after those of the external contributions
+        const IfaceOwn& own = m_ifaceOwn.at(invarp);
+        if (hasWholeOwnDriver(own)) contribs.clear();
+        for (AstAssignW* const assignp : own.driverps) {
+            const string suffix = cvtToStr(n++);
+            AstVar* const outVarp
+                = new AstVar{fl, VVarType::MODULETEMP, invarp->name() + "__out" + suffix, invarp};
+            outVarp->setDfgTriLowered();
+            ifaceModp->addStmtsp(outVarp);
+            AstVar* const enVarp
+                = new AstVar{fl, VVarType::MODULETEMP, invarp->name() + "__en" + suffix, invarp};
+            enVarp->setDfgTriLowered();
+            ifaceModp->addStmtsp(enVarp);
+            AstNodeExpr* enp;
+            if (AstSel* const selp = VN_CAST(assignp->lhsp(), Sel)) {
+                VN_AS(selp->fromp(), VarRef)->varp(outVarp);
+                enp = newEnableDeposit(selp, newAllZerosOrOnes(selp, true));
+            } else {
+                VN_AS(assignp->lhsp(), VarRef)->varp(outVarp);
+                enp = newAllZerosOrOnes(invarp, true);
+            }
+            ifaceModp->addStmtsp(
+                new AstAlways{new AstAssignW{fl, new AstVarRef{fl, enVarp, VAccess::WRITE}, enp}});
+            contribs.emplace_back(enVarp, outVarp);
+        }
+    }
+
     void combineIfaceContribs() {
         // After all modules have been processed, combine per-module contributions
         // for each interface tristate signal into final resolution logic.
         // Key is the canonical AstVar in the interface module (shared across instances).
+        // External drivers made these nets tristate after their interfaces were processed: make
+        // their own drivers contributions where possible. Candidates, and whether only
+        // TristateMayZVisitor decides that.
+        std::vector<std::pair<AstVar*, bool>> candidates;
+        bool needsMayZ = false;
+        std::vector<AstVar*> queryps;  // The variables whose may-'z decides them
+        for (const auto& kv : m_ifaceContribs) {
+            bool needs = false;
+            if (!isOwnCandidate(kv.first, needs, queryps)) continue;
+            candidates.emplace_back(kv.first, needs);
+            needsMayZ |= needs;
+        }
+        std::unique_ptr<const TristateMayZVisitor> mayZp;
+        if (needsMayZ) {
+            mayZp = std::make_unique<const TristateMayZVisitor>(
+                v3Global.rootp(), [this](AstVar* varp) { return isMayZSource(varp); }, queryps);
+        }
+        for (const std::pair<AstVar*, bool>& candidate : candidates) {
+            AstVar* const invarp = candidate.first;
+            if (!candidate.second || isOwnContrib(*mayZp, invarp)) {
+                addOwnContribs(findParentModule(invarp), invarp, m_ifaceContribs[invarp]);
+            }
+        }
         for (const std::pair<AstVar* const, std::vector<std::pair<AstVar*, AstVar*>>>& kv :
              m_ifaceContribs) {
             AstVar* const invarp = kv.first;
