@@ -1,0 +1,14 @@
+%Error: t/t_checker_output_type_bad.v:9:44: Checker output port cannot be of type untyped (IEEE 1800-2023 17.2).
+    9 | checker chk_untyped (input logic a, output untyped b);
+      |                                            ^~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_checker_output_type_bad.v:12:45: Checker output port cannot be of type sequence (IEEE 1800-2023 17.2).
+   12 | checker chk_sequence (input logic a, output sequence s);
+      |                                             ^~~~~~~~
+%Error: t/t_checker_output_type_bad.v:15:45: Checker output port cannot be of type property (IEEE 1800-2023 17.2).
+   15 | checker chk_property (input logic a, output property p);
+      |                                             ^~~~~~~~
+%Error: t/t_checker_output_type_bad.v:19:38: Checker output port cannot be of type untyped (IEEE 1800-2023 17.2).
+   19 | checker chk_inherited (output bit a, untyped b);
+      |                                      ^~~~~~~
+%Error: Exiting due to
