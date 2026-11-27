@@ -7852,28 +7852,36 @@ checker_port_list<nodep>:  // ==IEEE: checker_port_list
         ;
 
 checker_port_item<nodep>:  // IEEE: checker_port_item
-                checker_port_itemFront checker_port_itemAssignment  { $$ = $2; }
+                checker_port_itemFront checker_port_itemAssignment
+                        { $$ = $2;
+                          if ($1) {
+                              $1->v3error("Checker port " << $2->prettyNameQ()
+                                          << " has a direction, so it needs a data type"
+                                             " (IEEE 1800-2023 17.2).");
+                          }
+                        }
         ;
 
-checker_port_itemFront:  // IEEE: part of checker_port_item
+checker_port_itemFront<fl>:  // IEEE: part of checker_port_item
+        //                      // The direction's fileline if it has no data type, else nullptr
                 checker_port_directionE property_formal_typeNoDt
-                        { VARDTYPE($2); GRAMMARP->setPortInheritDType(nullptr); }
+                        { $$ = nullptr; VARDTYPE($2); GRAMMARP->setPortInheritDType(nullptr); }
         //                      // data_type_or_implicit
         |       checker_port_directionE data_type
-                        { VARDTYPE(GRAMMARP->portDType($2)); }
+                        { $$ = nullptr; VARDTYPE(GRAMMARP->portDType($2)); }
         |       checker_port_directionE yVAR data_type
-                        { VARDTYPE(GRAMMARP->portDType($3)); }
+                        { $$ = nullptr; VARDTYPE(GRAMMARP->portDType($3)); }
         |       checker_port_directionE yVAR implicit_typeE
-                        { VARDTYPE($3); GRAMMARP->setPortInheritDType(nullptr); }
+                        { $$ = nullptr; VARDTYPE($3); GRAMMARP->setPortInheritDType(nullptr); }
         |       checker_port_directionE implicit_typeE
-                        { VARDTYPE(GRAMMARP->portDType($2)); }
+                        { $$ = $2 ? nullptr : $1; VARDTYPE(GRAMMARP->portDType($2)); }
         ;
 
-checker_port_directionE:  // IEEE: [ checker_port_direction ]
+checker_port_directionE<fl>:  // IEEE: [ checker_port_direction ]
         //                      // The direction of the previous port, input for the first (IEEE 1800-2023 17.2)
-                /* empty */                             { VARIOANSI(); }
-        |       yINPUT                                  { VARIO(INPUT); }
-        |       yOUTPUT                                 { VARIO(OUTPUT); }
+                /* empty */                             { $$ = nullptr; VARIOANSI(); }
+        |       yINPUT                                  { $$ = $1; VARIO(INPUT); }
+        |       yOUTPUT                                 { $$ = $1; VARIO(OUTPUT); }
         ;
 
 checker_port_itemAssignment<nodep>:  // IEEE: part of checker_port_direction
