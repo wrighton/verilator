@@ -283,6 +283,9 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<std::pair<std::string, std::string>>
         m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
     bool m_checkOnly = false;  // Set for randomize(null)
+    bool m_uniqueLazy = false;  // Uniqueness groups are solved lazily, see refineUnique
+    // The values of variables, by name, each element's bytes after the previous one's
+    using KeptValues = std::vector<std::pair<std::string, std::string>>;
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
@@ -315,7 +318,14 @@ class VlRandomizer VL_NOT_FINAL {
     size_t hashConstraints(const std::vector<std::string>& extras) const;
     bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly);
     // "(distinct ...)" expression per unique-constrained array
-    std::vector<std::string> buildUniqueExprs() const;
+    std::vector<std::string>
+    buildUniqueExprs(std::vector<std::pair<uint32_t, uint64_t>>* lazyp) const;
+    bool refineUnique(std::vector<std::pair<uint32_t, uint64_t>>& lazyr, int round,
+                      std::vector<std::string>& exprsr, VlSolverSession& sess,
+                      bool& refinedr) const;
+    uint64_t solverBits() const;
+    void keepVars(KeptValues& valuesr) const;
+    void setValues(const KeptValues& values) const;
     void emitDefines(std::ostream& os) const;
     void emitDeclares(std::ostream& os, bool pinCurrent) const;
     void emitAsserts(std::ostream& os, const std::vector<std::string>& extras, bool named) const;
