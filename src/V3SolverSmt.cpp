@@ -2597,7 +2597,96 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
     }
     void visit(AstDynArraySel* nodep) override { visitElementSel(nodep); }
+    // The offset k of q[$ - k] in the 32 bits of an index. A wider one is saturated to the
+    // int range, past which it reaches no element of a queue either way, as a wide dynamic
+    // array index does.
+    static AstNodeExpr* newBackOffsetp(AstNodeExpr* offsetp) {
+        FileLine* const fl = offsetp->fileline();
+        const int width = offsetp->width();
+        const bool isSigned = offsetp->isSigned();
+        const bool rand = offsetp->user1();
+        AstNodeExpr* newp;
+        if (width < VL_IDATASIZE) {
+            newp = isSigned ? static_cast<AstNodeExpr*>(new AstExtendS{fl, offsetp, VL_IDATASIZE})
+                            : new AstExtend{fl, offsetp, VL_IDATASIZE};
+        } else if (width > VL_IDATASIZE) {
+            V3Number maxNum{offsetp, width};
+            maxNum.setQuad(0x7fffffffULL);
+            AstNodeExpr* const abovep
+                = isSigned
+                      ? static_cast<AstNodeExpr*>(new AstGtS{fl, offsetp->cloneTreePure(false),
+                                                             new AstConst{fl, maxNum}})
+                      : new AstGt{fl, offsetp->cloneTreePure(false), new AstConst{fl, maxNum}};
+            AstNodeExpr* const lowp
+                = new AstSel{fl, offsetp->cloneTreePure(false), 0, VL_IDATASIZE};
+            abovep->user1(rand);
+            lowp->user1(rand);
+            newp = new AstCond{
+                fl, abovep, new AstConst{fl, AstConst::WidthedValue{}, VL_IDATASIZE, 0x7fffffffU},
+                lowp};
+            if (isSigned) {
+                V3Number minNum{offsetp, width};
+                minNum.opNegate(V3Number{offsetp, width}.setQuad(0x80000000ULL));
+                AstNodeExpr* const belowp = new AstLtS{fl, offsetp, new AstConst{fl, minNum}};
+                belowp->user1(rand);
+                newp->user1(rand);
+                newp->dtypeSetBitSized(VL_IDATASIZE, VSigning::SIGNED);
+                newp = new AstCond{
+                    fl, belowp,
+                    new AstConst{fl, AstConst::WidthedValue{}, VL_IDATASIZE, 0x80000000U}, newp};
+            } else {
+                VL_DO_DANGLING(offsetp->deleteTree(), offsetp);
+            }
+        } else {
+            return offsetp;
+        }
+        newp->dtypeSetBitSized(VL_IDATASIZE, VSigning::SIGNED);
+        newp->user1(rand);
+        return newp;
+    }
     void visit(AstQueueSel* nodep) override {
+        if (nodep->fromBack() && nodep->fromp()->user1()) {
+            // q[$ - k] of a random queue, the element k before its last: at the size this
+            // solve gives the queue if it solves it, else at the size the queue has
+            FileLine* const fl = nodep->fileline();
+            AstNodeExpr* const arrayp = nodep->fromp()->unlinkFrBack();
+            const AstVarRef* const arrayRefp = VN_CAST(arrayp, VarRef);
+            AstVar* const sizeVarp
+                = arrayRefp ? VN_CAST(arrayRefp->varp()->user4p(), Var) : nullptr;
+            AstNodeExpr* sizep;
+            if (sizeVarp) {
+                sizep = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp,
+                                      VAccess::READ};
+            } else {
+                sizep = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
+            }
+            sizep->dtypeSetInt();
+            AstNodeExpr* const offsetp = newBackOffsetp(nodep->bitp()->unlinkFrBack());
+            AstNodeExpr* const lastp = new AstSub{fl, sizep, new AstConst{fl, 1}};
+            AstNodeExpr* const indexp = new AstSub{fl, lastp, offsetp};
+            lastp->dtypeFrom(sizep);
+            indexp->dtypeFrom(sizep);
+            // A solved size is a solver term, and the index with it, as with a random offset
+            const bool solved = sizeVarp;
+            sizep->user1(solved);
+            lastp->user1(solved);
+            indexp->user1(solved || offsetp->user1());
+            // An element the queue does not have reads zero, as no value can be solved for it
+            AstNodeExpr* const inRangep
+                = new AstLt{fl, indexp->cloneTreePure(false), sizep->cloneTreePure(false)};
+            inRangep->user1(indexp->user1());
+            AstQueueSel* const selp = new AstQueueSel{fl, arrayp, indexp};
+            selp->dtypeFrom(nodep);
+            selp->user1(true);
+            AstConst* const zerop = new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0};
+            AstCond* const condp = new AstCond{fl, inRangep, selp, zerop};
+            condp->dtypeFrom(nodep);
+            condp->user1(true);
+            nodep->replaceWith(condp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            iterate(condp);
+            return;
+        }
         if (!nodep->fromBack()) {
             visitElementSel(nodep);
             return;
