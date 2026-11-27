@@ -2272,8 +2272,10 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
     const bool lazyOk = !checkOnly && !sizeSolve && m_randcVarNames.empty()
                         && !m_uniqueArrays.empty() && solverBits() > ug2MaxBits;
     std::vector<std::string> uniqueExprs;
+    size_t groupExprs = 0;  // The leading uniqueExprs, of uniqueness groups
     const auto buildExprs = [&](std::vector<std::pair<uint32_t, uint64_t>>* lazyp) {
         uniqueExprs = buildUniqueExprs(lazyp);
+        groupExprs = uniqueExprs.size();
         // pin_frozen() constraints of the variables registered by now
         for (const auto& pin : m_frozenPins) {
             if (m_vars.count(pin.first)) uniqueExprs.push_back(pin.second);
@@ -2299,6 +2301,11 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
         if (currentHash != m_randcConstraintHash && !sizeSolved) m_randcUsedValues.clear();
         m_randcConstraintHash = currentHash;
     }
+    // A solve of the array sizes keeps only the sizes: the elements it holds are those of the old
+    // sizes, which the final solve picks again, so it asks none of them to differ. Asked, more
+    // old elements than the values they may take would be a pigeonhole a solver takes very long
+    // on. The randc history above sees the groups still, as before the final solve.
+    if (sizeSolve) uniqueExprs.erase(uniqueExprs.begin(), uniqueExprs.begin() + groupExprs);
 
     // Reseeded from outside, so everything cached came from the old seed.
     if (m_ug2.rngReseeds != rngr.reseeds()) {
