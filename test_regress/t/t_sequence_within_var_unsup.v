@@ -33,7 +33,7 @@ module t (
   // A variable-length outer sequence is only supported as a repetition of a
   // pure boolean, between ticks requiring its negation, as the whole sequence
   // of a cover property
-  cover property (@(posedge clk) a within (b ##[1:3] c));
+  cover sequence (@(posedge clk) a within (b ##[1:3] c));
   cover property (@(posedge clk) a within (b ##1 c[+] ##1 d));
   cover property (@(posedge clk) a within (b ##1 !b[+]));
   cover property (@(posedge clk) a within ((b || c) ##1 !b[+] ##1 b));

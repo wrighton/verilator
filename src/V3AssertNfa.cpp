@@ -238,7 +238,7 @@ struct BuildResult final {
 struct SvaAttemptSeq final {
     enum class Kind : uint8_t { BOOL, CAT, REP, OR, AND, INTERSECT };
     Kind kind = Kind::BOOL;
-    AstNodeExpr* condp = nullptr;  // Boolean
+    AstNodeExpr* condp = nullptr;  // Boolean, true if null
     std::unique_ptr<SvaAttemptSeq> lhsp;  // Operand, first operand of a concatenation if any
     std::unique_ptr<SvaAttemptSeq> rhsp;  // Second operand
     int minCount = 0;  // Concatenation: least delay; repetition: least iterations
@@ -247,6 +247,9 @@ struct SvaAttemptSeq final {
     int maxLen = 0;  // Ticks from its start to its latest match
     bool pairs = false;  // Has an 'and' or 'intersect'
     bool varLenAnd = false;  // Has an 'and' or 'intersect' with an operand of variable length
+    // Concatenation `lhs ##[0:K] 1` in an 'intersect' bounding its length below K: a match of
+    // lhs holds on every later tick
+    bool untilEnd = false;
 };
 
 // An operator tree of a property whose operands each resolve within a fixed number of ticks of
@@ -2877,6 +2880,45 @@ private:
     // The sequence of bounded length nodep, or nullptr. An 'and' or 'intersect' pairs the matches
     // of its operands by attempt, so only one starting on a fixed tick of its attempt is built,
     // as fixedStart says of nodep.
+    // `inner within outer` as `(##[0:K] inner ##[0:K] 1) intersect outer`, the placements of
+    // inner bounded by the longest match K of outer (IEEE 1800-2023 16.9.10)
+    static std::unique_ptr<SvaAttemptSeq> buildAttemptWithin(const AstSWithin* withinp) {
+        using Kind = SvaAttemptSeq::Kind;
+        std::unique_ptr<SvaAttemptSeq> innerp = buildAttemptSeq(withinp->lhsp(), false);
+        std::unique_ptr<SvaAttemptSeq> outerp = buildAttemptSeq(withinp->rhsp(), true);
+        if (!innerp || !outerp) return nullptr;
+        const int slack = outerp->maxLen;
+        const int innerMinLen = innerp->minLen;
+        const int innerMaxLen = innerp->maxLen;
+        const bool innerPairs = innerp->pairs;
+        const bool innerVarLenAnd = innerp->varLenAnd;
+        std::unique_ptr<SvaAttemptSeq> endp{new SvaAttemptSeq};
+        endp->kind = Kind::CAT;
+        endp->maxCount = slack;
+        endp->untilEnd = true;
+        endp->lhsp = std::move(innerp);
+        endp->rhsp.reset(new SvaAttemptSeq);
+        endp->minLen = innerMinLen;
+        endp->maxLen = innerMaxLen + slack;
+        std::unique_ptr<SvaAttemptSeq> placedp{new SvaAttemptSeq};
+        placedp->kind = Kind::CAT;
+        placedp->maxCount = slack;
+        placedp->rhsp = std::move(endp);
+        placedp->minLen = innerMinLen;
+        placedp->maxLen = innerMaxLen + 2 * slack;
+        placedp->pairs = innerPairs;
+        std::unique_ptr<SvaAttemptSeq> seqp{new SvaAttemptSeq};
+        seqp->kind = Kind::INTERSECT;
+        seqp->minLen = std::max(placedp->minLen, outerp->minLen);
+        seqp->maxLen = std::min(placedp->maxLen, outerp->maxLen);
+        // Without a common length the NFA lowering reports it never matching
+        if (seqp->minLen > seqp->maxLen) return nullptr;
+        seqp->pairs = true;
+        seqp->varLenAnd = slack > 0 || innerVarLenAnd || outerp->varLenAnd;
+        seqp->lhsp = std::move(placedp);
+        seqp->rhsp = std::move(outerp);
+        return seqp;
+    }
     static std::unique_ptr<SvaAttemptSeq> buildAttemptSeq(AstNodeExpr* nodep, bool fixedStart) {
         using Kind = SvaAttemptSeq::Kind;
         // A count above the latency limit makes a sequence too long to lower so
@@ -2953,6 +2995,9 @@ private:
             seqp->pairs = seqp->kind != Kind::OR;
             seqp->varLenAnd
                 = seqp->pairs && (lhs.minLen != lhs.maxLen || rhs.minLen != rhs.maxLen);
+        } else if (const AstSWithin* const withinp = VN_CAST(nodep, SWithin)) {
+            if (!fixedStart) return nullptr;
+            return buildAttemptWithin(withinp);
         } else {
             return nullptr;
         }
@@ -3996,6 +4041,7 @@ class SvaNfaLowering final {
         FileLine* const flp = a.c.flp;
         switch (seq.kind) {
         case Kind::BOOL: {
+            if (!seq.condp) return start;
             AstNodeExpr* const condp = newAttemptCondp(seq.condp->cloneTreePure(false));
             if (start.age >= 0) {
                 return {
@@ -4035,6 +4081,14 @@ class SvaNfaLowering final {
                                   AstVar*& livep) {
         FileLine* const flp = a.c.flp;
         const AttemptSet lhs = seq.lhsp ? lowerAttemptSeq(a, *seq.lhsp, start, livep) : start;
+        if (seq.untilEnd) {
+            // One register holds the attempts that have matched lhs
+            AstVar* const regp = newAttemptRegp(a, a.vecDTypep);
+            AstVar* const matchp = newAttemptOrp(a, newAttemptVecp(a, lhs), regp);
+            setAttemptRegp(a, regp, newAttemptRefp(a, matchp));
+            livep = newAttemptOrp(a, livep, matchp);
+            return {matchp, -1};
+        }
         AttemptSet rhsStart = seq.minCount ? AttemptSet{} : lhs;
         if (lhs.age >= 0 && seq.minCount != seq.maxCount) {
             // The attempts of the matches of a first operand of fixed length differ by the

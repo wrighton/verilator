@@ -16,7 +16,7 @@ module t (
   assert property (@(posedge clk) ((a ##1 b) or (b ##1 a)) intersect (c ##1 c));
   assert property (@(posedge clk) a |-> c throughout ((##1 b) or (##2 b)));
   assert property (@(posedge clk) a |-> ##[1:2] (##1 ((b ##1 c) or (c ##1 b))));
-  assert property (@(posedge clk) (a ##1 b) within (c ##2 c));
+  assert property (@(posedge clk) a throughout ((a ##1 b) within (c ##2 c)));
   // A later step after a sequence 'or' would reject before another operand matches
   assert property (@(posedge clk) a |-> ((b[->1]) or (##2 c) or (##3 a) or (##4 b) or (##5 c))
       ##1 a);
