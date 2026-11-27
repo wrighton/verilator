@@ -8066,8 +8066,22 @@ checker_port_item<nodep>:  // IEEE: checker_port_item
 
 checker_port_itemFront<fl>:  // IEEE: part of checker_port_item
         //                      // The direction's fileline if it has no data type, else nullptr
-                checker_port_directionE property_formal_typeNoDt
-                        { $$ = nullptr; VARDTYPE($2); GRAMMARP->setPortInheritDType(nullptr); }
+        //                      // IEEE: property_formal_type, of which an output shall have none
+                checker_port_directionE yUNTYPED
+                        { $$ = nullptr; GRAMMARP->checkerOutputTypeCheck($2, "untyped");
+                          VARDTYPE(nullptr); GRAMMARP->setPortInheritDType(nullptr); }
+        |       checker_port_directionE ySEQUENCE
+                        { $$ = nullptr;
+                          if (!GRAMMARP->checkerOutputTypeCheck($2, "sequence")) {
+                              BBUNSUP($2, "Unsupported: sequence argument data type");
+                          }
+                          VARDTYPE(nullptr); GRAMMARP->setPortInheritDType(nullptr); }
+        |       checker_port_directionE yPROPERTY
+                        { $$ = nullptr;
+                          if (!GRAMMARP->checkerOutputTypeCheck($2, "property")) {
+                              BBUNSUP($2, "Unsupported: property argument data type");
+                          }
+                          VARDTYPE(nullptr); GRAMMARP->setPortInheritDType(nullptr); }
         //                      // data_type_or_implicit
         |       checker_port_directionE data_type
                         { $$ = nullptr; VARDTYPE(GRAMMARP->portDType($2)); }
