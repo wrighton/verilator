@@ -5710,7 +5710,9 @@ public:
     AstNodeStmt* newFinalFailp(AstNodeCoverOrAssert* assertp) {
         FileLine* const flp = assertp->fileline();
         // The fail action replaces the default error (IEEE 1800-2023 16.14.1), unless it has a
-        // timing control, which could not resume in a final block (IEEE 1800-2023 9.2.3)
+        // timing control, which could not resume in a final block (IEEE 1800-2023 9.2.3). A task
+        // it calls runs up to its own timing control, which is not checked for, and stops the
+        // remaining attempts there.
         AstNodeStmt* const failsp = VN_AS(assertp, Assert)->failsp();
         const bool hasTimingControl = failsp && failsp->existsAndNext([](const AstNode* np) {
             return np->isTimingControl();

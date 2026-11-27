@@ -2413,7 +2413,6 @@ class AssertVisitor final : public VNVisitor {
     // Pristine action clones for clauses that share the current assertion's action.
     std::unordered_map<const AstPExprClause*, AstNodeStmt*> m_clauseActionsp;
     AstNodeCoverOrAssert* m_assertp = nullptr;  // Current assertion
-    AstFinal* m_finalp = nullptr;  // Current final block
     int m_controlTempNum = 0;  // Assertion-control operand temporaries within a module
     using AssertCtlDepths = std::array<uint32_t, std::numeric_limits<uint32_t>::digits>;
     // Maximum statically possible depth by type/directive bit for each shared list.
@@ -2813,12 +2812,9 @@ class AssertVisitor final : public VNVisitor {
                     newfl->warnOff(V3ErrorCode::FINALDLY, true);
                     dlyp->fileline(newfl);
                 });
-                if (!m_finalp) {
-                    m_finalp = new AstFinal{m_modp->fileline(), finalp->unlinkFrBack()};
-                    m_modp->addStmtsp(m_finalp);
-                } else {
-                    m_finalp->addStmtsp(finalp->unlinkFrBack());
-                }
+                // A final block of its own, so an action suspending in it, by a task it calls,
+                // does not stop the end-of-simulation checks of other assertions
+                m_modp->addStmtsp(new AstFinal{m_modp->fileline(), finalp->unlinkFrBack()});
             }
             VL_DO_DANGLING2(pushDeletep(pexprp), pexprp, propp);
             return forkp;
@@ -5387,7 +5383,6 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_modPastNum);
         VL_RESTORER(m_modStrobeNum);
         VL_RESTORER(m_modMonitorNum);
-        VL_RESTORER(m_finalp);
         VL_RESTORER_CLEAR(m_modExpr2Sen2DelayedAlwaysp);
         VL_RESTORER_CLEAR(m_modExpr2Sen2DefaultDelayedAlwaysp);
         VL_RESTORER_CLEAR(m_delayedAlways2TickTimep);
@@ -5404,7 +5399,6 @@ class AssertVisitor final : public VNVisitor {
         m_actionReactivep = nullptr;
         m_modStrobeNum = 0;
         m_modMonitorNum = 0;
-        m_finalp = nullptr;
         iterateChildren(nodep);
     }
     void visit(AstAlways* nodep) override {

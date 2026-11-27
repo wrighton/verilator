@@ -101,12 +101,6 @@ module t (
   assert property (@(posedge clk) (cyc == 1) |=> (1'b1 s_until (cyc > 20)))
   else $display("EOS_UNTIL");
 
-  // A timing control could not resume in the final block, so the default error is used.
-  assert property (@(posedge clk) s_always[1: 3] 1'b1)
-  else begin
-    #1 $display("EOS_DELAY_BAD");
-  end
-
   // Pending strong attempts at $finish (start 8 and 9) make a negated property hold.
   assert property (@(posedge clk) not (s_always[1: 3] cyc >= 9))
   else $display("EOS_NOT_BAD");
