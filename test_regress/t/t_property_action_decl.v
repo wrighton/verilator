@@ -165,7 +165,7 @@ module t;
     end
   end
 
-  // Covers, without --coverage-user not collected, so their actions have no effect
+  // Covers, whose actions run whether or not coverage is collected
   int cover_inits = 0;
   int cover_runs = 0;
 
@@ -184,15 +184,6 @@ module t;
     count = 1;
     cover_runs += count;
   end
-`ifndef T_COVER_COLLECTED
-  // Every attempt is still pending at the end of simulation, where cover_late holds
-  wire cover_late = cyc == 60;
-  cover property (@(posedge clk) s_eventually cover_late) begin
-    int count;
-    count = 1;
-    `checkd(count, 0);
-  end
-`endif
 
   // A reference through an instance named like a block of the action
   t_payload u ();
@@ -255,13 +246,8 @@ module t;
     `checkd(gen_child_seen, fails);
     `checkd(gen_sibling_seen, fails);
     `checkd(unnamed_seen, fails);
-`ifdef T_COVER_COLLECTED
     `checkd(cover_inits, 1);
     `checkd(cover_runs > 0, 1'b1);
-`else
-    `checkd(cover_inits, 0);
-    `checkd(cover_runs, 0);
-`endif
     `checkd(xmr_seen_a, 37);
     `checkd(xmr_seen_b, 37);
     `checkd(xmr_seen_up_a, 37);

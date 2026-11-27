@@ -12,7 +12,7 @@ import vltest_bootstrap
 test.scenarios('vlt')
 test.top_filename = "t/t_property_action_decl.v"
 
-test.compile(verilator_flags2=['--binary', '--coverage-user', '+define+T_COVER_COLLECTED'])
+test.compile(verilator_flags2=['--binary', '--coverage-user'])
 
 test.execute(check_finished=True,
              all_run_flags=["+verilator+coverage+file+" + test.obj_dir + "/coverage.dat"])

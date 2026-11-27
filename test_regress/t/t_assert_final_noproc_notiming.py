@@ -12,7 +12,7 @@ import vltest_bootstrap
 test.scenarios('simulator')
 test.top_filename = "t/t_assert_final_noproc.v"
 
-test.compile(verilator_flags2=['--binary', '--assert', '--no-timing', '+define+EXP_COVERS=0'])
+test.compile(verilator_flags2=['--binary', '--assert', '--no-timing', '+define+T_NO_TIMING'])
 
 test.execute()
 
