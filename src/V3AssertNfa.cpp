@@ -384,12 +384,23 @@ static AstNodeStmt* newDefaultFailp(FileLine* flp, AstNodeModule* modp, const st
     return stmtsp;
 }
 
-// Prepend stmtsp to the fail action, keeping the default one of an assertion without 'else'
+// Prepend stmtsp, the pass actions of attempts passing on a tick when another attempt fails, to
+// the fail action, keeping the default one of an assertion without 'else'
 static void prependFailAction(AstAssert* assertp, AstNodeModule* modp, AstNodeStmt* stmtsp) {
-    // Without 'else', a failure calls $error (IEEE 1800-2023 16.14.1), which V3Assert adds only
-    // to an assertion with no fail action
-    if (!assertp->failsp()) {
-        assertp->addFailsp(newDefaultFailp(assertp->fileline(), modp, "'assert' failed."));
+    if (!assertp->failsGated()) {
+        // Without 'else', a failure calls $error (IEEE 1800-2023 16.14.1), which V3Assert adds
+        // only to an assertion with no fail action
+        AstNodeStmt* failsp = assertp->failsp();
+        if (failsp) {
+            failsp->unlinkFrBackWithNext();
+        } else {
+            failsp = newDefaultFailp(assertp->fileline(), modp, "'assert' failed.");
+        }
+        // The fail control applies to the fail action only (IEEE 1800-2023 20.11), so it is
+        // gated here instead of by V3Assert
+        assertp->addFailsp(newIfAssertFailOn(assertp->controlVarp(), failsp, assertp->directive(),
+                                             assertp->userType()));
+        assertp->failsGated(true);
     }
     assertp->prependFailsp(stmtsp);
 }
@@ -7679,7 +7690,10 @@ class AssertNfaVisitor final : public VNVisitor {
             UASSERT_OBJ(passsp, assertp, "needMatch set but passsp is null");
             passsp->unlinkFrBackWithNext();
             FileLine* const flp = assertp->fileline();
-            AstIf* const ifp = new AstIf{flp, matchExprp, passsp, nullptr};
+            // Gated by the pass control here, as V3Assert leaves an if it takes as gated
+            AstIf* const ifp
+                = newPassOnIf(assertp->controlVarp(), flp, matchExprp, passsp, assertp->userType(),
+                              assertp->directive(), /*vacuous=*/false);
             assertp->addPasssp(ifp);
             // Fail-handler prefix for overlapping instances (IEEE 16.12):
             // fires when reject=1 && match=1 in the same cycle.
@@ -7805,7 +7819,10 @@ class AssertNfaVisitor final : public VNVisitor {
             AstNodeStmt* const passsp = assertAssertp->passsp()->unlinkFrBackWithNext();
             AstNodeExpr* const onp = assertOnCond(assertp->controlVarp(), flp, assertp->userType(),
                                                   assertp->directive());
-            assertAssertp->addPasssp(new AstIf{flp, new AstLogOr{flp, onp, matchp}, passsp});
+            assertAssertp->addPasssp(newPassOnIf(assertp->controlVarp(), flp,
+                                                 new AstLogOr{flp, onp, matchp}, passsp,
+                                                 assertp->userType(), assertp->directive(),
+                                                 /*vacuous=*/false));
         }
 
         AstNode* const innerPropp = propp->propp();
