@@ -19,7 +19,7 @@ module t (
 );
   localparam int NCYC = 400;
   localparam int LOOKAHEAD = 64;
-  localparam int NPROP = 16;
+  localparam int NPROP = 18;
 
   integer cyc = 0;
   reg [63:0] crc = 64'h2f1e_8d3c_4b5a_6970;
@@ -76,6 +76,11 @@ module t (
   // Sequence 'or' operands
   cover property (@(posedge clk) ((a ##1 b) or (c ##2 d)) and (e [* 1:2])) ++passes[14];
   cover property (@(posedge clk) ((a or b) ##1 c) and (d [* 1:2])) ++passes[15];
+  // An 'intersect' of operands of one fixed length fails on the first check that does not hold
+  assert property (@(posedge clk) (a [* 2]) intersect (b [* 2])) ++passes[16];
+  else ++fails[16];
+  assert property (@(posedge clk) (a ##1 b) intersect (c [* 2])) ++passes[17];
+  else ++fails[17];
   // Too long to lower per attempt
   cover property (@(posedge clk) (a [* 1:300]) and (b [* 2])) ++overLimitCovers;
   // Iterations of an 'and' of variable length start on variable ticks of the attempt
@@ -228,6 +233,20 @@ module t (
       15: begin
         tick = s + 1;
         if ((a0 || b0) && c1 && d0) outcome = PASS;
+      end
+      16: begin
+        if (!(a0 && b0)) outcome = FAIL;
+        else begin
+          tick = s + 1;
+          outcome = a1 && b1 ? PASS : FAIL;
+        end
+      end
+      17: begin
+        if (!(a0 && c0)) outcome = FAIL;
+        else begin
+          tick = s + 1;
+          outcome = b1 && c1 ? PASS : FAIL;
+        end
       end
       default: begin
         if (a0 && c0 && c1) begin
