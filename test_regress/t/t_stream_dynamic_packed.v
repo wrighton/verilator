@@ -157,35 +157,69 @@ module t (
     `checkh(x96, {crc[23:16], crc[15:8], crc[7:0], 72'h0});
   end
 
-  // Unpacking a wide stream into a dynamic array or queue, with a partial last element
+  // Unpacking into a dynamic array or queue takes whole elements from the left; the remaining
+  // bits are not unpacked (IEEE 1800-2023 11.4.14.3)
   always @(posedge clk) begin
+    logic [3:0] s4;
+    logic [11:0] s12;
+    logic [15:0] s16;
+    logic [39:0] s40;
     logic [74:0] s75;
     logic [69:0] w70[$];
     logic [63:0] l64[$];
-    byte unsigned b8[$];
+    logic [31:0] i32[$];
     shortint unsigned h16[$];
-    int unsigned i32[$];
+    logic [32:0] q33[$];
+    logic [64:0] w65[];
+    byte unsigned b8[$];
+    typedef byte unsigned bytes_t[];
+    bytes_t bd;
+    s4 = crc[3:0];
+    s12 = crc[11:0];
+    s16 = crc[15:0];
+    s40 = crc[39:0];
     s75 = {crc[10:0], crc};
-    {>>{w70}} = s75;
-    `checkh(w70.size(), 2);
-    `checkh(w70[0], s75[74:5]);
-    `checkh(w70[1], {65'h0, s75[4:0]});
-    {>>{l64}} = s75;
-    `checkh(l64.size(), 2);
-    `checkh(l64[0], s75[74:11]);
-    `checkh(l64[1], {53'h0, s75[10:0]});
+    {>>{b8}} = s4;
+    `checkh(b8.size(), 0);
+    {>>{b8}} = s12;
+    `checkh(b8.size(), 1);
+    `checkh(b8[0], s12[11:4]);
+    {<<8{b8}} = s16;
+    `checkh(b8.size(), 2);
+    `checkh(b8[0], s16[7:0]);
+    `checkh(b8[1], s16[15:8]);
+    {>>{i32}} = s40;
+    `checkh(i32.size(), 1);
+    `checkh(i32[0], s40[39:8]);
+    {>>{l64}} = s40;
+    `checkh(l64.size(), 0);
     {>>{b8}} = s75;
-    `checkh(b8.size(), 10);
+    `checkh(b8.size(), 9);
     `checkh(b8[0], s75[74:67]);
-    `checkh(b8[9], {5'h0, s75[2:0]});
+    `checkh(b8[8], s75[10:3]);
     {>>{h16}} = s75;
-    `checkh(h16.size(), 5);
-    `checkh(h16[0], s75[74:59]);
-    `checkh(h16[4], {5'h0, s75[10:0]});
-    {>>{i32}} = s75;
-    `checkh(i32.size(), 3);
-    `checkh(i32[0], s75[74:43]);
-    `checkh(i32[2], {21'h0, s75[10:0]});
+    `checkh(h16.size(), 4);
+    `checkh(h16[3], s75[26:11]);
+    {>>{l64}} = s75;
+    `checkh(l64.size(), 1);
+    `checkh(l64[0], s75[74:11]);
+    {>>{w70}} = s75;
+    `checkh(w70.size(), 1);
+    `checkh(w70[0], s75[74:5]);
+    // A source narrower than one element unpacks no element
+    {>>{q33}} = s40[31:0];
+    `checkh(q33.size(), 0);
+    {>>{l64}} = s40[31:0];
+    `checkh(l64.size(), 0);
+    {>>{w65}} = s40[31:0];
+    `checkh(w65.size(), 0);
+    w65 = new[1];
+    {>>{w65}} = s75[63:0];
+    `checkh(w65.size(), 0);
+    // A cast whose size does not match is not rejected, and converts the same way
+    bd = bytes_t'(s12);
+    `checkh(bd.size(), 1);
+    `checkh(bd[0], s12[11:4]);
   end
 
 endmodule
