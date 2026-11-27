@@ -118,6 +118,27 @@ class SignedConst;
   }
 endclass
 
+// A value drawn from a range of all 64-bit values, constant or not, has all its bits random
+class FullPick;
+  rand bit [63:0] x;
+  rand bit [3:0] y;
+  constraint c {
+    x dist {[64'h0 : 64'hffff_ffff_ffff_ffff] := 1};
+    y == x[3:0];
+  }
+endclass
+
+class FullPickRt;
+  rand bit [63:0] x;
+  rand bit [3:0] y;
+  bit [63:0] lo = 64'h0;
+  bit [63:0] hi = 64'hffff_ffff_ffff_ffff;
+  constraint c {
+    x dist {[lo : hi] :/ 1};
+    y == x[3:0];
+  }
+endclass
+
 module t;
   localparam int N = 1000;
   bit failed;
@@ -152,6 +173,8 @@ module t;
     automatic Signed32 g32 = new;
     automatic Signed64 g64 = new;
     automatic SignedConst gc = new;
+    automatic FullPick fp = new;
+    automatic FullPickRt fr = new;
     int ok;
     int c32[2];
     int c63[2];
@@ -161,6 +184,8 @@ module t;
     int cg32[2];
     int cg64[2];
     int cgc[2];
+    int cfp[4];
+    int cfr[4];
     for (int i = 0; i < N; ++i) begin
       ok = s32.randomize();
       `checkd(ok, 1);
@@ -186,6 +211,12 @@ module t;
       ok = gc.randomize();
       `checkd(ok, 1);
       ++cgc[gc.x == 100];
+      ok = fp.randomize();
+      `checkd(ok, 1);
+      ++cfp[fp.x[63:62]];
+      ok = fr.randomize();
+      `checkd(ok, 1);
+      ++cfr[fr.x[63:62]];
     end
     check("split32", c32, '{0.25, 0.75}, 10.83);
     check("split63", c63, '{0.25, 0.75}, 10.83);
@@ -195,6 +226,8 @@ module t;
     check("signed32", cg32, '{0.5, 0.5}, 10.83);
     check("signed64", cg64, '{0.5, 0.5}, 10.83);
     check("signedconst", cgc, '{11.0 / 12, 1.0 / 12}, 10.83);
+    check("fullpick", cfp, '{0.25, 0.25, 0.25, 0.25}, 16.27);
+    check("fullpick_rt", cfr, '{0.25, 0.25, 0.25, 0.25}, 16.27);
     if (failed) `stop;
     $write("*-* All Finished *-*\n");
     $finish;

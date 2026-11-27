@@ -3722,30 +3722,32 @@ class SolverSmtLowering final : public V3SolverLowering {
         const int distWidth = distp->exprp()->width();
         const AstConst* const lopCp = VN_CAST(irp->lhsp(), Const);
         const AstConst* const hipCp = VN_CAST(irp->rhsp(), Const);
-        AstNodeExpr* rangeSzp;
+        const auto newRandp = [fl]() {
+            AstNodeExpr* const randp = new AstRand{fl, nullptr, false};
+            randp->dtypeSetUInt64();
+            return randp;
+        };
+        // An offset below the range size, drawn from all 64 bits for a size of 2^64, which
+        // wraps to 0 in 64 bits
+        AstNodeExpr* offsetp;
         if (lopCp && hipCp) {
-            const uint64_t rsz = hipCp->toUQuad() - lopCp->toUQuad() + 1;
-            rangeSzp = new AstConst{fl, AstConst::Unsized64{}, rsz};
+            const uint64_t sizeLess1 = distConstBound(distp, hipCp) - distConstBound(distp, lopCp);
+            offsetp = sizeLess1 == ~0ULL
+                          ? newRandp()
+                          : new AstModDiv{fl, newRandp(),
+                                          new AstConst{fl, AstConst::Unsized64{}, sizeLess1 + 1}};
         } else {
-            const bool isSigned = irp->lhsp()->isSigned();
-            AstNodeExpr* const lo64p
-                = isSigned ? static_cast<AstNodeExpr*>(
-                                 new AstExtendS{fl, irp->lhsp()->cloneTreePure(false), 64})
-                           : static_cast<AstNodeExpr*>(
-                                 new AstExtend{fl, irp->lhsp()->cloneTreePure(false), 64});
-            AstNodeExpr* const hi64p
-                = isSigned ? static_cast<AstNodeExpr*>(
-                                 new AstExtendS{fl, irp->rhsp()->cloneTreePure(false), 64})
-                           : static_cast<AstNodeExpr*>(
-                                 new AstExtend{fl, irp->rhsp()->cloneTreePure(false), 64});
-            rangeSzp = new AstAdd{fl, new AstConst{fl, AstConst::Unsized64{}, 1ULL},
-                                  new AstSub{fl, hi64p, lo64p}};
+            const auto newSizep = [&]() {
+                return new AstAdd{fl, new AstConst{fl, AstConst::Unsized64{}, 1ULL},
+                                  new AstSub{fl, newDistBoundp(distp, irp->rhsp(), VL_QUADSIZE),
+                                             newDistBoundp(distp, irp->lhsp(), VL_QUADSIZE)}};
+            };
+            offsetp = new AstCond{
+                fl, new AstEq{fl, newSizep(), new AstConst{fl, AstConst::Unsized64{}, 0ULL}},
+                newRandp(), new AstModDiv{fl, newRandp(), newSizep()}};
         }
-        AstNodeExpr* const rand64p = new AstRand{fl, nullptr, false};
-        rand64p->dtypeSetUInt64();
-        AstNodeExpr* const offsetp
-            = new AstCCast{fl, new AstModDiv{fl, rand64p, rangeSzp}, distWidth};
-        AstNodeExpr* const valuep = new AstAdd{fl, irp->lhsp()->cloneTreePure(false), offsetp};
+        AstNodeExpr* const valuep = new AstAdd{fl, irp->lhsp()->cloneTreePure(false),
+                                               new AstCCast{fl, offsetp, distWidth}};
         AstNodeExpr* const eqp = new AstEq{fl, distExprCopyp, valuep};
         eqp->user1(true);
         return eqp;
