@@ -34,6 +34,7 @@
 #include "V3Const.h"
 #include "V3Graph.h"
 #include "V3Stats.h"
+#include "V3Task.h"
 #include "V3UniqueNames.h"
 
 #include <unordered_set>
@@ -158,6 +159,8 @@ public:
     // success condition is another NFA state rather than a static expression.
     SvaStateVertex* m_condVtxp = nullptr;
     bool m_abortReject = false;  // m_rejectOnFail edge rejecting a live thread on an abort
+    // The condition copies match items that run where a thread passes them, on another edge
+    bool m_copiesItems = false;
 
     // CONSTRUCTORS
     SvaTransEdge(V3Graph* graphp, V3GraphVertex* fromp, V3GraphVertex* top, AstNodeExpr* condp,
@@ -726,7 +729,7 @@ class SvaNfaBuilder final {
             AstNodeExpr* const condp
                 = result.finalCondp ? sampled(result.finalCondp->cloneTreePure(false)) : nullptr;
             SvaStateVertex* const successNowp = scopedCreateVertex();
-            guardedLink(srcp, successNowp, condp, flp);
+            guardedLink(srcp, successNowp, condp, flp)->m_copiesItems = true;
             // Retain a success through the latest deadline it can satisfy.
             SvaStateVertex* const historyp
                 = addDelayChain(successNowp, info.range + 1U, flp, false);
@@ -2603,6 +2606,212 @@ class SvaNfaLowering final {
         const AstAbortOn* exactAbortp = nullptr;
     };
 
+public:
+    // The statements of a match item, its subroutine calls (IEEE 1800-2023 16.11), taken out of
+    // the condition holding it. Every signal derived from the condition clones it, so each would
+    // call them again; they run instead once per tick a thread passes the item.
+    struct MatchItemStmts final {
+        const SvaTransEdge* edgep;  // Edge whose condition held the item, nullptr if the final
+        AstNodeStmt* stmtsp;  // The statements, reading sampled values as in the condition
+        AstNodeExpr* resultp;  // Copy of the result of the item, which must hold to run them
+        const FileLine* itemFlp;  // Of the item instance, shared by its copies
+        AstNodeExpr* gatep = nullptr;  // Edges taking it, with its copies from the same source
+    };
+    // Report the output and inout arguments of the subroutine calls stmtsp, which a match item
+    // cannot pass (IEEE 1800-2023 16.11), and return whether there are any
+    static bool reportOutputArgs(AstNodeStmt* const stmtsp) {
+        bool found = false;
+        for (AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+            const AstStmtExpr* const stmtExprp = VN_CAST(stmtp, StmtExpr);
+            AstNodeFTaskRef* const refp
+                = stmtExprp ? VN_CAST(stmtExprp->exprp(), NodeFTaskRef) : nullptr;
+            if (!refp) continue;
+            for (const V3TaskConnect& portArg :
+                 V3Task::taskConnects(refp, refp->taskp()->declsp(), nullptr, false)) {
+                const VDirection dir = portArg.first->direction();
+                if (!portArg.second || (dir != VDirection::OUTPUT && dir != VDirection::INOUT)) {
+                    continue;
+                }
+                portArg.second->v3error("Subroutine call in a sequence match item cannot have an "
+                                        << dir.verilogKwd()
+                                        << " argument (IEEE 1800-2023 16.11).");
+                found = true;
+            }
+        }
+        return found;
+    }
+    // Make the subroutine calls stmtsp read the sampled values of their input arguments, as in
+    // the condition holding them; ref arguments stay references
+    static void sampleInputArgs(AstNodeStmt* const stmtsp) {
+        for (AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+            const AstStmtExpr* const stmtExprp = VN_CAST(stmtp, StmtExpr);
+            AstNodeFTaskRef* const refp
+                = stmtExprp ? VN_CAST(stmtExprp->exprp(), NodeFTaskRef) : nullptr;
+            if (!refp) continue;
+            for (const V3TaskConnect& portArg :
+                 V3Task::taskConnects(refp, refp->taskp()->declsp(), nullptr, false)) {
+                AstArg* const argp = portArg.second;
+                if (!argp || !argp->exprp() || portArg.first->direction() != VDirection::INPUT) {
+                    continue;
+                }
+                argp->exprp(sampled(argp->exprp()->unlinkFrBack()));
+            }
+        }
+    }
+    // Add the variables the match items of condp assign, its local variables (IEEE 1800-2023
+    // 16.10), to varsr. Arguments of subroutine calls are not assigned.
+    static void addMatchItemWrites(const AstNodeExpr* const condp,
+                                   std::unordered_set<const AstVar*>& varsr) {
+        if (!condp) return;
+        std::unordered_set<const AstNodeVarRef*> argRefps;
+        condp->foreach([&](const AstArg* argp) {
+            argp->foreach([&](const AstNodeVarRef* refp) { argRefps.insert(refp); });
+        });
+        condp->foreach([&](const AstNodeVarRef* refp) {
+            if (refp->access().isWriteOrRW() && !argRefps.count(refp)) {
+                varsr.insert(refp->varp());
+            }
+        });
+    }
+    // Take the statements out of the match items of condpr calling subroutines only, leaving
+    // their results. Calls reading a variable that match items write, such as a local variable
+    // (IEEE 1800-2023 16.10), stay, reading it as the conditions do.
+    static void takeMatchItemStmts(AstNodeExpr*& condpr, const SvaTransEdge* edgep,
+                                   const std::unordered_set<const AstVar*>& writtenVars,
+                                   std::vector<MatchItemStmts>& itemsr) {
+        if (!condpr) return;
+        // Each with whether it has output arguments
+        std::vector<std::pair<AstExprStmt*, bool>> exprStmtps;
+        condpr->foreach([&](AstExprStmt* exprStmtp) {
+            if (!exprStmtp->stmtsp()) return;
+            for (const AstNode* stmtp = exprStmtp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                const AstStmtExpr* const stmtExprp = VN_CAST(stmtp, StmtExpr);
+                if (!stmtExprp || !VN_IS(stmtExprp->exprp(), NodeFTaskRef)) return;
+            }
+            const bool outputArgs = reportOutputArgs(exprStmtp->stmtsp());
+            if (!outputArgs && exprStmtp->stmtsp()->existsAndNext([&](const AstNodeVarRef* refp) {
+                    return refp->access().isReadOrRW() && writtenVars.count(refp->varp());
+                })) {
+                return;
+            }
+            exprStmtps.emplace_back(exprStmtp, outputArgs);
+        });
+        // Those inside others first
+        for (auto it = exprStmtps.rbegin(); it != exprStmtps.rend(); ++it) {
+            AstExprStmt* const exprStmtp = it->first;
+            AstNodeStmt* const stmtsp = exprStmtp->stmtsp()->unlinkFrBackWithNext();
+            if (it->second) {
+                VL_DO_DANGLING(stmtsp->deleteTree(), stmtsp);
+            } else {
+                sampleInputArgs(stmtsp);
+                itemsr.push_back({edgep, stmtsp, exprStmtp->resultp()->cloneTreePure(false),
+                                  exprStmtp->fileline()});
+            }
+            AstNodeExpr* const resultp = exprStmtp->resultp()->unlinkFrBack();
+            // The final condition may still be in the property
+            if (exprStmtp->backp()) exprStmtp->replaceWith(resultp);
+            if (exprStmtp == condpr) condpr = resultp;
+            VL_DO_DANGLING(exprStmtp->deleteTree(), exprStmtp);
+        }
+    }
+
+    // Take the statements out of the match items of condpr, a copy of the condition of another
+    // edge, where they run
+    static void dropMatchItemStmts(AstNodeExpr*& condpr,
+                                   const std::unordered_set<const AstVar*>& writtenVars) {
+        std::vector<MatchItemStmts> itemps;
+        takeMatchItemStmts(condpr, nullptr, writtenVars, itemps);
+        for (MatchItemStmts& itemr : itemps) {
+            VL_DO_DANGLING(itemr.stmtsp->deleteTree(), itemr.stmtsp);
+            VL_DO_DANGLING(itemr.resultp->deleteTree(), itemr.resultp);
+        }
+    }
+
+private:
+    // Run stmtsp when condp holds, once for each of the 'countp' threads there
+    void addMatchItemStmts(LowerCtx& c, AstNodeExpr* const condp, AstNodeExpr* const countp,
+                           AstNodeStmt* const stmtsp) {
+        // remaining = count; while (remaining != 0) { stmts; remaining = remaining - 1; }
+        AstVar* const remainingp
+            = new AstVar{c.flp, VVarType::MODULETEMP, m_names.get("itemCount"), m_u32DTypep};
+        remainingp->lifetime(VLifetime::STATIC_EXPLICIT);
+        m_modp->addStmtsp(remainingp);
+        AstNodeStmt* const bodyp
+            = new AstAssign{c.flp, new AstVarRef{c.flp, remainingp, VAccess::WRITE}, countp};
+        AstLoop* const loopp = new AstLoop{c.flp};
+        loopp->addStmtsp(
+            new AstLoopTest{c.flp, loopp,
+                            new AstNeq{c.flp, new AstVarRef{c.flp, remainingp, VAccess::READ},
+                                       newTypedConstp(c.flp, m_u32DTypep, 0)}});
+        loopp->addStmtsp(stmtsp);
+        loopp->addStmtsp(
+            new AstAssign{c.flp, new AstVarRef{c.flp, remainingp, VAccess::WRITE},
+                          new AstSub{c.flp, new AstVarRef{c.flp, remainingp, VAccess::READ},
+                                     newTypedConstp(c.flp, m_u32DTypep, 1)}});
+        bodyp->addNext(loopp);
+        m_modp->addStmtsp(newAssertAlways(c.flp, VAlwaysKwd::ALWAYS, c.senTreep->cloneTree(false),
+                                          new AstIf{c.flp, condp, bodyp}));
+    }
+    // The number of threads at a vertex, 32 bits wide. Where several attempts merge into a single
+    // state bit, as after a range delay's later steps, it counts one.
+    AstNodeExpr* threadCountp(const SvaStateVertex* const vtxp) const {
+        AstNodeExpr* const countp = vtxp->datap()->stateCountSigp;
+        UASSERT_OBJ(countp->width() == m_u32DTypep->width(), countp,
+                    "Thread count signal is not 32 bits");
+        return countp->cloneTreePure(false);
+    }
+    // Run the statements of match items once per thread passing the item: taking its edge, or
+    // matching at the end of the sequence, through any of the Links to the match vertex
+    void addMatchItemStmts(LowerCtx& c, std::vector<MatchItemStmts>& itemsr) {
+        // A thread passes an item once, also onto several edges holding copies of it, like the
+        // last edges of an 'or' operand, so the copies from one source join the first one
+        std::map<std::pair<const SvaStateVertex*, const FileLine*>, MatchItemStmts*> firstps;
+        for (MatchItemStmts& itemr : itemsr) {
+            if (!itemr.edgep) continue;
+            AstNodeExpr* const gatep = gatedEdgeSigp(c, *itemr.edgep);
+            MatchItemStmts& firstr
+                = *firstps.emplace(std::make_pair(itemr.edgep->fromVtxp(), itemr.itemFlp), &itemr)
+                       .first->second;
+            if (&firstr == &itemr) {
+                itemr.gatep = gatep;
+                continue;
+            }
+            UASSERT_OBJ(firstr.stmtsp->sameTree(itemr.stmtsp), itemr.stmtsp,
+                        "Copies of a match item differ");
+            firstr.gatep = new AstLogOr{c.flp, firstr.gatep, gatep};
+            VL_DO_DANGLING(itemr.stmtsp->deleteTree(), itemr.stmtsp);
+            itemr.stmtsp = nullptr;
+            VL_DO_DANGLING(itemr.resultp->deleteTree(), itemr.resultp);
+        }
+        for (MatchItemStmts& itemr : itemsr) {
+            if (!itemr.stmtsp) continue;  // Joined a copy
+            if (itemr.edgep) {
+                // The edge may also be taken without the item matching, like a rejection
+                AstNodeExpr* const condp
+                    = new AstLogAnd{c.flp, itemr.gatep, sampled(itemr.resultp)};
+                addMatchItemStmts(c, gateNotKill(c, condp), threadCountp(itemr.edgep->fromVtxp()),
+                                  itemr.stmtsp);
+                itemr.stmtsp = nullptr;
+                continue;
+            }
+            VL_DO_DANGLING(itemr.resultp->deleteTree(), itemr.resultp);
+            size_t edgesLeft = c.graph.m_matchVertexp->inEdges().size();
+            for (const V3GraphEdge& edger : c.graph.m_matchVertexp->inEdges()) {
+                const SvaTransEdge& tedger = static_cast<const SvaTransEdge&>(edger);
+                AstNodeExpr* condp = gatedEdgeSigp(c, tedger);
+                if (c.matchCondp) {
+                    condp
+                        = new AstLogAnd{c.flp, condp, sampled(c.matchCondp->cloneTreePure(false))};
+                }
+                AstNodeStmt* const stmtsp
+                    = --edgesLeft ? itemr.stmtsp->cloneTree(true) : itemr.stmtsp;
+                addMatchItemStmts(c, gateNotKill(c, condp), threadCountp(tedger.fromVtxp()),
+                                  stmtsp);
+            }
+            itemr.stmtsp = nullptr;
+        }
+    }
+
     // Build a match-now expression: stateSig[i] && $sampled(condp)
     static AstNodeExpr* buildMatchNow(FileLine* flp, AstNodeExpr* stateExprp, AstNodeExpr* condp) {
         AstNodeExpr* const statep = stateExprp->cloneTreePure(false);
@@ -3850,8 +4059,9 @@ public:
                     AstSenTree* const senTreep, AstNodeExpr* const matchCondp,
                     AstNodeExpr* const disableExprp, const bool needThreadFailCount,
                     const bool needThroughoutThreadFailCount, const bool trackAntecedentEnd,
-                    const bool needSuccessCount = false, const bool needRejectCount = false,
-                    const bool exactCounts = false, const AstAbortOn* const exactAbortp = nullptr,
+                    std::vector<MatchItemStmts>& itemStmtsr, const bool needSuccessCount = false,
+                    const bool needRejectCount = false, const bool exactCounts = false,
+                    const AstAbortOn* const exactAbortp = nullptr,
                     const bool countAttempts = false) {
         FileLine* const flp = assertp->fileline();
         AstCover* const coverp = VN_CAST(assertp, Cover);
@@ -4031,6 +4241,7 @@ public:
         emitDelayRingUpdates(c, countMatches);
         emitAndCombinerDoneLatchNba(c);
         emitKillAckNba(c);
+        addMatchItemStmts(c, itemStmtsr);
 
         // Phase 3/3a/3b: Compute terminal match/reject signals (cleans up stateSig).
         const SignalSet sigs = computeSignals(
@@ -4993,7 +5204,12 @@ class AssertNfaVisitor final : public VNVisitor {
             builder.presetRangeFallback();
         }
 
-        const BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
+        // Each instance of a match item, like one of a sequence used twice, gets its own
+        // FileLine, which the copies the build makes of it share, see addMatchItemStmts
+        propp->foreach([](AstExprStmt* exprStmtp) {
+            if (exprStmtp->stmtsp()) exprStmtp->fileline(new FileLine{exprStmtp->fileline()});
+        });
+        BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
         if (result.valid()) wireMatchAndMidSources(graph, result, flp);
         if (!result.valid()) {
             // Fall through to V3AssertPre for unsupported constructs; only
@@ -5057,10 +5273,37 @@ class AssertNfaVisitor final : public VNVisitor {
         const bool exactCounts
             = replayFails && !parts.hasImplication && oneThreadPerAttempt(seqBodyp, true)
               && !seqBodyp->exists([](const AstExprStmt* itemp) { return itemp->isMatchItem(); });
+        // The statements of the match items run once per tick a thread passes the item, not in
+        // each signal derived from its condition
+        std::unordered_set<const AstVar*> itemWrites;
+        for (const V3GraphVertex& vtxr : graph.m_graph.vertices()) {
+            for (const V3GraphEdge& edger : vtxr.outEdges()) {
+                const SvaTransEdge& tedger = static_cast<const SvaTransEdge&>(edger);
+                SvaNfaLowering::addMatchItemWrites(tedger.m_condp, itemWrites);
+            }
+        }
+        SvaNfaLowering::addMatchItemWrites(result.finalCondp, itemWrites);
+        std::vector<SvaNfaLowering::MatchItemStmts> itemStmts;
+        for (V3GraphVertex& vtxr : graph.m_graph.vertices()) {
+            for (V3GraphEdge& edger : vtxr.outEdges()) {
+                SvaTransEdge& tedger = static_cast<SvaTransEdge&>(edger);
+                if (tedger.m_copiesItems) {
+                    SvaNfaLowering::dropMatchItemStmts(tedger.m_condp, itemWrites);
+                } else {
+                    SvaNfaLowering::takeMatchItemStmts(tedger.m_condp, &tedger, itemWrites,
+                                                       itemStmts);
+                }
+            }
+            // A ring of candidates clears on one passing its final condition, a copy of the
+            // condition of the edge it passes
+            SvaStateVertex& svtxr = static_cast<SvaStateVertex&>(vtxr);
+            SvaNfaLowering::dropMatchItemStmts(svtxr.m_delayRingClearCondp, itemWrites);
+        }
+        SvaNfaLowering::takeMatchItemStmts(result.finalCondp, nullptr, itemWrites, itemStmts);
         const auto signals = m_loweringp->lower(
             assertp, graph, senTreep, result.finalCondp, disableExprp, replayFails || countPasses,
-            replayFails || countPasses, trackAntecedentEnd, replaySuccesses, countPasses,
-            exactCounts, exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr,
+            replayFails || countPasses, trackAntecedentEnd, itemStmts, replaySuccesses,
+            countPasses, exactCounts, exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr,
             coverp && !isCoverSeq && !negated && v3Global.opt.coverageUser());
         AstNodeExpr* matchExprp = nullptr;
         AstNodeExpr* const outputExprp

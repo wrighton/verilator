@@ -1,0 +1,9 @@
+%Error: t/t_property_match_call_output_bad.v:22:55: Subroutine call in a sequence match item cannot have an output argument (IEEE 1800-2023 16.11).
+                                                  : ... note: In instance 't'
+   22 |   assert property (@(posedge clk) 1 ##1 (1, take(cyc, got)));
+      |                                                       ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_match_call_output_bad.v:23:44: Subroutine call in a sequence match item cannot have an inout argument (IEEE 1800-2023 16.11).
+   23 |   assert property (@(posedge clk) (1, bump(count)) ##1 1);
+      |                                            ^~~~~
+%Error: Exiting due to
