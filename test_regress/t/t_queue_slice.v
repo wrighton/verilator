@@ -22,6 +22,13 @@ endfunction
 
 module t;
   int pos = 1;
+  int big = 32'sh7fff_ffff;
+  int least = 32'sh8000_0000;
+  longint wide = 64'sh1_0000_0000;
+  byte neg = -1;
+  longint wide_hi = 64'sd6442450943;
+  longint wide_lo = -64'sd6442450943;
+  bit [31:0] u31 = 32'h8000_0000;
   int calls = 0;
   function int pos_call();
     ++calls;
@@ -225,10 +232,98 @@ module t;
         `checkp(ri, "'{'ha}");
         ri = iq[sp-:2];
         `checkp(ri, "'{'hb, 'hc}");
+        ri = d[p3-:2];
+        `checkp(ri, "'{'h0, 'h14}");
       end
       d = '{20, 21, 22, 23};
       d = d[1:2];
       `checkp(d, "'{'h15, 'h16}");
+      // A dynamic array slice keeps its size, reading the default value past either end
+      d = '{20, 21};
+      ri = d[1:2];
+      `checkp(ri, "'{'h15, 'h0}");
+      ri = d[pos+:2];
+      `checkp(ri, "'{'h15, 'h0}");
+      begin
+        int p0;
+        p0 = 0;
+        ri = d[p0-:2];
+        `checkp(ri, "'{'h0, 'h14}");
+      end
+      ri = d[big+:2];
+      `checkp(ri, "'{'h0, 'h0}");
+      ri = d[big-1+:2];
+      `checkp(ri, "'{'h0, 'h0}");
+      ri = d[least-:2];
+      `checkp(ri, "'{'h0, 'h0}");
+      // A position that does not fit in 32 bits selects no element, a narrow one keeps its sign
+      d = '{20, 21};
+      ri = d[wide+:2];
+      `checkp(ri, "'{'h0, 'h0}");
+      ri = d[wide+1-:2];
+      `checkp(ri, "'{'h0, 'h0}");
+      ri = d[64'sh1_0000_0000:64'sh1_0000_0001];
+      `checkp(ri, "'{'h0, 'h0}");
+      ri = d[neg+:2];
+      `checkp(ri, "'{'h0, 'h14}");
+      ri = iq[wide+:2];
+      `checkp(ri, "'{}");
+      // A queue slice bound past either end is limited to the queue
+      iq = '{10, 11, 12};
+      ri = iq[0:wide_hi];
+      `checkp(ri, "'{'ha, 'hb, 'hc}");
+      ri = iq[wide_lo:1];
+      `checkp(ri, "'{'ha, 'hb}");
+      ri = iq[wide_hi:wide_hi];
+      `checkp(ri, "'{}");
+      // A slice with an X or Z position selects no element
+      ri = iq[4'bx000:1];
+      `checkp(ri, "'{}");
+      ri = iq[0:4'bx001];
+      `checkp(ri, "'{}");
+      // verilator lint_off WIDTHEXPAND
+      ri = iq[$-4'bx001:$];
+      `checkp(ri, "'{}");
+      ri = iq[1:$-4'bx000];
+      `checkp(ri, "'{}");
+      // verilator lint_on WIDTHEXPAND
+      iq = '{11, 22, 33};
+      ri = iq[1:wide];
+      `checkp(ri, "'{'h16, 'h21}");
+      // A dynamic array slice of variable size is limited to the array too
+      ri = d[0:wide_hi];
+      `checkp(ri, "'{'h14, 'h15}");
+      ri = d[wide_lo:1];
+      `checkp(ri, "'{'h14, 'h15}");
+      ri = d[pos:wide];
+      `checkp(ri, "'{'h15}");
+      // So is an unsigned 32-bit one past the int range
+      ri = iq[u31:5];
+      `checkp(ri, "'{}");
+      ri = iq[1:u31];
+      `checkp(ri, "'{'h16, 'h21}");
+      ri = d[1:u31];
+      `checkp(ri, "'{'h15}");
+      ri = d[u31+:2];
+      `checkp(ri, "'{'h0, 'h0}");
+      `checkh(iq[u31], 0);
+      `checkh(d[u31], 0);
+      iq = '{10, 11, 12, 13};
+      d[wide+:2] = '{1, 2};
+      `checkp(d, "'{'h14, 'h15}");
+      // A slice of variable size is limited to the array
+      ri = d[pos-1:pos+999999999];
+      `checkp(ri, "'{'h14, 'h15}");
+      // Writing a dynamic array slice skips the indexes outside the array
+      d = '{11, 22, 33};
+      d[pos-:3] = '{50, 51, 52};
+      `checkp(d, "'{'h33, 'h34, 'h21}");
+      d[2+:3] = '{60, 61, 62};
+      `checkp(d, "'{'h33, 'h34, 'h3c}");
+      d[1:3] = '{70, 71, 72};
+      `checkp(d, "'{'h33, 'h46, 'h47}");
+      d[-1:1] = '{80, 81, 82};
+      `checkp(d, "'{'h51, 'h52, 'h47}");
       q = '{"a", "b", "c"};
       q = q[pos+:2];
       `checkp(q, "'{\"b\", \"c\"}");

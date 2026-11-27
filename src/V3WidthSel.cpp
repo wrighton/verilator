@@ -50,6 +50,28 @@ class WidthSelVisitor final : public VNVisitor {
 
     // METHODS
 
+    // Value of constant slice position 'constp', and whether it has one as a 64-bit int
+    static std::pair<bool, int64_t> slicePosition(const AstConst* constp) {
+        const V3Number& num = constp->num();
+        if (num.isFourState() || constp->width() > VL_QUADSIZE) return {false, 0};
+        if (constp->width() == VL_IDATASIZE) return {true, num.toSInt()};
+        if (constp->isSigned()) return {true, num.toSQuad()};
+        const uint64_t value = num.toUQuad();
+        if (value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) return {false, 0};
+        return {true, static_cast<int64_t>(value)};
+    }
+    // Size of the slice from constant position lsbp to msbp, or nullptr if it is empty or not
+    // a 32-bit int
+    static AstConst* newSliceSizep(const AstConst* lsbp, const AstConst* msbp) {
+        const std::pair<bool, int64_t> lsb = slicePosition(lsbp);
+        const std::pair<bool, int64_t> msb = slicePosition(msbp);
+        if (!lsb.first || !msb.first || msb.second < lsb.second) return nullptr;
+        const uint64_t size
+            = static_cast<uint64_t>(msb.second) - static_cast<uint64_t>(lsb.second) + 1;
+        if (size > static_cast<uint64_t>(std::numeric_limits<int32_t>::max())) return nullptr;
+        return new AstConst{lsbp->fileline(), AstConst::Signed32{}, static_cast<int32_t>(size)};
+    }
+
     void checkConstantOrReplace(AstNode* nodep, const string& message) {
         // See also V3Width::checkConstantOrReplace
         // Note can't call V3Const::constifyParam(nodep) here, as constify may change nodep on us!
@@ -676,6 +698,28 @@ class WidthSelVisitor final : public VNVisitor {
             AstNodeExpr* const qrightp = nodep->rightp()->unlinkFrBack();
             AstNodeExpr* const qleftBacknessp = selQueueBackness(qleftp);
             AstNodeExpr* const qrightBacknessp = selQueueBackness(qrightp);
+            // A dynamic array slice of constant size keeps it, an index outside the array reading
+            // the default value (IEEE 1800-2023 7.4.5). Any other slice is limited to the array,
+            // as a queue slice is (IEEE 1800-2023 7.10.1).
+            if (VN_IS(ddtypep, DynArrayDType) && !qleftBacknessp && !qrightBacknessp
+                && VN_IS(qleftp, Const) && VN_IS(qrightp, Const)) {
+                // As its first position and size, so the size stays exact when a position does
+                // not fit the runtime's 32 bits
+                if (AstConst* const sizep
+                    = newSliceSizep(VN_AS(qleftp, Const), VN_AS(qrightp, Const))) {
+                    AstCMethodHard* const newp = new AstCMethodHard{
+                        nodep->fileline(), fromp, VCMethod::DYN_SLICE_PLUS_PAD, qleftp};
+                    newp->addPinsp(sizep);
+                    VL_DO_DANGLING(pushDeletep(qrightp), qrightp);
+                    newp->dtypep(ddtypep);
+                    newp->didWidth(true);
+                    newp->protect(false);
+                    nodep->replaceWith(newp);
+                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                    return;
+                }
+                // Else empty, or too large to read padded
+            }
             // Use special methods to refer to back rather than math using
             // queue size, this allows a single queue reference, to support
             // for equations in side effects that select the queue to
@@ -905,17 +949,23 @@ class WidthSelVisitor final : public VNVisitor {
             // is evaluated once
             AstNodeExpr* lsbp = rhsp;
             if (VN_IS(nodep, SelMinus)) {
-                // Subtract in 32 bits, the width of the runtime position, so a narrow position
-                // may go below 0
-                if (rhsp->width() < 32 && rhsp->isSigned()) {
-                    lsbp = new AstExtendS{rhsp->fileline(), rhsp, 32};
-                } else if (rhsp->width() < 32) {
-                    lsbp = new AstExtend{rhsp->fileline(), rhsp, 32};
+                // Subtract in 64 signed bits, so a position of up to 32 bits may go below 0 or
+                // past the int range of the runtime position, which then is converted as an
+                // index that does not fit
+                if (rhsp->width() <= VL_IDATASIZE) {
+                    if (rhsp->isSigned()) {
+                        lsbp = new AstExtendS{rhsp->fileline(), rhsp, VL_QUADSIZE};
+                    } else {
+                        lsbp = new AstExtend{rhsp->fileline(), rhsp, VL_QUADSIZE};
+                    }
+                    lsbp->dtypeSetLogicSized(VL_QUADSIZE, VSigning::SIGNED);
                 }
                 lsbp = newSubNeg(lsbp, width - 1);
             }
+            const VCMethod method = VN_IS(ddtypep, DynArrayDType) ? VCMethod::DYN_SLICE_PLUS_PAD
+                                                                  : VCMethod::DYN_SLICE_PLUS;
             AstCMethodHard* const newp
-                = new AstCMethodHard{nodep->fileline(), fromp, VCMethod::DYN_SLICE_PLUS, lsbp};
+                = new AstCMethodHard{nodep->fileline(), fromp, method, lsbp};
             newp->addPinsp(widthp);
             newp->dtypep(fromdata.m_dtypep);
             newp->didWidth(true);
