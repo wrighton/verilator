@@ -1008,6 +1008,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     }
     if (checkOnly && m_vars.empty() && m_constraints.empty()) return true;
     for (const auto& keySet : m_keySets) keySet.second.record(*this);
+    for (const auto& hold : m_holdRecords) hold.second(*this);
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
     m_checkOnly = checkOnly;

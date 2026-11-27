@@ -285,6 +285,8 @@ class VlRandomizer VL_NOT_FINAL {
         std::function<void(VlRandomizer&)> record;
     };
     std::map<std::string, KeySet> m_keySets;
+    // Records of the current elements of each array not solved, see hold_var()
+    std::map<std::string, std::function<void(VlRandomizer&)>> m_holdRecords;
     const VlQueue<CData>* m_randmodep = nullptr;  // rand_mode state;
     const VlQueue<CData>* m_static_randmodep = nullptr;  // Static rand_mode state (shared)
     std::unordered_set<std::string> m_staticVars;  // Names of static rand vars
@@ -641,6 +643,18 @@ public:
     // solve time, so a container resized by the solver is handled correctly.
     void rand_unique(const std::string& name, const uint32_t key) {
         m_uniqueArrays[key].insert(name);
+    }
+    // Give the solver array 'var' named 'name', of elements of 'width' bits, that is not solved
+    // but read by a random index, as an array whose rand_mode() is off: its current elements,
+    // recorded at each solve, pinned and never written back
+    template <typename T>
+    void hold_var(T& var, uint32_t width, const std::string& name, uint32_t dimension) {
+        T* const varp = &var;
+        m_holdRecords[name] = [varp, width, name, dimension](VlRandomizer& randomizer) {
+            randomizer.m_vars.erase(name);  // Of the object as copied, maybe since
+            randomizer.write_var(*varp, width, name.c_str(), dimension);
+            randomizer.m_disabledVars.insert(name);
+        };
     }
     // Define, in each solve, '__Vrd_<name>' reading associative array 'var' named 'name', of
     // elements of 'valueWidth' bits, by a key of 'keyWidth' bits, see emitKeySets(). Each solve

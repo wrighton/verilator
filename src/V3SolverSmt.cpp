@@ -165,6 +165,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     std::set<std::string>& m_writtenVars;  // Track which variable paths have write_var generated
                                            // (shared across all constraints)
     std::set<std::string> m_inlineWrittenVars;  // Per-instance tracking for inline constraints
+    std::set<const AstVar*> m_heldArrays;  // Arrays not solved read by a random index
     VInsertionSet<AstVar*>* m_sizeConstrainedArraysp = nullptr;  // Arrays with size constraints
     // Conditions of the enclosing guards without random variables, unlowered, which keep the
     // reads of the constraints they guard from being evaluated when false (IEEE 1800-2023
@@ -1219,6 +1220,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
 
+        markHeldArray(nodep->fromp(), nodep->bitp());
         addStringNamePart(nodep->bitp(), "%x");
         const bool indexIsRand = nodep->bitp()->exists([](const AstNodeVarRef* const vrefp) {
             return vrefp->varp()->rand().isRandomizable();
@@ -1343,8 +1345,59 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
     }
 
+    // An array of integral elements that is not solved, a member of this object, selected by
+    // random index 'indexp' from 'fromp', is given to the solver as an array whose rand_mode()
+    // is off (see VlRandomizer::hold_var). Mark it so, and return whether it is.
+    bool markHeldArray(AstNodeExpr* fromp, AstNodeExpr* indexp) {
+        AstVarRef* const refp = VN_CAST(fromp, VarRef);
+        if (!refp || refp->user1() || m_structSel || m_nestedAccessp || m_inlineInitBlockp) {
+            return false;
+        }
+        // A random variable is marked solved already
+        AstVar* const varp = refp->varp();
+        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+        const bool indexIsRand = indexp->exists([](const AstNodeVarRef* vrefp) {
+            return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
+        });
+        // An unpacked array, dynamic array or queue, of integral elements
+        const bool held = indexIsRand && varp->isClassMember()
+                          && dtypep->subDTypep()->skipRefp()->isIntegralOrPacked();
+        if (!held) return false;
+        refp->user1(true);
+        m_heldArrays.insert(varp);
+        return true;
+    }
+    // The reference 'nodep' to an array marked by markHeldArray, registered once
+    void editHeldArray(AstNodeVarRef* nodep) {
+        FileLine* const fl = nodep->fileline();
+        AstVar* const varp = nodep->varp();
+        if (m_writtenVars.insert(varp->name()).second) {
+            AstNodeModule* const classp = getLeftmostVarModulep(nullptr, varp);
+            AstVarRef* const arrayp = new AstVarRef{fl, classp, varp, VAccess::READWRITE};
+            arrayp->classOrPackagep(nodep->classOrPackagep());
+            AstCMethodHard* const holdp = new AstCMethodHard{
+                fl,
+                new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+                VCMethod::RANDOMIZER_HOLD_VAR, arrayp};
+            holdp->addPinsp(new AstConst{
+                fl, static_cast<uint32_t>(SmtUtil::arrayElementDTypep(varp->dtypep())->width())});
+            holdp->addPinsp(new AstConst{fl, AstConst::String{}, varp->name()});
+            holdp->addPinsp(new AstConst{fl, 1U});
+            holdp->dtypeSetVoid();
+            newInitBlockp(VN_AS(m_memberMap.findMember(classp, "new"), NodeFTask))
+                ->addStmtsp(holdp->makeStmt());
+        }
+        AstSFormatF* const newp = new AstSFormatF{fl, varp->name(), false, nullptr};
+        newp->user1(true);
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     // VISITORS
     void visit(AstNodeVarRef* nodep) override {
+        if (nodep->user1() && m_heldArrays.count(nodep->varp())) {
+            editHeldArray(nodep);
+            return;
+        }
         AstVar* varp = nodep->varp();
         if (varp->user4p()) {
             bool isSizeRef = false;
@@ -2348,6 +2401,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
+        markHeldArray(nodep->fromp(), nodep->bitp());
         FileLine* const fl = nodep->fileline();
         const bool objectElem = VN_IS(nodep->dtypep()->skipRefp(), ClassRefDType);
         // An element select reads zero out of range. The range checks of the selects of
@@ -3901,8 +3955,9 @@ class SolverSmtLowering final : public V3SolverLowering {
             if (!stmtExprp) continue;
             AstCMethodHard* const methodp = VN_CAST(stmtExprp->exprp(), CMethodHard);
             if (!methodp) continue;
-            // A clone reads its own associative arrays
-            if (methodp->method() == VCMethod::RANDOMIZER_KEY_SET) {
+            // A clone reads its own associative arrays and arrays not solved
+            if (methodp->method() == VCMethod::RANDOMIZER_KEY_SET
+                || methodp->method() == VCMethod::RANDOMIZER_HOLD_VAR) {
                 updatep->addStmtsp(methodp->cloneTree(false)->makeStmt());
                 continue;
             }
