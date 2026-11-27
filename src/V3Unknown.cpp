@@ -1412,6 +1412,14 @@ class UnknownVisitor final : public VNVisitor {
         return pinp;
     }
     void visit(AstCMethodHard* nodep) override {
+        // No element exists at an associative array index with X or Z bits, so exists() returns
+        // 0 and delete() does nothing (IEEE 1800-2023 7.8.6, 7.9.2, 7.9.3)
+        const bool exists = nodep->method() == VCMethod::ASSOC_EXISTS;
+        if ((exists || nodep->method() == VCMethod::ASSOC_ERASE)
+            && isFourStateAssocIndex(nodep->pinsp())) {
+            replaceAssocMethod(nodep, exists);
+            return;
+        }
         const int indexes = dynIndexArgs(nodep);
         const bool slice = !nodep->method().isDynElementAccess();
         // An index with X or Z bits selects no element: a read gives the default value and a
@@ -1450,15 +1458,36 @@ class UnknownVisitor final : public VNVisitor {
     }
     // An associative array element whose index has X or Z bits, which is invalid: a read gives
     // the default value, and a write is ignored, through a temporary (IEEE 1800-2023 7.8.6)
-    void visitAssocElement(AstNodeSel* nodep) {
-        const AstNodeExpr* indexp = nodep->bitp();
-        // The index may be under its cast to the key type
+    // Whether associative array index 'indexp' is a constant with X or Z bits, also under its
+    // cast to the key type
+    static bool isFourStateAssocIndex(const AstNodeExpr* indexp) {
         while (const AstNodeUniop* const castp = VN_CAST(indexp, NodeUniop)) {
             if (!VN_IS(castp, Extend) && !VN_IS(castp, ExtendS) && !VN_IS(castp, CCast)) break;
             indexp = castp->lhsp();
         }
         const AstConst* const constp = VN_CAST(indexp, Const);
-        if (!constp || !constp->num().isFourState()) {
+        return constp && constp->num().isFourState();
+    }
+    // Replace associative array method 'nodep', exists() if 'exists' else delete(), given such an
+    // index
+    void replaceAssocMethod(AstCMethodHard* nodep, bool exists) {
+        if (exists) {
+            nodep->v3warn(SELRANGE, "Associative array index has X or Z bits, so exists() returns"
+                                    " 0 (IEEE 1800-2023 7.8.6).");
+            AstConst* const newp
+                = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, nodep->width(), 0};
+            newp->dtypeFrom(nodep);
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
+        nodep->v3warn(SELRANGE, "Associative array index has X or Z bits, so delete() does"
+                                " nothing (IEEE 1800-2023 7.8.6).");
+        AstStmtExpr* const stmtp = VN_AS(nodep->backp(), StmtExpr);
+        VL_DO_DANGLING(pushDeletep(stmtp->unlinkFrBack()), stmtp);
+    }
+    void visitAssocElement(AstNodeSel* nodep) {
+        if (!isFourStateAssocIndex(nodep->bitp())) {
             iterateChildren(nodep);
             return;
         }
