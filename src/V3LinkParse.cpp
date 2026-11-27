@@ -85,6 +85,7 @@ class LinkParseVisitor final : public VNVisitor {
     VLifetime m_lifetime = VLifetime::STATIC_IMPLICIT;  // Propagating lifetime
     bool m_lifetimeAllowed = false;  // True to allow lifetime settings
     bool m_outlivesCall = false;  // If values of the current task can be used after it returns
+    bool m_readsResult = false;  // If the current function may read its result variable
     bool m_moduleWithGenericIface = false;  // If current module contains generic interface
     std::set<AstVar*> m_portDups;  // Non-ANSI port datatype duplicating input/output decls
 
@@ -286,6 +287,82 @@ class LinkParseVisitor final : public VNVisitor {
         return addsp;
     }
 
+    // Whether a function may read its result variable's value from a previous call: it may
+    // write it, and may read it, or return, before a plain assignment of it, or 'return' of a
+    // value, not reading it, at the start of its body, outside conditions, loops and forks
+    static bool readsResult(const AstNodeFTask* nodep) {
+        if (!VN_IS(nodep, Func)) return false;
+        const std::string& name = nodep->name();
+        const auto isRef = [&](const AstNode* np) {
+            return np->exists([&](const AstParseRef* refp) { return refp->name() == name; });
+        };
+        // Possibly written: other than read by an expression of only operators and selects, in an
+        // assignment's value, a condition, a display, or a 'return', e.g. as an assignment's
+        // target, by an increment, or as an argument or object of a call, function or method,
+        // which may set it. If never written, its value is always its initial value, the same
+        // automatic or static.
+        const auto mayWrite = [](const AstNode* refp) {
+            for (const AstNode* np = refp;;) {
+                const AstNode* const abovep = np->aboveLoopp();
+                if (const AstNodeAssign* const assignp = VN_CAST(abovep, NodeAssign)) {
+                    return assignp->lhsp() == np;
+                }
+                if (VN_IS(abovep, If) || VN_IS(abovep, Case) || VN_IS(abovep, CaseItem)
+                    || VN_IS(abovep, LoopTest) || VN_IS(abovep, Repeat) || VN_IS(abovep, Display)
+                    || VN_IS(abovep, Return)) {
+                    return false;
+                }
+                const bool readp = (VN_IS(abovep, NodeBiop) || VN_IS(abovep, NodeTriop)
+                                    || VN_IS(abovep, NodeUniop) || VN_IS(abovep, NodePreSel)
+                                    || VN_IS(abovep, SFormatF) || VN_IS(abovep, SFormatArg))
+                                   && !VN_IS(abovep, PreInc) && !VN_IS(abovep, PreDec)
+                                   && !VN_IS(abovep, PostInc) && !VN_IS(abovep, PostDec)
+                                   && !VN_IS(abovep, FGetS) && !VN_IS(abovep, CastDynamic)
+                                   && !VN_IS(abovep, NodeDistBiop)
+                                   && !VN_IS(abovep, NodeDistTriop);
+                if (!readp) return true;
+                np = abovep;
+            }
+        };
+        // A variable of the same name in a block, which a name may be of instead, so references
+        // by name are not known to be to it
+        if (nodep->exists([&](const AstVar* varp) {
+                return varp->name() == name && !varp->isIO() && !varp->isFuncReturn();
+            })) {
+            return true;
+        }
+        if (!nodep->exists(
+                [&](const AstParseRef* refp) { return refp->name() == name && mayWrite(refp); })) {
+            return false;
+        }
+        // Statements, in order, before one that writes it without reading it
+        enum class Scan : uint8_t { WRITTEN, READ, NEITHER };
+        const std::function<Scan(const AstNode*)> scan = [&](const AstNode* stmtsp) {
+            for (const AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+                if (const AstNodeAssign* const assignp = VN_CAST(stmtp, NodeAssign)) {
+                    const AstParseRef* const refp = VN_CAST(assignp->lhsp(), ParseRef);
+                    if (!VN_IS(assignp, AssignCompound) && refp && refp->name() == name
+                        && !isRef(assignp->rhsp())) {
+                        return Scan::WRITTEN;
+                    }
+                } else if (const AstReturn* const returnp = VN_CAST(stmtp, Return)) {
+                    if (returnp->lhsp() && !isRef(returnp->lhsp())) return Scan::WRITTEN;
+                } else if (const AstBegin* const beginp = VN_CAST(stmtp, Begin)) {
+                    const Scan result = scan(beginp->stmtsp());
+                    if (result != Scan::NEITHER) return result;
+                    continue;
+                }
+                if (isRef(stmtp) || stmtp->exists([](const AstNode* np) {
+                        return VN_IS(np, Disable) || VN_IS(np, Fork) || VN_IS(np, Return);
+                    })) {
+                    return Scan::READ;
+                }
+            }
+            return Scan::NEITHER;
+        };
+        return scan(nodep->stmtsp()) != Scan::WRITTEN;
+    }
+
     // VISITORS
     void visit(AstNodeFTask* nodep) override {
         if (nodep->user1SetOnce()) return;  // Process only once.
@@ -304,6 +381,8 @@ class LinkParseVisitor final : public VNVisitor {
         VL_RESTORER(m_lifetimeAllowed);
         m_lifetimeAllowed = true;
         VL_RESTORER(m_outlivesCall);
+        VL_RESTORER(m_readsResult);
+        m_readsResult = readsResult(nodep);
         // Timing control lets a value be used after the task has ended, with fork..join_none,
         // and a sampled value function samples it at later clock ticks
         m_outlivesCall = nodep->exists([](const AstNode* const nodep) {
@@ -458,8 +537,10 @@ class LinkParseVisitor final : public VNVisitor {
         } else if (m_ftaskp) {
             // Variables of a static task whose values can be used after it returns need to be
             // static, as IEEE 1800-2023 6.21 makes them, also a function's result variable
-            // (IEEE 1800-2023 13.4.1)
-            if (m_ftaskp->lifetime().isStatic() && m_outlivesCall) {
+            // (IEEE 1800-2023 13.4.1), and so a result variable whose value of the previous call
+            // may be read
+            if (m_ftaskp->lifetime().isStatic()
+                && (m_outlivesCall || (nodep->isFuncReturn() && m_readsResult))) {
                 nodep->lifetime(VLifetime::STATIC_IMPLICIT);
             } else if (!nodep->isFuncReturn()) {  // Return variables are created automatic
                 nodep->lifetime(VLifetime::AUTOMATIC_IMPLICIT);
