@@ -12578,8 +12578,11 @@ public:
         AstBegin* const setupBlockp
             = new AstBegin{nodep->fileline(), "__Vsetup_constraints", holderp, true};
         // Analyze before dist loses its membership/weight/soft-priority structure.
-        randomizeFuncp->addStmtsp(FastConstraintBuilder::apply(holderp->declsp(), localGenp, true,
-                                                               &m_fastDistGens, &m_uniqueNames));
+        AstNodeStmt* const fastStmtsp = FastConstraintBuilder::apply(
+            holderp->declsp(), localGenp, true, &m_fastDistGens, &m_uniqueNames);
+        // For the solve after a size solve, which starts from a copy of the class's generator
+        AstNodeStmt* fastCopyp = fastStmtsp ? fastStmtsp->cloneTree(true) : nullptr;
+        randomizeFuncp->addStmtsp(fastStmtsp);
         // Dist bucket draws go into the function, ahead of the constraints reading them
         lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
                              randModeVarp);
@@ -12705,6 +12708,8 @@ public:
                 capturedTreep->addNext(defaults.itemsp);
                 setupBlockp->addHereThisAsNext(defaults.snapshotsp);
                 randomizeFuncp->addStmtsp(newFastDisablep(nodep->fileline(), localGenp));
+                fastCopyp
+                    = AstNode::addNext(fastCopyp, newFastDisablep(nodep->fileline(), localGenp));
             }
         }
 
@@ -12879,6 +12884,10 @@ public:
                 if (randcKeepp) {
                     randomizeFuncp->addStmtsp(newRandcHistoryFromp(fl, localGenp, randcKeepp));
                 }
+                // The copy describes the class constraints for sampling without the solver;
+                // this with-block's are described again
+                if (fastCopyp) randomizeFuncp->addStmtsp(fastCopyp);
+                fastCopyp = nullptr;
             } else if (AstNodeStmt* const pinsp = newClassElemModePinsp(classp, localGenp)) {
                 randomizeFuncp->addStmtsp(pinsp);
             }
@@ -13019,6 +13028,7 @@ public:
                 if (classGenp) randomizeFuncp->addStmtsp(newAndNotFailedp(fl, retVarp, classGenp));
             }
         }
+        if (fastCopyp) VL_DO_DANGLING(fastCopyp->deleteTree(), fastCopyp);
         {
             // The class's constraints were set up in the class's generator, which holds the
             // rounds and is copied into this call's generator
