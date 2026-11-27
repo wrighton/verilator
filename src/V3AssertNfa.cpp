@@ -3306,6 +3306,8 @@ class AssertNfaVisitor final : public VNVisitor {
         AstDisplay* const dispp
             = new AstDisplay{flp, VDisplayType::DT_ERROR, "'assert' failed.", nullptr, nullptr};
         dispp->fmtp()->timeunit(m_modp->timeunit());
+        // %m names the assertion's scope also where its fail action is replayed
+        dispp->fmtp()->scopeNamep(new AstScopeName{flp, true});
         AstNodeStmt* const stmtsp = dispp;
         if (v3Global.opt.stopFail()) stmtsp->addNext(new AstStop{flp, false});
         return stmtsp;
@@ -3319,8 +3321,26 @@ class AssertNfaVisitor final : public VNVisitor {
     }
     // Run the pass action once for each of countp attempts succeeding on this tick, from a
     // count taken before the action, which may suspend
-    void addCountedPassActions(AstAssert* const assertp, AstNodeExpr* const countp) {
+    // countp, a count of outcomes the lowering of the property evaluates, without the sequence
+    // match items of its conditions (IEEE 1800-2023 16.10), so that counting them does not
+    // assign the local variables again. A count is never a bare match item. Takes ownership.
+    static AstNodeExpr* withoutMatchItemsp(AstNodeExpr* countp) {
+        std::vector<AstExprStmt*> itemps;
+        countp->foreach([&](AstExprStmt* itemp) {
+            if (itemp->isMatchItem()) itemps.push_back(itemp);
+        });
+        // Inner ones first, as an outer one's statements are deleted with it
+        for (auto it = itemps.rbegin(); it != itemps.rend(); ++it) {
+            AstExprStmt* const itemp = *it;
+            itemp->replaceWith(itemp->resultp()->unlinkFrBack());
+            VL_DO_DANGLING(itemp->deleteTree(), itemp);
+        }
+        return countp;
+    }
+
+    void addCountedPassActions(AstAssert* const assertp, AstNodeExpr* countp) {
         FileLine* const flp = assertp->fileline();
+        countp = withoutMatchItemsp(countp);
         AstNodeStmt* const passsp = assertp->passsp()->unlinkFrBackWithNext();
         AstVar* const countVarp
             = new AstVar{flp, VVarType::MODULETEMP, m_passCountNames.get(""), u32DTypep()};
@@ -3435,11 +3455,51 @@ class AssertNfaVisitor final : public VNVisitor {
                                              parts.triggerExprp, flp);
     }
 
+    // Statements adding countp, a count of threads as addCountp builds, to varp: one for each
+    // term of its sums, under its conditions, adding it if set. A C++ compiler takes much
+    // memory for one long sum, and for adding to a local, so the caller reads varp first to
+    // keep it a member. Takes ownership.
+    static AstNodeStmt* newCountAddsp(FileLine* flp, AstVar* varp, AstNodeExpr* countp) {
+        if (AstCond* const condp = VN_CAST(countp, Cond)) {
+            AstNodeExpr* const gatep = condp->condp()->unlinkFrBack();
+            AstNodeExpr* const thenp = condp->thenp()->unlinkFrBack();
+            AstNodeExpr* const elsep = condp->elsep()->unlinkFrBack();
+            VL_DO_DANGLING(condp->deleteTree(), condp);
+            return new AstIf{flp, gatep, newCountAddsp(flp, varp, thenp),
+                             newCountAddsp(flp, varp, elsep)};
+        }
+        if (countp->isZero()) {
+            VL_DO_DANGLING(countp->deleteTree(), countp);
+            return nullptr;
+        }
+        // addCountp builds a sum with its later terms on the right
+        std::vector<AstNodeExpr*> termps;
+        while (AstAdd* const addp = VN_CAST(countp, Add)) {
+            termps.push_back(addp->rhsp()->unlinkFrBack());
+            countp = addp->lhsp()->unlinkFrBack();
+            VL_DO_DANGLING(addp->deleteTree(), addp);
+        }
+        if (!termps.empty()) {
+            AstNodeStmt* stmtsp = newCountAddsp(flp, varp, countp);
+            for (auto it = termps.rbegin(); it != termps.rend(); ++it)
+                stmtsp = AstNode::addNext(stmtsp, newCountAddsp(flp, varp, *it));
+            return stmtsp;
+        }
+        // A term, as a thread's bit, added only if set
+        AstNodeExpr* const nonzerop = new AstNeq{flp, countp->cloneTreePure(false),
+                                                 newTypedConstp(flp, countp->dtypep(), 0)};
+        return new AstIf{
+            flp, nonzerop,
+            new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE},
+                          new AstAdd{flp, new AstVarRef{flp, varp, VAccess::READ}, countp}}};
+    }
+
     // Install pass-action gating and replay simultaneous per-thread failures.
     void attachActionHandlers(AstAssert* const assertp, AstNodeExpr* matchExprp,
                               AstSenTree* const threadFailReplaySenTreep,
-                              AstNodeExpr* const threadFailCountp) {
+                              AstNodeExpr* threadFailCountp) {
         if (threadFailCountp) {
+            threadFailCountp = withoutMatchItemsp(threadFailCountp);
             UASSERT_OBJ(threadFailReplaySenTreep, assertp,
                         "Thread fail count missing sensitivity tree");
             AstNodeStmt* const failsp = assertp->failsp();
@@ -3451,8 +3511,15 @@ class AssertNfaVisitor final : public VNVisitor {
                              m_modp->findBasicDType(VBasicDTypeKwd::UINT32)};
             remainingFailCountVarp->lifetime(VLifetime::STATIC_EXPLICIT);
             m_modp->addStmtsp(remainingFailCountVarp);
-            AstNodeStmt* const replayStmtsp = new AstAssign{
-                flp, new AstVarRef{flp, remainingFailCountVarp, VAccess::WRITE}, threadFailCountp};
+            // Clear what the last replays left, testing it first to keep it a member, see
+            // newCountAddsp
+            AstNodeStmt* const replayStmtsp = new AstIf{
+                flp,
+                new AstNeq{flp, new AstVarRef{flp, remainingFailCountVarp, VAccess::READ},
+                           newTypedConstp(flp, remainingFailCountVarp->dtypep(), 0)},
+                new AstAssign{flp, new AstVarRef{flp, remainingFailCountVarp, VAccess::WRITE},
+                              newTypedConstp(flp, remainingFailCountVarp->dtypep(), 0)}};
+            replayStmtsp->addNext(newCountAddsp(flp, remainingFailCountVarp, threadFailCountp));
             AstLoop* const replayLoopp = new AstLoop{flp};
             replayLoopp->addStmtsp(new AstLoopTest{
                 flp, replayLoopp,
@@ -3531,8 +3598,8 @@ class AssertNfaVisitor final : public VNVisitor {
         AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
         // Without 'else', a failure calls $error (IEEE 1800-2023 16.14.1). V3Assert adds it only
         // where the fail action is empty, and the pass actions of other attempts are put in the
-        // fail action below, so it is added here first.
-        if (assertAssertp && assertAssertp->passsp() && !assertAssertp->failsp()) {
+        // fail action below, so it is added here first, also to be replayed for each attempt.
+        if (assertAssertp && !assertAssertp->failsp()) {
             assertAssertp->addFailsp(newDefaultFailp(flp));
         }
         if (countsMatches(assertp)) {
@@ -4007,12 +4074,10 @@ class AssertNfaVisitor final : public VNVisitor {
         // The rejected threads of a negated property's operand are passes of the property,
         // vacuous when the antecedent of a followed-by does not match, and its matches and
         // vacuous successes failures
-        // An assertion with a pass action and no 'else' gets the default fail action, see
-        // finishDirective, which is replayed like an explicit one
-        const bool failActions
-            = assertAssertp && (assertAssertp->failsp() || assertAssertp->passsp());
-        const bool replayFails = failActions && !parts.hasImplication && !negated;
-        const bool replaySuccesses = failActions && negated;
+        // An assertion with no 'else' gets the default fail action, see finishDirective, which
+        // is replayed like an explicit one
+        const bool replayFails = assertAssertp && !parts.hasImplication && !negated;
+        const bool replaySuccesses = assertAssertp && negated;
         const bool countPasses = needMatch && negated && !parts.hasImplication;
         const auto signals = m_loweringp->lower(
             assertp, graph, senTreep, result.finalCondp, disableExprp, replayFails || countPasses,
@@ -4022,6 +4087,8 @@ class AssertNfaVisitor final : public VNVisitor {
             = m_loweringp->assembleResult(assertp, negated, result.finalCondp, signals,
                                           needMatch && !countPasses ? &matchExprp : nullptr);
         if (result.finalCondp && !result.finalCondp->backp()) pushDeletep(result.finalCondp);
+        // The pass action is gated by a copy of the match, see withoutMatchItemsp
+        if (matchExprp) matchExprp = withoutMatchItemsp(matchExprp);
         AstNodeExpr* antecedentRejectp = signals.antecedentRejectp;
         if (antecedentRejectp && !countPasses) {
             VL_DO_DANGLING(antecedentRejectp->deleteTree(), antecedentRejectp);

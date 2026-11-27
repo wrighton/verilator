@@ -4,10 +4,10 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
-// The default failure of an assertion without 'else' runs once for each attempt failing on a
-// tick, as an explicit fail action does (IEEE 1800-2023 16.14.1). On the tick of cyc 2, one
-// attempt of each sequence matches and two fail. On that of cyc 1, two attempts of each
-// implication fail.
+// The default failure of an assertion without 'else', with or without a pass action, runs once
+// for each attempt failing on a tick, as an explicit fail action does (IEEE 1800-2023 16.14.1).
+// On the tick of cyc 2, one attempt of each sequence matches and two fail. On that of cyc 1,
+// two attempts of each implication fail.
 module t;
   logic clk = 0;
   always #5 clk = ~clk;
@@ -25,11 +25,13 @@ module t;
   assert property (@(posedge clk) a ##1 b ##1 c) passes++;
   else $error("sequence failed");
   assert property (@(posedge clk) a ##1 b ##1 c) passes++;
+  assert property (@(posedge clk) a ##1 b ##1 c);
   // The failures of the attempts of an implication on one tick are not counted apart, with or
   // without 'else'
   assert property (@(posedge clk) x |-> y ##1 z) passes++;
   else $error("implication failed");
   assert property (@(posedge clk) x |-> y ##1 z) passes++;
+  assert property (@(posedge clk) x |-> y ##1 z);
 
   initial begin
     #45 $assertfailoff;

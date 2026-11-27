@@ -1,0 +1,14 @@
+[5] %Error: t_assert_default_error_scope.v:27: Assertion failed in t.lab_two: 'assert' failed.
+-Info: t/t_assert_default_error_scope.v:27: Verilog $stop, ignored due to +verilator+error+limit
+[15] %Error: t_assert_default_error_scope.v:27: Assertion failed in t.lab_two: 'assert' failed.
+[25] %Error: t_assert_default_error_scope.v:12: Assertion failed in t.u_sub.lab_sub: 'assert' failed.
+[25] %Error: t_assert_default_error_scope.v:22: Assertion failed in t.lab_seq: 'assert' failed.
+[25] %Error: t_assert_default_error_scope.v:27: Assertion failed in t.lab_two: 'assert' failed.
+[35] %Error: t_assert_default_error_scope.v:23: Assertion failed in t: 'assert' failed.
+[35] %Error: t_assert_default_error_scope.v:27: Assertion failed in t.lab_two: 'assert' failed.
+[45] %Error: t_assert_default_error_scope.v:24: Assertion failed in t.lab_pass: 'assert' failed.
+[55] %Error: t_assert_default_error_scope.v:29: Assertion failed in t.gen.lab_gen: 'assert' failed.
+[65] %Error: t_assert_default_error_scope.v:27: Assertion failed in t.lab_two: 'assert' failed.
+[65] %Error: t_assert_default_error_scope.v:27: Assertion failed in t.lab_two: 'assert' failed.
+[75] %Error: t_assert_default_error_scope.v:27: Assertion failed in t.lab_two: 'assert' failed.
+*-* All Finished *-*

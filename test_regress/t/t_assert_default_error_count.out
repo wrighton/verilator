@@ -1,0 +1,36 @@
+[5] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+-Info: t/t_assert_default_error_count.v:22: Verilog $stop, ignored due to +verilator+error+limit
+[5] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[15] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[15] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[25] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[25] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[45] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[45] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[55] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[55] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[55] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[55] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[75] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[75] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[85] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[85] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[115] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[115] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[145] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[145] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[175] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[175] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[205] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[205] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[235] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[235] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[265] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[265] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[275] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[275] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[295] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[295] %Error: t_assert_default_error_count.v:22: Assertion failed in t: 'assert' failed.
+[295] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+[295] %Error: t_assert_default_error_count.v:24: Assertion failed in t: explicit
+*-* All Finished *-*
