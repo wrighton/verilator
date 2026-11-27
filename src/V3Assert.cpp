@@ -105,9 +105,27 @@ void V3AssertCommon::checkSampledDType(AstNode* nodep, const AstNodeDType* dtype
         }
     }
     // An untyped property formal is checked once its actual is substituted
-    if (dtypep->isIntegralOrPacked() || (dtypep->basicp() && dtypep->basicp()->untyped())) return;
+    if (dtypep->isIntegralOrPacked() || (allowUnpacked && isSampledType(dtypep))
+        || (dtypep->basicp() && dtypep->basicp()->untyped())) {
+        return;
+    }
     nodep->v3error("Expected numeric type, but got a " << dtypep->prettyDTypeNameQ()
                                                        << " data type");
+}
+
+bool V3AssertCommon::isSampledType(const AstNodeDType* dtypep) {
+    // Sampled value functions store and compare such values (IEEE 1800-2023 7.4.3, 16.9.3)
+    dtypep = dtypep->skipRefp();
+    if (dtypep->isIntegralOrPacked()) return true;
+    if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        return isSampledType(arrayp->subDTypep());
+    }
+    const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+    if (!structp) return false;
+    for (const AstMemberDType* memberp = structp->membersp(); memberp;
+         memberp = VN_AS(memberp->nextp(), MemberDType))
+        if (!isSampledType(memberp->subDTypep())) return false;
+    return true;
 }
 
 void V3AssertCommon::collectDefaultDisable(AstNetlist* nodep) {
@@ -330,19 +348,20 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
             return new AstConsArray{flp, dtypep, newTypeDefault(flp, arrayp->subDTypep())};
         }
+        AstStructDType* const structp = VN_CAST(dtypep->skipRefp(), StructDType);
+        if (structp && !structp->packed()) {
+            AstConsStruct* const consp = new AstConsStruct{flp, structp};
+            for (AstMemberDType* memberp = structp->membersp(); memberp;
+                 memberp = VN_AS(memberp->nextp(), MemberDType)) {
+                consp->addItemsp(new AstConsStructItem{flp, memberp,
+                                                       newTypeDefault(flp, memberp->subDTypep())});
+            }
+            return consp;
+        }
         AstConst* const constp = new AstConst{flp, AstConst::DTyped{}, dtypep};
         if (dtypep->isFourstate()) constp->num().setAllBitsX();
         constp->dtypep(dtypep);
         return constp;
-    }
-    // Whether a constant can have the default value of the type: an integral type, or a
-    // fixed-size unpacked array of one
-    static bool hasConstant(const AstNodeDType* dtypep) {
-        dtypep = dtypep->skipRefp();
-        if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
-            return hasConstant(arrayp->subDTypep());
-        }
-        return dtypep->isIntegralOrPacked();
     }
     static bool hasDefaultValue(const AstVar* varp) {
         return !varp->isParam()
@@ -356,8 +375,9 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         return nullptr;
     }
     void replaceWithTypeDefault(AstNodeExpr* nodep) {
-        // Before any process runs the expression has the default value of its type
-        if (!hasConstant(nodep->dtypep())) return;
+        // Only integral values and unpacked arrays and structures of them have a constant, but
+        // before any process runs the expression has the default value of its type
+        if (!V3AssertCommon::isSampledType(nodep->dtypep())) return;
         nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }

@@ -25,10 +25,7 @@ module t (
   end
 
   string strings[2];
-  typedef struct {int a;} unpacked_t;
-  unpacked_t structs[2];
   always @(posedge clk) begin
     if ($changed(strings)) $stop;
-    if ($stable(structs)) $stop;
   end
 endmodule
