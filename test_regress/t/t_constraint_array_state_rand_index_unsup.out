@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_constraint_array_state_rand_index_unsup.v:13:20: Unsupported: Queue or dynamic array index wider than 32 bits, read through a randomized index.
+   13 |   constraint c {qf[w][k] == 8'd7;}
+      |                    ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

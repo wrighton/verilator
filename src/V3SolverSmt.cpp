@@ -1328,6 +1328,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     // Element of a dynamic array or queue, counted from the front
     void visitElementSel(AstNodeSel* nodep) {
         if (editFormat(nodep)) return;
+        if (editStateArraySel(nodep)) return;
         FileLine* const fl = nodep->fileline();
 
         addStringNamePart(nodep->bitp(), "%x");
@@ -2502,8 +2503,248 @@ class ConstraintExprVisitor final : public VNVisitor {
             newp->exprsp()->nextp()->name(objectElem ? "%0x" : "%x");
         }
     }
+    // The select by a random index of an element of an array variable that is not solved, which
+    // integral 'exprp' is or reads through selects of elements: the one nearest the variable,
+    // so that it selects from the variable through indices that are not solved; else nullptr
+    static AstNodeSel* stateRandIndexSelp(AstNodeExpr* exprp) {
+        if (!exprp->dtypep()->skipRefp()->isIntegralOrPacked()) return nullptr;
+        AstNodeSel* foundp = nullptr;
+        AstNodeExpr* pathp = exprp;
+        while (VN_IS(pathp, ArraySel) || isFrontElementSel(pathp)) {
+            AstNodeSel* const selp = VN_AS(pathp, NodeSel);
+            if (isSolvedIndex(selp->bitp())) foundp = selp;
+            pathp = selp->fromp();
+        }
+        if (!VN_IS(pathp, VarRef) || pathp->user1()) return nullptr;
+        return foundp;
+    }
+    // The index of element select 'selp' of an unpacked array with low bound 'lo' as written,
+    // inside the select of V3WidthSel, which takes the low bound off it extended without its
+    // sign, and so is right only modulo the width of the position; else nullptr
+    static AstNodeExpr* writtenIndexp(AstNodeSel* selp, int lo) {
+        AstNodeExpr* indexp = selp->bitp();
+        AstNodeBiop* const biopp = VN_CAST(indexp, NodeBiop);
+        if (!biopp || !(VN_IS(biopp, Add) || VN_IS(biopp, Sub))) return nullptr;
+        const AstConst* const constp = VN_CAST(unextendedp(biopp->rhsp()), Const);
+        if (!constp) return nullptr;
+        const int offset = VN_IS(biopp, Add) ? -lo : lo;
+        FileLine* const fl = constp->fileline();
+        V3Number expected{fl, constp->width(), 0};
+        expected.opExtendS(V3Number{fl, VL_IDATASIZE, static_cast<uint32_t>(offset)},
+                           VL_IDATASIZE);
+        if (!constp->num().isCaseEq(expected)) return nullptr;
+        return unextendedp(biopp->lhsp());
+    }
+    static AstNodeExpr* unextendedp(AstNodeExpr* exprp) {
+        while (VN_IS(exprp, Extend) || VN_IS(exprp, ExtendS)) {
+            exprp = VN_AS(exprp, NodeUniop)->lhsp();
+        }
+        return exprp;
+    }
+    // Make each index that is not random of an unpacked array on the path of 'exprp', which
+    // reads it when randomize() is called once the index is known to be in range, the position
+    // from the index as written, of 32 bits, as element selects take it
+    static void narrowStateIndices(AstNodeExpr* exprp) {
+        for (AstNodeExpr* pathp = exprp; VN_IS(pathp, NodeSel);
+             pathp = VN_AS(pathp, NodeSel)->fromp()) {
+            AstNodeSel* const selp = VN_AS(pathp, NodeSel);
+            const AstUnpackArrayDType* const adtypep
+                = VN_CAST(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
+            AstNodeExpr* const indexp = selp->bitp();
+            if (!adtypep || isSolvedIndex(indexp)) continue;
+            AstNodeExpr* const writtenp
+                = adtypep->lo() ? writtenIndexp(selp, adtypep->lo()) : nullptr;
+            if (!writtenp && indexp->width() <= VL_IDATASIZE) continue;
+            FileLine* const fl = indexp->fileline();
+            AstNodeExpr* const posp
+                = writtenp ? newStatePositionp(writtenp->cloneTreePure(false), adtypep->lo())
+                           : indexp->cloneTreePure(false);
+            indexp->replaceWith(new AstSel{fl, posp, 0, VL_IDATASIZE});
+            VL_DO_DANGLING(indexp->deleteTree(), indexp);
+        }
+    }
+    // Width of the position of an element from an index of 'width' bits, which cannot wrap
+    static int positionWidth(int width) { return std::max(width, VL_IDATASIZE) + 2; }
+    // Signed value 'value' as a constant of 'width' bits
+    static AstConst* newPositionConstp(FileLine* fl, int width, int value) {
+        V3Number num{fl, width, 0};
+        num.opExtendS(V3Number{fl, VL_IDATASIZE, static_cast<uint32_t>(value)}, VL_IDATASIZE);
+        return new AstConst{fl, num};
+    }
+    // Position from a non-random index 'indexp' as written and low bound 'lo', as
+    // positionWidth: an index of 32 bits or fewer is an int, as for the solver's index
+    static AstNodeExpr* newStatePositionp(AstNodeExpr* indexp, int lo) {
+        FileLine* const fl = indexp->fileline();
+        const int width = positionWidth(indexp->width());
+        AstNodeExpr* valuep = indexp;
+        if (indexp->width() < VL_IDATASIZE) {
+            valuep = indexp->isSigned()
+                         ? static_cast<AstNodeExpr*>(new AstExtendS{fl, valuep, VL_IDATASIZE})
+                         : new AstExtend{fl, valuep, VL_IDATASIZE};
+        }
+        valuep = indexp->width() <= VL_IDATASIZE || indexp->isSigned()
+                     ? static_cast<AstNodeExpr*>(new AstExtendS{fl, valuep, width})
+                     : new AstExtend{fl, valuep, width};
+        AstNodeExpr* const posp = new AstSub{fl, valuep, newPositionConstp(fl, width, lo)};
+        posp->dtypeSetLogicSized(width, VSigning::UNSIGNED);
+        return posp;
+    }
+    // The value of 'exprp', which reads through 'selp' an element of an array that is not
+    // solved at a random index: a select among the values it reads through each element as
+    // they are when randomize() is called (see VlRandomizer::positionSelect), zero out of range
+    // (IEEE 1800-2023 7.4.6). Unlike a solver array, which would need '(as const ...)' for the
+    // values, every solver takes it.
+    AstSFormatF* newStateArraySelp(AstNodeExpr* exprp, AstNodeSel* selp) {
+        FileLine* const fl = exprp->fileline();
+        AstNodeExpr* const arrayp = selp->fromp();
+        const AstUnpackArrayDType* const adtypep
+            = VN_CAST(arrayp->dtypep()->skipRefp(), UnpackArrayDType);
+        AstVar* const idxVarp = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vstate"),
+                                           arrayp->findIntDType()};
+        AstNodeExpr* const headerArrayp = arrayp->cloneTreePure(false);
+        narrowStateIndices(headerArrayp);
+        AstForeachHeader* const headerp = new AstForeachHeader{fl, headerArrayp, idxVarp};
+        // The position of the element, as the index of an element select gives it
+        AstNodeExpr* posp = new AstVarRef{fl, idxVarp, VAccess::READ};
+        if (adtypep) {
+            posp = new AstSub{fl, posp,
+                              new AstConst{fl, AstConst::WidthedValue{}, 32,
+                                           static_cast<uint32_t>(adtypep->lo())}};
+            posp->dtypeFrom(idxVarp);
+        }
+        // The value read through the element at the position, itself such a select through
+        // another random index
+        AstNodeExpr* const elemp = exprp->cloneTree(false);
+        AstNodeExpr* const oldIndexp = selp->clonep()->bitp();
+        oldIndexp->replaceWith(posp);
+        VL_DO_DANGLING(oldIndexp->deleteTree(), oldIndexp);
+        narrowStateIndices(elemp);
+        AstNodeExpr* leafp = newStateReadp(elemp);
+        if (leafp) {
+            VL_DO_DANGLING(pushDeletep(elemp), elemp);
+        } else {
+            leafp = getConstFormat(elemp);
+        }
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
+        AstVar* const leavesVarp = newTextQueueVarp(fl, blockp, "__Vleaves");
+        // Emptied first, as it is built again for each value of an enclosing select
+        AstCMethodHard* const clearp = new AstCMethodHard{
+            fl, new AstVarRef{fl, leavesVarp, VAccess::WRITE}, VCMethod::DYN_CLEAR};
+        clearp->dtypeSetVoid();
+        blockp->addStmtsp(clearp->makeStmt());
+        // In ascending positions, as a foreach visits a descending range from its high bound
+        const bool front = adtypep && !adtypep->declRange().ascending();
+        blockp->addStmtsp(new AstForeach{fl, headerp, newTextPushp(fl, leavesVarp, leafp, front)});
+        // The index, read once for each bit of a position, so bound to a name. A negative one
+        // is out of range, so is extended to a width where it is.
+        AstNodeExpr* writtenp
+            = adtypep && adtypep->lo() ? writtenIndexp(selp, adtypep->lo()) : nullptr;
+        AstNodeExpr* bitp = selp->bitp()->unlinkFrBack();
+        int cmpWidth;
+        AstNodeExpr* indexTextp;
+        if (writtenp) {
+            // The position from the index as written, as an int if of 32 bits or fewer
+            writtenp->unlinkFrBack();
+            VL_DO_DANGLING(pushDeletep(bitp), bitp);
+            const int indexWidth = writtenp->width();
+            const bool indexSigned = writtenp->isSigned();
+            cmpWidth = positionWidth(indexWidth);
+            indexTextp = VN_AS(iterateSubtreeReturnEdits(writtenp), NodeExpr);
+            if (indexWidth <= VL_IDATASIZE) {
+                indexTextp = newResizedTextp(
+                    newResizedTextp(indexTextp, indexWidth, indexSigned, VL_IDATASIZE),
+                    VL_IDATASIZE, true, cmpWidth);
+            } else {
+                indexTextp = newResizedTextp(indexTextp, indexWidth, indexSigned, cmpWidth);
+            }
+            AstConst* const lop = newPositionConstp(fl, cmpWidth, adtypep->lo());
+            AstSFormatF* const subp = new AstSFormatF{fl, "(bvsub %s %s)", false, indexTextp};
+            subp->addExprsp(getConstFormat(lop));
+            indexTextp = subp;
+        } else {
+            const int indexWidth = bitp->width();
+            const bool indexSigned = bitp->isSigned();
+            cmpWidth = indexSigned ? std::max(indexWidth, VL_IDATASIZE) + 1 : indexWidth;
+            indexTextp = newResizedTextp(VN_AS(iterateSubtreeReturnEdits(bitp), NodeExpr),
+                                         indexWidth, indexSigned, cmpWidth);
+        }
+        const std::string name = m_uniqueNames.get("__Vi");
+        AstCFuncHard* const callp = new AstCFuncHard{fl, VCFunction::RANDOMIZER_POSITION_SELECT,
+                                                     new AstVarRef{fl, leavesVarp, VAccess::READ}};
+        callp->addPinsp(new AstConst{fl, AstConst::String{}, name});
+        callp->addPinsp(new AstConst{fl, static_cast<uint32_t>(cmpWidth)});
+        callp->addPinsp(
+            getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, exprp->width(), 0}));
+        callp->dtypeSetString();
+        AstSFormatF* const newp
+            = new AstSFormatF{fl, "(let ((" + name + " %s)) %s)", false, indexTextp};
+        newp->addExprsp(new AstExprStmt{fl, blockp, callp});
+        return newp;
+    }
+    // Text of integral 'exprp' if it reads an element of an array that is not solved at a
+    // random index (see newStateArraySelp), else nullptr
+    AstNodeExpr* newStateReadp(AstNodeExpr* exprp) {
+        AstNodeSel* const selp = stateRandIndexSelp(exprp);
+        if (!selp) return nullptr;
+        FileLine* const fl = exprp->fileline();
+        const int width = exprp->width();
+        // The other indices that are not solved select when randomize() is called, and the read
+        // is the default where one is out of range. An element of a queue or dynamic array out
+        // of range reads the default itself.
+        AstNodeExpr* inRangep = nullptr;
+        for (AstNodeExpr* pathp = exprp; VN_IS(pathp, NodeSel);
+             pathp = VN_AS(pathp, NodeSel)->fromp()) {
+            AstNodeSel* const otherp = VN_AS(pathp, NodeSel);
+            if (otherp == selp || isSolvedIndex(otherp->bitp())) continue;
+            const AstUnpackArrayDType* const adtypep
+                = VN_CAST(otherp->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
+            AstNodeExpr* const indexp = otherp->bitp();
+            if (!adtypep) {
+                // Queue and dynamic array elements are read by a 32-bit index
+                if (indexp->width() > VL_IDATASIZE) {
+                    indexp->v3warn(E_UNSUPPORTED, "Unsupported: Queue or dynamic array index "
+                                                  "wider than 32 bits, read through a "
+                                                  "randomized index.");
+                    if (inRangep) VL_DO_DANGLING(pushDeletep(inRangep), inRangep);
+                    return nullptr;
+                }
+                continue;
+            }
+            const uint32_t elements = static_cast<uint32_t>(adtypep->elementsConst());
+            const AstConst* const constp = VN_CAST(indexp, Const);
+            if (constp && constp->width() <= VL_IDATASIZE && constp->toUInt() < elements) {
+                continue;
+            }
+            AstNodeExpr* const writtenp
+                = adtypep->lo() ? writtenIndexp(otherp, adtypep->lo()) : nullptr;
+            AstNodeExpr* const posp
+                = writtenp ? newStatePositionp(writtenp->cloneTreePure(false), adtypep->lo())
+                           : newGuardedIndexp(indexp->cloneTreePure(false));
+            AstNodeExpr* const ltp = new AstLt{
+                fl, posp, new AstConst{fl, AstConst::WidthedValue{}, posp->width(), elements}};
+            inRangep = inRangep ? new AstLogAnd{fl, inRangep, ltp} : ltp;
+        }
+        AstSFormatF* const newp = newStateArraySelp(exprp, selp);
+        if (!inRangep) return newp;
+        return new AstSFormatF{
+            fl, "%s", false,
+            new AstCond{fl, inRangep, newp,
+                        getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, 0})}};
+    }
+    // Replace integral 'nodep' if it reads an element of an array that is not solved at a
+    // random index (see newStateArraySelp)
+    bool editStateArraySel(AstNodeExpr* nodep) {
+        if (m_nestedAccessp || m_structSel) return false;
+        AstNodeExpr* const newp = newStateReadp(nodep);
+        if (!newp) return false;
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        return true;
+    }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
+        if (editStateArraySel(nodep)) return;
         FileLine* const fl = nodep->fileline();
         const bool objectElem = VN_IS(nodep->dtypep()->skipRefp(), ClassRefDType);
         // An element select reads zero out of range. The range checks of the selects of
