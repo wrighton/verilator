@@ -5,9 +5,9 @@
 %Error-UNSUPPORTED: t/t_checker_unsup.v:35:11: Unsupported: 'checker' below unit-level
    35 |   checker checker_in_pkg;
       |           ^~~~~~~~~~~~~~
-%Error-UNSUPPORTED: t/t_checker_unsup.v:39:29: Unsupported: checker port variable default value
-   39 | checker Chk(input defaulted = 1'b0);
-      |                             ^
+%Error-UNSUPPORTED: t/t_checker_unsup.v:39:33: Unsupported: checker port variable default value
+   39 | checker Chk(input bit defaulted = 1'b0);
+      |                                 ^
 %Error-UNSUPPORTED: t/t_checker_unsup.v:43:3: Unsupported: checker rand
    43 |   rand bit randed;   
       |   ^~~~

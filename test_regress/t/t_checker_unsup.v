@@ -36,7 +36,7 @@ package Pkg;
   endchecker
 endpackage
 
-checker Chk(input defaulted = 1'b0);
+checker Chk(input bit defaulted = 1'b0);
   bit clk;
   bit in;
   bit rst;
