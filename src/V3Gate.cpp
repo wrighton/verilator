@@ -89,6 +89,7 @@ class GateVarVertex final : public GateEitherVertex {
     AstVarScope* const m_varScp;  // Variable scope this vertex represents
     bool m_isTop = false;  // Variable is a top-level signal
     bool m_isClock = false;  // Variable is used as a clock
+    bool m_sampledRead = false;  // Variable is read by a sampled value function
     bool m_clockedBlockingWrite = false;  // Written by a blocking assignment in clocked logic
     AstNode* m_rstSyncNodep = nullptr;  // Used as reset and not in SenItem, in clocked always
     AstNode* m_rstAsyncNodep = nullptr;  // Used as reset and in SenItem, in clocked always
@@ -104,6 +105,8 @@ public:
     void setIsTop() { m_isTop = true; }
     bool isClock() const { return m_isClock; }
     void setIsClock() { m_isClock = true; }
+    bool sampledRead() const { return m_sampledRead; }
+    void setSampledRead() { m_sampledRead = true; }
     bool clockedBlockingWrite() const { return m_clockedBlockingWrite; }
     void setClockedBlockingWrite() { m_clockedBlockingWrite = true; }
     AstNode* rstSyncNodep() const { return m_rstSyncNodep; }
@@ -225,6 +228,7 @@ class GateBuildVisitor final : public VNVisitorConst {
     bool m_inStaticActive = false;  // Underneath static active
     bool m_inInitialActive = false;  // Underneath initial active
     bool m_inSenItem = false;  // Underneath AstSenItem; any varrefs are clocks
+    bool m_inSampled = false;  // Underneath AstSampled
     bool m_inLoop = false;  // Underneath AstLoop
     bool m_inAssignDlyLhs = false;  // Underneath the LHS of an AstAssignDly
 
@@ -308,6 +312,11 @@ class GateBuildVisitor final : public VNVisitorConst {
         m_logicVertexp->setConsumed("Rtmd");
         iterateChildrenConst(nodep);
     }
+    void visit(AstSampled* nodep) override {
+        VL_RESTORER(m_inSampled);
+        m_inSampled = true;
+        iterateChildrenConst(nodep);
+    }
     void visit(AstSenItem* nodep) override {
         VL_RESTORER(m_inSenItem);
         m_inSenItem = true;
@@ -323,6 +332,7 @@ class GateBuildVisitor final : public VNVisitorConst {
         AstVarScope* const vscp = nodep->varScopep();
         GateVarVertex* const vVtxp = m_graphp->makeVarVertex(vscp);
 
+        if (m_inSampled) vVtxp->setSampledRead();
         if (m_inSenItem) {
             vVtxp->setIsClock();
             vscp->user2(true);
@@ -764,6 +774,9 @@ class GateInline final {
                 = vVtxp->inEdges().frontp()->fromp()->as<GateLogicVertex>();
             if (!lVtxp->reducible()) continue;
             AstNode* const logicp = lVtxp->nodep();
+            // A sampled value at time 0 is taken before any initial procedure writes the
+            // variable (IEEE 1800-2023 16.5.1)
+            if (vVtxp->sampledRead() && VN_IS(logicp, Initial)) continue;
 
             // Commit pending optimizations to driving logic, as we will re-analyze
             commitSubstitutions(logicp);
