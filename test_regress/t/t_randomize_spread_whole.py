@@ -37,16 +37,18 @@ calls = [n for n in calls if n]
 
 # Each array's size is solved first. Ones: the few elements that conflict are dropped one
 # by one (16 checks with z3 4.13 to 5.4), rather than dropping every element and spreading
-# all of them again part by part (25 checks). Below: still dropped for all (43 to 47 checks),
+# all of them again part by part (25 checks). Below: still dropped for all (56 to 59 checks),
 # where going one by one would take hundreds. Most: dropped for all once too many conflict
-# one by one (61 checks), rather than spending every check one by one (513). The last
-# Below, at a seed where the single bits of many elements conflict one by one while a
-# sample of the others fits, takes them one by one only for a few (52 checks, 43 to 54 over
-# 64 seeds), rather than until the satisfied checks run out (351). The last Most, whose bits
+# one by one, some then tied to new values (93 checks), rather than spending every check one
+# by one (513). The last Below, at a seed where the single bits of many elements conflict
+# one by one while a sample of the others fits, takes them one by one only for a few (56 to
+# 63 checks), rather than until the satisfied checks run out (351). The last Most, whose bits
 # 5 to 3 conflict with kept parts of a quarter of its elements, ties them again once those
-# parts are dropped (89 checks, where Most takes 34 to 118 over 256 seeds).
-if (len(calls) != 10 or calls[1] > 20 or calls[3] > 100 or calls[5] > 200 or calls[7] > 70
-        or calls[9] > 150):
+# parts are dropped (120 checks).
+# Over 256 seeds Below takes 49 to 64 checks and Most 44 to 145: the bounds are 1.25 times
+# those or more.
+if (len(calls) != 10 or calls[1] > 20 or calls[3] > 100 or calls[5] > 200 or calls[7] > 80
+        or calls[9] > 200):
     test.error("Spreading checks per solve: " + str(calls))
 
 test.passes()

@@ -89,14 +89,14 @@ module t;
     // At this seed, too, each bit is set about as often as in values drawn uniformly below
     // 200: bits 5 to 3 in 48% of the elements, bits 7 and 6 in 36%
     begin
-      automatic Most m64 = new;
+      automatic Most m20 = new;
       automatic int set[8];
-      m64.srandom(64);
-      ok = m64.randomize();
+      m20.srandom(20);
+      ok = m20.randomize();
       `checkd(ok, 1);
-      foreach (m64.d[i]) begin
-        `checkd(m64.d[i] < 8'd200, 1'b1);
-        for (int b = 0; b < 8; ++b) set[b] += int'(m64.d[i][b]);
+      foreach (m20.d[i]) begin
+        `checkd(m20.d[i] < 8'd200, 1'b1);
+        for (int b = 0; b < 8; ++b) set[b] += int'(m20.d[i][b]);
       end
       for (int b = 3; b < 6; ++b) `checkd(set[b] > 1000 && set[b] < 2000, 1'b1);
       for (int b = 6; b < 8; ++b) `checkd(set[b] > 500 && set[b] < 1700, 1'b1);

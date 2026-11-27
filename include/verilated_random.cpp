@@ -46,6 +46,15 @@ static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to dro
 static constexpr int diversitySlotSamples = 4;  // Elements checked for a part dropped for all
 static constexpr int diversitySlotShare = 2;  // Of checks left, 1/this for a part one by one
 static constexpr int diversitySlotFew = 128;  // Of its elements, 1/this conflicting one by one
+// Times a whole variable or element is tied to a new random value before it is split
+static constexpr int diversityRetieRounds = 2;
+static constexpr int diversityRetieChunks = 8;  // Chunks of them, at most
+static constexpr int diversityRetieShare = 4;  // Of checks left, 1/this for them
+// Checks for them at most, each a fraction of a percent more solver time, past a few dozen
+// elements leaving the rest split
+static constexpr int diversityRetieChecks = 32;
+static constexpr size_t diversityRetieSample = 8;  // Terms tied again first, as a sample
+static constexpr size_t diversityRetieGrowth = 4;  // A chunk's terms, at most, per one before
 static constexpr int diversityCoreFew = 4;  // Terms of an unsat core picked from as it is
 // Terms of a solve-before layer, before the last, past which it is not spread (see
 // solvePhaseValues)
@@ -1601,35 +1610,38 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
         if (--satisfiedLeft <= 0) checksLeft = 0;
     };
     bool settled = true;  // The last check was satisfied, so its model satisfies keep
+    // A core held more than a few ties, as cvc5's do, so each conflict costs several checks
+    bool wide = false;
     std::vector<bool> dropped;
     std::vector<SpreadLit> litInfo;  // What each literal ties, by its number
     std::set<SlotKey> handledBits;  // Slots of single bits whose causes were dropped
-    while (!terms.empty() && checksLeft > 0) {
-        litInfo.resize(lits + terms.size());
-        for (size_t k = 0; k < terms.size(); ++k) {
-            PinTerm& term = terms[k];
-            os << "(declare-fun __Va" << lits + k << " () Bool)\n";
-            os << "(assert (= __Va" << lits + k << " (=";
-            emitTerm(term);
-            os << " #b";
-            IData bits = 0;
-            QData value = 0;  // Its low 64 bits
-            for (int b = 0; b < term.width; ++b) {
-                if (!(b & VL_SIZEBITS_I)) {
-                    bits = term.same ? term.value0 : VL_RANDOM_RNG_I(rngr);
-                    const IData used = bits & VL_MASK_I(std::min(VL_IDATASIZE, term.width - b));
-                    if (b < VL_QUADSIZE) value |= static_cast<QData>(used) << b;
-                }
-                os << (VL_BITISSET_I(bits, b & VL_SIZEBITS_I) ? '1' : '0');
+    // Declare literal __Va<lit> tying term to a random value
+    const auto tie = [&](PinTerm& term, int lit) VL_REQUIRES(sess.m_mutex) {
+        os << "(declare-fun __Va" << lit << " () Bool)\n";
+        os << "(assert (= __Va" << lit << " (=";
+        emitTerm(term);
+        os << " #b";
+        IData bits = 0;
+        QData value = 0;  // Its low 64 bits
+        for (int b = 0; b < term.width; ++b) {
+            if (!(b & VL_SIZEBITS_I)) {
+                bits = term.same ? term.value0 : VL_RANDOM_RNG_I(rngr);
+                const IData used = bits & VL_MASK_I(std::min(VL_IDATASIZE, term.width - b));
+                if (b < VL_QUADSIZE) value |= static_cast<QData>(used) << b;
             }
-            term.value0 = VL_BITISSET_I(bits, (term.width - 1) & VL_SIZEBITS_I) ? 1 : 0;
-            os << ")))\n";
-            litInfo[lits + k] = {term.varp, term.elem, term.lsb, term.width, value};
+            os << (VL_BITISSET_I(bits, b & VL_SIZEBITS_I) ? '1' : '0');
         }
+        term.value0 = VL_BITISSET_I(bits, (term.width - 1) & VL_SIZEBITS_I) ? 1 : 0;
+        os << ")))\n";
+        if (litInfo.size() <= static_cast<size_t>(lit)) litInfo.resize(lit + 1);
+        litInfo[lit] = {term.varp, term.elem, term.lsb, term.width, value};
+    };
+    while (!terms.empty() && checksLeft > 0) {
+        for (size_t k = 0; k < terms.size(); ++k) tie(terms[k], lits + k);
         std::vector<int> slotIds;
         std::vector<std::vector<int>> keptCores;
         settled = assumeDropping(rngr, sess, keep, lits, terms, dropped, checksLeft, nullptr,
-                                 &slotIds, &satisfiedLeft, &keptCores);
+                                 &slotIds, &satisfiedLeft, &keptCores, &wide);
         if (!settled) break;
         satisfied();
         std::vector<PinTerm> conflicted;
@@ -1687,8 +1699,8 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
             os << ' ' << values[k] << "))))\n";
         }
         std::vector<bool> guessed;
-        settled
-            = assumeDropping(rngr, sess, keep, lits, conflicted, dropped, checksLeft, &guessed);
+        settled = assumeDropping(rngr, sess, keep, lits, conflicted, dropped, checksLeft, &guessed,
+                                 nullptr, nullptr, nullptr, &wide);
         if (!settled) break;
         satisfied();
         // A term dropped as a guess may still change on its own, which would leave its
@@ -1748,16 +1760,82 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
         };
         const auto splitting
             = [&](size_t k) { return !dropped[k] && !stopped.count(conflicted[k].root); };
+        // A whole variable or element that can change is tied again to a fresh random value
+        // a few times before it is split: a value that fits is then one drawn uniformly from
+        // those its constraints allow (rejection), where a split leaves the bits that
+        // conflict to the solver's choice. Not with wide cores, which cost too many checks.
+        std::vector<PinTerm> again;
+        const auto splitOrAgain = [&](const PinTerm& term) {
+            if (!wide && term.width == term.varp->width()) {
+                again.push_back(term);
+            } else {
+                split(term);
+            }
+        };
         for (size_t k = 0; k < nalone; ++k) {
-            if (splitting(k)) split(conflicted[k]);
+            if (splitting(k)) splitOrAgain(conflicted[k]);
         }
         size_t samplek = nalone;
         for (size_t sloti = 0; sloti < slots.size(); ++sloti) {
             bool any = false;
             for (size_t i = 0; i < nsamples[sloti]; ++i) any |= splitting(samplek++);
             if (!any) continue;
-            for (const PinTerm& term : slots[sloti]) split(term);
+            for (const PinTerm& term : slots[sloti]) splitOrAgain(term);
         }
+        // At random, so a large array is not cut short at its first elements, in chunks
+        // growing from a sample, each within a share of the checks left, as each conflict
+        // costs a check or more and a round one satisfied check. Past 3/4 of a check per
+        // new value, as when most conflict, tying again stops. The rest is split.
+        for (size_t i = again.size(); i > 1; --i) {
+            std::swap(again[i - 1], again[VL_RANDOM_RNG_I(rngr) % i]);
+        }
+        int budget = std::min(diversityRetieChecks, checksLeft / diversityRetieShare);
+        int roundsLeft = diversityRetieRounds * diversityRetieChunks;
+        size_t untied = 0;  // The first term not tied again yet
+        size_t tied = 0;  // New values tied so far
+        size_t spent = 0;  // Checks they took
+        const auto affordable = [&]() { return spent * 4 <= tied * 3; };
+        std::vector<bool> misfit;  // Per term of a chunk
+        while (untied < again.size() && roundsLeft > 0 && budget > 2 && checksLeft > 0
+               && affordable()) {
+            // So that it fits even if every new value conflicts
+            const size_t fit = std::min<size_t>(budget - 2, tied ? diversityRetieGrowth * tied
+                                                                 : diversityRetieSample);
+            const size_t n = std::min(again.size() - untied, fit);
+            std::vector<PinTerm> chunk{again.begin() + untied, again.begin() + untied + n};
+            untied += n;
+            for (int round = 0; round < diversityRetieRounds && !chunk.empty() && roundsLeft > 0;
+                 ++round, --roundsLeft) {
+                if (round
+                    && (budget <= static_cast<int>(chunk.size()) || checksLeft <= 0
+                        || !affordable())) {
+                    break;
+                }
+                for (size_t k = 0; k < chunk.size(); ++k) tie(chunk[k], lits + k);
+                const int before = budget;
+                settled = assumeDropping(rngr, sess, keep, lits, chunk, misfit, budget);
+                checksLeft -= before - budget;
+                tied += chunk.size();
+                spent += before - budget;
+                lits += chunk.size();
+                if (!settled) break;
+                satisfied();
+                std::vector<PinTerm> still;
+                for (size_t k = 0; k < chunk.size(); ++k) {
+                    if (misfit[k]) {
+                        still.push_back(chunk[k]);
+                    } else {
+                        keep += " __Va" + std::to_string(lits - chunk.size() + k);
+                        kept.push_back(lits - chunk.size() + k);
+                    }
+                }
+                chunk.swap(still);
+            }
+            if (!settled) break;
+            for (const PinTerm& term : chunk) split(term);
+        }
+        if (!settled) break;
+        for (; untied < again.size(); ++untied) split(again[untied]);
         terms.insert(terms.end(), bitsAgain.begin(), bitsAgain.end());
     }
     if (!settled) {
@@ -1883,8 +1961,8 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
                                   int first, const std::vector<PinTerm>& terms,
                                   std::vector<bool>& droppedr, int& checksLeftr,
                                   std::vector<bool>* guessedp, std::vector<int>* slotIdsp,
-                                  int* satisfiedLeftp, std::vector<std::vector<int>>* keptCoresp)
-    VL_REQUIRES(sess.m_mutex) {
+                                  int* satisfiedLeftp, std::vector<std::vector<int>>* keptCoresp,
+                                  bool* widep) VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     droppedr.assign(terms.size(), false);
     if (guessedp) guessedp->assign(terms.size(), false);
@@ -1982,6 +2060,7 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
             if (status != VlSolverStatus::UNSAT) return false;
             coreTerms(core);
             if (core.size() > static_cast<size_t>(diversityCoreFew)) {
+                if (widep) *widep = true;
                 for (size_t k = 0; k < terms.size(); ++k) {
                     if (!droppedr[k]) order.push_back(static_cast<int>(k));
                 }
