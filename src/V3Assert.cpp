@@ -2750,8 +2750,10 @@ class AssertVisitor final : public VNVisitor {
                                           bool vacuous) {
         // Add an internal if to check assertion passOn is enabled.
         // Don't make this an AND term, as it's unlikely to need to test this.
-        return newIfControl(
+        AstIf* const ifp = newIfControl(
             assertPassOnCond(statep, bodyp->fileline(), type, directiveType, vacuous), bodyp);
+        ifp->isAssertPassGate(true);
+        return ifp;
     }
     static AstNodeStmt* newIfAssertFailOn(AstVar* statep, AstNodeStmt* bodyp,
                                           VAssertDirectiveType directiveType, VAssertType type) {
@@ -4219,8 +4221,11 @@ class AssertVisitor final : public VNVisitor {
                 failsp = newReactiveAction(nodep, actionSenTreep, failsp);
             }
         }
+        // A pass action V3AssertNfa already gates on pass control, not a user's 'if'
         bool passspAlreadyGated = false;
-        if (passsp && VN_IS(passsp, If)) passspAlreadyGated = VN_AS(passsp, If)->user1();
+        if (passsp && VN_IS(passsp, If)) {
+            passspAlreadyGated = VN_AS(passsp, If)->isAssertPassGate();
+        }
         if (passsp && !passspGated && !passspAlreadyGated && !VN_IS(propExprp, PExpr)
             && !seqEvent) {
             passsp = newIfAssertPassOn(nodep->controlVarp(), passsp, nodep->directive(),
