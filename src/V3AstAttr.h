@@ -1132,12 +1132,14 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(SCHED_AWAITING_ZERO_DELAY,          "awaitingZeroDelay",      PURE,   CLEAN,  false,      "", "") \
     macro(SCHED_READY,                        "ready",                  false,  CLEAN,  false,      "r", "") \
     macro(SCHED_MOVE_TO_RESUME_QUEUE,         "moveToResumeQueue",      false,  CLEAN,  false,      "r", "") \
+    macro(SCHED_COLLECT_FORK_STARTS,          "collectForkStarts",      false,  CLEAN,  false,      "", "") \
     macro(SCHED_DELAY,                        "delay",                  false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_DO_POST_UPDATES,              "doPostUpdates",          false,  CLEAN,  false,      "", "") \
     macro(SCHED_EVALUATE,                     "evaluate",               false,  CLEAN,  false,      "", "") \
     macro(SCHED_EVALUATION,                   "evaluation",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_POST_UPDATE,                  "postUpdate",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_RESUME,                       "resume",                 false,  CLEAN,  false,      "TODO", "") \
+    macro(SCHED_RESUME_FORK_STARTS,           "resumeForkStarts",       false,  CLEAN,  false,      "", "") \
     macro(SCHED_RESUME_ZERO_DELAY,            "resumeZeroDelay",        false,  CLEAN,  false,      "", "") \
     macro(SCHED_RESUMPTION,                   "resumption",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_TRIGGER,                      "trigger",                false,  CLEAN,  AWAITABLE,  "rrrrr", "") \

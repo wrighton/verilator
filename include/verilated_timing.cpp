@@ -132,6 +132,7 @@ void VlDelayScheduler::resume() {
         m_queue.clear();
         m_zeroDelayed.clear();
         m_zeroDelayesSwap.clear();
+        m_forkStarts.clear();
         return;
     }
     bool resumed = false;
@@ -148,6 +149,19 @@ void VlDelayScheduler::resume() {
                     "%Error: Encountered process that should've been resumed at an "
                     "earlier simulation time. Missed a time slot?\n");
     }
+}
+
+void VlDelayScheduler::resumeForkStarts() {
+    while (!m_forkStarts.empty()) {
+        m_forkStartsSwap.swap(m_forkStarts);
+        for (const VlDelayedCoroutineQueue::iterator& it : m_forkStartsSwap) {
+            VlCoroutineHandle handle = std::move(it->second);
+            m_queue.erase(it);
+            handle.resume();
+        }
+        m_forkStartsSwap.clear();
+    }
+    m_collectForkStarts = false;
 }
 
 void VlDelayScheduler::resumeZeroDelay() {
