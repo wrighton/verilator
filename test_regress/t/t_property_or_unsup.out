@@ -48,7 +48,7 @@
       |                                                          ^~
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:38:51: Unsupported: sequence antecedent of an implication in a negated property
                                                  : ... note: In instance 't'
-   38 |   assert property (@(posedge clk) not (((a ##1 b) or (c ##2 a)) |-> b));
+   38 |   assert property (@(posedge clk) not (((a ##1 b) or (c ##[2:$] a)) |-> b));
       |                                                   ^~
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:39:81: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
    39 |   assert property (@(posedge clk) not ((##1 a) or (##2 b) or (##3 c) or (##4 a) or (##5 b)));
