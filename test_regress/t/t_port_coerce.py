@@ -11,7 +11,10 @@ import vltest_bootstrap
 
 test.scenarios('simulator')
 
-test.compile(timing_loop=True, verilator_flags2=['--timing'])
+test.compile(timing_loop=True, verilator_flags2=['--timing', '--debug-check', '--dump-tree'])
+
+# Select indices in clocking output expressions remain read-only inputs.
+test.file_grep(test.glob_one(test.obj_dir + '/*_width.tree'), r'VAR .* sel_index INPUT')
 
 # A top-level port is not coerced
 test.file_grep(test.obj_dir + "/" + test.vm_prefix + ".h", r'VL_IN8\(&tin,')
