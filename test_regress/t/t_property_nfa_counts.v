@@ -205,7 +205,7 @@ module t (
       `checkd(neg_fail_at_b, 1);
       `checkd(neg_large_fail_at_b, 1);
       `checkd(neg_chain_pass, 2);
-      `checkd(neg_chain_fail, 2);
+      `checkd(neg_chain_fail, 1);
       `checkd(neg_chain_cover, 1);
       `checkd(neg_imp_pass, 2);
       `checkd(vacuous_pass, 12);

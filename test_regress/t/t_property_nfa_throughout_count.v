@@ -19,7 +19,10 @@ module t (
   int fixed_fail = 0, negated_pass = 0, negated_cover = 0;
 
   bit range_start = 0, range_guard = 1, range_done = 0;
-  int range_fail = 0;
+  int range_fail = 0, negated_range_pass = 0;
+
+  bit end_start = 0, end_guard = 1, end_done = 0;
+  int negated_end_pass = 0;
 
   bit disable_now = 0, disabled_guard = 1;
   int disabled_fail = 0;
@@ -41,6 +44,15 @@ module t (
       range_start |-> (range_guard throughout (1'b1 ##[1:300] range_done)))
   else range_fail++;
 
+  assert property (@(posedge clk) not (range_guard throughout (range_start ##[1:300] range_done)))
+  begin
+    if (drop_tag) negated_range_pass++;
+  end
+
+  assert property (@(posedge clk) not (end_guard throughout (end_start ##1 end_done))) begin
+    if (drop_tag) negated_end_pass++;
+  end
+
   assert property (@(posedge clk) disable iff (disable_now)
       fixed_start |-> (disabled_guard throughout (1'b1 ##300 1'b1)))
   else disabled_fail++;
@@ -52,6 +64,7 @@ module t (
     @(negedge clk) begin
       fixed_start = 1;
       range_start = 1;
+      end_start = 1;
     end
     repeat (2) @(negedge clk);
     @(negedge clk) begin
@@ -60,6 +73,8 @@ module t (
       drop_tag = 1;
       range_start = 0;
       range_guard = 0;
+      end_start = 0;
+      end_guard = 0;
       disable_now = 1;
       disabled_guard = 0;
     end
@@ -67,7 +82,11 @@ module t (
     @(negedge clk) begin
       `checkd(fixed_fail, 1);
       `checkd(range_fail, 1);
-      `checkd(negated_pass, 1);
+      // Per attempt: the three attempts in the delay and the one starting on the drop
+      `checkd(negated_pass, 4);
+      `checkd(negated_range_pass, 4);
+      // The attempts failing their last step and their first one on the drop
+      `checkd(negated_end_pass, 2);
       `checkd(negated_cover, 1);
       `checkd(disabled_fail, 0);
       drop_tag = 0;
