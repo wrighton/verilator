@@ -6,8 +6,8 @@
 
 // The default failure of an assertion without 'else', with or without a pass action, runs once
 // for each attempt failing on a tick, as an explicit fail action does (IEEE 1800-2023 16.14.1).
-// On the tick of cyc 2, one attempt of each sequence matches and two fail. On that of cyc 1,
-// two attempts of each implication fail.
+// On the tick of cyc 2, one attempt of each sequence matches and two fail, as two attempts of
+// each ranged implication do. On that of cyc 1, two attempts of each implication fail.
 module t;
   logic clk = 0;
   always #5 clk = ~clk;
@@ -30,6 +30,13 @@ module t;
   else $error("implication failed");
   assert property (@(posedge clk) x |-> y ##1 z) passes++;
   assert property (@(posedge clk) x |-> y ##1 z);
+
+  wire r = cyc == 0 || cyc == 1;
+  wire s = cyc == 2;
+  assert property (@(posedge clk) (r ##[1:2] s) |-> z) passes++;
+  else $error("ranged implication failed");
+  assert property (@(posedge clk) (r ##[1:2] s) |-> z) passes++;
+  assert property (@(posedge clk) (r ##[1:2] s) |-> z);
 
   initial begin
     #45 $assertfailoff;

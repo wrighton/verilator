@@ -11,6 +11,12 @@
 [25] %Error: t_assert_pass_only_overlap.v:27: Assertion failed in t: 'assert' failed.
 [25] %Error: t_assert_pass_only_overlap.v:28: Assertion failed in t: 'assert' failed.
 [25] %Error: t_assert_pass_only_overlap.v:28: Assertion failed in t: 'assert' failed.
+[25] %Error: t_assert_pass_only_overlap.v:37: Assertion failed in t: ranged implication failed
+[25] %Error: t_assert_pass_only_overlap.v:37: Assertion failed in t: ranged implication failed
+[25] %Error: t_assert_pass_only_overlap.v:38: Assertion failed in t: 'assert' failed.
+[25] %Error: t_assert_pass_only_overlap.v:38: Assertion failed in t: 'assert' failed.
+[25] %Error: t_assert_pass_only_overlap.v:39: Assertion failed in t: 'assert' failed.
+[25] %Error: t_assert_pass_only_overlap.v:39: Assertion failed in t: 'assert' failed.
 [35] %Error: t_assert_pass_only_overlap.v:26: Assertion failed in t: sequence failed
 [35] %Error: t_assert_pass_only_overlap.v:27: Assertion failed in t: 'assert' failed.
 [35] %Error: t_assert_pass_only_overlap.v:28: Assertion failed in t: 'assert' failed.
