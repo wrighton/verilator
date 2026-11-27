@@ -3664,7 +3664,9 @@ class SvaNfaLowering final {
         SvaGraph& graph;  // NFA graph
         bool exactCounts;  // Count threads exactly, each being one attempt
         const AstAbortOn* exactAbortp;  // With exactCounts, top-level synchronous abort, if any
-        bool trackAntecedentEnd;  // Compute SignalSet::antecedentEndp
+        bool trackAntecedentEnd;  // Compute SignalSet::antecedentEndCountp
+        bool countAttemptPasses;  // Compute the attempt pass counts of SignalSet, if possible
+        AstNodeExpr* vacuousTriggerp;  // With countAttemptPasses, a boolean antecedent, if any
     };
 
     // Build a match-now expression: stateSig[i] && $sampled(condp)
@@ -3806,8 +3808,9 @@ class SvaNfaLowering final {
         AstNodeExpr* threadFailCountp = nullptr;  // Number of threads rejected on this tick
         AstNodeExpr* vacuousp = nullptr;  // Vacuous success this tick, if tracked
         AstNodeExpr* successCountp = nullptr;  // Matches and vacuous successes on this tick
-        // An antecedent ending without a match this tick, a vacuous success, if tracked
-        AstNodeExpr* antecedentEndp = nullptr;
+        // Attempts whose antecedent ends without a match this tick, succeeding vacuously, if
+        // tracked
+        AstNodeExpr* antecedentEndCountp = nullptr;
         AstNodeExpr* attemptPassCountp = nullptr;  // Attempts succeeding on this tick
         AstNodeExpr* attemptNonvacuousPassCountp = nullptr;  // Of those, the nonvacuous ones
     };
@@ -4977,10 +4980,15 @@ class SvaNfaLowering final {
     // tick in an attempt, which then succeeds vacuously (IEEE 1800-2023 16.12.7): a thread of
     // the antecedent, or an attempt starting, that no transition continues, or the threads of
     // a fixed delay ring cleared. Nullptr if the antecedent has a vertex of another kind.
-    AstNodeExpr* newAntecedentEndp(LowerCtx& c) {
-        std::vector<AstNodeExpr*> endps;
+    AstNodeExpr* newAntecedentEndCountp(LowerCtx& c) {
+        // The threads of one fixed offset belong to one attempt (see vertexOffsets), which ends
+        // when none of them continues
+        const std::vector<int> offsets = vertexOffsets(c.graph);
+        std::map<int, AstNodeExpr*> endps;  // By offset
+        AstNodeExpr* countp = nullptr;
         const auto fail = [&]() {
-            for (AstNodeExpr* const endp : endps) VL_DO_DANGLING(endp->deleteTree(), endp);
+            for (const auto& it : endps) VL_DO_DANGLING(it.second->deleteTree(), it.second);
+            if (countp) VL_DO_DANGLING(countp->deleteTree(), countp);
             return nullptr;
         };
         for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
@@ -4992,39 +5000,91 @@ class SvaNfaLowering final {
                 || vtxp->m_delayRingAdvanceCondp) {
                 return fail();
             }
-            // The threads of the ring, beside the one at its output
+            const int offset = offsets[vtxp->color()];
+            if (offset < 0) return fail();
+            // The threads of the ring, each of an attempt, end when it clears, the one at its
+            // output among them
+            AstNodeExpr* clearp = nullptr;
             if (vtxp->m_delayRingSize && vtxp->m_delayRingClearCondp) {
-                endps.push_back(new AstLogAnd{
-                    c.flp, delayRingHasLiveThreadsp(c.flp, vtxp->datap()->delayRingLiveCountVarp),
-                    sampled(vtxp->m_delayRingClearCondp->cloneTreePure(false))});
+                clearp = sampled(vtxp->m_delayRingClearCondp->cloneTreePure(false));
+                countp = addCountp(
+                    c.flp, countp,
+                    new AstVarRef{c.flp, vtxp->datap()->delayRingLiveCountVarp, VAccess::READ},
+                    clearp->cloneTreePure(false));
             }
             AstNodeExpr* continuesp = nullptr;
             bool alwaysContinues = false;
             for (const V3GraphEdge& edger : vtxp->outEdges()) {
                 const SvaTransEdge& tedger = static_cast<const SvaTransEdge&>(edger);
-                if (tedger.m_condVtxp) return fail();
+                // Only a required step of the property rejects on another state
+                UASSERT_OBJ(!tedger.m_condVtxp, vtxp, "Antecedent state rejecting on a state");
                 if (!tedger.m_condp) {
                     alwaysContinues = true;
                     break;
                 }
                 continuesp = orExprs(c.flp, continuesp, tedger.m_condp->cloneTreePure(false));
             }
+            if (clearp) continuesp = orExprs(c.flp, continuesp, clearp);
             if (alwaysContinues) {
                 if (continuesp) VL_DO_DANGLING(continuesp->deleteTree(), continuesp);
                 continue;
             }
             AstNodeExpr* const statep = vtxp->datap()->stateSigp->cloneTreePure(false);
-            endps.push_back(continuesp
-                                ? new AstLogAnd{c.flp, statep, new AstLogNot{c.flp, continuesp}}
-                                : statep);
+            AstNodeExpr*& endp = endps[offset];
+            endp = orExprs(c.flp, endp,
+                           continuesp
+                               ? new AstLogAnd{c.flp, statep, new AstLogNot{c.flp, continuesp}}
+                               : statep);
         }
-        AstNodeExpr* endp = newOrTree(c.flp, endps.cbegin(), endps.cend());
-        if (!endp) return nullptr;
+        for (const auto& it : endps) {
+            countp
+                = addCountp(c.flp, countp, new AstExtend{c.flp, it.second, m_u32DTypep->width()});
+        }
+        if (!countp) return nullptr;
         if (c.disableExprp) {
-            endp = new AstLogAnd{c.flp, endp,
-                                 new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)}};
+            countp = addCountp(c.flp, nullptr, countp,
+                               new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
         }
-        return gateNotKill(c, endp);
+        return addCountp(c.flp, nullptr, countp, notKillActive(c));
+    }
+
+    // The passes of the attempts of an assertion on this tick, if its threads tell attempts
+    // apart: of those completing, and of those succeeding vacuously
+    void setAttemptPassCounts(LowerCtx& c, SignalSet& sigs) {
+        AstNodeExpr* vacuousp = nullptr;
+        if (c.vacuousTriggerp) {
+            // An attempt starting this tick, while the assertion is on
+            vacuousp = new AstExtend{
+                c.flp,
+                new AstLogAnd{
+                    c.flp, assertOnCond(c.controlVarp, c.flp, c.assertType, c.directiveType),
+                    new AstLogNot{c.flp, sampled(c.vacuousTriggerp->cloneTreePure(false))}},
+                m_u32DTypep->width()};
+            if (c.disableExprp) {
+                vacuousp = addCountp(c.flp, nullptr, vacuousp,
+                                     new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
+            }
+            vacuousp = addCountp(c.flp, nullptr, vacuousp, notKillActive(c));
+        } else if (c.trackAntecedentEnd) {
+            if (!sigs.antecedentEndCountp) return;
+            vacuousp = sigs.antecedentEndCountp->cloneTreePure(false);
+        }
+        AstNodeExpr* nonvacuousp = newAttemptMatchCountp(c);
+        if (!nonvacuousp) {
+            if (vacuousp) VL_DO_DANGLING(vacuousp->deleteTree(), vacuousp);
+            return;
+        }
+        if (c.matchCondp) {
+            nonvacuousp = addCountp(c.flp, nullptr, nonvacuousp,
+                                    sampled(c.matchCondp->cloneTreePure(false)));
+        }
+        if (c.disableExprp) {
+            nonvacuousp = addCountp(c.flp, nullptr, nonvacuousp,
+                                    new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
+        }
+        nonvacuousp = addCountp(c.flp, nullptr, nonvacuousp, notKillActive(c));
+        sigs.attemptNonvacuousPassCountp = nonvacuousp;
+        sigs.attemptPassCountp = addCountp(c.flp, vacuousp, nonvacuousp->cloneTreePure(false));
     }
 
     // Key of the rejections of a vertex's threads, counted once per tick, see computeSignals
@@ -5172,7 +5232,8 @@ class SvaNfaLowering final {
         sigs.rejectBasep = gateNotKill(c, sigs.rejectBasep);
         sigs.throughoutRejectp = gateNotKill(c, sigs.throughoutRejectp);
 
-        if (c.trackAntecedentEnd) sigs.antecedentEndp = newAntecedentEndp(c);
+        if (c.trackAntecedentEnd) sigs.antecedentEndCountp = newAntecedentEndCountp(c);
+        if (c.countAttemptPasses) setAttemptPassCounts(c, sigs);
 
         // Clean up intermediate state signals. These are orphan subtrees
         // (never linked into the enclosing AST); deleteTree() is immediate
@@ -5476,7 +5537,9 @@ public:
                    graph,
                    false,
                    nullptr,
-                   false};
+                   false,
+                   false,
+                   nullptr};
         // One bit more than the latency, and two at least, as a register of a bit is not a vector
         const int width = std::max(tree.latency + 1, 2);
         AttemptCtx a{c, width, m_modp->findBitDType(width, width, VSigning::UNSIGNED),
@@ -5652,7 +5715,8 @@ public:
                     AstNodeExpr* const disableExprp, const bool needThreadFailCount,
                     const bool needRejectCount, const bool needSuccessCount,
                     const bool exactCounts, const AstAbortOn* const exactAbortp,
-                    const bool countAttempts, const bool trackAntecedentEnd) {
+                    const bool countAttempts, const bool trackAntecedentEnd,
+                    const bool countAttemptPasses, AstNodeExpr* const vacuousTriggerp) {
         FileLine* const flp = assertp->fileline();
         AstCover* const coverp = VN_CAST(assertp, Cover);
         const bool isSeqEvent = coverp && coverp->isSeqEvent();
@@ -5807,9 +5871,10 @@ public:
         m_statVertices += vtx.size();
 
         // Build lowering context for phase sub-functions.
-        LowerCtx c{flp,        senTreep,      disableExprp, matchCondp,
-                   assertType, directiveType, killVarp,     assertp->controlVarp(),
-                   graph,      exactCounts,   exactAbortp,  trackAntecedentEnd};
+        LowerCtx c{
+            flp,           senTreep,           disableExprp,           matchCondp,     assertType,
+            directiveType, killVarp,           assertp->controlVarp(), graph,          exactCounts,
+            exactAbortp,   trackAntecedentEnd, countAttemptPasses,     vacuousTriggerp};
 
         // Phase 1: Resolve combinational Links.
         AstNodeExpr* const triggerExprp
@@ -8225,8 +8290,10 @@ class AssertNfaVisitor final : public VNVisitor {
         int implications = 0;
         bool other = false;
         findAttemptKinds(*treep, implications, other);
+        // An implication split by the lengths of its antecedent has a pass of each attempt
+        const bool lengthsSplit = treep->lengthsJoin || treep->antSeqp;
         if (!hasVarLenAnd(*treep) && (cover || !implications || (!other && implications < 2))
-            && (cover || !isVarLenSequence(*treep))) {
+            && (cover || (!isVarLenSequence(*treep) && !lengthsSplit))) {
             return nullptr;
         }
         if (const SvaAttemptNode* const limitp = findOverLimit(*treep)) {
@@ -8491,6 +8558,13 @@ class AssertNfaVisitor final : public VNVisitor {
                                         && !splitImplicationPasssp
                                         && oneThreadPerAttempt(parts.triggerExprp, false);
         const bool needMatch = assertAssertp && assertAssertp->passsp();
+        // The pass action runs once per attempt succeeding (IEEE 1800-2023 16.14.1), where the
+        // threads tell how many do, and how many of them vacuously
+        AstNodeExpr* const vacuousTriggerp
+            = parts.hasImplication && splitImplicationPasssp ? parts.triggerExprp : nullptr;
+        const bool countAttemptPasses
+            = needMatch && !negated && !parts.isFollowedBy
+              && (!parts.hasImplication || vacuousTriggerp || trackAntecedentEnd);
 
         // The rejected threads of a negated property's operand are passes of the property
         const bool replayFails = assertAssertp && assertAssertp->failsp() && !negated;
@@ -8502,18 +8576,38 @@ class AssertNfaVisitor final : public VNVisitor {
             = replayFails && !parts.hasImplication && oneThreadPerAttempt(seqBodyp, true);
         // A match and a vacuous success of its operand on one tick both fail a negated property
         const bool replaySuccesses = assertAssertp && assertAssertp->failsp() && negated;
-        const auto signals = m_loweringp->lower(
-            assertp, graph, senTreep, result.finalCondp, disableExprp, replayThreads,
-            replayThreads, replaySuccesses, exactCounts,
-            exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr,
-            coverp && !isCoverSeq && !negated && v3Global.opt.coverageUser(), trackAntecedentEnd);
+        const auto signals
+            = m_loweringp->lower(assertp, graph, senTreep, result.finalCondp, disableExprp,
+                                 replayThreads, replayThreads, replaySuccesses, exactCounts,
+                                 exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr,
+                                 coverp && !isCoverSeq && !negated && v3Global.opt.coverageUser(),
+                                 trackAntecedentEnd, countAttemptPasses, vacuousTriggerp);
+        const bool attemptPasses = signals.attemptPassCountp;
         AstNodeExpr* matchExprp = nullptr;
-        AstNodeExpr* const outputExprp = m_loweringp->assembleResult(
-            assertp, negated, result.finalCondp, signals, needMatch ? &matchExprp : nullptr);
+        AstNodeExpr* const outputExprp
+            = m_loweringp->assembleResult(assertp, negated, result.finalCondp, signals,
+                                          needMatch && !attemptPasses ? &matchExprp : nullptr);
         if (result.finalCondp && !result.finalCondp->backp()) pushDeletep(result.finalCondp);
-        finishDirective(assertp, parts, senTreep, outputExprp, matchExprp, signals.matchCountp,
-                        replayFails ? signals.threadFailCountp : signals.successCountp,
-                        replayPasses ? signals.threadFailCountp : nullptr, signals.antecedentEndp);
+        AstNodeExpr* failCountp = replayFails ? signals.threadFailCountp : signals.successCountp;
+        AstNodeExpr* const passCountp = replayPasses ? signals.threadFailCountp : nullptr;
+        // Without the counts, a vacuous success of some attempts
+        AstNodeExpr* antecedentEndp = signals.antecedentEndCountp;
+        if (antecedentEndp && attemptPasses) {
+            VL_DO_DANGLING(antecedentEndp->deleteTree(), antecedentEndp);
+        } else if (antecedentEndp) {
+            antecedentEndp = new AstNeq{flp, antecedentEndp,
+                                        newTypedConstp(flp, antecedentEndp->dtypep(), 0)};
+        }
+        if (attemptPasses) {
+            finishDirective(assertp, PropertyParts{}, senTreep, outputExprp, nullptr,
+                            signals.matchCountp, failCountp, passCountp, nullptr);
+            // After the replays, which clone the fail action without the pass action prefix
+            attachAttemptPassActions(assertAssertp, senTreep, signals.attemptPassCountp,
+                                     signals.attemptNonvacuousPassCountp);
+        } else {
+            finishDirective(assertp, parts, senTreep, outputExprp, matchExprp, signals.matchCountp,
+                            failCountp, passCountp, antecedentEndp);
+        }
         VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
 
         UINFO(4, "NFA converted assertion at " << flp << endl);

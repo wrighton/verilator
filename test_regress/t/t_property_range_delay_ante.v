@@ -10,8 +10,8 @@
 // verilog_format: on
 
 // Every tick of a ranged cycle delay in an antecedent ends a match that starts the
-// consequent (IEEE 1800-2023 16.9.2.2, 16.12.7), checked tick by tick against a
-// procedural model
+// consequent, and an attempt fails at the first match whose consequent fails (IEEE 1800-2023
+// 16.9.2.2, 16.12.7), checked tick by tick against a procedural model
 
 module t (
     input clk
@@ -72,33 +72,58 @@ module t (
       int exp_two[CYCLES];
       int exp_or[CYCLES];
       int nexp[7];
-      // Only attempts whose matches all lie in the checked window
+      // Only attempts whose matches all lie in the checked window. An attempt fails once, at
+      // the first match of its antecedent whose consequent fails (IEEE 1800-2023 16.12.7)
       for (int s = 0; s < CYCLES - 6; ++s) begin
+        automatic int first;
         if (s % 4 == 0) begin
           for (int u = s + 1; u <= s + 2; ++u) begin
-            if (u % 2 == 1 && u != 100) exp_cyc[u] = 1;
+            if (u % 2 == 1 && u != 100) begin
+              exp_cyc[u] = 1;
+              break;
+            end
           end
         end
         for (int u = s + 1; u <= s + 2; ++u) begin
-          if (hist_b[u] && !hist_c[u]) exp_lead[u] = 1;
+          if (hist_b[u] && !hist_c[u]) begin
+            exp_lead[u] = 1;
+            break;
+          end
         end
-        if (hist_d[s] && !hist_c[s]) exp_or[s] = 1;
+        for (int u = s; u <= s + 2; ++u) begin
+          if (((u == s && hist_d[s]) || (u > s && hist_a[s] && hist_b[u])) && !hist_c[u]) begin
+            exp_or[u] = 1;
+            break;
+          end
+        end
         if (hist_a[s]) begin
-          for (int u = s; u <= s + 3; ++u) begin
+          for (int u = s + 1; u <= s + 2; ++u) begin
+            if (hist_b[u] && !hist_c[u]) begin
+              exp_12[u] = 1;
+              break;
+            end
+          end
+          for (int u = s; u <= s + 2; ++u) begin
+            if (hist_b[u] && !hist_c[u]) begin
+              exp_02[u] = 1;
+              break;
+            end
+          end
+          for (int u = s + 1; u <= s + 3; ++u) begin
+            if (hist_b[u] && !hist_c[u+1]) begin
+              exp_nonover[u+1] = 1;
+              break;
+            end
+          end
+          first = CYCLES;
+          for (int u = s + 1; u <= s + 2; ++u) begin
             if (hist_b[u]) begin
-              if (u >= s + 1 && u <= s + 2 && !hist_c[u]) begin
-                exp_12[u] = 1;
-                exp_or[u] = 1;
-              end
-              if (u <= s + 2 && !hist_c[u]) exp_02[u] = 1;
-              if (u >= s + 1 && !hist_c[u+1]) exp_nonover[u+1] = 1;
-              if (u >= s + 1 && u <= s + 2) begin
-                for (int v = u + 1; v <= u + 2; ++v) begin
-                  if (hist_c[v] && !hist_d[v]) exp_two[v] = 1;
-                end
+              for (int v = u + 1; v <= u + 2; ++v) begin
+                if (hist_c[v] && !hist_d[v] && v < first) first = v;
               end
             end
           end
+          if (first < CYCLES) exp_two[first] = 1;
         end
       end
       nexp = '{default: 0};
@@ -120,12 +145,12 @@ module t (
       end
       // Failing ticks expected from the model, so each check above is exercised
       `checkd(nexp[0], 24);
-      `checkd(nexp[1], 14);
-      `checkd(nexp[2], 19);
-      `checkd(nexp[3], 21);
+      `checkd(nexp[1], 13);
+      `checkd(nexp[2], 17);
+      `checkd(nexp[3], 19);
       `checkd(nexp[4], 20);
-      `checkd(nexp[5], 10);
-      `checkd(nexp[6], 29);
+      `checkd(nexp[5], 9);
+      `checkd(nexp[6], 27);
       $write("*-* All Finished *-*\n");
       $finish;
     end
