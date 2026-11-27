@@ -78,13 +78,45 @@ class BeginVisitor final : public VNVisitor {
     string m_unnamedScope;  // Name of begin blocks, including unnamed blocks
     std::map<const AstNodeFTask*, string> m_forkBranchScopes;  // m_displayScope at the call
     int m_ifDepth = 0;  // Current if depth
+    VDouble0 m_statScopeChars;  // Characters appended to the scopes of blocks
     bool m_inStaticInit = false;  // Initializer executes outside its containing subroutine
     bool m_inPersistentRhs = false;  // Continuous evaluation outlives its activating subroutine
     V3UniqueNames m_exprTempNames;  // Clone-distinct expression captures within a module
 
+    // Restores the scopes when leaving a block. Its names were appended to them, so truncating
+    // them back avoids copying them for each block, which is quadratic in the depth of nesting.
+    class ScopeLengths final {
+        BeginVisitor& m_visitor;  // Visitor whose scopes are restored
+        const size_t m_display;  // Length of m_displayScope to restore
+        const size_t m_named;  // Length of m_namedScope to restore
+        const size_t m_unnamed;  // Length of m_unnamedScope to restore
+
+    public:
+        explicit ScopeLengths(BeginVisitor& visitor)
+            : m_visitor{visitor}
+            , m_display{visitor.m_displayScope.size()}
+            , m_named{visitor.m_namedScope.size()}
+            , m_unnamed{visitor.m_unnamedScope.size()} {}
+        ~ScopeLengths() {
+            m_visitor.m_displayScope.resize(m_display);
+            m_visitor.m_namedScope.resize(m_named);
+            m_visitor.m_unnamedScope.resize(m_unnamed);
+        }
+    };
+
     // METHODS
 
     string dot(const string& a, const string& b) { return VString::dot(a, "__DOT__", b); }
+    // Append b to scope a, as dot(a, b)
+    void dotAppend(string& a, const string& b) {
+        if (b.empty()) return;
+        if (!a.empty()) {
+            a += "__DOT__";
+            m_statScopeChars += std::strlen("__DOT__");
+        }
+        a += b;
+        m_statScopeChars += b.size();
+    }
 
     void dotNames(const std::string& name, FileLine* const flp, const char* const blockName) {
         UINFO(8, "nname " << m_namedScope);
@@ -98,10 +130,10 @@ class BeginVisitor final : public VNVisitor {
             const std::string ident = dottedname.substr(0, pos);
             dottedname = dottedname.substr(pos + std::strlen("__DOT__"));
             if (name != "") {
-                m_displayScope = dot(m_displayScope, ident);
-                m_namedScope = dot(m_namedScope, ident);
+                dotAppend(m_displayScope, ident);
+                dotAppend(m_namedScope, ident);
             }
-            m_unnamedScope = dot(m_unnamedScope, ident);
+            dotAppend(m_unnamedScope, ident);
             // Create CellInline for dotted var resolution
             // Cloned assertion actions repeat their blocks, so the same name can recur.
             if (!m_ftaskp && m_inlineNames.emplace(m_unnamedScope).second) {
@@ -236,9 +268,7 @@ class BeginVisitor final : public VNVisitor {
         if (nodep->user1SetOnce()) return;
         // GenBlocks were only useful in variable creation, change names and delete
         UINFO(8, "  " << nodep);
-        VL_RESTORER_COPY(m_displayScope);
-        VL_RESTORER_COPY(m_namedScope);
-        VL_RESTORER_COPY(m_unnamedScope);
+        const ScopeLengths lengths{*this};
         dotNames(nodep->name(), nodep->fileline(), "__BEGIN__");
         iterateAndNextNull(nodep->itemsp());
         // Repalce node with body then delete
@@ -250,9 +280,7 @@ class BeginVisitor final : public VNVisitor {
     void visit(AstFork* nodep) override {
         if (nodep->user1SetOnce()) return;
         {
-            VL_RESTORER_COPY(m_displayScope);
-            VL_RESTORER_COPY(m_namedScope);
-            VL_RESTORER_COPY(m_unnamedScope);
+            const ScopeLengths lengths{*this};
             dotNames(nodep->name(), nodep->fileline(), "__FORK__");
             iterateChildren(nodep);
         }
@@ -298,9 +326,7 @@ class BeginVisitor final : public VNVisitor {
         }
         // Begin blocks were only useful in variable creation, change names and delete
         UINFO(8, "  " << nodep);
-        VL_RESTORER_COPY(m_displayScope);
-        VL_RESTORER_COPY(m_namedScope);
-        VL_RESTORER_COPY(m_unnamedScope);
+        const ScopeLengths lengths{*this};
         dotNames(nodep->name(), nodep->fileline(), "__BEGIN__");
         iterateChildren(nodep);
 
@@ -494,6 +520,7 @@ class BeginVisitor final : public VNVisitor {
     // CONSTRUCTORS
     explicit BeginVisitor(AstNetlist* nodep) {
         iterate(nodep);
+        V3Stats::addStat("Begin, scope characters appended", m_statScopeChars);
         // Fix up references, now that all renames are done
         for (AstVarXRef* const refp : m_staticVarRefps) {
             // A reference '<path>.<ftask>.<blocks>.<var>' to a static variable moved out of the
