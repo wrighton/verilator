@@ -266,6 +266,31 @@ class Holder;
     w = w + 1;
     return a;
   endfunction
+  // Elements passed to a const ref argument
+  function int peek(const ref int r);
+    return r;
+  endfunction
+  function int peek_delete(const ref int r);
+    fill();
+    q[3000] = -5;
+    q[N-1] = -6;
+    return r;
+  endfunction
+  function int peek_new(const ref int r);
+    d = new[N];
+    d[3000] = -5;
+    return r;
+  endfunction
+  function int peek_via(const ref int src[$]);
+    return peek(src[1]);
+  endfunction
+  task peek_later(const ref int r, output int seen);
+    #1;
+    seen = r;
+  endtask
+  task peek_via_later(const ref int src[$], output int seen);
+    peek_later(src[3000], seen);
+  endtask
   task bump_sub_later(ref int r);
     #1;
     r = r + 1;
@@ -298,6 +323,45 @@ module t;
     join
     `checkd(h.q[3000], 66);
     `checkd(h.q.size(), N);
+  end
+
+  initial begin  // Elements passed to a const ref argument
+    automatic Holder h = new;
+    int seen;
+    int back;
+    h.fill();
+    h.q[3000] = 20;
+    `checkd(h.peek_delete(h.q[3000]), 20);
+    h.fill();
+    `checkd(h.peek_delete(h.q[$]), N - 1);
+    h.q[3000] = 20;
+    fork
+      h.peek_later(h.q[3000], seen);
+      begin
+        h.q.delete();
+        repeat (N) h.q.push_back(66);
+      end
+    join
+    `checkd(seen, 20);
+    // One past the last element is read as the default, not appended
+    back = -1;
+    `checkd(h.peek(h.q[$-back]), 0);
+    `checkd(h.q.size(), N);
+    `checkd(h.peek_via(h.q), 66);
+    // An element of a const ref queue passed on to a const ref argument
+    h.fill();
+    h.q[3000] = 20;
+    fork
+      h.peek_via_later(h.q, seen);
+      begin
+        h.q.delete();
+        repeat (N) h.q.push_back(66);
+      end
+    join
+    `checkd(seen, 20);
+    h.d = new[N];
+    h.d[3000] = 20;
+    `checkd(h.peek_new(h.d[3000]), 20);
   end
 
   initial begin  // The element itself popped, then another element popped

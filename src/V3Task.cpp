@@ -654,9 +654,9 @@ class TaskVisitor final : public VNVisitor {
             }
         }
         if (AstDynArraySel* const selp = VN_CAST(pinp, DynArraySel)) {
-            if (selp->isLValue()) selp->refPin(true);
+            selp->refPin(true);
         } else if (AstQueueSel* const selp = VN_CAST(pinp, QueueSel)) {
-            if (selp->isLValue()) selp->refPin(true);
+            selp->refPin(true);
         }
     }
 

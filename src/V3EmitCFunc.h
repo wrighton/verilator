@@ -843,6 +843,8 @@ public:
         iterateAndNextConstNull(nodep->fromp());
         // Writing one past the last element appends (IEEE 1800-2023 7.10.1)
         std::string atFunc = nodep->isLValue() ? ".atWriteAppend" : ".at";
+        // An element passed to a const ref argument is read, so is pinned without appending
+        if (nodep->refPin() && !nodep->isLValue()) atFunc = ".atWrite";
         if (nodep->fromBack()) atFunc += "Back";
         if (nodep->refPin()) atFunc += "Ref";
         putns(nodep, atFunc + "(");

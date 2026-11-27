@@ -1142,6 +1142,14 @@ public:
     VlRefPin<T_Value> atWriteAppendBackRef(int32_t index) {
         return {refState(), atWriteAppendBack(index)};
     }
+    // Element passed to a const ref argument, which reading does not append
+    VlRefPin<const T_Value> atWriteRef(int32_t index) const { return {refState(), at(index)}; }
+    VlRefPin<T_Value> atWriteBackRef(int32_t index) {
+        return atWriteRef(m_deque.size() - 1 - index);
+    }
+    VlRefPin<const T_Value> atWriteBackRef(int32_t index) const {
+        return atWriteRef(m_deque.size() - 1 - index);
+    }
 
     // function void q.insert(index, value);
     void insert(int32_t index, const T_Value& value) {
