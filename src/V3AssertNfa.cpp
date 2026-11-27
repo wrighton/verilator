@@ -1409,6 +1409,12 @@ class SvaNfaBuilder final {
         });
     }
 
+    // Whether an implication decides its vacuous pass on its first tick, with a boolean
+    // antecedent and no other implication
+    static bool isVacuousAtEntry(const AstImplication* implp) {
+        return implp && !implp->isFollowedBy() && isPlainBoolean(implp->lhsp())
+               && !implp->rhsp()->exists([](const AstImplication*) { return true; });
+    }
     // Build `b or p` at the end of an asserted property, with b boolean
     BuildResult buildBoolOrProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
                                 FileLine* flp) {
@@ -1431,10 +1437,16 @@ class SvaNfaBuilder final {
         }
         VL_RESTORER(m_wantBoolLeaf);
         m_wantBoolLeaf = true;
+        // An implication passes vacuously when its antecedent does not match (IEEE 1800-2023
+        // 16.12.7), which is a pass of the 'or' too. Only a boolean antecedent decides that on
+        // the first tick. The vacuous passes of other implications, and of one with another
+        // implication in it, are not seen.
+        const AstImplication* const implicationp = VN_CAST(propp, Implication);
+        const bool vacuousAtEntry = isVacuousAtEntry(implicationp);
         // A constant b holds on every attempt, or never so that only p decides
         if (const AstConst* const constp = VN_CAST(boolp, Const)) {
-            if (constp->isZero()) return buildExpr(propp, entryVtxp, /*isTopLevelStep=*/true);
-            return {entryVtxp, boolp->cloneTreePure(false), {}};
+            if (!constp->isZero()) return {entryVtxp, boolp->cloneTreePure(false), {}};
+            if (!vacuousAtEntry) return buildExpr(propp, entryVtxp, /*isTopLevelStep=*/true);
         }
         SvaStateVertex* const propEntryp = scopedCreateVertex();
         guardedLink(entryVtxp, propEntryp,
@@ -1449,6 +1461,11 @@ class SvaNfaBuilder final {
         // Otherwise reach the merge vertex as p would reach the match vertex
         SvaStateVertex* const mergeVtxp = scopedCreateVertex();
         guardedLink(entryVtxp, mergeVtxp, sampled(boolp->cloneTreePure(false)), flp);
+        if (vacuousAtEntry) {
+            guardedLink(propEntryp, mergeVtxp,
+                        new AstLogNot{flp, sampled(implicationp->lhsp()->cloneTreePure(false))},
+                        flp);
+        }
         if (!prop.finalCondp) {
             guardedLink(propTermp, mergeVtxp, flp);
             return {mergeVtxp, nullptr, {}};
@@ -2294,6 +2311,25 @@ public:
         // With more transitions it keeps the merge vertex (see buildFixedSeqOrProp)
         if (fixedOrTransitions(ops, offsets) > MAX_FIXED_OR_TRANSITIONS) return false;
         if (mixedLengthsp) *mixedLengthsp = lengths.size() > 1;
+        return true;
+    }
+    // Whether an 'or' at the root of an asserted property is of a boolean and an implication
+    // of a boolean antecedent and a fixed-length consequent, which buildBoolOrProp lowers with
+    // one state per attempt, and whether its attempts can match on one tick
+    static bool isBoolOrImplication(const AstSOr* orp, bool* mixedLengthsp = nullptr) {
+        const AstImplication* implp = VN_CAST(orp->rhsp(), Implication);
+        const AstNodeExpr* boolp = orp->lhsp();
+        if (!implp) {
+            implp = VN_CAST(orp->lhsp(), Implication);
+            boolp = orp->rhsp();
+        }
+        if (!isVacuousAtEntry(implp) || !isPlainBoolean(boolp)) return false;
+        if (boolOrKeepsMerge(boolp, implp)) return false;
+        std::map<int, std::vector<AstNodeExpr*>> checks;
+        if (!flattenFixedSeq(implp->rhsp(), 0, checks)) return false;
+        if (mixedLengthsp) {
+            *mixedLengthsp = fixedLength(implp->rhsp()) + (implp->isOverlapped() ? 0 : 1) > 0;
+        }
         return true;
     }
     // Free a dropped sub-result condition that is not linked into the AST
@@ -3227,7 +3263,8 @@ class SvaNfaLowering final {
 
     // Phase 3b: Throughout-drop and ring-wide abort rejection.
     void computeThroughoutReject(LowerCtx& c, SignalSet& sigs, const bool needThreadFailCount,
-                                 std::map<int, AstNodeExpr*>& vertexFailps) {
+                                 std::map<int, AstNodeExpr*>& vertexFailps,
+                                 std::map<int, const SvaStateVertex*>& vertexps) {
         for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
             const SvaStateVertex* const vtxp = static_cast<const SvaStateVertex*>(&vtxr);
             const bool guardRejects = !vtxp->m_throughoutConds.empty() && !vtxp->m_isAntecedent;
@@ -3247,9 +3284,14 @@ class SvaNfaLowering final {
             AstNodeExpr* const rejectCondp = newThroughoutRejectCondp(c, vtxp);
             if (needThreadFailCount && !vtxp->datap()->delayRingLiveCountVarp) {
                 AstNodeExpr*& vertexFailp = vertexFailps[vtxp->color()];
-                vertexFailp = orExprs(c.flp, vertexFailp,
-                                      new AstLogAnd{c.flp, stateExprp->cloneTreePure(false),
-                                                    rejectCondp->cloneTreePure(false)});
+                if (c.exactCounts) {
+                    vertexFailp = orExprs(c.flp, vertexFailp, rejectCondp->cloneTreePure(false));
+                    vertexps[vtxp->color()] = vtxp;
+                } else {
+                    vertexFailp = orExprs(c.flp, vertexFailp,
+                                          new AstLogAnd{c.flp, stateExprp->cloneTreePure(false),
+                                                        rejectCondp->cloneTreePure(false)});
+                }
             } else if (needThreadFailCount) {
                 AstNodeExpr* countCondp = rejectCondp->cloneTreePure(false);
                 if (AstNodeExpr* const holdp = newRequiredStepsHoldp(c, vtxp)) {
@@ -3481,6 +3523,8 @@ class SvaNfaLowering final {
         // A thread failing several checks on one tick, such as its next step and a throughout
         // guard, is one rejected thread, so count the rejections by source vertex.
         std::map<int, AstNodeExpr*> vertexFailps;
+        // With exact counts, the failing checks of each vertex, whose threads are counted
+        std::map<int, const SvaStateVertex*> vertexps;
         for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
             if (!tedgep->m_rejectOnFail) continue;
             const SvaStateVertex* const fromVtxp = tedgep->fromVtxp();
@@ -3491,12 +3535,11 @@ class SvaNfaLowering final {
             AstNodeExpr* const notCondp = new AstLogNot{c.flp, newRequiredStepCondp(c, *tedgep)};
             AstNodeExpr* const rawFailp = new AstLogAnd{c.flp, srcSigp, notCondp};
             if (c.exactCounts) {
-                // thread_fail_count += fail ? source_count : 0;
+                // thread_fail_count += fail ? source_count : 0, once per vertex
                 if (!tedgep->m_abortReject) {
-                    sigs.threadFailCountp
-                        = addCountp(c.flp, sigs.threadFailCountp,
-                                    fromVtxp->datap()->stateCountSigp->cloneTreePure(false),
-                                    notCondp->cloneTreePure(false));
+                    AstNodeExpr*& vertexFailp = vertexFailps[fromVtxp->color()];
+                    vertexFailp = orExprs(c.flp, vertexFailp, notCondp->cloneTreePure(false));
+                    vertexps[fromVtxp->color()] = fromVtxp;
                 }
             } else if (needThreadFailCount) {
                 AstNodeExpr*& vertexFailp = vertexFailps[fromVtxp->color()];
@@ -3510,11 +3553,18 @@ class SvaNfaLowering final {
             sigs.requiredStepRejectp = orExprs(c.flp, sigs.requiredStepRejectp, failp);
         }
 
-        computeThroughoutReject(c, sigs, needThroughoutThreadFailCount, vertexFailps);
+        computeThroughoutReject(c, sigs, needThroughoutThreadFailCount, vertexFailps, vertexps);
         for (const auto& it : vertexFailps) {
-            sigs.threadFailCountp
-                = addCountp(c.flp, sigs.threadFailCountp,
-                            new AstExtend{c.flp, it.second, m_u32DTypep->width()});
+            if (c.exactCounts) {
+                const SvaStateVertex* const vtxp = vertexps.at(it.first);
+                sigs.threadFailCountp
+                    = addCountp(c.flp, sigs.threadFailCountp,
+                                vtxp->datap()->stateCountSigp->cloneTreePure(false), it.second);
+            } else {
+                sigs.threadFailCountp
+                    = addCountp(c.flp, sigs.threadFailCountp,
+                                new AstExtend{c.flp, it.second, m_u32DTypep->width()});
+            }
         }
         if (c.exactAbortp)
             sigs.threadFailCountp = newExactAbortFailCountp(c, sigs.threadFailCountp);
@@ -4946,7 +4996,9 @@ class AssertNfaVisitor final : public VNVisitor {
         }
         // At the root, an 'or' of fixed-length sequences tracks one set of operands per attempt
         if (AstSOr* const orp = VN_CAST(nodep, SOr))
-            return top && SvaNfaBuilder::isFixedSeqOr(orp);
+            return top
+                   && (SvaNfaBuilder::isFixedSeqOr(orp)
+                       || SvaNfaBuilder::isBoolOrImplication(orp));
         // A goto repetition repeats a boolean (IEEE 1800-2023 16.9.2); a consecutive repetition
         // of a multi-cycle sequence is reported as unsupported
         if (const AstSGotoRep* const repp = VN_CAST(nodep, SGotoRep)) return !repp->maxCountp();
@@ -5094,9 +5146,11 @@ class AssertNfaVisitor final : public VNVisitor {
         // can match on one tick, where each passes, or fails a negated property
         AstSOr* const rootOrp = VN_CAST(seqBodyp, SOr);
         bool mixedLengths = false;
-        const bool matchesTogether = !parts.hasImplication && rootOrp
-                                     && SvaNfaBuilder::isFixedSeqOr(rootOrp, &mixedLengths)
-                                     && mixedLengths;
+        const bool matchesTogether
+            = !parts.hasImplication && rootOrp
+              && (SvaNfaBuilder::isFixedSeqOr(rootOrp, &mixedLengths)
+                  || SvaNfaBuilder::isBoolOrImplication(rootOrp, &mixedLengths))
+              && mixedLengths;
         const bool replayMatches = needMatch && !negated && matchesTogether;
         // Counting threads counts the attempts failing, and matching, when each attempt has one
         // thread. Counting each state's threads evaluates the conditions of its incoming
