@@ -46,6 +46,8 @@ public:
     // True if the statements of a process may suspend it, so evaluate a procedural concurrent
     // assertion in a later time step than that of its clock
     static bool procSuspends(AstNode* stmtsp) VL_MT_DISABLED;
+    // Clone an action block for one more execution site, naming its automatics from names
+    static AstNodeStmt* cloneAction(AstNodeStmt* actionp, V3UniqueNames& names) VL_MT_DISABLED;
 };
 
 // Makes the actions of concurrent assertions run in the Reactive region, after the NBA updates
