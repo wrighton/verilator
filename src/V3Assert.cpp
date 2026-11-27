@@ -922,7 +922,7 @@ static bool actionLeavesItself(const AstNode* actionsp) {
 // runs it continues with other attempts and actions (IEEE 1800-2023 16.14.1). The conditions
 // on the outcomes of attempts that gate actions, as newPassOnIf makes, are decided where they
 // are, at once, and each action they gate runs in a process of its own.
-static AstNodeStmt* newSpawnedAction(AstNodeStmt* actionsp) {
+AstNodeStmt* V3AssertCommon::newSpawnedAction(AstNodeStmt* actionsp) {
     // An action leaving itself stays in the process it leaves to
     if (!v3Global.opt.timing().isSetTrue() || !V3AssertCommon::procSuspends(actionsp)
         || actionLeavesItself(actionsp)) {
@@ -1137,7 +1137,7 @@ AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actions
     loopp->addStmtsp(new AstAssign{
         flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
         new AstSub{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}});
-    loopp->addStmtsp(newSpawnedAction(actionsp));
+    loopp->addStmtsp(V3AssertCommon::newSpawnedAction(actionsp));
     runnerr.bodyp->addThensp(loopp);
     AstNodeExpr* const condp = runnerr.bodyp->condp()->unlinkFrBack();
     AstVarRef* const pendingRefp = new AstVarRef{flp, pendingp, VAccess::READ};
@@ -3964,8 +3964,8 @@ class AssertVisitor final : public VNVisitor {
         }
         // Also one left where it is
         if (!nodep->immediate() && !isPExpr) {
-            if (passsp) passsp = newSpawnedAction(passsp);
-            if (failsp) failsp = newSpawnedAction(failsp);
+            if (passsp) passsp = V3AssertCommon::newSpawnedAction(passsp);
+            if (failsp) failsp = V3AssertCommon::newSpawnedAction(failsp);
         }
         if (coverp && matchCountp && passsp) {
             // Convert the match count into a loop that decrements a temporary variable until it

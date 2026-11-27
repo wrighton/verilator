@@ -7454,12 +7454,7 @@ class AssertNfaVisitor final : public VNVisitor {
                          AstNodeStmt* stmtp) {
         FileLine* const flp = stmtp->fileline();
         // Each run is of another attempt, so one that suspends does not hold back the others
-        if (v3Global.opt.timing().isSetTrue() && V3AssertCommon::procSuspends(stmtp)) {
-            AstFork* const forkp = new AstFork{flp, VJoinType::JOIN_NONE};
-            forkp->immediateStart(true);
-            forkp->addForksp(new AstForkItem{flp, new AstBegin{flp, "", stmtp, true}});
-            stmtp = forkp;
-        }
+        stmtp = V3AssertCommon::newSpawnedAction(stmtp);
         AstVar* const remainingCountVarp
             = new AstVar{flp, VVarType::MODULETEMP, m_failCountNames.get(""),
                          m_modp->findBasicDType(VBasicDTypeKwd::UINT32)};
