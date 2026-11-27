@@ -1663,6 +1663,13 @@ class SvaNfaBuilder final {
             }
         }
         if (canFail && wantBoolLeaf) {
+            // A boolean and a fixed-length operand, such as a bounded always of a boolean, are
+            // operands of the 'or' of fixed-length operands, which fails each attempt once
+            if ((isPlainBoolean(lhsp) && hasMultiCycleExpr(rhsp))
+                || (isPlainBoolean(rhsp) && hasMultiCycleExpr(lhsp))) {
+                const BuildResult fixedOr = buildFixedSeqOrProp(lhsp, rhsp, entryVtxp, flp);
+                if (fixedOr.valid() || fixedOr.errorEmitted) return fixedOr;
+            }
             if (isPlainBoolean(lhsp) && hasMultiCycleExpr(rhsp)) {
                 return buildBoolOrProp(lhsp, rhsp, entryVtxp, flp);
             }
