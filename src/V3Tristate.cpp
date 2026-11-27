@@ -1937,6 +1937,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             while (const AstSel* const selp = VN_CAST(lhsBasep, Sel)) lhsBasep = selp->fromp();
             if (m_procedurep
                 && (VN_IS(lhsBasep, ArraySel) || VN_IS(lhsBasep, AssocSel)
+                    || VN_IS(lhsBasep, DynArraySel) || VN_IS(lhsBasep, QueueSel)
                     || VN_IS(lhsBasep, WildcardSel) || VN_IS(lhsBasep, CMethodHard)
                     || VN_IS(lhsBasep, StructSel) || VN_IS(lhsBasep, MemberRef))
                 && nodep->rhsp()->exists(writesZ)) {

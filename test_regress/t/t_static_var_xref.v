@@ -32,6 +32,11 @@ endpackage
 // Static variables in named blocks of tasks and functions can be referenced
 // hierarchically
 module t;
+  task automatic at(input int ai);
+    static int as;
+    as = ai;
+  endtask
+
   task st(input int si);
     begin : blk
       int ba;

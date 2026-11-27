@@ -1,12 +1,13 @@
 // DESCRIPTION: Verilator: Verilog Test module
 //
-// This file ONLY is placed under the Creative Commons Public Domain
+// This file ONLY is placed under the Creative Commons Public Domain.
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
 // verilog_format: off
 `define stop $stop
 `define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 // Classes of the same name in different scopes, as type parameter values, make different
@@ -20,9 +21,13 @@ package PkgReg;
       T h = new;
       return h;
     endfunction
-    static function string tname();
-      T h;
-      return $typename(h);
+  endclass
+  class Db #(
+      type T = int
+  );
+    static T m_v;
+    static function void set(T value);
+      m_v = value;
     endfunction
   endclass
 endpackage
@@ -33,16 +38,18 @@ package PkgA;
     virtual function string who();
       return "PkgA::Cfg";
     endfunction
-    static function Cfg get();
-      Cfg h;
-      h = type_id::create();
-      return h;
-    endfunction
   endclass
   class Outer;
     class Item;
       virtual function string who();
         return "PkgA::Outer::Item";
+      endfunction
+    endclass
+  endclass
+  class Other;
+    class Item;
+      virtual function string who();
+        return "PkgA::Other::Item";
       endfunction
     endclass
   endclass
@@ -53,14 +60,17 @@ package PkgA;
       return "PkgA::Pc";
     endfunction
   endclass
-  interface class Ifc;
-    pure virtual function string who();
+  class Base;
   endclass
-  class Impl implements Ifc;
+  class Data extends Base;
     virtual function string who();
-      return "PkgA::Impl";
+      return "PkgA::Data";
     endfunction
   endclass
+  function automatic void setData();
+    Data h = new;
+    PkgReg::Db#(Data)::set(h);
+  endfunction
 endpackage
 
 package PkgB;
@@ -68,11 +78,6 @@ package PkgB;
     typedef PkgReg::Registry#(Cfg) type_id;
     virtual function string who();
       return "PkgB::Cfg";
-    endfunction
-    static function Cfg get();
-      Cfg h;
-      h = type_id::create();
-      return h;
     endfunction
   endclass
   class Outer;
@@ -89,12 +94,9 @@ package PkgB;
       return "PkgB::Pc";
     endfunction
   endclass
-  interface class Ifc;
-    pure virtual function string who();
-  endclass
-  class Impl implements Ifc;
+  class Data;
     virtual function string who();
-      return "PkgB::Impl";
+      return "PkgB::Data";
     endfunction
   endclass
 endpackage
@@ -127,15 +129,22 @@ class Cfg;
   endfunction
 endclass
 
-class Holder #(
-    type T = int
+// Each instance declares its own Cfg
+interface Ifc #(
+    int W = 1
 );
-  T h;
-  function string who();
-    return h.who();
+  class Cfg;
+    virtual function int width();
+      return W;
+    endfunction
+  endclass
+  function automatic int width();
+    Cfg h = PkgReg::Registry#(Cfg)::create();
+    return h.width();
   endfunction
-endclass
+endinterface
 
+// Each specialization declares its own Cfg
 module sub #(
     parameter string NAME = ""
 );
@@ -191,53 +200,47 @@ module t;
     end
   end
 
-  initial begin
-    PkgA::Cfg a;
-    PkgB::Cfg b;
-    Cfg u;
-    PkgA::Outer::Item ai;
-    PkgB::Outer::Item bi;
-    PkgA::Pc #(int) ap;
-    PkgB::Pc #(int) bp;
-    automatic Holder #(PkgA::Ifc) aif = new;
-    automatic Holder #(PkgB::Ifc) bif = new;
-    automatic PkgA::Impl aimpl = new;
-    automatic PkgB::Impl bimpl = new;
+  // Classes declared in instances of an interface
+  Ifc #(.W(3)) i3 ();
+  Ifc #(.W(7)) i7 ();
 
+  initial begin
     // Same-named classes in different packages, and in $unit
-    b = PkgB::Cfg::get();
-    a = PkgA::Cfg::get();
-    `checks(b.who(), "PkgB::Cfg");
-    `checks(a.who(), "PkgA::Cfg");
-    a = PkgA::Cfg::type_id::create();
-    b = PkgB::Cfg::type_id::create();
-    u = Cfg::type_id::create();
-    `checks(a.who(), "PkgA::Cfg");
-    `checks(b.who(), "PkgB::Cfg");
-    `checks(u.who(), "$unit::Cfg");
-    `checks(PkgA::Cfg::type_id::tname(), "class PkgA::Cfg");
-    `checks(PkgB::Cfg::type_id::tname(), "class PkgB::Cfg");
-    `checks(Cfg::type_id::tname(), "class $unit::Cfg");
+    begin
+      automatic PkgA::Cfg a = PkgA::Cfg::type_id::create();
+      automatic PkgB::Cfg b = PkgB::Cfg::type_id::create();
+      automatic Cfg u = Cfg::type_id::create();
+      `checks(a.who(), "PkgA::Cfg");
+      `checks(b.who(), "PkgB::Cfg");
+      `checks(u.who(), "$unit::Cfg");
+    end
 
     // Same-named nested classes
-    ai = PkgReg::Registry#(PkgA::Outer::Item)::create();
-    bi = PkgReg::Registry#(PkgB::Outer::Item)::create();
-    `checks(ai.who(), "PkgA::Outer::Item");
-    `checks(bi.who(), "PkgB::Outer::Item");
+    begin
+      automatic PkgA::Outer::Item ai = PkgReg::Registry#(PkgA::Outer::Item)::create();
+      automatic PkgB::Outer::Item bi = PkgReg::Registry#(PkgB::Outer::Item)::create();
+      automatic PkgA::Other::Item oi = PkgReg::Registry#(PkgA::Other::Item)::create();
+      `checks(ai.who(), "PkgA::Outer::Item");
+      `checks(bi.who(), "PkgB::Outer::Item");
+      `checks(oi.who(), "PkgA::Other::Item");
+    end
 
     // Specializations of same-named parameterized classes
-    ap = PkgReg::Registry#(PkgA::Pc#(int))::create();
-    bp = PkgReg::Registry#(PkgB::Pc#(int))::create();
-    `checks(ap.who(), "PkgA::Pc");
-    `checks(bp.who(), "PkgB::Pc");
-    `checks(PkgReg::Registry#(PkgA::Pc#(int))::tname(), "class PkgA::Pc#(int)");
-    `checks(PkgReg::Registry#(PkgB::Pc#(int))::tname(), "class PkgB::Pc#(int)");
+    begin
+      automatic PkgA::Pc #(int) ap = PkgReg::Registry#(PkgA::Pc#(int))::create();
+      automatic PkgB::Pc #(int) bp = PkgReg::Registry#(PkgB::Pc#(int))::create();
+      `checks(ap.who(), "PkgA::Pc");
+      `checks(bp.who(), "PkgB::Pc");
+    end
 
-    // Same-named interface classes
-    aif.h = aimpl;
-    bif.h = bimpl;
-    `checks(aif.who(), "PkgA::Impl");
-    `checks(bif.who(), "PkgB::Impl");
+    // Same-named classes, one with a base class, as static function arguments
+    begin
+      automatic PkgB::Data b = new;
+      PkgA::setData();
+      PkgReg::Db#(PkgB::Data)::set(b);
+      `checks(PkgReg::Db#(PkgA::Data)::m_v.who(), "PkgA::Data");
+      `checks(PkgReg::Db#(PkgB::Data)::m_v.who(), "PkgB::Data");
+    end
 
     // Same-named classes in a package and a module of the same name
     begin
@@ -246,13 +249,41 @@ module t;
       `checks(u_dup.who(), "module dup");
     end
 
-    // Same-named classes in instances of a module
+    // Same-named classes in instances of a module, and in generate blocks
     `checks(s1.who(), "s1");
     `checks(s2.who(), "s2");
-
-    // Same-named classes in generate blocks
     `checks(g[0].who(), "g[0]");
     `checks(g[1].who(), "g[1]");
+
+    // Containers of same-named classes, as type parameter values of a class
+    begin
+      typedef PkgA::Data a_da_t[];
+      typedef PkgB::Data b_da_t[];
+      typedef PkgA::Data a_wa_t [*];
+      typedef PkgB::Data b_wa_t [*];
+      typedef PkgA::Data a_u_t[3:1];
+      typedef PkgB::Data b_u_t[3:1];
+      automatic PkgA::Data da = new;
+      automatic PkgB::Data db = new;
+      PkgReg::Db#(a_da_t)::m_v = new[1];
+      PkgReg::Db#(b_da_t)::m_v = new[1];
+      PkgReg::Db#(a_da_t)::m_v[0] = da;
+      PkgReg::Db#(b_da_t)::m_v[0] = db;
+      PkgReg::Db#(a_wa_t)::m_v[5] = da;
+      PkgReg::Db#(b_wa_t)::m_v[5] = db;
+      PkgReg::Db#(a_u_t)::m_v[2] = da;
+      PkgReg::Db#(b_u_t)::m_v[2] = db;
+      `checks(PkgReg::Db#(a_da_t)::m_v[0].who(), "PkgA::Data");
+      `checks(PkgReg::Db#(b_da_t)::m_v[0].who(), "PkgB::Data");
+      `checks(PkgReg::Db#(a_wa_t)::m_v[5].who(), "PkgA::Data");
+      `checks(PkgReg::Db#(b_wa_t)::m_v[5].who(), "PkgB::Data");
+      `checks(PkgReg::Db#(a_u_t)::m_v[2].who(), "PkgA::Data");
+      `checks(PkgReg::Db#(b_u_t)::m_v[2].who(), "PkgB::Data");
+    end
+
+    // Classes declared in instances of an interface
+    `checkd(i3.width(), 3);
+    `checkd(i7.width(), 7);
 
     $write("*-* All Finished *-*\n");
     $finish;

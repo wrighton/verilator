@@ -841,7 +841,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             } else if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
                 exprp = selp->fromp();
             } else {
-                return VN_IS(exprp, AssocSel) || VN_IS(exprp, CMethodHard);
+                return VN_IS(exprp, AssocSel) || VN_IS(exprp, DynArraySel)
+                       || VN_IS(exprp, QueueSel) || VN_IS(exprp, CMethodHard);
             }
         }
     }

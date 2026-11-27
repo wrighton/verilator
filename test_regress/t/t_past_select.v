@@ -58,6 +58,10 @@ module t (
   int id;
   assign id = cyc % 4;
 
+  int stable_fails = 0;
+  int past_fails = 0;
+  int lut_fails = 0;
+  int m4_fails = 0;
   always @(posedge clk) begin
     cyc <= cyc + 1;
     cnt[id+4] <= cnt[id+4] + 1;
@@ -84,6 +88,8 @@ module t (
   bit [3:0] exp_lut = 0;
   bit [1:0] exp_sti = 2'b10;
   bit [3:0] exp_lutk = 4'd10;
+  bit exp_v3 = 0;
+  bit exp_b0 = 0;
   always @(posedge clk) begin
     `checkd($past(cnt[id+4]), exp_cnt);
     `checkd($past(v[id+:3]), exp_v);
@@ -106,29 +112,23 @@ module t (
     exp_sti <= sti.b[id+:2];
     exp_lutk <= lut[k];
   end
-  bit exp_v3 = 0;
-  bit exp_b0 = 0;
   always @(posedge clk) begin
     exp_v3 <= v[3];
     exp_b0 <= st.b[0];
   end
 
   // cnt[5] changes on cycles 1, 5, 9, ...; checked through cycle 19
-  int stable_fails = 0;
   assert property (@(posedge clk) cyc == 0 || cyc > 12 || $stable(cnt[5]))
   else stable_fails++;
 
   // False only on the first tick, from the default sampled value
-  int past_fails = 0;
   assert property (@(posedge clk) $past(cnt[id+4] > 0) && cnt[id+4] != 0)
   else past_fails++;
 
-  int lut_fails = 0;
   assert property (@(posedge clk) int'($past(lut[idx%4+1])) == (cyc == 0 ? 0 : 9 + (idx + 3) % 4))
   else lut_fails++;
 
   // The unknown default sampled values only affect the first tick
-  int m4_fails = 0;
   assert property (@(posedge clk) cyc == 0 || ($stable(m4[1]) && $stable(v4[i4]) && !$rose(m4[i4][0])))
   else m4_fails++;
 

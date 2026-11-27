@@ -1584,7 +1584,6 @@ class RandomizeVisitor final : public VNVisitor {
     const SelectedOwnRandSet& m_selectedOwnRandps;  // Selected handles keeping their randomize()
     ActiveSet m_activeClasses;  // Classes currently building randomize()
     RandModeVars m_modeVars;  // Static rand_mode/constraint_mode state vars per class
-    std::map<AstClass*, std::vector<AstClass*>> m_derivedClasses;  // Directly derived classes
     const std::unique_ptr<V3SolverLowering> m_solverp;  // Constraint solver lowering
 
     // METHODS
