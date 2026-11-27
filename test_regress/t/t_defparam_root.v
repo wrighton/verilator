@@ -11,12 +11,25 @@
 
 module sub;
   parameter P = 0;
+  function automatic int get_q();
+    parameter Q = 0;
+    return Q;
+  endfunction
 endmodule
 
 module mid;
   sub s ();
   // Absolute path from inside another module, selects only one instance of mid
   defparam $root.t.m2.s.P = 4;
+endmodule
+
+// Instance t.h.t, so its m1 has a path ending as $root.t.m1 does
+module holder;
+  mid m1 ();
+endmodule
+
+module wrapper;
+  holder t ();
 endmodule
 
 module t;
@@ -26,11 +39,19 @@ module t;
   mid m1 ();
   mid m2 ();
   defparam $root.t.m1.s.P = 3;
+  // A parameter in a function
+  defparam $root.t.m1.s.get_q.Q = 5;
+
+  wrapper h ();
 
   initial begin
     `checkd(s.P, 6);
     `checkd(m1.s.P, 3);
     `checkd(m2.s.P, 4);
+    `checkd(m1.s.get_q(), 5);
+    `checkd(m2.s.get_q(), 0);
+    `checkd(h.t.m1.s.P, 0);
+    `checkd(h.t.m1.s.get_q(), 0);
     $write("*-* All Finished *-*\n");
     $finish;
   end
