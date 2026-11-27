@@ -234,7 +234,9 @@ module t;
     begin
       automatic ForeachDims o = new;
       automatic int sizes = 0;
-      repeat (12) begin
+      // Until every size the constraints allow was solved for, however the solver distributes
+      // its solutions
+      for (int n = 0; n < 64 && sizes != 'b11101110; ++n) begin
         randomize_result = o.randomize();
         `checkd(randomize_result, 1);
         sizes |= 1 << o.m.size() | 1 << (o.q.size() + 4);
