@@ -3896,6 +3896,16 @@ void VlRandomizer::clear_nested(const std::string& path) {
     }
     for (const std::string& name : it->second.second) m_disabledVars.erase(name);
     m_nested.erase(it);
+    // So are the holder's own reads through the path, as its handles may hold other objects
+    // now: the holder registers them again with its constraints, after the merges, whose
+    // names they would otherwise give (see set_nested_busy)
+    const std::string prefix = path + ".";
+    auto varIt = m_vars.lower_bound(prefix);
+    while (varIt != m_vars.end() && varIt->first.compare(0, prefix.size(), prefix) == 0) {
+        if (!varIt->second->isArray()) m_nestedNames.erase(varIt->second->datap(0));
+        clear_arr_table(varIt->first);
+        varIt = m_vars.erase(varIt);
+    }
 }
 
 void VlRandomizer::nullReadCheck(const std::string& constraint, const char* filename,
@@ -3943,6 +3953,9 @@ void VlRandomizer::clearConstraints() {
     m_softConstraints.clear();
     m_softVarNames.clear();
     m_softVarEnds.clear();
+    // What merge_nested() added, also under the names it found for the same storage, as the
+    // handles may hold other objects for the merges that follow (see clear_nested())
+    while (!m_nested.empty()) clear_nested(m_nested.begin()->first);
     m_uniqueArrays.clear();  // Re-registered by constraint setup
     m_frozenPins.clear();  // Likewise re-added
     m_elemVarsCleared.clear();
