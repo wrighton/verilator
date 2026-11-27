@@ -3026,11 +3026,12 @@ void VlRandomizer::clear_nested(const std::string& path) {
         m_randcVarNames.erase(name);
     }
     for (const std::string& name : it->second.second) m_disabledVars.erase(name);
+    // Before the erase, as 'path' may be the key erased (see clearConstraints)
+    const std::string prefix = path + ".";
     m_nested.erase(it);
     // So are the holder's own reads through the path, as its handles may hold other objects
     // now: the holder registers them again with its constraints, after the merges, whose
     // names they would otherwise give (see set_nested_busy)
-    const std::string prefix = path + ".";
     auto varIt = m_vars.lower_bound(prefix);
     while (varIt != m_vars.end() && varIt->first.compare(0, prefix.size(), prefix) == 0) {
         if (!varIt->second->isArray()) m_nestedNames.erase(varIt->second->datap(0));
