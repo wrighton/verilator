@@ -536,6 +536,10 @@ class VlRandomizer VL_NOT_FINAL {
     void solveDiversity(VlRNG& rngr, VlSolverSession& sess,
                         const std::set<std::string>* fixedp = nullptr,
                         const std::vector<std::string>* uniqueExprsp = nullptr);
+    // Moves the current model's values of terms towards random ones (see solveDiversity);
+    // true if the model current after it holds them, still to be read
+    bool spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<PinTerm> terms,
+                     const std::vector<std::string>* uniqueExprsp);
     // Find a random solution again in a fresh session, after spreading kept nothing
     void resolveFresh(VlRNG& rngr, VlSolverSession& sess,
                       const std::vector<std::string>& uniqueExprs, uint64_t limit);

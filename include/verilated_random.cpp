@@ -51,6 +51,9 @@ static constexpr int diversitySlotShare = 2;  // Of checks left, 1/this for a pa
 static constexpr int diversitySlotFew = 128;  // Of its elements, 1/this conflicting one by one
 // Elements past which a model's array is read whole, one value, rather than by element
 static constexpr int modelWholeRead = 64;
+// Terms of a solve-before layer, before the last, past which it is not spread (see
+// solvePhaseValues)
+static constexpr int diversityLayerTerms = 8;
 // Resource limit of each spreading check, in the solver's own units (SMT-LIB 2.6
 // :reproducible-resource-limit): diversityCheckLimit, plus diversityCheckLimitSquare times
 // n^2, n the number of terms spread (variables and array elements, not bits). It bounds
@@ -2679,25 +2682,7 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
                                   const std::set<std::string>* fixedp,
                                   const std::vector<std::string>* uniqueExprsp)
     VL_REQUIRES(sess.m_mutex) {
-    // Tie each variable or array element to a random value via an assumption literal and
-    // drop the literals that conflict with the constraints. Dropped terms that can still
-    // change are split in halves that are tied again, down to single bits, so free bits
-    // come out uniform and the surviving literals steer constrained ones (value < N,
-    // #7563). A term that cannot (equal to another variable, or a solved size) costs a
-    // check or two rather than one per bit, and wide data needs no per-bit literal or
-    // XOR constraint. Variables in fixedp are already pinned, so skipped.
-    // The solver checks are bounded. When several wide parts of an element conflict and
-    // the first one cannot change while the others keep their values, the element is
-    // left as it is: it is likely one of a few constants, which random parts never fit,
-    // so splitting would cost a check per part down to single bits. Past
-    // diversityMaxChecks checks the literals kept so far are the result.
-    std::iostream& os = sess.os();
-    const auto emitTerm = [&](const PinTerm& term) {
-        const bool whole = term.width == term.varp->width();
-        if (!whole) os << " ((_ extract " << term.lsb + term.width - 1 << ' ' << term.lsb << ')';
-        term.varp->emitElement(os, term.elem);
-        if (!whole) os << ')';
-    };
+    // Each variable and array element, but those in fixedp, already pinned
     std::vector<PinTerm> terms;
     for (const auto& var : m_vars) {
         if (fixedp && fixedp->count(var.first)) continue;
@@ -2711,6 +2696,31 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             terms.push_back({var.second.get(), j, 0, width, static_cast<int>(terms.size())});
         }
     }
+    if (spreadTerms(rngr, sess, std::move(terms), uniqueExprsp)) applyModel(sess);
+}
+
+bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<PinTerm> terms,
+                               const std::vector<std::string>* uniqueExprsp)
+    VL_REQUIRES(sess.m_mutex) {
+    // Tie each term, a variable, array element or part of one, to a random value via an
+    // assumption literal and drop the literals that conflict with the constraints. Dropped
+    // terms that can still change are split in halves that are tied again, down to single
+    // bits, so free bits come out uniform and the surviving literals steer constrained ones
+    // (value < N, #7563). A term that cannot (equal to another variable, or a solved size)
+    // costs a check or two rather than one per bit, and wide data needs no per-bit literal
+    // or XOR constraint.
+    // The solver checks are bounded. When several wide parts of an element conflict and
+    // the first one cannot change while the others keep their values, the element is
+    // left as it is: it is likely one of a few constants, which random parts never fit,
+    // so splitting would cost a check per part down to single bits. Past
+    // diversityMaxChecks checks the literals kept so far are the result.
+    std::iostream& os = sess.os();
+    const auto emitTerm = [&](const PinTerm& term) {
+        const bool whole = term.width == term.varp->width();
+        if (!whole) os << " ((_ extract " << term.lsb + term.width - 1 << ' ' << term.lsb << ')';
+        term.varp->emitElement(os, term.elem);
+        if (!whole) os << ')';
+    };
     // Checks spreading more terms (variables and array elements, not bits) take more work,
     // about the square of their number
     const uint64_t nterms = std::min<uint64_t>(terms.size(), 65536);
@@ -2780,7 +2790,7 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         for (const PinTerm& term : conflicted) emitTerm(term);
         os << "))\n";
         std::vector<std::string> values;
-        if (!readValues(sess, values) || values.size() != conflicted.size()) return;
+        if (!readValues(sess, values) || values.size() != conflicted.size()) return false;
         for (size_t k = 0; k < conflicted.size(); ++k) {
             os << "(declare-fun __Va" << lits + k << " () Bool)\n";
             os << "(assert (= __Va" << lits + k << " (not (=";
@@ -2868,19 +2878,19 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         if (keep.empty() && uniqueExprsp && m_softConstraints.empty()) {
             os << "(check-sat-assuming ())\n";
             const VlSolverStatus status = sess.readStatus();
-            if (status == VlSolverStatus::SAT) applyModel(sess);
-            if (status != VlSolverStatus::UNKNOWN) return;
+            if (status != VlSolverStatus::UNKNOWN) return status == VlSolverStatus::SAT;
             sess.limitChecks(0);
+            // Which writes its model
             resolveFresh(rngr, sess, *uniqueExprsp,
                          std::min(diversityCheckLimitMax, diversityFreshLimit * checkLimit));
-            return;
+            return false;
         }
         // The kept literals have a solution, so finding it again is not limited.
         sess.limitChecks(0);
         os << "(check-sat-assuming (" << keep << "))\n";
-        if (sess.readStatus() != VlSolverStatus::SAT) return;
+        return sess.readStatus() == VlSolverStatus::SAT;
     }
-    applyModel(sess);
+    return true;
 }
 
 void VlRandomizer::resolveFresh(VlRNG& rngr, VlSolverSession& sess,
@@ -4060,7 +4070,8 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
             os << "(set-option :produce-models true)\n";
             if (solverSamples()) {
                 emitSolverSeed(os, rngr);
-            } else if (isFinalPhase) {
+            } else {
+                // Every phase's variables are spread (solvePhaseValues, solveDiversity)
                 os << "(set-option :produce-unsat-assumptions true)\n";
             }
             os << "(set-logic " << logicp << ")\n";
@@ -4282,30 +4293,64 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
     }
     if (!readSized(values)) return false;
 
-    // Try diversity: add random constraint, re-check. If sat, get
-    // updated (more diverse) values. If unsat, keep baseline values.
-    // Scoped to this layer's own vars -- see randomConstraint's comment -- and the sizes of
-    // its sized arrays, which are read again with their elements.
+    // Spread a layer of few terms, its own variables and the sizes of its sized arrays, as the
+    // final phase spreads its variables, rather than leave its values to the solver. A tie
+    // that conflicts is split down to bits, so a range that is not a power of two still leans
+    // to the solver's choice (a residual). A larger layer keeps one random parity over its
+    // bits: spreading it would cost a check or more per term, many times the solve itself on a
+    // slow solver, and the solver's choice within the parity remains (a residual too). The
+    // values are then read again, with the elements up to the sizes.
     if (!solverSamples()) {
-        std::vector<std::string> hashVars = layerVars;
-        for (const VlRandomVar* const varp : sized) hashVars.push_back(sizeVarp(*varp)->name());
-        os << "(assert ";
-        randomConstraint(os, rngr, _VL_SOLVER_HASH_LEN, &hashVars);
-        os << ")\n";
-        os << "(check-sat)\n";
-        const VlSolverStatus status = sess.readStatus();
-        if (status == VlSolverStatus::SAT) {
+        std::vector<PinTerm> spread;
+        // A layer can hold an array and some of its elements by name: each element is spread
+        // once, as first written
+        std::unordered_set<std::string> spreadTexts;
+        const auto add = [&](const VlRandomVar* varp) {
+            const int width = varp->width();
+            for (int j = 0; j < varp->totalWidth() / width; ++j) {
+                std::ostringstream text;
+                varp->emitElement(text, j);
+                if (!spreadTexts.insert(text.str()).second) continue;
+                spread.push_back({varp, j, 0, width, static_cast<int>(spread.size())});
+            }
+        };
+        for (const auto& varName : layerVars) {
+            const VlRandomVar* const varp = solveBeforeVarp(varName);
+            if (std::find(sized.begin(), sized.end(), varp) == sized.end()) add(varp);
+        }
+        for (const VlRandomVar* const varp : sized) add(sizeVarp(*varp));
+        bool diverse = false;  // Whether the model is to be read again
+        bool unanswered = false;  // Whether a command may be unanswered
+        if (spread.size() <= static_cast<size_t>(diversityLayerTerms)) {
+            diverse = spreadTerms(rngr, sess, std::move(spread), nullptr);
+            unanswered = !diverse;
+        } else {
+            // Scoped to this layer's own vars -- see randomConstraint's comment -- and the
+            // sizes of its sized arrays
+            std::vector<std::string> hashVars = layerVars;
+            for (const VlRandomVar* const varp : sized) {
+                hashVars.push_back(sizeVarp(*varp)->name());
+            }
+            os << "(assert ";
+            randomConstraint(os, rngr, _VL_SOLVER_HASH_LEN, &hashVars);
+            os << ")\n";
+            os << "(check-sat)\n";
+            const VlSolverStatus status = sess.readStatus();
+            diverse = status == VlSolverStatus::SAT;
+            unanswered = status == VlSolverStatus::FAIL;
+        }
+        if (diverse) {
             // An unusable reply leaves the baseline values
-            std::map<std::string, std::string> diverse;
+            std::map<std::string, std::string> rechecked;
             if (fixedTerms.empty()) {
-                if (readSized(diverse)) values.swap(diverse);
+                if (readSized(rechecked)) values.swap(rechecked);
             } else {
                 os << "(get-value (" << fixedTerms << "))\n";
-                if (readPhaseValues(sess, fixedTerms, diverse) && readSized(diverse)) {
-                    values.swap(diverse);
+                if (readPhaseValues(sess, fixedTerms, rechecked) && readSized(rechecked)) {
+                    values.swap(rechecked);
                 }
             }
-        } else if (status == VlSolverStatus::FAIL) {
+        } else if (unanswered) {
             // Only the diversity commands can be unanswered, and the next phase starts with a
             // (reset), so get back in step here and keep the baseline values
             sess.resync();

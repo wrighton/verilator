@@ -121,12 +121,33 @@ test.file_grep(logfile, r'NPASS=(\d+)', 11)
 test.file_grep(logfile, r'Solver died or replied unreadably')
 
 # A reply the unigen2 sampler can't read while it measures the solution space.
-# Falls back to the plain solve, so every randomize still succeeds
-logfile = test.obj_dir + '/sim_ug2_estimate.log'
-test.execute(logfile=logfile,
-             run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=model_trunc TAMPER_AT=12 ')
-test.file_grep(logfile, r'NPASS=(\d+)', 12)
+# Falls back to the plain solve, so every randomize still succeeds. Each model of the
+# measurement's first cell is cut in turn: the models it reads, each followed by the
+# clause blocking it, found in the solver log of a run left alone.
+reflog = test.obj_dir + '/sim_ug2_reference.smt2'
+test.execute(logfile=test.obj_dir + '/sim_ug2_reference.log',
+             all_run_flags=['+verilator+solver+file+' + reflog])
+with open(reflog, encoding="utf8") as fh:
+    lines = fh.read().split('\n')
+cell = []  # Numbers of the models of the first cell, as model_trunc counts them
+models = 0
+for i, line in enumerate(lines):
+    if cell and line.startswith(('  (push', '  (pop', '  (reset)')):
+        break
+    if not line.startswith('< (('):
+        continue
+    models += 1
+    following = next((later for later in lines[i + 1:] if not later.startswith('< ')), '')
+    if following.startswith('  (assert (not (and'):
+        cell.append(models)
+if not cell:
+    test.error("No measurement of the solution space in " + reflog)
+for at in cell:
+    logfile = test.obj_dir + '/sim_ug2_estimate_' + str(at) + '.log'
+    test.execute(logfile=logfile,
+                 run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
+                 'TAMPER=model_trunc TAMPER_AT=' + str(at) + ' ')
+    test.file_grep(logfile, r'NPASS=(\d+)', 12)
 
 # A value the sampler can't parse while it measures the solution space.
 # Falls back to the plain solve, so every randomize still succeeds
