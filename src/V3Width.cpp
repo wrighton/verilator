@@ -7361,6 +7361,33 @@ class WidthVisitor final : public VNVisitor {
         if (VN_IS(dtypep, QueueDType)) return new AstConsQueue{fileline};
         return nullptr;
     }
+    // The number of elements of an unpacked array value assigned to a dynamic array slice, if
+    // known now, else -1
+    static int64_t constElementCount(const AstNodeExpr* nodep) {
+        if (const AstUnpackArrayDType* const adtypep
+            = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType)) {
+            return adtypep->elementsConst();
+        }
+        if (const AstCvtUnpackToQueue* const cvtp = VN_CAST(nodep, CvtUnpackToQueue)) {
+            return constElementCount(cvtp->fromp());
+        }
+        const AstConsDynArray* const consp = VN_CAST(nodep, ConsDynArray);
+        if (!consp || consp->sizep()) return -1;  // Keyed items: sized by the largest index
+        const AstNodeDType* const elemDtp = consp->dtypep()->skipRefp()->subDTypep();
+        int64_t count = 0;
+        for (const AstConsDynArrayItem* const itemp : consp->itemspList()) {
+            // An element if assignable to the element type, else an array, as addConsItem
+            const AstNodeExpr* const valuep = itemp->valuep();
+            if (AstNode::computeCastable(elemDtp, valuep->dtypep(), nullptr).isAssignable()) {
+                ++count;
+                continue;
+            }
+            const int64_t itemCount = constElementCount(valuep);
+            if (itemCount < 0) return -1;
+            count += itemCount;
+        }
+        return count;
+    }
     // Whether 'nodep' constructs a dynamic array or queue from keyed items
     static bool isKeyedCons(const AstNodeExpr* nodep) {
         if (const AstConsDynArray* const dynp = VN_CAST(nodep, ConsDynArray)) return dynp->sizep();
@@ -8078,16 +8105,36 @@ class WidthVisitor final : public VNVisitor {
             }
             if (assignMethod != VCMethod::_ENUM_MAX) {
                 UINFO(9, "LHS queue slice -> sliceAssign: " << nodep);
+                // A dynamic array slice of constant size, unlike a queue slice, has that size
+                // even past the end of the array (IEEE 1800-2023 7.4.5), so a source of another
+                // constant size is an error now, not at run time (IEEE 1800-2023 7.6)
+                if (assignMethod == VCMethod::DYN_SLICE_ASSIGN_PLUS_PAD) {
+                    const AstConst* const sizep = VN_CAST(slicep->pinsp()->nextp(), Const);
+                    const int64_t srcSize = constElementCount(nodep->rhsp());
+                    if (sizep && srcSize >= 0 && srcSize != sizep->toSInt()) {
+                        nodep->rhsp()->v3error(
+                            "Illegal assignment: Unmatched array sizes (IEEE 1800-2023 7.6)\n"
+                            << nodep->rhsp()->warnMore() << "... Left-hand slice has "
+                            << sizep->toSInt() << " elements\n"
+                            << nodep->rhsp()->warnMore() << "... Right-hand array has " << srcSize
+                            << " elements");
+                    }
+                }
                 AstNodeExpr* const fromp = slicep->fromp()->unlinkFrBack();
                 // Collect existing slice index pins (lsb, msb or width)
                 AstNodeExpr* const lsbp = slicep->pinsp()->unlinkFrBack();
                 AstNodeExpr* const msbp = slicep->pinsp()->unlinkFrBack();
                 AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
+                // The elements of a stream, unlike those of an array, may be fewer than the
+                // slice's, and are filled with zeros (IEEE 1800-2023 11.4.14)
+                const bool stream = VN_IS(rhsp, CvtPackedToArray);
                 AstCMethodHard* const newp
                     = new AstCMethodHard{nodep->fileline(), fromp, assignMethod};
                 newp->addPinsp(lsbp);
                 newp->addPinsp(msbp);
                 newp->addPinsp(rhsp);
+                newp->addPinsp(stream ? new AstConst{nodep->fileline(), AstConst::BitTrue{}}
+                                      : new AstConst{nodep->fileline(), AstConst::BitFalse{}});
                 newp->didWidth(true);
                 newp->protect(false);
                 newp->dtypeSetVoid();

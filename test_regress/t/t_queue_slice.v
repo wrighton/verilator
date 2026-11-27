@@ -170,11 +170,24 @@ module t;
       `checkh(res.size, 2);
       res = q3[-3 : -1];
       `checkh(res.size, 0);
-      q3[5 : 6] = '{9, 9};
-      `checkh(q3[2], 3);
       q3[1 : 5] = '{7, 8};
       `checkh(q3[1], 7);
       `checkh(q3[2], 8);
+    end
+
+    begin
+      // A slice ending at $+1, of the size assigned, writes it and appends its last element
+      automatic int qa[$] = '{1, 2};
+      automatic int qe[$];
+      qa[1:2] = '{10, 11};
+      `checkp(qa, "'{'h1, 'ha, 'hb}");
+      qa[3:3] = '{12};
+      `checkp(qa, "'{'h1, 'ha, 'hb, 'hc}");
+      qe[0:0] = '{9};
+      `checkp(qe, "'{'h9}");
+      qa = '{1, 2};
+      qa[1:2] = qa;
+      `checkp(qa, "'{'h1, 'h1, 'h2}");
     end
 
     begin
@@ -322,6 +335,25 @@ module t;
       d[pos_call()-:2] = '{3, 4};
       `checkp(d, "'{'h3, 'h4, 'h16, 'h17}");
       `checkh(calls, 3);
+    end
+
+    begin
+      // A stream is written from the left of a slice, and the rest of it with zeros
+      automatic byte bd[] = '{1, 2, 3, 4};
+      automatic byte bq[$] = '{1, 2, 3, 4, 5};
+      automatic int id[] = '{1, 2, 3};
+      bd[1:3] = {>>{16'haabb}};
+      `checkp(bd, "'{'h1, 'haa, 'hbb, 'h0}");
+      bd[-1:1] = {>>{8'h77}};
+      `checkp(bd, "'{'h0, 'h0, 'hbb, 'h0}");
+      bq[1:3] = {>>{8'hcc}};
+      `checkp(bq, "'{'h1, 'hcc, 'h0, 'h0, 'h5}");
+      bq[pos+:2] = {<<8{16'hddee}};
+      `checkp(bq, "'{'h1, 'hee, 'hdd, 'h0, 'h5}");
+      bq[1:$-1] = {>>{16'hff11}};
+      `checkp(bq, "'{'h1, 'hff, 'h11, 'h0, 'h5}");
+      id[0:2] = {>>{16'h1234}};
+      `checkp(id, "'{'h12340000, 'h0, 'h0}");
     end
 
     $write("*-* All Finished *-*\n");

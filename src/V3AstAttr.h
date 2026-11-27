@@ -1053,11 +1053,11 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(DYN_RESIZE,                         "resize",                 false,  CLEAN,  false,      "TODO") \
     macro(DYN_SIZE,                           "size",                   PURE,   CLEAN,  false,      "") \
     macro(DYN_SLICE,                          "slice",                  PURE,   CLEAN,  false,      "rr") \
-    macro(DYN_SLICE_ASSIGN,                   "sliceAssign",            false,  CLEAN,  false,      "rrr") \
-    macro(DYN_SLICE_ASSIGN_BACK_BACK,         "sliceAssignBackBack",    false,  CLEAN,  false,      "rrr") \
-    macro(DYN_SLICE_ASSIGN_FRONT_BACK,        "sliceAssignFrontBack",   false,  CLEAN,  false,      "rrr") \
-    macro(DYN_SLICE_ASSIGN_PLUS,              "sliceAssignPlus",        false,  CLEAN,  false,      "rrr") \
-    macro(DYN_SLICE_ASSIGN_PLUS_PAD,          "sliceAssignPlusPad",     false,  CLEAN,  false,      "rrr") \
+    macro(DYN_SLICE_ASSIGN,                   "sliceAssign",            false,  CLEAN,  false,      "rrrr") \
+    macro(DYN_SLICE_ASSIGN_BACK_BACK,         "sliceAssignBackBack",    false,  CLEAN,  false,      "rrrr") \
+    macro(DYN_SLICE_ASSIGN_FRONT_BACK,        "sliceAssignFrontBack",   false,  CLEAN,  false,      "rrrr") \
+    macro(DYN_SLICE_ASSIGN_PLUS,              "sliceAssignPlus",        false,  CLEAN,  false,      "rrrr") \
+    macro(DYN_SLICE_ASSIGN_PLUS_PAD,          "sliceAssignPlusPad",     false,  CLEAN,  false,      "rrrr") \
     macro(DYN_SLICE_BACK_BACK,                "sliceBackBack",          PURE,   CLEAN,  false,      "rr") \
     macro(DYN_SLICE_FRONT_BACK,               "sliceFrontBack",         PURE,   CLEAN,  false,      "rr") \
     macro(DYN_SLICE_PAD_BACK_BACK,            "slicePadBackBack",       PURE,   CLEAN,  false,      "rr") \
