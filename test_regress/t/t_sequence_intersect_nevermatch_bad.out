@@ -40,4 +40,28 @@
                                                               : ... note: In instance 't'
    93 |   assert property (((e ##[1:2] c) intersect e) or (c ##1 a)) ++passes[5];
       |                                   ^~~~~~~~~
+%Warning-NEVERMATCH: t/t_sequence_intersect_nevermatch.v:96:49: Sequence can never match because intersect operands have no common length.
+                                                              : ... note: In instance 't'
+   96 |   assert property ((e ##[0:1] e) and ((e ##1 e) intersect b)) ++passes[6];
+      |                                                 ^~~~~~~~~
+%Warning-NEVERMATCH: t/t_sequence_intersect_nevermatch.v:98:31: Sequence can never match because intersect operands have no common length.
+                                                              : ... note: In instance 't'
+   98 |   assert property (((a ##1 a) intersect (b ##1 b ##1 b)) and c) ++passes[7];
+      |                               ^~~~~~~~~
+%Warning-NEVERMATCH: t/t_sequence_intersect_nevermatch.v:100:31: Sequence can never match because intersect operands have no common length.
+                                                               : ... note: In instance 't'
+  100 |   assert property (((a ##1 a) intersect (b ##1 b ##1 b)) or c) ++passes[8];
+      |                               ^~~~~~~~~
+%Warning-NEVERMATCH: t/t_sequence_intersect_nevermatch.v:102:45: Sequence can never match because intersect operands have no common length.
+                                                               : ... note: In instance 't'
+  102 |   assert property ((c ##1 a) and ((a ##1 a) intersect (b ##1 b ##1 b))) ++passes[9];
+      |                                             ^~~~~~~~~
+%Warning-NEVERMATCH: t/t_sequence_intersect_nevermatch.v:104:57: Sequence can never match because intersect operands have no common length.
+                                                               : ... note: In instance 't'
+  104 |   assert property (en |-> ((e ##[0:1] e) and ((e ##1 e) intersect b))) ++passes[10];
+      |                                                         ^~~~~~~~~
+%Warning-NEVERMATCH: t/t_sequence_intersect_nevermatch.v:106:35: Sequence can never match because intersect operands have no common length.
+                                                               : ... note: In instance 't'
+  106 |   assert property (((e ##[1:2] c) intersect e) or (c ##1 1'b1)) ++passes[11];
+      |                                   ^~~~~~~~~
 %Error: Exiting due to
