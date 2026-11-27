@@ -32,8 +32,40 @@ class FuncConstraintTest;
   endfunction
 endclass
 
+class AssocConstRefTest;
+  rand int m[int];
+  rand int x;
+  rand int y;
+
+  function int get_val(const ref int v);
+    return v;
+  endfunction
+
+  constraint assoc_con {
+    foreach (m[i]) m[i] inside {[1 : 50]};
+    x == get_val(m[1]) + 1;
+  }
+endclass
+
+// A function first reached from a constraint is still executed elsewhere
+class ConstraintFirstTest;
+  rand int x;
+  int m[int];
+
+  constraint c {x == get_m(1);}
+
+  function int get_val(const ref int v);
+    return v;
+  endfunction
+  function int get_m(int k);
+    return get_val(m[k]);
+  endfunction
+endclass
+
 module t;
   FuncConstraintTest fct;
+  AssocConstRefTest act;
+  ConstraintFirstTest cft;
   int rand_ok;
   bit [7:0] min_val;
   bit [7:0] max_val;
@@ -51,6 +83,21 @@ module t;
       max_val = fct.get_max_value(fct.mask);
       `check_range(fct.value, min_val, max_val)
     end
+
+    // Element of an associative array passed to a const ref in a constraint
+    act = new;
+    act.m[1] = 0;
+    act.m[2] = 0;
+    repeat (10) begin
+      rand_ok = act.randomize() with { y == get_val(m[2]); };
+      `checkd(rand_ok, 1)
+      `checkd(act.x, act.m[1] + 1)
+      `checkd(act.y, act.m[2])
+    end
+
+    cft = new;
+    `checkd(cft.get_m(5), 0);
+    `checkd(cft.m.exists(5), 1);
 
     $write("*-* All Finished *-*\n");
     $finish;
