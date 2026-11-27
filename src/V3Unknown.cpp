@@ -28,7 +28,7 @@
 //              OPTIMIZE: Must not collapse this initial back into the equation.
 //      Dynamic array and queue element indices:
 //          Convert to the runtime's 32-bit signed index, keeping an index whose value does
-//          not fit invalid
+//          not fit, or with X or Z bits, invalid
 //      Part-select writes that may be partly out of range:
 //          A constant position narrows the select to its bits in range. A variable one marks
 //          the select a partial write (AstSel::partialWrite), at a signed 64-bit position.
@@ -537,9 +537,11 @@ class UnknownVisitor final : public VNVisitor {
             flp, new AstAdd{flp, highp, new AstConst{flp, AstConst::WidthedValue{}, highWidth, 1}},
             new AstConst{flp, AstConst::WidthedValue{}, highWidth, 2}};
         AstNodeExpr* const lowp = new AstSel{flp, valuep, 0, VL_IDATASIZE};
-        AstNodeExpr* const invalidp
-            = new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE, 1U << (VL_IDATASIZE - 1)};
-        return new AstCond{flp, fitsp, lowp, invalidp};
+        return new AstCond{flp, fitsp, lowp, newInvalidDynIndexp(flp)};
+    }
+    // The most negative index, which selects no element, also as an offset from the back
+    static AstConst* newInvalidDynIndexp(FileLine* flp) {
+        return new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE, 1U << (VL_IDATASIZE - 1)};
     }
 
     // VISITORS
@@ -1349,11 +1351,20 @@ class UnknownVisitor final : public VNVisitor {
         }
     }
     void visit(AstCMethodHard* nodep) override {
-        iterateChildren(nodep);
-        if (!nodep->method().isDynElementAccess()) return;
         // An associative array element is also selected with these methods, by its key
-        const AstNodeDType* const fromDtypep = nodep->fromp()->dtypep()->skipRefp();
-        if (!VN_IS(fromDtypep, DynArrayDType) && !VN_IS(fromDtypep, QueueDType)) return;
+        const bool dynElement = nodep->method().isDynElementAccess()
+                                && (VN_IS(nodep->fromp()->dtypep()->skipRefp(), DynArrayDType)
+                                    || VN_IS(nodep->fromp()->dtypep()->skipRefp(), QueueDType));
+        // An index with X or Z bits selects no element: a read gives the default value and a
+        // write is ignored (IEEE 1800-2023 7.4.6)
+        if (AstConst* const constp = dynElement ? VN_CAST(nodep->pinsp(), Const) : nullptr) {
+            if (constp->num().isFourState()) {
+                constp->replaceWith(newInvalidDynIndexp(constp->fileline()));
+                VL_DO_DANGLING(pushDeletep(constp), constp);
+            }
+        }
+        iterateChildren(nodep);
+        if (!dynElement) return;
         AstNodeExpr* const indexp = nodep->pinsp();
         // A narrower unsigned index is zero extended by the C++ conversion
         if (indexp->width() < VL_IDATASIZE ? !indexp->isSigned()
