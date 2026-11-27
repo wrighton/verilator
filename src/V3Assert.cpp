@@ -1061,7 +1061,7 @@ V3AssertReactive::Runner& V3AssertReactive::runnerFor(const Site& site, V3Unique
         new AstCStmt{
             flp, "vlSymsp->__Vm_assertActionPending.store(false, std::memory_order_relaxed);"}};
     runnerp->addStmtsp(bodyp);
-    runners.push_back({runnerp, bodyp, site.senTreep, {}});
+    runners.push_back({runnerp, bodyp, site.senTreep->cloneTree(false), nullptr});
     ++m_statRunners;
     if (AstGenBlock* const genp = VN_CAST(site.containerp, GenBlock)) {
         genp->addItemsp(runnerp);
@@ -1071,36 +1071,11 @@ V3AssertReactive::Runner& V3AssertReactive::runnerFor(const Site& site, V3Unique
     return runners.back();
 }
 
-V3AssertReactive::KillCheck& V3AssertReactive::killCheck(const Site& site, Runner& runner,
-                                                         V3UniqueNames& names) {
-    KillCheck& checkr = runner.killChecks[{site.assertp->userType(), site.assertp->directive()}];
-    if (checkr.ifp) return checkr;
-    FileLine* const flp = site.assertp->fileline();
-    // The count at the first evaluation making an action pending, against the count when the
-    // runner runs, before any action
-    ++m_statKillChecks;
-    checkr.armedp = newReactiveTemp(site, names, "KillArmed");
-    checkr.countp = newReactiveTemp(site, names, "KillCount");
-    checkr.ifp = new AstIf{flp, new AstNeq{flp, new AstVarRef{flp, checkr.countp, VAccess::READ},
-                                           newKillCountp(site)}};
-    AstIf* const armedIfp
-        = new AstIf{flp, new AstVarRef{flp, checkr.armedp, VAccess::READ},
-                    new AstAssign{flp, new AstVarRef{flp, checkr.armedp, VAccess::WRITE},
-                                  new AstConst{flp, 0}}};
-    armedIfp->addThensp(checkr.ifp);
-    // After the flush, before any action
-    AstNode* const firstp = runner.bodyp->thensp();
-    if (VN_IS(firstp, CStmt)) {
-        firstp->addNextHere(armedIfp);
-    } else if (firstp) {
-        firstp->addHereThisAsNext(armedIfp);
-    } else {
-        runner.bodyp->addThensp(armedIfp);
-    }
-    return checkr;
-}
-
 V3AssertReactive::~V3AssertReactive() {
+    for (const auto& it : m_runners) {
+        for (const Runner& runner : it.second)
+            VL_DO_DANGLING(runner.clockp->deleteTree(), runner.clockp);
+    }
     V3Stats::addStatSum("Assertions, Reactive action runners", m_statRunners);
     V3Stats::addStatSum("Assertions, Reactive action kill checks", m_statKillChecks);
 }
@@ -1131,12 +1106,31 @@ AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actions
             [&](AstScopeName* namep) { namep->scopeAttr(site.scope + namep->scopeAttr()); });
     }
     Runner& runnerr = runnerFor(site, names);
-    KillCheck* const checkp = m_killChecks ? &killCheck(site, runnerr, names) : nullptr;
     AstVar* const pendingp = newReactiveTemp(site, names, "Pending");
-    // Run what is pending, unless an $assertkill came after it
-    if (checkp) {
-        checkp->ifp->addThensp(new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
-                                             new AstConst{flp, 0}});
+    // The $assertkill count at the first evaluation making an action pending, if one may kill
+    AstVar* const killCountp = m_killChecks ? newReactiveTemp(site, names, "KillCount") : nullptr;
+    const auto newKilledp = [&]() {
+        return new AstNeq{flp, new AstVarRef{flp, killCountp, VAccess::READ}, newKillCountp(site)};
+    };
+    const auto newDropp = [&]() {
+        return new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
+                             new AstConst{flp, 0}};
+    };
+    if (killCountp) {
+        // Drop what is pending if an $assertkill came after its evaluation, before any action
+        // runs, which may call one too
+        ++m_statKillChecks;
+        AstIf* const checkp = new AstIf{flp, newKilledp(), newDropp()};
+        if (runnerr.lastCheckp) {
+            runnerr.lastCheckp->addNextHere(checkp);
+        } else if (VN_IS(runnerr.bodyp->thensp(), CStmt)) {
+            runnerr.bodyp->thensp()->addNextHere(checkp);
+        } else if (AstNode* const firstp = runnerr.bodyp->thensp()) {
+            firstp->addHereThisAsNext(checkp);
+        } else {
+            runnerr.bodyp->addThensp(checkp);
+        }
+        runnerr.lastCheckp = checkp;
     }
     AstLoop* const loopp = new AstLoop{flp};
     loopp->addStmtsp(new AstLoopTest{flp, loopp, new AstVarRef{flp, pendingp, VAccess::READ}});
@@ -1153,7 +1147,7 @@ AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actions
     } else {
         runnerr.bodyp->condp(new AstLogOr{flp, condp, pendingRefp});
     }
-    // pending++, noted for the runners; the first sets the count it is checked against
+    // pending++, noted for the runners
     AstNodeStmt* const stmtsp = new AstAssign{
         flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
         new AstAdd{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}};
@@ -1161,14 +1155,19 @@ AstNodeStmt* V3AssertReactive::newPending(const Site& site, AstNodeStmt* actions
     stmtsp->addNext(new AstCStmt{
         flp, "vlSymsp->__Vm_assertActionPending.store(true, std::memory_order_relaxed);",
         VCStmtType::ASSERT_ACTION_NOTE});
-    if (checkp) {
+    if (killCountp) {
+        // The first sets the count it is checked against; one after an $assertkill drops what
+        // is pending before it
         AstIf* const armp
-            = new AstIf{flp, new AstLogNot{flp, new AstVarRef{flp, checkp->armedp, VAccess::READ}},
-                        new AstAssign{flp, new AstVarRef{flp, checkp->armedp, VAccess::WRITE},
-                                      new AstConst{flp, 1}}};
-        armp->addThensp(new AstAssign{flp, new AstVarRef{flp, checkp->countp, VAccess::WRITE},
+            = new AstIf{flp,
+                        new AstLogOr{flp,
+                                     new AstEq{flp, new AstVarRef{flp, pendingp, VAccess::READ},
+                                               new AstConst{flp, 0}},
+                                     newKilledp()},
+                        newDropp()};
+        armp->addThensp(new AstAssign{flp, new AstVarRef{flp, killCountp, VAccess::WRITE},
                                       newKillCountp(site)});
-        stmtsp->addNext(armp);
+        return AstNode::addNext<AstNodeStmt, AstNodeStmt>(armp, stmtsp);
     }
     return stmtsp;
 }
