@@ -3037,7 +3037,7 @@ class AssertNfaVisitor final : public VNVisitor {
         if (!parts.isFollowedBy) {
             AstNodeExpr* const vacuousp
                 = new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))};
-            AstNodeStmt* const vacuousBodyp = passsp->cloneTree(false);
+            AstNodeStmt* const vacuousBodyp = passsp->cloneTree(true);
             splitsp = newPassOnIf(flp, vacuousp, vacuousBodyp, assertp->userType(),
                                   assertp->directive(), /*vacuous=*/true);
         }

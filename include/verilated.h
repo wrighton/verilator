@@ -952,6 +952,8 @@ public:  // But for internal use only
     // Keep first so is at zero offset for fastest code
     VerilatedContext* const _vm_contextp__;  // Context for current model
     VerilatedEvalMsgQueue* __Vm_evalMsgQp;
+    // An evaluation made a concurrent assertion action pending, for the Reactive region to run
+    std::atomic<bool> __Vm_assertActionPending{false};
     explicit VerilatedSyms(VerilatedContext* contextp);  // Pass null for default context
     ~VerilatedSyms();
     VL_UNCOPYABLE(VerilatedSyms);

@@ -1270,6 +1270,7 @@ class VCStmtType final {
 public:
     enum en : uint8_t {
         NONE,  // Unknown or not applicable
+        ASSERT_ACTION_NOTE,  // Noting a pending concurrent assertion action (see V3Assert)
         CTOR_VAR_RESET_CALL,
         _ENUM_MAX  // Leave last
     };
@@ -1292,7 +1293,8 @@ public:
         : m_e(static_cast<en>(_e)) {}  // Need () or GCC 4.8 false warning
     constexpr operator en() const { return m_e; }
     const char* ascii() const VL_PURE {
-        static constexpr const char* const names[] = {"none", "ctor_var_reset_call"};
+        static constexpr const char* const names[]
+            = {"none", "assert_action_note", "ctor_var_reset_call"};
         return names[m_e];
     }
     bool isNone() const { return m_e == NONE; }

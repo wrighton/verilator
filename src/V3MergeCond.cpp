@@ -279,7 +279,9 @@ class CodeMotionAnalysisVisitor final : public VNVisitorConst {
         }
 
         // Side effect, but assume does not access public state
-        if (VN_IS(nodep, Display) || VN_IS(nodep, Stop)) {
+        const AstCStmt* const cstmtp = VN_CAST(nodep, CStmt);
+        if (VN_IS(nodep, Display) || VN_IS(nodep, Stop)
+            || (cstmtp && cstmtp->stmtType() == VCStmtType::ASSERT_ACTION_NOTE)) {
             m_propsp->m_sideEffect = true;
             return;
         }
