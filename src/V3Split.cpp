@@ -363,15 +363,23 @@ class SplitVisitor final : public VNVisitor {
         return result;
     }
 
-    // Whether the block reads a variable it writes before writing it
+    // Whether the block reads a variable it writes before writing it, not counting writes
+    // scheduling ignores, or reads the state of an internal variable such writes keep (see
+    // V3Sched::util::computeImplicitSensitivities)
     static bool readsWrittenBeforeWrite(const AstAlways* nodep) {
         std::unordered_set<const AstVar*> written;
         std::unordered_set<const AstVar*> readFirst;
+        bool readsState = false;
         nodep->foreach([&](const AstNodeVarRef* refp) {
             const AstVar* const varp = refp->varp();
-            if (refp->access().isReadOrRW() && !written.count(varp)) readFirst.emplace(varp);
-            if (refp->access().isWriteOrRW()) written.emplace(varp);
+            if (refp->access().isReadOrRW() && !written.count(varp)) {
+                readFirst.emplace(varp);
+                readsState |= varp->isInternal() && varp->ignoreSchedWrite()
+                              && !VN_IS(varp->dtypep()->skipRefp(), CDType);
+            }
+            if (refp->access().isWriteOrRW() && !varp->ignoreSchedWrite()) written.emplace(varp);
         });
+        if (readsState) return true;
         for (const AstVar* const varp : readFirst) {
             if (written.count(varp)) return true;
         }
