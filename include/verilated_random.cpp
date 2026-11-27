@@ -2222,6 +2222,15 @@ int VlRandomizer::nextFast(VlRNG& rngr) {
 // Whether this call spreads its solution; otherwise the solver's own, seeded, is the result
 bool VlRandomizer::spreads() const { return !solverSamples() && !m_spreadPause.now; }
 
+static constexpr uint64_t ug2MaxBits = 1024;  // Most solver variable bits to sample with UniGen2
+// A uniqueness group of whole arrays with more elements than this is solved without its
+// 'distinct', which a solver bit-blasts into a disequality for each pair of elements, and then
+// has only the elements found equal constrained to differ, see refineUnique
+static constexpr uint32_t uniqueLazyMinElements = 32;
+// Times a lazy uniqueness group's equal elements are constrained before it gets its 'distinct'
+// whole
+static constexpr int uniqueLazyRounds = 2;
+
 bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
     m_unsat = false;
     // A native array is not solved: checked before the solve, or sampled once it succeeds
@@ -2256,16 +2265,27 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
     const VerilatedLockGuard lock{sess.m_mutex};
     m_checkOnly = checkOnly;
     m_sizeSolve = sizeSolve;
-    std::vector<std::string> uniqueExprs = buildUniqueExprs();
-    // pin_frozen() constraints of the variables registered by now
-    for (const auto& pin : m_frozenPins) {
-        if (m_vars.count(pin.first)) uniqueExprs.push_back(pin.second);
-    }
-    addAliasExprs(uniqueExprs);
-    // The sizes the elements could not be solved with
-    if (sizeSolve) {
-        uniqueExprs.insert(uniqueExprs.end(), m_sizeExclusions.begin(), m_sizeExclusions.end());
-    }
+    // A large uniqueness group is solved lazily, see refineUnique, unless the solve is of the
+    // array sizes or checks the values, randc values a discarded solve would use up, or UniGen2
+    // samples the space, which a change of the constraints would restart
+    std::vector<std::pair<uint32_t, uint64_t>> lazy;  // The groups, and their pairs constrained
+    const bool lazyOk = !checkOnly && !sizeSolve && m_randcVarNames.empty()
+                        && !m_uniqueArrays.empty() && solverBits() > ug2MaxBits;
+    std::vector<std::string> uniqueExprs;
+    const auto buildExprs = [&](std::vector<std::pair<uint32_t, uint64_t>>* lazyp) {
+        uniqueExprs = buildUniqueExprs(lazyp);
+        // pin_frozen() constraints of the variables registered by now
+        for (const auto& pin : m_frozenPins) {
+            if (m_vars.count(pin.first)) uniqueExprs.push_back(pin.second);
+        }
+        addAliasExprs(uniqueExprs);
+        // The sizes the elements could not be solved with
+        if (sizeSolve) {
+            uniqueExprs.insert(uniqueExprs.end(), m_sizeExclusions.begin(),
+                               m_sizeExclusions.end());
+        }
+    };
+    buildExprs(lazyOk ? &lazy : nullptr);
 
     // Randc exclusion-based cycling: exclude previously used values per randc var.
     // When solver returns unsat (all values exhausted), clear history for new cycle.
@@ -2300,24 +2320,53 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
     std::map<std::string, std::shared_ptr<const VlRandomVar>> hidden;
     hideUnnamedFrozen(hidden);
 
-    // Pinned vars make phase ordering moot; skip phased path in check-only.
+    // A lazy solve that fails, after an earlier one set values, leaves the values it found
+    // (IEEE 1800-2023 18.6.3)
+    KeptValues kept;
+    if (!lazy.empty()) keepVars(kept);
+    const VlRNG startRng = rngr;
+    bool refined = false;  // A group had only some of its elements constrained to differ
     bool result;
     m_spreadFailed = false;
     sess.beginCall();
     // A check-only call spreads nothing, so leaves the pause as it is
     m_spreadPause.now = !m_checkOnly && m_spreadPause.skips != 0;
     if (m_spreadPause.now) --m_spreadPause.skips;
-    if (!m_checkOnly && !m_solveBefore.empty()) {
-        result = nextPhased(rngr, sess, uniqueExprs);
-    } else {
-        result = nextFlat(rngr, sess, uniqueExprs);
+    bool spreadFailed = false;  // The spreading of a round failed
+    for (int round = 0;; ++round) {
+        m_uniqueLazy = !lazy.empty();
+        // Only the last round's solution is returned, so a spreading failure, or a reply
+        // warning held, of a round refineUnique discards is not warned of; it still counts
+        // toward the pause of spreading, below
+        spreadFailed |= m_spreadFailed || !sess.takeHeldReply().empty();
+        m_spreadFailed = false;
+        // Pinned vars make phase ordering moot; skip phased path in check-only.
+        if (!m_checkOnly && !m_solveBefore.empty()) {
+            result = nextPhased(rngr, sess, uniqueExprs);
+        } else {
+            result = nextFlat(rngr, sess, uniqueExprs);
+        }
+        if (!result || lazy.empty() || !refineUnique(lazy, round, uniqueExprs, sess, refined)) {
+            break;
+        }
+        if (lazy.empty() && !refined) {
+            // Every group got its whole 'distinct' at once: solve as with them from the start,
+            // from the random state the call started with, for the same values and work
+            buildExprs(nullptr);
+            static_cast<VlRNG&>(rngr) = startRng;
+        }
     }
+    m_uniqueLazy = false;
+    if (!result && !kept.empty()) setValues(kept);
     m_vars.insert(hidden.begin(), hidden.end());
     // The solution found before the spreading failed satisfies the constraints, so it is
     // returned (IEEE 1800-2023 18.6.3), though less random
     const std::string heldReply = sess.takeHeldReply();
     if (!result && !heldReply.empty()) warnSolverReply(heldReply);
-    if (result && (m_spreadFailed || !heldReply.empty())) {
+    // The last round's spreading failed, so the solution returned is less random
+    const bool lastFailed = m_spreadFailed || !heldReply.empty();
+    spreadFailed |= lastFailed;
+    if (result && spreadFailed) {
         if (sess.broke()) {
             // A solver that broke spreading likely breaks again, each time restarted, so later
             // calls do not spread for a while, twice as long after each further break, and
@@ -2325,14 +2374,14 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
             m_spreadPause.length
                 = m_spreadPause.length ? std::min(2 * m_spreadPause.length, spreadPauseMax) : 1;
             m_spreadPause.skips = m_spreadPause.length;
-            if (!m_warnedSpreadBroke) {
+            if (lastFailed && !m_warnedSpreadBroke) {
                 m_warnedSpreadBroke = true;
                 VL_WARN_MT(__FILE__, __LINE__, "randomize",
                            "Solver died or replied unreadably while spreading the solution, so "
                            "this randomize() returned it less random, and spreading pauses for "
                            "this object; warned once per object.");
             }
-        } else if (!m_warnedSpreadFailed) {
+        } else if (lastFailed && !m_warnedSpreadFailed) {
             m_warnedSpreadFailed = true;
             VL_WARN_MT(__FILE__, __LINE__, "randomize",
                        "Solver failed while spreading the solution, so this randomize() returned "
@@ -2372,7 +2421,82 @@ std::string VlRandomizer::aliasExpr(const std::string& name, const std::string& 
     return "(__Vbv (= " + name + " " + otherName + "))";
 }
 
-std::vector<std::string> VlRandomizer::buildUniqueExprs() const {
+// Constrain each lazily solved uniqueness group's elements that the last solve made equal to
+// differ, so the next solve does not repeat them, and return whether any were, setting
+// refinedr if only some of a group's were. Values are spread over the elements' domain, so a
+// solve that made more than one pair equal shows a domain small enough for the next solve to
+// make others equal (or values not spread, see solveDiversity): that group, one whose equal
+// elements were constrained uniqueLazyRounds times already, or one whose constrained pairs
+// would outnumber its elements gets its 'distinct' whole instead, needing no further checks.
+// The groups and their elements are taken in order, so a seed gives the same constraints.
+bool VlRandomizer::refineUnique(std::vector<std::pair<uint32_t, uint64_t>>& lazyr, int round,
+                                std::vector<std::string>& exprsr, VlSolverSession& sess,
+                                bool& refinedr) const VL_REQUIRES(sess.m_mutex) {
+    bool refined = false;
+    const auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
+    for (auto lazyIt = lazyr.begin(); lazyIt != lazyr.end();) {
+        // The group's elements, in classes of equal value in order of their first element
+        const std::unordered_set<std::string>& group = m_uniqueArrays.at(lazyIt->first);
+        std::vector<std::string> names{group.begin(), group.end()};
+        std::sort(names.begin(), names.end());
+        std::unordered_map<std::string, size_t> classOfValue;
+        std::vector<std::vector<std::pair<const VlRandomVar*, int>>> classes;
+        uint64_t elements = 0;
+        for (const std::string& name : names) {
+            const auto varIt = m_vars.find(name);
+            if (varIt == m_vars.end()) continue;
+            const VlRandomVar& var = *varIt->second;
+            var.setArrayInfo(arrVarsp);
+            const size_t bytes = elemBytes(var);
+            const int count = var.countMatchingElements(*arrVarsp, name);
+            for (int j = 0; j < count; ++j) {
+                const char* const datap = static_cast<const char*>(var.datap(j));
+                const auto it = classOfValue.emplace(std::string{datap, bytes}, classes.size());
+                if (it.second) classes.emplace_back();
+                classes[it.first->second].emplace_back(&var, j);
+            }
+            elements += count;
+        }
+        uint64_t& pairsr = lazyIt->second;  // The pairs constrained so far
+        uint64_t pairs = 0;  // The pairs this solve made equal
+        std::ostringstream os;
+        for (const auto& members : classes) {
+            if (members.size() < 2) continue;
+            pairs += members.size() * (members.size() - 1) / 2;
+            os << "(__Vbv (distinct";
+            for (const auto& member : members) member.first->emitElement(os, member.second);
+            os << "))";
+            exprsr.push_back(os.str());
+            os.str("");
+        }
+        if (!pairs) {
+            ++lazyIt;
+            continue;
+        }
+        refined = true;
+        pairsr += pairs;
+        if (pairs == 1 && round < uniqueLazyRounds && pairsr <= elements) {
+            sess.os() << "; unique refinement " << round + 1 << '\n';
+            refinedr = true;
+            ++lazyIt;
+            continue;
+        }
+        // The whole 'distinct' instead
+        sess.os() << "; unique fallback\n";
+        os << "(__Vbv (distinct ";
+        for (const std::string& name : names) {
+            const auto varIt = m_vars.find(name);
+            if (varIt != m_vars.end()) varIt->second->emitGetValue(os);
+        }
+        os << "))";
+        exprsr.push_back(os.str());
+        lazyIt = lazyr.erase(lazyIt);
+    }
+    return refined;
+}
+
+std::vector<std::string>
+VlRandomizer::buildUniqueExprs(std::vector<std::pair<uint32_t, uint64_t>>* lazyp) const {
     std::vector<std::string> exprs;
     if (m_uniqueArrays.empty()) return exprs;
     const auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
@@ -2393,6 +2517,11 @@ std::vector<std::string> VlRandomizer::buildUniqueExprs() const {
         }
 
         if (matchingElementsCount < 2) continue;
+        // A large group is solved without its 'distinct', see refineUnique
+        if (lazyp && matchingElementsCount > uniqueLazyMinElements) {
+            lazyp->emplace_back(keyArrNames.first, 0);
+            continue;
+        }
         std::ostringstream os;
         os << "(__Vbv (distinct " << varsString.str() << "))";
         exprs.push_back(os.str());
@@ -2613,9 +2742,11 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
                             const std::vector<std::string>& uniqueExprs)
     VL_REQUIRES(sess.m_mutex) {
     if (spreads() && m_randcVarNames.empty() && !m_checkOnly && !hasFrozenVar()) {
+        // Whether an earlier round of the call broke the solver
+        const bool broke = sess.broke();
         if (unigen2(rngr, sess, uniqueExprs)) return true;
         // Sampling that broke the solver is a spread that broke it
-        if (sess.broke()) m_spreadFailed = true;
+        if (!broke && sess.broke()) m_spreadFailed = true;
     }
     VlSolverTxn txn{sess};
     if (!txn.ok()) return false;
@@ -2673,7 +2804,17 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
     return false;  // Should not reach here
 }
 
-static constexpr uint64_t ug2MaxBits = 1024;  // Most solver variable bits to sample with UniGen2
+// The bits of the variables and the elements of the arrays to solve
+uint64_t VlRandomizer::solverBits() const {
+    uint64_t bits = 0;
+    for (const auto& var : m_vars) {
+        const uint64_t elements = var.second->dimension()
+                                      ? var.second->countMatchingElements(m_arr_vars, var.first)
+                                      : 1;
+        bits += elements * var.second->width();
+    }
+    return bits;
+}
 
 // Enumerate one cell of the solution space, and cache the solutions in m_ug2.loThreshWitnesses.
 // The next call with the same constraint set will drain the cache before running the full
@@ -2684,14 +2825,7 @@ bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
     // Its XORs span every bit, which gets slow to solve (about a minute per call at 16k
     // bits) while the large-space cells it can afford are poorly spread, so wide problems
     // use the flat path
-    uint64_t bits = 0;
-    for (const auto& var : m_vars) {
-        const uint64_t elements = var.second->dimension()
-                                      ? var.second->countMatchingElements(m_arr_vars, var.first)
-                                      : 1;
-        bits += elements * var.second->width();
-    }
-    if (bits > ug2MaxBits) return false;
+    if (solverBits() > ug2MaxBits) return false;
 
     const size_t currentHash = hashConstraints(uniqueExprs);
     // Params and batch are computed for specific constraint set, so drop them
@@ -3102,7 +3236,10 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
     const VlSolverLimit limit{sess, checkLimit};
     std::string keep;  // Surviving literals
     int lits = 0;  // Literals declared so far
-    int checksLeft = diversityMaxChecks;
+    // A solve leaving uniqueness groups to be checked lazily keeps its values when the first
+    // check fails, which then has the groups' elements mostly equal, and take their whole
+    // 'distinct' rather than spread values they discard (see refineUnique)
+    int checksLeft = m_uniqueLazy ? 1 : diversityMaxChecks;
     // Satisfied checks are the slow ones on large problems; past their limit, no further
     // check is made and the literals kept so far are the result
     int satisfiedLeft = diversityMaxSatisfied;
@@ -3634,7 +3771,7 @@ bool VlRandomizer::exclude_sizes() {
 bool VlRandomizer::report_unsat() {
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
-    std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    std::vector<std::string> uniqueExprs = buildUniqueExprs(nullptr);
     addAliasExprs(uniqueExprs);
     uniqueExprs.insert(uniqueExprs.end(), m_sizeExclusions.begin(), m_sizeExclusions.end());
     // Like a solve, in a transaction, so the next solve starts afresh

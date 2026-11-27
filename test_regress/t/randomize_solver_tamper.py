@@ -14,6 +14,7 @@
 #         | binary | bv_digits | bv_literals | bv_long | bv_overflow | bv_sort | bv_spaced
 #         | close_stdin_at | core_junk | crlf | csa_unsupported | die_assuming | die_at
 #         | die_status_at
+#         | die_lazy
 #         | diversity_model | dup_model | err_assume | err_cell | err_core | err_extra
 #         | err_marker | err_multiline | err_mute | err_once | err_phase | err_reply | err_trunc
 #         | err_unbal | err_unbal_cont | frozen_value
@@ -64,6 +65,8 @@
 #   die_status_at    - kill the solver at the Nth status line and exit, closing every pipe end
 #   die_assuming     - kill the solver when a check-sat-assuming is sent and exit, closing
 #                      every pipe end
+#   die_lazy         - as die_assuming, at a check-sat-assuming of a solve sent no distinct
+#                      since the last reset: the spreading of a lazy uniqueness round
 #   diversity_model  - replace the Nth array model reply with one holding an unusable value
 #   dup_model        - replace the Nth model reply with one answering a variable twice
 #   err_assume       - replace the first unsat-assumptions reply with (error ...)
@@ -367,8 +370,8 @@ CORE_MODES = ("core_junk", "err_core")
 STREAM_MODES = ("bin_literals", "bv_literals", "bv_spaced", "crlf", "csa_unsupported", "indent",
                 "limit_unsupported", "multiline", "success", "wide_core", "wide_core_cut")
 # Modes that read or change the commands on their way to the solver
-INPUT_MODES = ("csa_unsupported", "die_assuming", "err_cell", "limit_unsupported", "wide_core",
-               "wide_core_cut")
+INPUT_MODES = ("csa_unsupported", "die_assuming", "die_lazy", "err_cell", "limit_unsupported",
+               "wide_core", "wide_core_cut")
 # Echoed in place of a command, to mark where in the replies its answer belongs
 TAMPER_MARK = "vl_tamper"
 
@@ -393,6 +396,8 @@ proc = subprocess.Popen(real_solver(),
 scopes = types.SimpleNamespace(count=0, pushed=False, cell_after=None)
 # wide_core: the literals of the last check-sat-assuming sent
 assumed = types.SimpleNamespace(literals=[])
+# Whether the solve has been sent a distinct, for die_lazy
+sent = types.SimpleNamespace(distinct=False)
 
 
 def feed():
@@ -403,7 +408,12 @@ def feed():
         text = cmd.lstrip()
         if mode == "csa_unsupported" and text.startswith("(check-sat-assuming"):
             cmd = '(echo "' + TAMPER_MARK + '")\n'
-        if (mode == "die_assuming" and text.startswith("(check-sat-assuming") and match in text
+        if text.startswith("(reset)"):
+            sent.distinct = False
+        elif "(distinct " in text:
+            sent.distinct = True
+        dies = mode == "die_assuming" or (mode == "die_lazy" and not sent.distinct)
+        if (dies and text.startswith("(check-sat-assuming") and match in text
                 and not (once and os.path.exists(once))):
             if once:
                 with open(once, "w", encoding="utf-8"):
