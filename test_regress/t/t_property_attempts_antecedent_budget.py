@@ -13,8 +13,8 @@ test.scenarios('vlt')
 
 test.compile(verilator_flags2=['--assert', '--stats'], verilator_make_gmake=False)
 
-test.file_grep(test.stats, r'Assertions, NFA per-attempt properties\s+(\d+)', 1)
-test.file_grep(test.stats, r'Assertions, NFA per-attempt antecedent length branches\s+(\d+)', 2)
-test.file_grep(test.stats, r'Assertions, NFA per-attempt antecedent branch ticks\s+(\d+)', 255)
+test.file_grep(test.stats, r'Assertions, NFA per-attempt properties\s+(\d+)', 3)
+test.file_grep(test.stats, r'Assertions, NFA per-attempt antecedent length branches\s+(\d+)', 7)
+test.file_grep(test.stats, r'Assertions, NFA per-attempt antecedent branch ticks\s+(\d+)', 399)
 
 test.passes()
