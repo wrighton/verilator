@@ -2319,6 +2319,8 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
 }
 
 bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
+    // The final solve after a solve of sizes, which pins them
+    const bool sizesSolved = m_sizeSolved;
     if (VL_UNLIKELY(failed())) {
         static bool s_warned = false;
         if (!m_failWarned && !s_warned) {
@@ -2415,6 +2417,19 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
     // (IEEE 1800-2023 18.6.3)
     KeptValues kept;
     if (!lazy.empty()) keepVars(kept);
+    // The sizes before the call, for a solve keeping them, see boundSizes. The solve after a
+    // solve of sizes has them pinned.
+    decltype(m_randcUsedValues) randcUsed;
+    m_sizeStarts.clear();
+    if (!checkOnly && !sizesSolved && !m_resized.empty()) {
+        randcUsed = m_randcUsedValues;
+        for (const std::string& name : m_resized) {
+            const auto it = m_vars.find(name);
+            if (it != m_vars.end() && it->second->width() == VL_IDATASIZE) {
+                m_sizeStarts[name] = *static_cast<const IData*>(it->second->datap(0));
+            }
+        }
+    }
     const VlRNG startRng = rngr;
     bool refined = false;  // A group had only some of its elements constrained to differ
     bool result;
@@ -2431,12 +2446,23 @@ bool VlRandomizer::nextSolve(VlRNGReseeds& rngr, bool checkOnly, const bool size
         // toward the pause of spreading, below
         spreadFailed |= m_spreadFailed || !sess.takeHeldReply().empty();
         m_spreadFailed = false;
-        // Pinned vars make phase ordering moot; skip phased path in check-only.
-        if (!m_checkOnly && !m_solveBefore.empty()) {
-            result = nextPhased(rngr, sess, uniqueExprs);
-        } else {
-            result = nextFlat(rngr, sess, uniqueExprs);
+        // A solve giving a size over the limit is done again, keeping the sizes the constraints
+        // leave unbounded, see boundSizes. The randc values the first one used are not used up,
+        // and its spreading, discarded, counts as a discarded round's.
+        for (int keep = 0;; ++keep) {
+            // Pinned vars make phase ordering moot; skip phased path in check-only.
+            if (!m_checkOnly && !m_solveBefore.empty()) {
+                result = nextPhased(rngr, sess, uniqueExprs);
+            } else {
+                result = nextFlat(rngr, sess, uniqueExprs);
+            }
+            if (!result || keep || checkOnly || sizesSolved || !sizeOverLimit()) break;
+            m_randcUsedValues = randcUsed;
+            m_keepSizes = true;
+            spreadFailed |= m_spreadFailed || !sess.takeHeldReply().empty();
+            m_spreadFailed = false;
         }
+        m_keepSizes = false;
         if (!result || lazy.empty() || !refineUnique(lazy, round, uniqueExprs, sess, refined)) {
             break;
         }
@@ -2845,6 +2871,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
     // Randc retry: if unsat due to randc exhaustion, clear history and retry once
     const bool hasRandc = !m_randcVarNames.empty();
     decltype(m_randcUsedValues) usedValues;  // The history cleared for the retry
+    std::vector<std::string> bounded;  // uniqueExprs and the sizes kept, if any
     for (int attempt = 0; attempt < (hasRandc ? 2 : 1); ++attempt) {
         const FreeElements free = freeElements();
         os << "(set-option :produce-models true)\n";
@@ -2858,6 +2885,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
         }
         emitFlat(os, uniqueExprs);
         if (relaxSoftConstraints(sess) != VlSolverStatus::SAT) return false;
+        if (!boundSizes(sess, uniqueExprs, bounded)) return false;
         const VlSolverStatus status = checkFree(rngr, sess, free);
 
         if (status != VlSolverStatus::SAT) {
@@ -2884,7 +2912,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
         if (!m_checkOnly) {
             if (spreads()) {
                 sess.holdReplies(true);
-                solveDiversity(rngr, sess, nullptr, &uniqueExprs);
+                solveDiversity(rngr, sess, nullptr, bounded.empty() ? &uniqueExprs : &bounded);
                 sess.holdReplies(false);
                 m_spreadFailed |= sess.failed();
             }
@@ -2913,7 +2941,8 @@ uint64_t VlRandomizer::solverBits() const {
 // mechanism again.
 bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
                            const std::vector<std::string>& uniqueExprs) VL_REQUIRES(sess.m_mutex) {
-    if (!m_softConstraints.empty()) return false;
+    // A size kept is kept by the flat solve: cached witnesses would hold earlier sizes
+    if (!m_softConstraints.empty() || m_keepSizes) return false;
     // Its XORs span every bit, which gets slow to solve (about a minute per call at 16k
     // bits) while the large-space cells it can afford are poorly spread, so wide problems
     // use the flat path
@@ -3843,6 +3872,115 @@ std::vector<int> VlRandomizer::readUnsatAssumptions(VlSolverSession& sess)
     return scanIntRuns(reply);
 }
 
+// Whether a size this solve gave an array it resizes is over randArrayMax()
+bool VlRandomizer::sizeOverLimit() const {
+    const IData limit = static_cast<IData>(Verilated::threadContextp()->randArrayMax());
+    for (const auto& start : m_sizeStarts) {
+        if (*static_cast<const IData*>(m_vars.at(start.first)->datap(0)) > limit) return true;
+    }
+    return false;
+}
+
+// A size the constraints in force leave unbounded above, as one read only in an implication
+// antecedent ('q.size() > 0 -> ...') or bounded from below alone ('q.size() > q[i]'), takes
+// what the sampling picks of its 31 bits: billions of elements, over randArrayMax(), so
+// randomize() failed. IEEE 1800-2023 18.4 leaves that size to the implementation: when a solve
+// gives a size over the limit, it is solved again. The sizes the constraints let be over the
+// limit are first kept within it together, so that keeping one does not push another over it;
+// then each keeps the size its array had (its size variable's value before), if the
+// constraints allow it, else takes the least size they allow. A solve giving sizes within the
+// limit is as before: a check before it would change how the solver answers the spreading. In
+// a session with the constraints asserted and the softs relaxed, asserts the sizes chosen, and
+// gives boundedr uniqueExprs and them if any, for a solve that asserts the constraints again;
+// false if the solver failed.
+bool VlRandomizer::boundSizes(VlSolverSession& sess, const std::vector<std::string>& uniqueExprs,
+                              std::vector<std::string>& boundedr) VL_REQUIRES(sess.m_mutex) {
+    boundedr.clear();
+    if (!m_keepSizes) return true;
+    // In name order, so the solver is given the same text from run to run
+    const std::map<std::string, IData> sizes{m_sizeStarts.begin(), m_sizeStarts.end()};
+    if (sizes.empty()) return true;
+    const IData limit = static_cast<IData>(Verilated::threadContextp()->randArrayMax());
+    std::iostream& os = sess.os();
+    const auto hex = [](IData value) {
+        std::ostringstream s;
+        s << "#x" << std::hex << std::setw(8) << std::setfill('0') << value;
+        return s.str();
+    };
+    int lits = 0;
+    // Whether the constraints allow 'expr' to hold
+    const auto allows = [&](const std::string& expr) VL_REQUIRES(sess.m_mutex) {
+        os << "(declare-fun __Vsz" << lits << " () Bool)\n";
+        os << "(assert (= __Vsz" << lits << ' ' << expr << "))\n";
+        os << "(check-sat-assuming (__Vsz" << lits++ << "))\n";
+        return sess.readStatus();
+    };
+    // The sizes chosen, asserted, also for a solve that asserts the constraints again
+    std::vector<std::string> pins;
+    const auto pin = [&](const std::string& expr) VL_REQUIRES(sess.m_mutex) {
+        os << "(assert " << expr << ")\n";
+        pins.push_back("(__Vbv " + expr + ')');
+    };
+    std::string anyOver = "(or false";
+    for (const auto& size : sizes) anyOver += " (bvugt " + size.first + ' ' + hex(limit) + ')';
+    anyOver += ')';
+    VlSolverStatus status = allows(anyOver);
+    // The sizes that can be over the limit
+    std::vector<std::pair<std::string, IData>> overs;
+    for (const auto& size : sizes) {
+        if (status != VlSolverStatus::SAT) break;
+        if (sizes.size() > 1) status = allows("(bvugt " + size.first + ' ' + hex(limit) + ')');
+        if (status == VlSolverStatus::SAT) overs.push_back(size);
+        if (status == VlSolverStatus::UNSAT) status = VlSolverStatus::SAT;
+    }
+    // Within the limit together, if the constraints allow it; else one of them is over the
+    // limit in every solution, which array_size_ok() reports
+    std::string allWithin = "(and true";
+    for (const auto& size : overs) allWithin += " (bvule " + size.first + ' ' + hex(limit) + ')';
+    allWithin += ')';
+    if (status == VlSolverStatus::SAT && overs.size() > 1) status = allows(allWithin);
+    if (status == VlSolverStatus::SAT && overs.size() > 1) pin(allWithin);
+    if (status == VlSolverStatus::UNSAT) status = VlSolverStatus::SAT;
+    for (const auto& size : overs) {
+        if (status != VlSolverStatus::SAT) break;
+        const std::string& name = size.first;
+        const IData start = size.second;
+        std::string value = hex(start);
+        status = start <= limit ? allows("(= " + name + ' ' + value + ')') : VlSolverStatus::UNSAT;
+        if (status != VlSolverStatus::SAT && status != VlSolverStatus::UNSAT) break;
+        if (status == VlSolverStatus::UNSAT) {
+            // The least size allowed, if one is within the limit; else the size solved is
+            // over it, which array_size_ok() reports
+            status = allows("(bvule " + name + ' ' + hex(limit) + ')');
+            if (status == VlSolverStatus::UNSAT) {
+                status = VlSolverStatus::SAT;
+                continue;
+            }
+            IData lo = 0;
+            IData hi = limit;
+            while (lo < hi && status == VlSolverStatus::SAT) {
+                const IData mid = lo + (hi - lo) / 2;
+                status = allows("(bvule " + name + ' ' + hex(mid) + ')');
+                if (status == VlSolverStatus::SAT) {
+                    hi = mid;
+                } else if (status == VlSolverStatus::UNSAT) {
+                    lo = mid + 1;
+                    status = VlSolverStatus::SAT;
+                }
+            }
+            if (status != VlSolverStatus::SAT) break;
+            value = hex(lo);
+        }
+        pin("(= " + name + ' ' + value + ')');
+    }
+    if (status != VlSolverStatus::SAT && status != VlSolverStatus::UNSAT) return false;
+    if (!pins.empty()) {
+        boundedr = uniqueExprs;
+        boundedr.insert(boundedr.end(), pins.begin(), pins.end());
+    }
+    return true;
+}
+
 // Re-solve with named asserts so an unsat core can name the failing constraints
 bool VlRandomizer::exclude_sizes() {
     std::ostringstream os;
@@ -4682,6 +4820,7 @@ void VlRandomizer::clearConstraints() {
     m_uniqueArrays.clear();  // Re-registered by constraint setup
     m_uniqueDomains.clear();  // Likewise
     m_frozenPins.clear();  // Likewise re-added
+    m_resized.clear();  // Marked again before a solve choosing sizes
     m_elemVarsCleared.clear();
     m_tables.clear();
     m_tableHeads.clear();
@@ -5077,6 +5216,8 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
     // the phase after a phase that kept no base build a fresh base as before.
     bool keepBase = false;
     bool rebuild = false;  // Sampling took no assignment, so solve this phase afresh
+    std::vector<std::string> bounded;  // uniqueExprs and the sizes kept, if any
+    bool sizesKept = false;  // The first build chose them
 
     size_t phase = 0;
     while (true) {
@@ -5110,7 +5251,7 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
             for (const auto& entry : solvedValues) {
                 os << "(assert (= " << entry.first << " " << entry.second << "))\n";
             }
-            emitAsserts(os, uniqueExprs, false);
+            emitAsserts(os, bounded.empty() ? uniqueExprs : bounded, false);
 
             // Randc: exclude previously used values
             emitRandcExclusions(os);
@@ -5119,6 +5260,11 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
             // that succeeded settled every check, so the kept selection stays maximal under
             // this phase's pins.
             if (relaxSoftConstraints(sess) != VlSolverStatus::SAT) return false;
+            // The sizes kept, chosen by the first build, are asserted by the later ones
+            if (!sizesKept) {
+                sizesKept = true;
+                if (!boundSizes(sess, uniqueExprs, bounded)) return false;
+            }
             keepBase = sampled;
         }
 
