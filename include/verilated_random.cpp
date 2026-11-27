@@ -1158,6 +1158,12 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
     return false;  // Should not reach here
 }
 
+// Most solver variable bits UniGen2 samples. Each witness it enumerates is excluded by an
+// assertion over every variable bit, and its XOR hashes span them all, so its checks grow with
+// the bits: 300 rand arrays of two bytes took 52 s for 3 calls. Past this the flat solve and its
+// XOR diversity are used, at the cost of UniGen2's near-uniform spread.
+static constexpr uint64_t ug2MaxBits = 1024;
+
 // Enumerate one cell of the solution space, and cache the solutions in m_ug2.loThreshWitnesses.
 // The next call with the same constraint set will drain the cache before running the full
 // mechanism again.
@@ -1180,6 +1186,16 @@ bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
 
     // Nothing cached from a previous UG2 run, so refill the batch first.
     if (m_ug2.loThreshWitnesses.empty()) {
+        // Counted per batch, as arrays may have been resized since the last one
+        uint64_t bits = 0;
+        for (const auto& var : m_vars) {
+            const uint64_t elements
+                = var.second->dimension()
+                      ? var.second->countMatchingElements(m_arr_vars, var.first)
+                      : 1;
+            bits += elements * var.second->width();
+        }
+        if (bits > ug2MaxBits) return false;
         VlSolverTxn txn{sess};
         if (!txn.ok()) return false;
         std::iostream& solver = sess.os();
