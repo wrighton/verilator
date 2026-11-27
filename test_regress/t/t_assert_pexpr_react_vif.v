@@ -34,6 +34,8 @@ module t;
   ifc i1 ();
   virtual ifc vi1 = i1;
   wire [31:0] w = i0.x + 1;
+  // Updated by the action of a procedural assertion through an automatic handle
+  ifc i2 ();
 
   assert property (@(posedge clk) p until q)
   else vi.x <= 100 + cyc;
@@ -41,6 +43,12 @@ module t;
   else begin
     i1.x <= 300 + cyc;
     vi1.x <= 200 + cyc;
+  end
+
+  always @(posedge clk) begin
+    automatic virtual ifc va = i2;
+    assert property (p until q)
+    else va.x <= 400;
   end
 
   always #5 clk = ~clk;
@@ -57,6 +65,7 @@ module t;
     `checkd(i0.x, exp_x);
     `checkd(w, exp_x + 1);
     if (cyc > 3) `checkd(i1.x, cyc > 8 ? 209 : 204);
+    `checkd(i2.x, cyc > 3 ? 400 : 0);
     if (cyc < T) begin
       p = P[cyc];
       q = Q[cyc];
