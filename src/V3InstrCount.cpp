@@ -23,6 +23,7 @@
 
 #include <iomanip>
 #include <unordered_map>
+#include <unordered_set>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -37,6 +38,11 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 ///         Count underneath $display/$stop statements.
 ///         The branch with more is unlikely.
 ///     A branch predicted not taken has zero cost.
+///
+/// The functions called from a node are counted before the node, depth first with an explicit
+/// stack, as call chains can be deeper than recursion can go on the C++ stack. To visit them in
+/// the order the count reaches them, each node is first walked in a 'finding' mode, which records
+/// the functions reached, then counted once they are all counted.
 
 class InstrCountVisitor final : public VNVisitorConst {
     // NODE STATE
@@ -44,10 +50,15 @@ class InstrCountVisitor final : public VNVisitorConst {
     //  AstNode::user2()        -> uint64_t.  Path cost + 1, 0 means don't dump
     const VNUser2InUse m_inuser2;
 
+    // TYPES
+    // Functions reached in order, and whether reached directly rather than called
+    using FoundFuncs = std::vector<std::pair<AstCFunc*, bool>>;
+
     // MEMBERS
     uint32_t m_instrCount = 0;  // Running count of instructions
     const AstNode* const m_startNodep;  // Start node of count
-    bool m_tracingCall = false;  // Iterating into a CCall to a CFunc
+    bool m_finding = false;  // Only finding the functions reached, see 'findFuncs'
+    FoundFuncs* m_foundp = nullptr;  // In 'finding' mode, the functions reached
     bool m_inCFunc = false;  // Inside AstCFunc
     bool m_ignoreRemaining = false;  // Ignore remaining statements in the block
     int m_unlikely = 0;  // Excuses for branch likely not taken
@@ -56,8 +67,9 @@ class InstrCountVisitor final : public VNVisitorConst {
     const bool m_assertNoDups;  // Check for duplicates
     const std::ostream* const m_osp;  // Dump file
     std::unordered_map<const AstCFunc*, uint32_t> m_funcCosts;  // Cost of each function
+    // Functions counted where first reached directly from a netlist, rather than called
+    std::unordered_set<const AstCFunc*> m_directFirst;
 
-    // TYPES
     // Little class to cleanly call startVisitBase/endVisitBase
     class VisitBase final {
         // MEMBERS
@@ -84,7 +96,7 @@ public:
         : m_startNodep{nodep}
         , m_assertNoDups{assertNoDups}
         , m_osp{osp} {
-        iterateConstNull(nodep);
+        countDepthFirst(nodep);
     }
     ~InstrCountVisitor() override {
         V3Stats::addStatSum("Optimizations, Branch prediction likely", m_statLikely);
@@ -99,10 +111,82 @@ private:
         m_instrCount = 0;
         m_ignoreRemaining = false;
     }
+
+    // Count 'nodep', the start node, after the functions it reaches, see the file header
+    void countDepthFirst(AstNode* nodep) {
+        if (!nodep) return;
+        struct Frame final {
+            AstNode* nodep;  // Start node or function to count
+            FoundFuncs found;  // Functions it reaches
+            size_t next;  // Index of next function in 'found' to consider
+        };
+        std::vector<Frame> stack;
+        if (AstCFunc* const funcp = VN_CAST(nodep, CFunc)) m_funcCosts.emplace(funcp, 0);
+        stack.push_back({nodep, findFuncs(nodep), 0});
+        while (!stack.empty()) {
+            Frame& frame = stack.back();
+            if (frame.next < frame.found.size()) {
+                AstCFunc* const funcp = frame.found[frame.next].first;
+                const bool direct = frame.found[frame.next].second;
+                ++frame.next;
+                // Count each function once, where first reached. A function being counted costs
+                // zero, as on a recursive call.
+                if (!m_funcCosts.emplace(funcp, 0).second) continue;
+                if (direct) m_directFirst.emplace(funcp);
+                FoundFuncs found = findFuncs(funcp);
+                stack.push_back({funcp, std::move(found), 0});
+                continue;
+            }
+            AstNode* const countp = frame.nodep;
+            stack.pop_back();
+            if (AstCFunc* const funcp = VN_CAST(countp, CFunc)) {
+                walkFunction(funcp);
+                m_funcCosts.at(funcp) = m_instrCount;
+            } else {
+                reset();
+                iterateConst(countp);
+            }
+        }
+    }
+
+    // Walk 'nodep' as when counting it, returning the functions reached in order
+    FoundFuncs findFuncs(AstNode* nodep) {
+        FoundFuncs found;
+        VL_RESTORER(m_finding);
+        VL_RESTORER(m_foundp);
+        VL_RESTORER(m_instrCount);
+        VL_RESTORER(m_ignoreRemaining);
+        VL_RESTORER(m_unlikely);
+        VL_RESTORER(m_inCFunc);
+        m_finding = true;
+        m_foundp = &found;
+        if (AstCFunc* const funcp = VN_CAST(nodep, CFunc)) {
+            walkFunction(funcp);
+        } else {
+            iterateConst(nodep);
+        }
+        return found;
+    }
+
+    // Walk the body of 'funcp', once the functions it calls are counted unless finding them
+    void walkFunction(AstCFunc* funcp) {
+        // The caller's branch counts the call, not the statements within
+        VL_RESTORER(m_unlikely);
+        VL_RESTORER(m_inCFunc);
+        m_inCFunc = true;
+        reset();
+        const VisitBase vb{this, funcp};
+        iterateChildrenConst(funcp);
+    }
+
+    // Do not dump 'nodep', as in a branch not taken
+    void dontDump(AstNode* nodep) {
+        if (nodep && !m_finding) nodep->user2(0);
+    }
     uint32_t startVisitBase(AstNode* nodep) {
         UASSERT_OBJ(!m_ignoreRemaining, nodep, "Should not reach here if ignoring");
         if (nodep->isUnlikely()) ++m_unlikely;
-        if (m_assertNoDups && !m_inCFunc) {
+        if (m_assertNoDups && !m_inCFunc && !m_finding) {
             // Ensure we don't count the same node twice
             //
             // We only enable this assert for the initial LogicMTask counts
@@ -128,12 +212,15 @@ private:
         return savedCount;
     }
     void endVisitBase(uint32_t savedCount, AstNode* nodep) {
-        UINFO(8, "cost " << std::setw(6) << std::left << m_instrCount << "  " << nodep);
+        if (!m_finding) {
+            UINFO(8, "cost " << std::setw(6) << std::left << m_instrCount << "  " << nodep);
+        }
         markCost(nodep);
         if (!m_ignoreRemaining) m_instrCount += savedCount;
     }
     void markCost(AstNode* nodep) {
-        if (m_osp) nodep->user2(m_instrCount + 1);  // Else don't mark to avoid writeback
+        // Else don't mark to avoid writeback
+        if (m_osp && !m_finding) nodep->user2(m_instrCount + 1);
     }
 
     // VISITORS
@@ -200,7 +287,7 @@ private:
         uint32_t elseCount = m_instrCount;
         const int elseUnlikely = m_unlikely;
 
-        if (nodep->branchPred().unknown()) {
+        if (nodep->branchPred().unknown() && !m_finding) {
             if (elseUnlikely > thenUnlikely) {
                 nodep->branchPred(VBranchPred::BP_LIKELY);
                 ++m_statLikely;
@@ -215,10 +302,10 @@ private:
         reset();
         if (ifCount >= elseCount) {
             m_instrCount = savedCount + ifCount;
-            if (nodep->elsesp()) nodep->elsesp()->user2(0);  // Don't dump it
+            dontDump(nodep->elsesp());
         } else {
             m_instrCount = savedCount + elseCount;
-            if (nodep->thensp()) nodep->thensp()->user2(0);  // Don't dump it
+            dontDump(nodep->thensp());
         }
     }
     void visit(AstCond* nodep) override {
@@ -242,10 +329,10 @@ private:
         reset();
         if (ifCount >= elseCount) {
             m_instrCount = savedCount + ifCount;
-            if (nodep->elsep()) nodep->elsep()->user2(0);  // Don't dump it
+            dontDump(nodep->elsep());
         } else {
             m_instrCount = savedCount + elseCount;
-            if (nodep->thenp()) nodep->thenp()->user2(0);  // Don't dump it
+            dontDump(nodep->thenp());
         }
     }
     void visit(AstCAwait* nodep) override {
@@ -288,44 +375,26 @@ private:
         if (m_ignoreRemaining) return;
         const VisitBase vb{this, nodep};
         iterateChildrenConst(nodep);
-        const auto it = m_funcCosts.find(nodep->funcp());
-        if (it == m_funcCosts.end()) {
-            m_tracingCall = true;
-            iterateConst(nodep->funcp());
-            UASSERT_OBJ(!m_tracingCall, nodep,
-                        "visit(AstCFunc) should have cleared m_tracingCall.");
-        } else {
-            m_instrCount += it->second;  // This guards and adds zero cost on recursive calls
+        if (m_finding) {
+            m_foundp->emplace_back(nodep->funcp(), false);
+            return;
         }
+        // The function is counted already, or is being counted and costs zero on this recursive
+        // call
+        m_instrCount += m_funcCosts.at(nodep->funcp());
     }
     void visit(AstCFunc* nodep) override {
-        // Don't count a CFunc other than by tracing a call or counting it
-        // from the root. From a netlist, count each CFunc once, where first reached.
-        if (!m_tracingCall && nodep != m_startNodep) {
-            UASSERT_OBJ(VN_IS(m_startNodep, Netlist), nodep,
-                        "AstCFunc not under AstCCall, or not start node");
-            if (m_funcCosts.count(nodep)) return;
+        // Only reached directly from a netlist, as the start node and called functions are
+        // walked by 'walkFunction'. From a netlist, count each CFunc once, where first reached.
+        UASSERT_OBJ(VN_IS(m_startNodep, Netlist), nodep,
+                    "AstCFunc not under AstCCall, or not start node");
+        if (m_finding) {
+            m_foundp->emplace_back(nodep, true);
+            return;
         }
+        if (!m_directFirst.count(nodep)) return;
         UASSERT_OBJ(!m_ignoreRemaining, nodep, "Should not be ignoring at the start of a CFunc");
-        const auto emplacePair = m_funcCosts.emplace(nodep, 0);
-        UASSERT_OBJ(emplacePair.second, nodep, "Should visit every CFunc at most once");
-        // The caller's branch counts the call, not the statements within
-        VL_RESTORER(m_unlikely);
-        uint32_t& funcCostr = emplacePair.first->second;
-        m_tracingCall = false;
-
-        const uint32_t savedCount = m_instrCount;
-        reset();
-        {
-            VL_RESTORER(m_inCFunc);
-            m_inCFunc = true;
-            const VisitBase vb{this, nodep};
-            iterateChildrenConst(nodep);
-        }
-        funcCostr = m_instrCount;
-        m_instrCount += savedCount;
-
-        m_ignoreRemaining = false;
+        m_instrCount += m_funcCosts.at(nodep);
     }
     void visit(AstNodeCons* nodep) override {
         if (m_ignoreRemaining) return;
