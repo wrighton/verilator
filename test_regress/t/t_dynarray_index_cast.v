@@ -304,6 +304,20 @@ module t (
     `checkd(xq.size(), 4);
   end
 
+  // ... and so does an index with Z bits
+  initial begin
+    automatic int zd[] = '{10, 11, 12, 13};
+    automatic int zq[$] = '{20, 21, 22, 23};
+    `checkd(zd[4'bz001], 0);
+    `checkd(zq[4'bz000], 0);
+    `checkd(zq[$-4'bz001], 0);
+    zd[4'bz000] = 99;
+    zq[4'bz001] = 98;
+    `checkd(zd[0], 10);
+    `checkd(zq[1], 21);
+    `checkd(zq.size(), 4);
+  end
+
   // Nested dynamic arrays and queues, also below a fixed dimension with nonzero bounds
   int static_d[] = '{10, 11, 12};
   initial begin

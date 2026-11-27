@@ -3546,6 +3546,28 @@ class TristateVisitor final : public TristateBaseVisitor {
     }
 
     // Default: Just iterate
+    // A constant index of a dynamic, queue or associative array element drives nothing, so its
+    // Z bits are left to V3Unknown, which reads such an index as invalid
+    void visitDynElement(AstNode* nodep, AstNodeExpr* fromp, AstNodeExpr* indexp) {
+        iterateAndNextNull(fromp);
+        if (!VN_IS(indexp, Const)) iterate(indexp);
+        iterateAndNextNull(indexp->nextp());
+        checkUnhandled(nodep);
+    }
+    void visit(AstAssocSel* nodep) override {
+        visitDynElement(nodep, nodep->fromp(), nodep->bitp());
+    }
+    void visit(AstWildcardSel* nodep) override {
+        visitDynElement(nodep, nodep->fromp(), nodep->bitp());
+    }
+    void visit(AstCMethodHard* nodep) override {
+        if (!nodep->method().isDynElementAccess()) {
+            iterateChildren(nodep);
+            checkUnhandled(nodep);
+            return;
+        }
+        visitDynElement(nodep, nodep->fromp(), nodep->pinsp());
+    }
     void visit(AstNode* nodep) override {
         iterateChildren(nodep);
         checkUnhandled(nodep);
