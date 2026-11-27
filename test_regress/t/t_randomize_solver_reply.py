@@ -63,8 +63,9 @@ runs = [
     ('model_trunc', 1, 0),  # unterminated model, then the pipe closes
     # Unterminated reply to a spreading query, then the pipe closes, in each solver started: a
     # flat call keeps the solution found before spreading, and a phased call, which spreads
-    # each layer, fails, but the solver is restarted and never given up
-    ('model_trunc', 4, 12),
+    # each layer, fails, but the solver is restarted and never given up. A call pausing
+    # spreading after a break keeps its solver, which then cuts a solve short.
+    ('model_trunc', 4, 11),
     ('multiline', 1, 16),  # S-expression split one token per line
     ('no_digits', 1, 15),  # a base marker with no digits after it
     ('octal', 1, 16),  # octal values
