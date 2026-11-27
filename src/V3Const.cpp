@@ -2730,7 +2730,8 @@ class ConstVisitor final : public VNVisitor {
             if (lowerAsFixedAggregate(srcDTypep)) {
                 srcp = packFixedAggregate(srcp);
             } else if (VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType)) {
-                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)) {
+                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)
+                    || VN_IS(dstDTypep, UnpackArrayDType)) {
                     int srcElementBits = 0;
                     if (const AstNodeDType* const elemDtp = srcDTypep->subDTypep()) {
                         srcElementBits = elemDtp->width();
@@ -2942,6 +2943,11 @@ class ConstVisitor final : public VNVisitor {
                         || VN_IS(srcDTypep, UnpackArrayDType))) {
                 const bool dynamicDst
                     = VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType);
+                // A dynamically sized source streams into a fixed-size unpacked target as into
+                // a queue, V3Width having checked its elements are packed
+                const bool arrayDst = dynamicDst
+                                      || (VN_IS(dstDTypep, UnpackArrayDType)
+                                          && !VN_IS(srcDTypep, UnpackArrayDType));
                 if (dynamicDst || !VN_IS(srcDTypep, UnpackArrayDType)) {
                     const uint32_t blockSize = streamBlockSize(streamp);
                     int srcElementBits = 0;
@@ -2951,7 +2957,7 @@ class ConstVisitor final : public VNVisitor {
                     // A dynamically sized source is reversed before packing it left-justified,
                     // as its width is not known
                     AstNodeDType* const arrayDTypep
-                        = dynamicDst ? dstDTypep : srcp->dtypep()->skipRefp();
+                        = arrayDst ? dstDTypep : srcp->dtypep()->skipRefp();
                     int dstElementBits = 0;
                     if (const AstNodeDType* const elemDtp = arrayDTypep->subDTypep()) {
                         dstElementBits = elemDtp->width();
@@ -2965,7 +2971,7 @@ class ConstVisitor final : public VNVisitor {
                     srcp = new AstCvtArrayToArray{
                         srcp->fileline(), srcp,           arrayDTypep,   true,
                         blockSize,        dstElementBits, srcElementBits};
-                    if (!dynamicDst) {
+                    if (!arrayDst) {
                         srcp = new AstCvtArrayToPacked{srcp->fileline(), srcp, dstDTypep};
                     }
                     nodep->rhsp(srcp);

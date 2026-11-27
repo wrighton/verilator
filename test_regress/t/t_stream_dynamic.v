@@ -194,10 +194,73 @@ module t;
     `checkh(rbits, 64'hefbeaddefecadefa);
   endtask
 
+  // Dynamically sized operand into fixed-size unpacked arrays
+  task test4;
+    int q[$];
+    byte dyn8[];
+    int up3[3];
+    int up4[4];
+    int desc[4:2];
+    int asc[1:3];
+    bit [14:0] up15[2];
+    bit [94:0] up95[2];
+    byte q8[$];
+    bit [7:0] a1[1];
+    byte bq8[$:4];
+    bit [7:0] a3[3];
+
+    q.push_back(1);
+    q.push_back(2);
+    q.push_back(3);
+    up3 = {>>{q}};
+    `checkp(up3, "'{'h1, 'h2, 'h3}");
+    // A narrower stream is zero-filled on the right
+    up4 = '{9, 9, 9, 9};
+    up4 = {>>{q}};
+    `checkp(up4, "'{'h1, 'h2, 'h3, 'h0}");
+    up3 = {<<8{q}};
+    `checkp(up3, "'{'h3000000, 'h2000000, 'h1000000}");
+    desc = {>>{q}};
+    `checkh(desc[4], 1);
+    `checkh(desc[3], 2);
+    `checkh(desc[2], 3);
+    asc = {<<{q}};
+    `checkh(asc[1], 32'hc0000000);
+    `checkh(asc[2], 32'h40000000);
+    `checkh(asc[3], 32'h80000000);
+    up95 = '{'1, '1};
+    up95 = {>>{q}};
+    `checkh(up95[0], 95'h0_80000001_00000001);
+    `checkh(up95[1], 95'h40000000_00000000_00000000);
+
+    dyn8 = new[3] ('{8'h12, 8'h34, 8'h56});
+    up15 = {>>{dyn8}};
+    `checkh(up15[0], 15'h091a);
+    `checkh(up15[1], 15'h1580);
+
+    // Bytes into a byte array, not filling a 32-bit word
+    q8 = '{8'h41};
+    a1 = {>>{q8}};
+    `checkh(a1[0], 8'h41);
+    q8 = '{8'h61, 8'h5a, 8'h21};
+    a3 = {>>{q8}};
+    `checkp(a3, "'{'h61, 'h5a, 'h21}");
+    a3 = {<<8{q8}};
+    `checkp(a3, "'{'h21, 'h5a, 'h61}");
+    // From a bounded queue
+    bq8 = '{8'h41};
+    a1 = {>>{bq8}};
+    `checkh(a1[0], 8'h41);
+    bq8 = '{8'h61, 8'h5a, 8'h21};
+    a3 = {<<8{bq8}};
+    `checkp(a3, "'{'h21, 'h5a, 'h61}");
+  endtask
+
   initial begin
     test1();
     test2();
     test3();
+    test4();
     $write("*-* All Finished *-*\n");
     $finish;
   end

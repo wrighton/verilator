@@ -539,6 +539,11 @@ public:
     }
 
     void visit(AstCvtArrayToArray* nodep) override {
+        // A descending fixed-size target takes the first element at its highest index
+        const AstUnpackArrayDType* const unpackDtp
+            = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
+        const bool descending = unpackDtp && !unpackDtp->declRange().ascending();
+        if (descending) puts("VL_PACK_REVERSED(");
         // The result type, as its elements may differ from the source's
         puts(nodep->reverse() ? "VL_REVCLONE_Q<" : "VL_CLONE_Q<");
         puts(nodep->dtypep()->cType("", false, false));
@@ -551,6 +556,7 @@ public:
         puts(", ");
         puts(cvtToStr(nodep->dstElementBits()));
         puts(")");
+        if (descending) puts(")");
     }
 
     void visit(AstCvtArrayToPacked* nodep) override {
@@ -682,7 +688,7 @@ public:
         bool paren = true;
         bool decind = false;
         bool rhs = true;
-        bool reverseUnpack = false;  // Set for descending CvtPackedToArray
+        bool reverseUnpack = false;  // Set for descending CvtPackedToArray/CvtArrayToArray
         const AstUnpackArrayDType* const unpackDtp
             = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
         if (AstSel* const selp = VN_CAST(nodep->lhsp(), Sel)) {
@@ -772,6 +778,8 @@ public:
             puts(cvtToStr(castp->srcElementBits()));
             puts(", ");
             puts(cvtToStr(castp->dstElementBits()));
+            // Descending unpacked dest: reverse after copy
+            if (unpackDtp && !unpackDtp->declRange().ascending()) reverseUnpack = true;
         } else if (nodep->isWide() && !unpackDtp && VN_IS(nodep->lhsp(), VarRef)  //
                    && !VN_IS(nodep->rhsp(), CExpr)  //
                    && !VN_IS(nodep->rhsp(), CMethodHard)  //

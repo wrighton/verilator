@@ -3213,6 +3213,24 @@ inline void VL_REVCOPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, uint
     VL_COPY_Q(q, srcQ, lbits, srcElementBits, dstElementBits);
 }
 
+// Overloads for VlQueue source -> fixed-size VlUnpacked destination
+template <typename T_Dst, std::size_t N_Depth, typename T_Src, std::size_t N_SrcMaxSize>
+inline void VL_COPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+                      uint32_t lbits, int srcElementBits, int dstElementBits) {
+    VlQueue<T_Dst> dstQ;
+    VL_COPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
+    // Elements past a shorter stream read as zero (IEEE 1800-2023 11.4.14)
+    for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
+}
+
+template <typename T_Dst, std::size_t N_Depth, typename T_Src, std::size_t N_SrcMaxSize>
+inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+                         uint32_t lbits, int srcElementBits, int dstElementBits) {
+    VlQueue<T_Dst> dstQ;
+    VL_REVCOPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
+    for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
+}
+
 //======================================================================
 // Expressions needing insert/select
 

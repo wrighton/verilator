@@ -12468,13 +12468,27 @@ public:
                                        << lwidth << " bits) is narrower than the stream ("
                                        << rwidth << " bits) (IEEE 1800-2023 11.4.14)");
             }
-            if (VN_IS(streamp->lhsp()->dtypep()->skipRefp(), QueueDType)
-                && !lhsDTypeSkippedRefp->isDynamicallySized()) {
-                const int queueElementSize = streamp->lhsp()->dtypep()->subDTypep()->width();
+            const AstNodeDType* const srcDTypep = streamp->lhsp()->dtypep()->skipRefp();
+            const bool dynamic = VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType);
+            const bool fixedTarget = VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
+                                     || lowerAsFixedAggregate(lhsDTypeSkippedRefp);
+            // V3Const streams a dynamically sized operand of packed elements as into a queue
+            const bool asQueue
+                = dynamic && VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
+                  && lhsDTypeSkippedRefp->subDTypep()->skipRefp()->isIntegralOrPacked()
+                  && srcDTypep->subDTypep()->skipRefp()->isIntegralOrPacked();
+            if (fixedTarget && dynamic && !asQueue) {
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: Stream of "
+                                                 << srcDTypep->prettyDTypeNameQ() << " into "
+                                                 << lhsDTypeSkippedRefp->prettyDTypeNameQ()
+                                                 << ".");
+            }
+            if (VN_IS(srcDTypep, QueueDType) && !lhsDTypeSkippedRefp->isDynamicallySized()
+                && !fixedTarget) {
+                const int queueElementSize = srcDTypep->subDTypep()->width();
                 UASSERT_OBJ(queueElementSize <= lwidth, nodep, "LHS < RHS");
             }
-            if (VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
-                || lowerAsFixedAggregate(lhsDTypeSkippedRefp)) {
+            if (fixedTarget && !asQueue) {
                 streamp->unlinkFrBack();
                 nodep->rhsp(
                     new AstCvtPackedToArray{streamp->fileline(), streamp, lhsDTypeSkippedRefp});
