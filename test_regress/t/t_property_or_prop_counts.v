@@ -27,7 +27,7 @@ module t (
 
   int n_fail1 = 0, n_fail2 = 0, n_fail3 = 0, n_fail4 = 0, n_fail5 = 0, n_fail6 = 0;
   int n_fail7 = 0, n_fail8 = 0, n_fail9 = 0, n_fail10 = 0, n_fail11 = 0, n_fail12 = 0;
-  int n_fail13 = 0, n_fail14 = 0, n_fail15 = 0, n_pass16 = 0;
+  int n_fail13 = 0, n_fail14 = 0, n_fail15 = 0, n_pass16 = 0, n_fail17 = 0, n_fail18 = 0;
 
   // An implication with a boolean operand
   assert property (@(posedge clk) disable iff (cyc > END) (a |-> ##1 b) or c)
@@ -52,13 +52,17 @@ module t (
   assert property (@(posedge clk) disable iff (cyc > END) !a or (s_always [0:2] a))
   else ++n_fail10;
   // An implication in the other operand of a boolean keeps the operand split off behind the
-  // boolean, where a delay ring counts the attempts failing on one tick once (known limit)
+  // boolean, where a delay ring holds the threads of several attempts, each failing once
   assert property (@(posedge clk) disable iff (cyc > END) d or (b |-> always [0:2] a))
   else ++n_fail13;
   assert property (@(posedge clk) disable iff (cyc > END) d or (b |=> s_always [0:3] a))
   else ++n_fail14;
   assert property (@(posedge clk) disable iff (cyc > END) d or (b |-> always [1:3] a))
   else ++n_fail15;
+  assert property (@(posedge clk) disable iff (cyc > END) d or (b |=> always [0:4] a))
+  else ++n_fail17;
+  assert property (@(posedge clk) disable iff (cyc > END) d or (b |-> s_always [2:4] a))
+  else ++n_fail18;
   // The attempts passing on one tick pass once (known limit)
   assert property (@(posedge clk) disable iff (cyc > END) d or (always [0:1] a)) ++n_pass16;
   else begin
@@ -84,7 +88,7 @@ module t (
     end
     if (cyc == END + 3) begin
       automatic int e1 = 0, e2 = 0, e3 = 0, e4 = 0, e5 = 0, e6 = 0, e7 = 0, e8 = 0, e10 = 0;
-      automatic int e11 = 0, e12 = 0, e13 = 0, e14 = 0, e15 = 0, p16 = 0;
+      automatic int e11 = 0, e12 = 0, e13 = 0, e14 = 0, e15 = 0, p16 = 0, e17 = 0, e18 = 0;
       automatic bit passAt[END + 4];
       // Count the failures of attempts started on cycle s on the cycles they fail, up to END
       for (int s = 0; s <= END; ++s) begin
@@ -135,6 +139,18 @@ module t (
               break;
             end
           end
+          for (int k = 1; k <= 5; ++k) begin
+            if (!ha[s+k]) begin
+              if (s + k <= END) ++e17;
+              break;
+            end
+          end
+          for (int k = 2; k <= 4; ++k) begin
+            if (!ha[s+k]) begin
+              if (s + k <= END) ++e18;
+              break;
+            end
+          end
         end
         // An attempt passes on its tick with d, or else on the next with a on both
         if (hd[s]) passAt[s] = 1'b1;
@@ -152,13 +168,11 @@ module t (
       `checkd(n_fail10, e10);
       `checkd(n_fail11, e11);
       `checkd(n_fail12, e12);
-      // Each attempt failing would give e13, e14 and e15: 33, 44 and 35
-      `checkd(e13, 33);
-      `checkd(e14, 44);
-      `checkd(e15, 35);
-      `checkd(n_fail13, 28);
-      `checkd(n_fail14, 32);
-      `checkd(n_fail15, 29);
+      `checkd(n_fail13, e13);
+      `checkd(n_fail14, e14);
+      `checkd(n_fail15, e15);
+      `checkd(n_fail17, e17);
+      `checkd(n_fail18, e18);
       // Once for each tick with a pass
       foreach (passAt[t]) p16 += passAt[t];
       `checkd(n_pass16, p16);
