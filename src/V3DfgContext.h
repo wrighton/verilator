@@ -66,6 +66,7 @@ public:
     VDouble0 m_nonRepCfg;  // Non-representable due to failing to build CFG
     VDouble0 m_nonRepLive;  // Non-representable due to failing liveness analysis
     VDouble0 m_nonRepVar;  // Non-representable due to unsupported variable properties
+    VDouble0 m_nonRepSelfRead;  // Non-representable always_comb reading what it writes
 
 private:
     V3DfgAstToDfgContext()
@@ -76,8 +77,10 @@ private:
         addStat("non-representable (cfg)", m_nonRepCfg);
         addStat("non-representable (live)", m_nonRepLive);
         addStat("non-representable (var)", m_nonRepVar);
+        addStat("non-representable (self read)", m_nonRepSelfRead);
         // Check the stats are consistent
-        UASSERT(m_representable + m_nonRepCfg + m_nonRepLive + m_nonRepVar == m_inputs,
+        UASSERT(m_representable + m_nonRepCfg + m_nonRepLive + m_nonRepVar + m_nonRepSelfRead
+                    == m_inputs,
                 "Inconsistent statistics");
     }
 };

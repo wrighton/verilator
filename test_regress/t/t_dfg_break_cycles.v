@@ -388,7 +388,8 @@ module t (
 
   // verilator lint_off ALWCOMBORDER
   logic [3:0] always_2;
-  always_comb begin
+  // Not an always_comb, which would not be sensitive to what it writes
+  always @* begin
     always_2[2:0] = 3'((always_2 << 1) | 4'(rand_a[0]));
     always_2[3] = rand_a[0];
   end

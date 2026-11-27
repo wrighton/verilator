@@ -27,6 +27,7 @@
 #include "V3Const.h"
 #include "V3Dfg.h"
 #include "V3DfgPasses.h"
+#include "V3Sched.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -145,6 +146,7 @@ class AstToDfgVisitor final : public VNVisitorConst {
     DfgGraph& m_dfg;  // The graph being built
     V3DfgAstToDfgContext& m_ctx;  // The context for stats
     AstScope* m_scopep = nullptr;  // The current scope, iff T_Scoped
+    const V3Sched::util::SoleWriterMap m_soleWriters;  // The only writer of each variable
 
     // METHODS
 
@@ -292,6 +294,14 @@ class AstToDfgVisitor final : public VNVisitorConst {
         // Gather read variables, give up if any are not supported
         const std::unique_ptr<std::vector<DfgVertexVar*>> iVarpsp = gatherLive(*cfgp);
         if (!iVarpsp) return false;
+        // Keep a user's always_comb that reads, before writing, what only it writes, as it is
+        // not sensitive to that (IEEE 1800-2023 9.2.2.2.1), which scheduling takes from it
+        size_t selfWritten = 0;
+        V3Sched::util::computeImplicitSensitivities(nodep, m_soleWriters, selfWritten);
+        if (selfWritten) {
+            ++m_ctx.m_nonRepSelfRead;
+            return false;
+        }
         // Create the DfgLogic
         DfgLogic* const logicp = new DfgLogic{m_dfg, nodep, m_scopep, std::move(cfgp)};
         // Connect it up
@@ -335,7 +345,8 @@ class AstToDfgVisitor final : public VNVisitorConst {
     // CONSTRUCTOR
     AstToDfgVisitor(DfgGraph& dfg, AstNetlist& root, V3DfgAstToDfgContext& ctx)
         : m_dfg{dfg}
-        , m_ctx{ctx} {
+        , m_ctx{ctx}
+        , m_soleWriters{V3Sched::util::computeSoleWriters(&root)} {
         iterateConst(&root);
     }
     VL_UNCOPYABLE(AstToDfgVisitor);

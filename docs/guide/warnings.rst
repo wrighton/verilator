@@ -110,6 +110,12 @@ List Of Warnings
         tmp = b;
       end
 
+   As the block writes ``tmp``, it is not sensitive to ``tmp`` (IEEE
+   1800-2023 9.2.2.2.1), so it does not run again when it changes ``tmp``,
+   and ``y`` keeps using the previous value until something else the block
+   reads changes. Verilator applies this to a variable only the block
+   writes, including in a task it calls.
+
    If the new value of ``tmp`` is intended, assign ``tmp`` before reading it.
    Suppressing this warning may make results vary between simulators.
 

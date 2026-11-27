@@ -378,6 +378,27 @@ and all combinational logic that depends on such variables is converted
 into hybrid logic, with the back-edge driven variables listed as explicit
 'changed' sensitivities.
 
+An ``always_comb`` is not sensitive to what it writes (IEEE 1800-2023
+9.2.2.2.1), so ``V3Sched::util::computeImplicitSensitivities`` leaves the
+variables only that process writes out of its implicit sensitivities, and
+it reads them as a latch would. Such a variable is then no cycle. As the
+process is then not idempotent, it is made hybrid logic with explicit
+sensitivities on all it is still sensitive to, so it runs once at time
+zero, when the 'act' region first runs, and then once per change of those,
+and is not settled in 'stl'. V3Split does not split it. One left sensitive
+to nothing runs once at time zero, as initial logic. This uses a flag on
+the ``AstAlways`` from the parser, as other passes create ``always_comb``
+processes too. The writes of an inlined task count, though IEEE only
+excludes those of a function. Reads that optimizations remove before
+scheduling do not count, so ``if (x || 1'b1)`` is not sensitive to ``x``.
+If a change of something else the process reads cannot be detected, such as
+of a queue, is of a variable whose writes scheduling ignores, or is of a
+public variable, nothing is left out, so a cycle stays one and is reported.
+Reads in the action blocks of immediate assertions are not implicit
+sensitivities of an ``always_comb`` either (IEEE 1800-2023 9.2.2.2.1):
+V3Assert marks the references there, and V3Task those of the bodies it
+inlines for calls there, with ``inAssertAction``.
+
 Hybrid logic is handled by ``V3Order`` mostly in the same way as
 combinational logic, with two exceptions:
 
