@@ -1,5 +1,5 @@
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:15:53: Unsupported: sequence 'or' with an operand that is not a fixed-length sequence of boolean expressions in an asserted property (IEEE 1800-2023 16.9.7)
-   15 |   assert property (@(posedge clk) a |-> (##[1:2] b) or (##3 c));
+   15 |   assert property (@(posedge clk) a |-> (##[1:$] b) or (##3 c));
       |                                                     ^~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:16:46: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
@@ -37,14 +37,14 @@
    34 |   assert property (@(posedge clk) not ((always [0:1] a) or (b ##[2:3] c)));
       |                                                         ^~
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:35:50: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
-   35 |   assert property (@(posedge clk) not ((a #=# b) or (c ##[2:3] a)));
+   35 |   assert property (@(posedge clk) not ((a #=# b) or (c ##[2:$] a)));
       |                                                  ^~
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:36:41: Unsupported: 's_eventually' in complex property expression
                                                  : ... note: In instance 't'
    36 |   assert property (@(posedge clk) not ((s_eventually a) or (b ##1 c)));
       |                                         ^~~~~~~~~~~~
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:37:58: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
-   37 |   assert property (@(posedge clk) not (((a |-> b) and a) or (a ##[1:2] c)));
+   37 |   assert property (@(posedge clk) not (((a |-> b) and a) or (a ##[1:$] c)));
       |                                                          ^~
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:38:51: Unsupported: sequence antecedent of an implication in a negated property
                                                  : ... note: In instance 't'

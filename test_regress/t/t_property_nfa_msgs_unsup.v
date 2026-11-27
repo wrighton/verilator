@@ -65,8 +65,8 @@ module t (
 
   // A negated implication's vacuous success is tracked only at the end of the property
   // and for a boolean antecedent
-  assert property (@(posedge clk) not ((a ##1 b) |=> c));
-  assert property (@(posedge clk) not ((a |=> b [* 1:2]) or c));
+  assert property (@(posedge clk) not ((a ##[1:2] b) |=> c));
+  assert property (@(posedge clk) not ((a |=> b [* 1:$]) or c));
 
   // A 'not' of a multi-cycle operand below another property operator
   assert property (@(posedge clk) ((a ##1 b) and (c ##1 d)) or (not (a ##1 b) and not (c ##1 d)));
