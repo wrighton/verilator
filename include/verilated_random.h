@@ -358,6 +358,15 @@ class VlRandomizer VL_NOT_FINAL {
     ArrayInfoMap m_arr_vars;  // Tracks each element in array structures for iteration
     // Arrays whose elements must be distinct grouped by unique constraint
     std::map<uint32_t, std::unordered_set<std::string>> m_uniqueArrays;
+    // The values a hard constraint allows every element of an array, see uniqueDomainsUnsat
+    struct UniqueDomain final {
+        size_t constraint;  // Index of the constraint on the first element, for its warning
+        uint32_t width;  // Of an element
+        bool isSigned;
+        std::vector<std::pair<uint64_t, uint64_t>> ranges;  // Keys of the values, in order
+    };
+    std::unordered_map<std::string, std::vector<UniqueDomain>> m_uniqueDomains;
+    std::string m_uniqueDomainName;  // Of the array unique_range() adds values to
     // Variable name and constraint of each pin_frozen()
     std::vector<std::pair<std::string, std::string>> m_frozenPins;
     std::vector<std::string> m_tables;  // Body of each table
@@ -642,6 +651,17 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<int> readUnsatAssumptions(VlSolverSession& sess);
     void reportUnsatSetup(VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
     void reportUnsatCore(VlSolverSession& sess);
+    void warnUnsatConstraint(size_t n) const;
+    using UniqueRanges = std::vector<std::pair<uint64_t, uint64_t>>;  // Keys, in order
+    // The values each array of a uniqueness group, sorted names, may take: what all the domains
+    // registered for it allow. False when an array has none, so may take any value
+    bool uniqueAllowed(const std::vector<std::string>& names,
+                       std::vector<UniqueRanges>& allowedr) const;
+    // Whether a uniqueness group has more elements than values for them, in an array or in all
+    bool uniqueDomainsUnsat() const;
+    // For the solve of array sizes, bound the sizes of the arrays of each uniqueness group to
+    // the values for them, each array and all together
+    void addUniqueSizeBounds(std::vector<std::string>& exprs) const;
     void emitRandcExclusions(std::ostream& os) const;  // Emit randc exclusion constraints
     void recordRandcValues();  // Record solved randc values for future exclusion
     size_t hashConstraints(const std::vector<std::string>& extras, bool randcOnly = false) const;
@@ -1164,6 +1184,15 @@ public:
     // solve time, so a container resized by the solver is handled correctly.
     void rand_unique(const std::string& name, const uint32_t key) {
         m_uniqueArrays[key].insert(name);
+    }
+    // Start the values a hard constraint, registered next, allows every element of an array
+    void unique_domain(const std::string& name, uint32_t width, bool isSigned) {
+        m_uniqueDomains[name].push_back(UniqueDomain{m_constraints.size(), width, isSigned, {}});
+        m_uniqueDomainName = name;
+    }
+    // Add values lo to hi, keys ordered from the least signed value, to the values started
+    void unique_range(uint64_t lo, uint64_t hi) {
+        m_uniqueDomains[m_uniqueDomainName].back().ranges.emplace_back(lo, hi);
     }
 
     // Recursively record all elements in an unpacked array
