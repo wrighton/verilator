@@ -140,6 +140,36 @@ Options:
    the default would sample without the solver (see
    :vlopt:`-fno-constraint-fast`) are also given to the solver.
 
+   For eligible solver-backed ``dist`` constraints, whose weights, bounds,
+   indices, and guards read no random variables, Verilator takes the weighted
+   draw before selecting the other values. Such a hard constraint, or a soft
+   one kept by soft-constraint relaxation, allows only the items with a
+   nonzero weight: an active hard one whose weights are all zero makes
+   ``randomize()`` fail, while a soft one is discarded during relaxation.
+   These constraints accept ranges wider than 64 bits. For a variable or an
+   element at fixed indices, point trials are limited to the values the target
+   can hold; for a compound target they are not, which makes the point-trial
+   warning more likely there. This changes only where points are tried, not
+   the weight of a bucket. Every other ``dist`` constraint keeps its existing
+   handling, including its range-size restrictions and diagnostics: values
+   stay inside the distribution, a distribution whose items all have a
+   constant zero weight accepts any value, and weights may be followed less
+   closely when other constraints restrict the values. This applies to
+   unsupported targets or comparison types, to targets whose elements have
+   their own ``rand_mode``, to weights, bounds, indices, and guards that use
+   ``$countones`` or ``**``, to constraints with more items than the
+   compile-time item limit or that exceed the compile-time sampling limit, and
+   to classes that require a phased solve (``solve before``, random-dependent
+   function arguments, random array sizes, or a phased ``with`` clause), along
+   with their ancestors and descendants. A weighted draw that is unusually
+   hard to satisfy may stop early; Verilator then reports a runtime warning,
+   and the constraint still holds but may not follow its weights.
+
+   In ``default`` mode Verilator then tries a limited number of random
+   choices for the other values instead of using the internal algorithm
+   described above. In ``solver`` mode it still takes the weighted draw,
+   but leaves the other values to the solver.
+
    The default sampler can also be specified using the
    :option:`VERILATOR_RAND_SAMPLER` environment variable.
 

@@ -12,6 +12,8 @@ class C;
   rand bit [99:0] z;
   bit [99:0] lo = 5;
   constraint c_z {z dist {[lo : 20] :/ 1};}
+  // A class with solve before still reports ranges wider than 64 bits as unsupported.
+  constraint c_order {solve y before sy, z;}
 endclass
 
 module t;

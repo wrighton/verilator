@@ -76,6 +76,24 @@ understand Verilator's warning output should read the SARIF JSON output
 created with :vlopt:`--diagnostics-sarif`.
 
 
+Runtime Constraint Diagnostics
+==============================
+
+* ``DIST weighting limited: sampling limit reached``: Verilator reached its
+  sampling limit for an active hard or retained soft ``dist`` constraint,
+  either before it chose a weighted bucket or while it tried points in a
+  bucket it had already chosen and kept.
+* ``DIST weighting limited: no uniform point found in the selected bucket``:
+  None of the points sampled from the chosen bucket satisfied the constraints.
+  Verilator keeps the selected bucket; the solver may choose any satisfying
+  point in it. Ordinary legal code can trigger this warning when the
+  satisfying values are sparse within a bucket, for example an enumeration
+  with gaps in its values.
+
+These runtime warnings cannot be suppressed. Verilator warns at most once
+per warning kind per source location per simulator process. The observed
+distribution may differ from the requested weights.
+
 List Of Warnings
 ================
 

@@ -1,0 +1,16 @@
+Inactive constraint checked
+Check-only constraint checked
+Active constraint checked
+Many-draw admission check
+%Warning: t/t_constraint_dist_indep.v:41: DIST weighting limited: sampling limit reached
+Many-draw satisfying models retained
+Tail draw after cut draws
+%Warning: t/t_constraint_dist_indep.v:132: DIST weighting limited: sampling limit reached
+%Warning: t/t_constraint_dist_indep.v:137: DIST weighting limited: sampling limit reached
+Rejected bucket checks
+%Warning: t/t_constraint_dist_indep.v:59: DIST weighting limited: sampling limit reached
+%Warning: t/t_constraint_dist_indep.v:73: DIST weighting limited: sampling limit reached
+Spreading after rejected buckets
+Batch restored after spreading
+Singleton clamp check
+*-* All Finished *-*

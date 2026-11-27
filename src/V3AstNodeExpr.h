@@ -605,7 +605,11 @@ class AstDistItem final : public AstNode {
     // Constraint distribution item
     // @astgen op1 := rangep : AstNodeExpr
     // @astgen op2 := weightp : AstNodeExpr
+    // @astgen op3 := itemRangep : Optional[AstNodeExpr]  // Item-local comparison operand
+    // @astgen op4 := itemTargetp : Optional[AstNodeExpr]  // Target in the same context
     bool m_isWhole = false;  // True for weight ':/', false for ':='
+    bool m_distOpenLow = false;  // Lower endpoint is '$'
+    bool m_distOpenHigh = false;  // Upper endpoint is '$'
 public:
     AstDistItem(FileLine* fl, AstNodeExpr* rangep, AstNodeExpr* weightp)
         : ASTGEN_SUPER_DistItem(fl) {
@@ -617,6 +621,15 @@ public:
     void dumpJson(std::ostream& str) const override;
     void isWhole(bool flag) { m_isWhole = flag; }
     bool isWhole() const { return m_isWhole; }
+    void distOpenLow(bool flag) { m_distOpenLow = flag; }
+    bool distOpenLow() const { return m_distOpenLow; }
+    void distOpenHigh(bool flag) { m_distOpenHigh = flag; }
+    bool distOpenHigh() const { return m_distOpenHigh; }
+    bool sameNode(const AstNode* samep) const override {
+        const AstDistItem* const otherp = VN_DBG_AS(samep, DistItem);
+        return isWhole() == otherp->isWhole() && distOpenLow() == otherp->distOpenLow()
+               && distOpenHigh() == otherp->distOpenHigh();
+    }
 };
 class AstPatternItem final : public AstNode {
     // Item of an AstPattern: 'value', 'key: value', 'default: value' or 'count{values}'
@@ -1507,6 +1520,9 @@ public:
 class AstDist final : public AstNodeExpr {
     // @astgen op1 := exprp : AstNodeExpr
     // @astgen op2 := itemsp : List[AstDistItem]
+    // @astgen op3 := drawGatep : Optional[AstNodeExpr]  // Draw only while the target is enabled
+    int m_distLhsWidth = 0;  // Original LHS width, or zero without prepared views
+    bool m_distVarRef = false;  // Original LHS directly reads a scalar or fixed element
 public:
     AstDist(FileLine* fl, AstNodeExpr* exprp, AstDistItem* itemsp)
         : ASTGEN_SUPER_Dist(fl) {
@@ -1515,6 +1531,16 @@ public:
         dtypeSetBit();
     }
     ASTGEN_MEMBERS_AstDist;
+    int distLhsWidth() const { return m_distLhsWidth; }
+    void distLhsWidth(int width) { m_distLhsWidth = width; }
+    bool distVarRef() const { return m_distVarRef; }
+    void distVarRef(bool flag) { m_distVarRef = flag; }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+    bool sameNode(const AstNode* samep) const override {
+        const AstDist* const otherp = VN_DBG_AS(samep, Dist);
+        return distLhsWidth() == otherp->distLhsWidth() && distVarRef() == otherp->distVarRef();
+    }
     string emitVerilog() override { return "%l dist { %r }"; }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return false; }  // NA

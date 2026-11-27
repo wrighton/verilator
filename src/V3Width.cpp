@@ -72,6 +72,8 @@
 
 #include "V3Width.h"
 
+#include "verilated_rand_limits.h"
+
 #include "V3Assert.h"
 #include "V3Ast.h"
 #include "V3Begin.h"
@@ -412,6 +414,7 @@ class WidthVisitor final : public VNVisitor {
     AstNodeModule* m_modep = nullptr;  // Current module
     const AstConstraint* m_constraintp = nullptr;  // Current constraint
     bool m_inConstraintExpr = false;  // Under a class or inline ('with') constraint expression
+    bool m_distView = false;  // Type an alternate DIST view without repeating width diagnostics
     AstNodeProcedure* m_procedurep = nullptr;  // Current final/always
     const AstNode* m_writerp = nullptr;  // Assign, driving pin, alias, etc. of the iterated lvalue
     // Arguments of the enclosing 'with' clauses, by name, innermost shadowing outer
@@ -5095,8 +5098,7 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstNodeCons* nodep) override {}  // Widthed when created
     void visit(AstNodeConsItem* nodep) override {}  // Widthed when created
-    void replaceDistUnbounded(AstNodeExpr* boundp, const AstNodeExpr* exprp, bool upper) {
-        if (!VN_IS(boundp, Unbounded)) return;
+    void replaceDistUnbounded(AstUnbounded* boundp, const AstNodeExpr* exprp, bool upper) {
         V3Number num{boundp, exprp->width(), 0};
         if (upper) num.setAllBits1();
         if (exprp->isSigned()) {
@@ -5105,6 +5107,101 @@ class WidthVisitor final : public VNVisitor {
         }
         boundp->replaceWith(new AstConst{boundp->fileline(), num});
         VL_DO_DANGLING(pushDeletep(boundp), boundp);
+    }
+    // Keep the common context for width diagnostics and build a separate view only
+    // when an item's comparison context differs.
+    void prepareDistViews(AstDist* const nodep, AstNodeDType* const sharedp) {
+        if (v3Global.opt.fourstate() || nodep->distLhsWidth()) return;
+        AstNodeExpr* const targetp = nodep->exprp();
+        if (!targetp->dtypep()->skipRefp()->isIntegralOrPacked() || !targetp->isPure()) return;
+        // A chain of element selects rooted in a variable is direct storage.
+        const bool directTarget = [&] {
+            const AstNodeExpr* basep = targetp;
+            while (true) {
+                if (const AstNodeSel* const selp = VN_CAST(basep, NodeSel)) {
+                    if (!VN_IS(selp, ArraySel) && !VN_IS(selp, AssocSel)) return false;
+                    basep = selp->fromp();
+                } else if (const AstCMethodHard* const atp = VN_CAST(basep, CMethodHard)) {
+                    if (atp->method() != VCMethod::ARRAY_AT) return false;
+                    basep = atp->fromp();
+                } else {
+                    return VN_IS(basep, VarRef);
+                }
+            }
+        }();
+        // Solver lowering decides on state operands; explicit random reads and expanding
+        // operators already rule a site out.
+        const auto excludedOperand = [](const AstNode* const exprp) {
+            return exprp->exists([](const AstNode* const partp) {
+                const AstVarRef* const refp = VN_CAST(partp, VarRef);
+                const AstMemberRef* const memberp = VN_CAST(partp, MemberRef);
+                return (refp && refp->varp()->rand().isRandomizable())
+                       || (memberp && memberp->varp()->rand().isRandomizable())
+                       || VN_IS(partp, CountOnes) || VN_IS(partp, Pow) || VN_IS(partp, PowSS)
+                       || VN_IS(partp, PowSU) || VN_IS(partp, PowUS);
+            });
+        };
+        // Every item, even a zero-weight one, must pass each check that keeps procedural
+        // weighting; only building the views and buckets skips zero-weight items.
+        unsigned items = 0;
+        for (const AstDistItem* const itemp : nodep->itemspList()) {
+            if (itemp->weightp()->width() > static_cast<int>(VlRandLimits::distMaxBits)
+                || std::max(targetp->width(), itemp->rangep()->width())
+                       > static_cast<int>(VlRandLimits::distMaxBits)) {
+                return;
+            }
+            // Stop before cloning a view for each of too many items.
+            if (++items > VlRandLimits::distMaxItems) return;
+            if (excludedOperand(itemp->weightp()) || excludedOperand(itemp->rangep())) return;
+            if (!itemp->weightp()->dtypep()->skipRefp()->isIntegralOrPacked()
+                || !itemp->rangep()->dtypep()->skipRefp()->isIntegralOrPacked()
+                || !itemp->rangep()->isPure()) {
+                return;
+            }
+            if (const AstInsideRange* const rangep = VN_CAST(itemp->rangep(), InsideRange)) {
+                if (itemp->distOpenLow() && itemp->distOpenHigh()) return;
+                if (itemp->distOpenLow() || itemp->distOpenHigh()) {
+                    // Widening a compound expression can change its value, not just its type.
+                    if (targetp->isSigned() && !rangep->isSigned()) return;
+                    if (!directTarget && rangep->width() > targetp->width()) return;
+                } else {
+                    // Each endpoint has its own comparison context before final widthing.
+                    const AstNodeExpr* const lop = rangep->lhsp();
+                    const AstNodeExpr* const hip = rangep->rhsp();
+                    const bool differentWidth = std::max(targetp->width(), lop->width())
+                                                != std::max(targetp->width(), hip->width());
+                    const bool differentSign
+                        = targetp->isSigned() && lop->isSigned() != hip->isSigned();
+                    if (differentWidth || differentSign) return;
+                }
+            }
+        }
+        VL_RESTORER(m_distView);
+        m_distView = true;
+        for (AstDistItem* const itemp : nodep->itemspList()) {
+            if (itemp->weightp()->isZero()) continue;
+            AstNodeExpr* const rangep = itemp->rangep();
+            const int width = std::max(targetp->width(), rangep->width());
+            const bool sign = targetp->isSigned() && rangep->isSigned();
+            const bool fourstate
+                = targetp->dtypep()->isFourstate() || rangep->dtypep()->isFourstate();
+            if (width == sharedp->width() && sign == sharedp->isSigned()) continue;
+            AstNodeDType* const domainp = nodep->findBitOrLogicDType(
+                width, std::max(targetp->widthMin(), rangep->widthMin()), VSigning::fromBool(sign),
+                fourstate);
+            itemp->itemTargetp(targetp->cloneTree(false));
+            itemp->itemRangep(rangep->cloneTree(false));
+            iterateCheck(nodep, "Dist expression", itemp->itemTargetp(), CONTEXT_DET, FINAL,
+                         domainp, EXTEND_EXP);
+            if (VN_IS(rangep, InsideRange)) {
+                userIterate(itemp->itemRangep(), WidthVP{domainp, FINAL}.p());
+            } else {
+                iterateCheck(nodep, "Dist Item", itemp->itemRangep(), CONTEXT_DET, FINAL, domainp,
+                             EXTEND_EXP);
+            }
+        }
+        nodep->distLhsWidth(targetp->width());
+        nodep->distVarRef(directTarget);
     }
     void visit(AstDist* nodep) override {
         //  x dist {a :/ p, b :/ q} --> (p > 0 && x == a) || (q > 0 && x == b)
@@ -5116,8 +5213,14 @@ class WidthVisitor final : public VNVisitor {
         if (m_inConstraintExpr && nodep->exprp()->dtypep()->skipRefp()->isIntegralOrPacked()) {
             for (AstDistItem* const itemp : nodep->itemspList()) {
                 if (AstInsideRange* const irp = VN_CAST(itemp->rangep(), InsideRange)) {
-                    replaceDistUnbounded(irp->lhsp(), nodep->exprp(), false);
-                    replaceDistUnbounded(irp->rhsp(), nodep->exprp(), true);
+                    if (AstUnbounded* const lop = VN_CAST(irp->lhsp(), Unbounded)) {
+                        itemp->distOpenLow(true);
+                        replaceDistUnbounded(lop, nodep->exprp(), false);
+                    }
+                    if (AstUnbounded* const hip = VN_CAST(irp->rhsp(), Unbounded)) {
+                        itemp->distOpenHigh(true);
+                        replaceDistUnbounded(hip, nodep->exprp(), true);
+                    }
                 }
             }
         }
@@ -5150,6 +5253,7 @@ class WidthVisitor final : public VNVisitor {
                 width, mwidth, nodep->exprp()->dtypep()->numeric(), isFourstate);
         }
 
+        if (m_inConstraintExpr) prepareDistViews(nodep, subDTypep);
         iterateCheck(nodep, "Dist expression", nodep->exprp(), CONTEXT_DET, FINAL, subDTypep,
                      EXTEND_EXP);
         for (AstDistItem* const ditemp : nodep->itemspList()) {
@@ -13232,7 +13336,7 @@ class WidthVisitor final : public VNVisitor {
                 return;
             }
             // An explicit cast suppresses width warnings in its expression.
-            if (m_underCast) warnOn = false;
+            if (m_underCast || m_distView) warnOn = false;
             if (parentp->fileline()->erroringOn() || underp->fileline()->erroringOn())
                 warnOn = false;
             if (VN_IS(underp, Const) && VN_AS(underp, Const)->num().isFromString()

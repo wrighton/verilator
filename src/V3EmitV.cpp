@@ -1154,6 +1154,12 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         iterateAndNextConstNull(nodep->rhsp());
         puts("]");
     }
+    void visit(AstDistItem* nodep) override {
+        // The generic debug form, without the internal item-local comparison operands
+        puts("\n???? // "s + nodep->prettyTypeNameQ() + "\n");
+        iterateAndNextConstNull(nodep->rangep());
+        iterateAndNextConstNull(nodep->weightp());
+    }
     void visit(AstRange* nodep) override {
         puts("[");
         if (VN_IS(nodep->leftp(), Const) && VN_IS(nodep->rightp(), Const)) {

@@ -42,7 +42,8 @@
 //   so hard/soft/randc semantics are untouched and rounds need no push/pop or
 //   re-asserting. See solveDiversity.
 #define _VL_SOLVER_HASH_LEN 1
-static constexpr int diversityMaxChecks = 512;  // Most solver checks to spread one solution
+using VlRandLimits::distTextWork;
+using VlRandLimits::diversityMaxChecks;
 static constexpr int diversityMaxSatisfied = 64;  // Most of them satisfied
 static constexpr int diversityWideBits = 64;  // Parts wider than this may stay unsplit
 static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to drop a part of all
@@ -609,9 +610,29 @@ static bool solverSamples() {
     return Verilated::threadContextp()->randSampler() == VerilatedRandSampler::SAMPLER_SOLVER;
 }
 
+class VlDistCheckBudget final {
+    VlRandomizer::DistSampler* const m_scopep;  // Budget and saved model for optional checks
+    int& m_local;  // Checks still allowed in the current diversity loop
+    VlDistCheckBudget*& m_slot;  // Non-null only while observing optional checks
+    bool m_pending = false;  // A reserved check whose status has not been read
+
+public:
+    VlDistCheckBudget(VlRandomizer::DistSampler* scopep, int& localr, VlDistCheckBudget*& slotr);
+    ~VlDistCheckBudget() {
+        assert(!m_pending);
+        m_slot = nullptr;
+    }
+    bool chargeWork(size_t work);
+    bool reserve(size_t assumptionBytes);
+    bool stopped() const;
+    VlSolverStatus observe(VlSolverStatus status);
+    void fail();
+};
+
 // Owns the solver process; serializes transactions and replaces a solver that
 // died or was left out of step with the reply stream
 class VlSolverSession final {
+    friend class VlDistCheckBudget;
     friend class VlRandomizer;
     friend class VlSolverTxn;
     enum class State : uint8_t { UNSTARTED, LIVE, BROKEN, DISABLED };
@@ -623,23 +644,42 @@ class VlSolverSession final {
     int m_consecFails VL_GUARDED_BY(m_mutex) = 0;  // Failed transactions in a row
     bool m_dirty VL_GUARDED_BY(m_mutex) = false;  // Transaction left the pipe out of step
     bool m_stale VL_GUARDED_BY(m_mutex) = false;  // Replies of later commands may be queued
+    // The hook may request a model immediately: no later check may already be queued.
+    VlDistCheckBudget* m_checkBudgetp VL_GUARDED_BY(m_mutex) = nullptr;
+    std::set<std::tuple<std::string, unsigned, bool>>
+        m_distWarned VL_GUARDED_BY(m_mutex);  // Site and kind
     std::string m_program VL_GUARDED_BY(m_mutex);  // Storage backing m_argv
     std::vector<const char*> m_argv VL_GUARDED_BY(m_mutex);  // Solver argv
     bool m_warnedRestart VL_GUARDED_BY(m_mutex) = false;
 
 public:
     std::iostream& os() VL_REQUIRES(m_mutex) { return m_proc; }
+    void warnDist(const char* filep, unsigned line, bool pointFailure) VL_REQUIRES(m_mutex) {
+        if (m_distWarned.emplace(filep, line, pointFailure).second) {
+            const char* const reason
+                = pointFailure
+                      ? "DIST weighting limited: no uniform point found in the selected bucket"
+                      : "DIST weighting limited: sampling limit reached";
+            VL_WARN_MT(filep, line, "randomize", reason);
+        }
+    }
     // The pipe may hold bytes of an abandoned reply, so replace the solver
     void abandon() VL_REQUIRES(m_mutex) { m_dirty = true; }
+
+    bool reserveOptionalCheck(size_t assumptionBytes) VL_REQUIRES(m_mutex) {
+        return !m_checkBudgetp || m_checkBudgetp->reserve(assumptionBytes);
+    }
+    bool hasOptionalFollowup() const VL_REQUIRES(m_mutex) {
+        return !m_checkBudgetp || !m_checkBudgetp->stopped();
+    }
 
     // Read a check-sat status; once one fails, so does every later read until resync()
     VlSolverStatus readStatus() VL_REQUIRES(m_mutex) {
         // The failed read may have taken an error answering an earlier command of the batch
         // (SMT-LIB 2.6 section 4.1.2), so later replies cannot be matched to their commands
-        if (m_stale) return VlSolverStatus::FAIL;
-        const VlSolverStatus status = ::readStatus(m_proc);
+        const VlSolverStatus status = m_stale ? VlSolverStatus::FAIL : ::readStatus(m_proc);
         m_stale = status == VlSolverStatus::FAIL;
-        return status;
+        return m_checkBudgetp ? m_checkBudgetp->observe(status) : status;
     }
     // An unreadable reply means text of it may still be queued, so it is not
     // safe to read anything more from this solver
@@ -810,6 +850,43 @@ void VlRandomVar::emitExtract(std::ostream& s, int i) const {
 void VlRandomVar::emitType(std::ostream& s) const { s << "(_ BitVec " << width() << ')'; }
 // A scalar var IS its only element, so "element j" is just the whole var.
 void VlRandomVar::emitElement(std::ostream& s, int /*j*/) const { s << ' ' << m_name; }
+
+static size_t decimalBytes(size_t value) {
+    size_t bytes = 1;
+    while (value >= 10) {
+        value /= 10;
+        ++bytes;
+    }
+    return bytes;
+}
+
+// Match getConstFormat's bit-vector literals in V3SolverSmt.cpp, plus indexed replies.
+static size_t replyLiteralBytes(size_t width) {
+    // Reserve for binary, and for the indexed decimal spelling on narrow values.
+    const size_t indexed = sizeof("(_ bv )") - 1 + (width / 3 + 1) + decimalBytes(width);
+    return std::max(sizeof("#b") - 1 + width, indexed);
+}
+
+// Mirror emitElement and emitSelect, allowing binary indices in echoed terms.
+size_t VlRandomVar::elementBytes(const ArrayInfo* infop, bool reply) const {
+    size_t bytes = 1 + m_name.size();
+    if (infop) {
+        // Match emitSelect: a nested select and one literal per subscript.
+        for (const size_t width : infop->m_idxWidths) {
+            const size_t hexDigits = width > 32 ? (width / 32) * 8 : width / 4;
+            const size_t literal = reply ? replyLiteralBytes(width) : sizeof("#x") - 1 + hexDigits;
+            bytes += sizeof("(select  )") - 1 + literal;
+        }
+    }
+    return bytes;
+}
+
+size_t VlRandomVar::elementBytes(int j) const {
+    if (!m_dimension) return elementBytes(nullptr, false);
+    const auto it = m_arrVarsRefp->find({m_name, j});
+    assert(it != m_arrVarsRefp->end());
+    return elementBytes(it->second.get(), false);
+}
 // Serialize the current runtime value as an SMT-LIB binary literal. Used by
 // randomize(null) to pin a var via `(assert (= var #b...))`. Binary (#b)
 // rather than hex (#x) sidesteps SMT-LIB's hex-width-multiple-of-4 rule.
@@ -1902,6 +1979,567 @@ void VlRandomizer::emitAsserts(std::ostream& os, const std::vector<std::string>&
     }
 }
 
+namespace {
+using DistWords = std::vector<IData>;
+using DistRequests = std::vector<std::pair<const std::string*, int>>;
+constexpr int distPointTrials = 8;
+constexpr char distBatchLiteral[] = " __Vdist_batch";
+constexpr char distBatchCheck[] = "(check-sat-assuming (__Vdist_batch))\n";
+static constexpr size_t distPointPredicateOverhead = 42;  // Equality and extract syntax
+static constexpr unsigned distClampWorkPerWord = 12;  // Coordinate and interval arithmetic
+static constexpr unsigned distPointWorkPerWord = 3;  // Draw, add, and encode a point
+static constexpr size_t modelCopies = 4;  // Diversity passes over the model per call
+
+size_t assumptionBytes(size_t index) { return sizeof(" __Va") - 1 + decimalBytes(index); }
+
+bool distCharge(size_t& workLeftr, size_t work) {
+    if (work > workLeftr) return false;
+    workLeftr -= work;
+    return true;
+}
+
+bool distDraw(VlRNG& rngr, const DistWords& limit, DistWords& result, size_t& workLeftr) {
+    const int words = limit.size();
+    if (!distCharge(workLeftr, 2 * words)) return false;
+    const int bits = VL_MOSTSETBITP1_W(words, WDataInP::external(limit.data()));
+    const int used = VL_WORDS_I(bits);
+    std::fill(result.begin() + used, result.end(), 0);
+    // Rejection stays uniform; the per-call work allowance bounds the retries.
+    while (true) {
+        if (!distCharge(workLeftr, used + words)) return false;
+        for (int i = 0; i < used; ++i) result[i] = rngr.rand64();
+        result[used - 1] &= VL_MASK_I(bits);
+        if (VL_LT_W(words, WDataInP::external(result.data()), WDataInP::external(limit.data()))) {
+            return true;
+        }
+    }
+}
+
+// Convert back from signed-order coordinates without narrowing the selected point.
+std::string distPoint(DistWords& point, int width, bool signedRange) {
+    if (signedRange) point[VL_WORDS_I(width) - 1] ^= IData{1} << ((width - 1) % 32);
+    std::ostringstream os;
+    os << "((_ extract " << width - 1 << " 0) #x" << std::hex << std::setfill('0');
+    for (int i = VL_WORDS_I(width); i-- > 0;) os << std::setw(8) << point[i];
+    os << ')';
+    return os.str();
+}
+// Clamp only the point interval, after computing the declared bucket mass.
+// In signed-order coordinates the variable's extremes surround the sign-bit pivot.
+bool clampDistPoints(DistWords& lowr, DistWords& countr, const DistWords& one, int width,
+                     int targetWidth, bool signedRange) {
+    const int words = lowr.size();
+    DistWords minimum(words), maximum(words), span(words), high(words);
+    const auto minp = WDataOutP::external(minimum.data());
+    const auto maxp = WDataOutP::external(maximum.data());
+    const auto spanp = WDataOutP::external(span.data());
+    const auto hip = WDataOutP::external(high.data());
+    const auto lop = WDataOutP::external(lowr.data());
+    const auto countp = WDataOutP::external(countr.data());
+    const auto onep = WDataInP::external(one.data());
+    VL_ASSIGNBIT_WI(targetWidth - signedRange, spanp, 1);
+    if (signedRange) {
+        VL_ASSIGNBIT_WI(width - 1, minp, 1);
+        VL_ASSIGNBIT_WI(width - 1, maxp, 1);
+        VL_SUB_W(words, minp, minp, spanp);
+    }
+    VL_ADD_W(words, maxp, WDataInP::external(maximum.data()), spanp);
+    VL_SUB_W(words, maxp, maxp, onep);
+    VL_ADD_W(words, hip, lop, countp);
+    VL_SUB_W(words, hip, hip, onep);
+    if (VL_LT_W(words, lop, minp)) lowr.swap(minimum);
+    if (VL_LT_W(words, maxp, hip)) high.swap(maximum);
+    const auto clippedLowp = WDataInP::external(lowr.data());
+    const auto clippedHighp = WDataInP::external(high.data());
+    if (!VL_LTE_W(words, clippedLowp, clippedHighp)) return false;
+    VL_SUB_W(words, countp, clippedHighp, clippedLowp);
+    VL_ADD_W(words, countp, countp, onep);
+    return true;
+}
+}  // namespace
+
+struct VlRandomizer::DistPick final {
+    size_t bucket = noDistIndex;  // The first choice, even if its interval was empty
+    std::string point;  // The first uniform trial, if drawn
+};
+
+struct VlRandomizer::DistSampler final {
+    VlRNG& rng;
+    DistBudget budget;
+    ModelFrame checkpoint;
+    ModelFrame previous;  // Checkpoint a refresh replaced, if writeback rejects the new one
+    VlSolverStatus status = VlSolverStatus::SAT;
+    bool saved = false;  // Checkpoint satisfies all user constraints
+    bool hasPrevious = false;
+    bool liveNewer = false;  // A later check produced a live satisfying reply
+    bool batched = false;  // Keep the successful batch literal during diversity
+    bool drew = false;  // Some occurrence kept a weighted bucket
+    std::vector<DistPick> picks;  // First trials in retained-occurrence order
+    std::unordered_set<std::string> fixedTargets;  // Batch equalities, by emitted target
+
+    explicit DistSampler(VlRNG& rngr)
+        : rng{rngr} {}
+    bool stopped() const {
+        return !budget.checksLeft || status == VlSolverStatus::UNKNOWN
+               || status == VlSolverStatus::FAIL;
+    }
+};
+
+size_t VlRandomizer::distModelWork() const {
+    // readModel copies the map entries and their keys once, not the shared ArrayInfo pointees.
+    constexpr size_t frameBytes = sizeof("(get-value ())\n()") - 1;
+    size_t mapBytes = sizeof(m_arr_vars) + frameBytes;
+    for (const auto& entry : m_arr_vars) mapBytes += sizeof(entry) + entry.first.first.size();
+    size_t work = m_arr_vars.size() + distTextWork(mapBytes);
+    for (const auto& var : m_vars) {
+        const VlRandomVar& value = *var.second;
+        const size_t words = 1 + VL_WORDS_I(value.width());
+        const auto elementWork = [&](const ArrayInfo* infop) {
+            constexpr size_t pairBytes = sizeof("( )\n") - 1;
+            return words
+                   + distTextWork(value.elementBytes(infop, false)
+                                  + value.elementBytes(infop, true) + pairBytes
+                                  + replyLiteralBytes(value.width()));
+        };
+        if (!value.dimension()) {
+            work += elementWork(nullptr);
+            continue;
+        }
+        work += words;
+        for (auto it = m_arr_vars.lower_bound({var.first, 0});
+             it != m_arr_vars.end() && it->first.first == var.first; ++it) {
+            work += it->second->m_indices.size() + elementWork(it->second.get());
+        }
+    }
+    return work;
+}
+
+bool VlRandomizer::saveDistModel(DistSampler& ctx, VlSolverSession& sess, bool refresh)
+    VL_REQUIRES(sess.m_mutex) {
+    if (ctx.saved && !(refresh && ctx.liveNewer)) return true;
+    ModelFrame frame;
+    if (!readModel(sess, frame)) {
+        ctx.status = VlSolverStatus::FAIL;
+        return ctx.saved;  // An earlier saved model still satisfies the constraints
+    }
+    if (ctx.saved) {
+        ctx.previous = std::move(ctx.checkpoint);
+        ctx.hasPrevious = true;
+    }
+    ctx.checkpoint = std::move(frame);
+    ctx.saved = true;
+    ctx.liveNewer = false;
+    return true;
+}
+
+VlSolverStatus VlRandomizer::probeDist(DistSampler& ctx, VlSolverSession& sess,
+                                       const std::string& predicate) VL_REQUIRES(sess.m_mutex) {
+    // Callers sample only from a saved model, with a check in reserve to restore a failed trial.
+    assert(ctx.saved && !ctx.stopped() && ctx.budget.checksLeft >= 2);
+    --ctx.budget.checksLeft;
+    sess.os() << "(push 1)\n(assert " << predicate << ")\n(check-sat)\n";
+    const VlSolverStatus tried = sess.readStatus();
+    if (tried == VlSolverStatus::SAT) {
+        ctx.liveNewer = true;
+        return tried;
+    }
+    if (tried == VlSolverStatus::FAIL) return tried;
+    if (tried == VlSolverStatus::UNKNOWN) {
+        ctx.status = tried;
+        return tried;
+    }
+    --ctx.budget.checksLeft;
+    sess.os() << "(pop 1)\n(check-sat)\n";
+    const VlSolverStatus restored = sess.readStatus();
+    if (restored == VlSolverStatus::SAT) {
+        ctx.liveNewer = true;
+        return tried;
+    }
+    ctx.status = restored;
+    return restored == VlSolverStatus::UNKNOWN ? restored : VlSolverStatus::FAIL;
+}
+
+struct VlRandomizer::DistDraw final {
+    struct Mass final {
+        DistWords low, count, mass;
+        size_t lowIndex;
+    };
+    const int words;
+    DistWords total, one, draw, point;
+    std::vector<std::string> values;
+    std::vector<Mass> masses;
+
+    explicit DistDraw(int n)
+        : words{n}
+        , total(n)
+        , one(n)
+        , draw(n)
+        , point(n) {
+        one[0] = 1;
+    }
+
+    size_t choose(DistSampler& ctx) {
+        const size_t work = VlRandLimits::distChoiceWork(masses.size(), words);
+        if (!distCharge(ctx.budget.workLeft, work)
+            || !distDraw(ctx.rng, total, draw, ctx.budget.workLeft))
+            return noDistIndex;
+        auto drawp = WDataOutP::external(draw.data());
+        size_t chosen = 0;
+        while (true) {
+            const auto massp = WDataInP::external(masses[chosen].mass.data());
+            if (VL_LT_W(words, drawp, massp)) return chosen;
+            VL_SUB_W(words, drawp, drawp, massp);
+            ++chosen;
+        }
+    }
+
+    void remove(size_t chosen) {
+        const auto totalp = WDataOutP::external(total.data());
+        DistWords& mass = masses[chosen].mass;
+        VL_SUB_W(words, totalp, totalp, WDataInP::external(mass.data()));
+        std::fill(mass.begin(), mass.end(), 0);
+    }
+
+    std::string drawPoint(DistSampler& ctx, const Mass& mass, const DistBucket& b) {
+        if (mass.count == one) {
+            point = mass.low;
+        } else {
+            if (!distDraw(ctx.rng, mass.count, point, ctx.budget.workLeft)) return {};
+            auto pointp = WDataOutP::external(point.data());
+            VL_ADD_W(words, pointp, pointp, WDataInP::external(mass.low.data()));
+        }
+        return distPoint(point, b.width, b.signedRange);
+    }
+};
+
+bool VlRandomizer::readDistDraw(VlSolverSession& sess, const DistSite& site, DistDraw& drawr)
+    VL_REQUIRES(sess.m_mutex) {
+    const int words = site.words;
+    DistRequests terms;
+    for (const DistBucket& b : site.buckets) {
+        terms.emplace_back(&b.low, b.width);
+        if (!b.high.empty()) terms.emplace_back(&b.high, b.width);
+        terms.emplace_back(&b.weight, b.weightWidth);
+    }
+    std::iostream& os = sess.os();
+    os << "(get-value (";
+    for (const auto& term : terms) os << ' ' << *term.first;
+    os << "))\n";
+    std::vector<std::string>& values = drawr.values;
+    if (!readValues(sess, values) || values.size() != terms.size()) return false;
+    for (size_t i = 0; i < terms.size(); ++i) {
+        if (!smtLiteralOfWidth(values[i], terms[i].second)) return false;
+    }
+    size_t index = 0;
+    for (const DistBucket& b : site.buckets) {
+        const size_t lowIndex = index++;
+        const size_t highIndex = b.high.empty() ? lowIndex : index++;
+        DistDraw::Mass m{DistWords(words), DistWords(words), DistWords(words), lowIndex};
+        DistWords high(words);
+        auto lo = WDataOutP::external(m.low.data());
+        auto hi = WDataOutP::external(high.data());
+        auto count = WDataOutP::external(m.count.data());
+        auto mass = WDataOutP::external(m.mass.data());
+        parseSMTNum(b.width, lo, values[lowIndex]);
+        parseSMTNum(b.width, hi, values[highIndex]);
+        if (b.signedRange) {
+            const IData sign = IData{1} << ((b.width - 1) % 32);
+            lo[VL_WORDS_I(b.width) - 1] ^= sign;
+            hi[VL_WORDS_I(b.width) - 1] ^= sign;
+        }
+        DistWords weight(words);
+        const auto weightp = WDataOutP::external(weight.data());
+        parseSMTNum(b.weightWidth, weightp, values[index++]);
+        if (VL_LTE_W(words, lo, hi)) {
+            VL_SUB_W(words, count, hi, lo);
+            VL_ADD_W(words, count, count, WDataInP::external(drawr.one.data()));
+            if (b.perValue) {
+                VL_MUL_W(words, mass, count, weightp);
+            } else {
+                m.mass.swap(weight);
+            }
+        }
+        const auto totalp = WDataOutP::external(drawr.total.data());
+        VL_ADD_W(words, totalp, totalp, WDataInP::external(m.mass.data()));
+        drawr.masses.push_back(std::move(m));
+    }
+    return true;
+}
+
+bool VlRandomizer::sampleDist(DistSampler& ctx, VlSolverSession& sess, const DistSite& site,
+                              DistCut& cutr, const DistPick* replayp) VL_REQUIRES(sess.m_mutex) {
+    DistBudget& budget = ctx.budget;
+    const int words = site.words;
+    DistDraw draw{words};
+    if (!readDistDraw(sess, site, draw)) return false;
+    const auto budgetCut = [&] {
+        cutr = DistCut::BUDGET;
+        return true;
+    };
+    while (VL_MOSTSETBITP1_W(words, WDataInP::external(draw.total.data()))) {
+        if (budget.checksLeft < 2) return budgetCut();
+        const DistPick* const firstp = std::exchange(replayp, nullptr);
+        const size_t chosen
+            = firstp && firstp->bucket != noDistIndex ? firstp->bucket : draw.choose(ctx);
+        if (chosen == noDistIndex) return budgetCut();
+        DistDraw::Mass& m = draw.masses[chosen];
+        const DistBucket& b = site.buckets[chosen];
+        const std::string& low = draw.values[m.lowIndex];
+        const bool range = !b.high.empty();
+        const std::string& high = draw.values[m.lowIndex + range];
+        const size_t probeWork = VlRandLimits::distBucketTextWork(b.target.size(), low.size(),
+                                                                  range ? high.size() : 0);
+        if (!distCharge(budget.workLeft, probeWork)) return budgetCut();
+        const char* const le = b.signedRange ? "bvsle" : "bvule";
+        const std::string member = range ? "(" + std::string{le} + ' ' + low + ' ' + b.target
+                                               + ") (" + le + ' ' + b.target + ' ' + high + ')'
+                                         : "(= " + b.target + ' ' + low + ')';
+        const VlSolverStatus bucket = probeDist(ctx, sess, "(and true " + member + ')');
+        if (bucket == VlSolverStatus::FAIL) return false;
+        if (bucket == VlSolverStatus::UNSAT) {
+            draw.remove(chosen);
+            continue;
+        }
+        if (bucket != VlSolverStatus::SAT) break;
+        ctx.drew = true;
+        if (low == high) break;
+        if (b.targetWidth) {
+            if (!distCharge(budget.workLeft, distClampWorkPerWord * words)) return budgetCut();
+            // The SAT bucket cannot have an empty representable interval.
+            const bool nonempty
+                = clampDistPoints(m.low, m.count, draw.one, b.width, b.targetWidth, b.signedRange);
+            assert(nonempty);
+            static_cast<void>(nonempty);
+            if (m.count == draw.one) break;
+        }
+        // Keep the selected range even if every point trial is infeasible.
+        cutr = DistCut::POINT;
+        const size_t pointText
+            = distTextWork(distPointPredicateOverhead + b.target.size() + 8 * VL_WORDS_I(b.width));
+        for (int trial = 0; trial < distPointTrials; ++trial) {
+            if (budget.checksLeft < 2
+                || !distCharge(budget.workLeft, distPointWorkPerWord * words + pointText)) {
+                return budgetCut();
+            }
+            const std::string point = trial == 0 && firstp && !firstp->point.empty()
+                                          ? firstp->point
+                                          : draw.drawPoint(ctx, m, b);
+            if (point.empty()) return budgetCut();
+            const VlSolverStatus tested
+                = probeDist(ctx, sess, "(= " + b.target + ' ' + point + ')');
+            if (tested == VlSolverStatus::FAIL) return false;
+            if (tested != VlSolverStatus::UNSAT) {
+                cutr = DistCut::NONE;
+                break;
+            }
+        }
+        break;
+    }
+    return true;
+}
+
+bool VlRandomizer::batchDist(DistSampler& ctx, VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
+    if (m_dist.size() < 2 || ctx.budget.checksLeft < 2) return false;
+    // Reserve the full command before building it. Each occurrence contributes
+    // one equality, containing at most its longest target and point literal.
+    constexpr char prefix[] = "(push 1)\n(declare-fun __Vdist_batch () Bool)\n"
+                              "(assert (=> __Vdist_batch (and true";
+    constexpr char suffix[] = ")))\n";
+    constexpr char restore[] = "(pop 1)\n(check-sat)\n";
+    size_t bytes = sizeof(prefix) + sizeof(suffix) + sizeof(restore) + sizeof(distBatchCheck) - 4;
+    size_t active = 0;
+    for (const DistSite& site : m_dist) {
+        if (!distSiteRetained(site)) continue;
+        // Charge the sizing walk before inspecting the bucket text.
+        if (!distCharge(ctx.budget.workLeft, 1 + site.buckets.size())) return false;
+        ++active;
+        size_t maxBytes = 0;
+        for (const DistBucket& bucket : site.buckets) {
+            const size_t pointBytes = sizeof("((_ extract  0) #x)") - 1
+                                      + decimalBytes(bucket.width - 1)
+                                      + 8 * VL_WORDS_I(bucket.width);
+            const size_t literal = std::max<size_t>(bucket.width + 2, pointBytes);
+            // Include indexing the target for the diversity pass.
+            maxBytes
+                = std::max(maxBytes, sizeof(" (=  )") - 1 + 2 * bucket.target.size() + literal);
+        }
+        bytes += maxBytes;
+    }
+    if (active < 2 || !distCharge(ctx.budget.workLeft, distTextWork(bytes))) return false;
+    if (!saveDistModel(ctx, sess) || ctx.stopped()) return false;
+    std::string command;
+    command.reserve(bytes);
+    command += prefix;
+    ctx.picks.reserve(active);
+    bool feasible = true;
+    for (const DistSite& site : m_dist) {
+        if (!distSiteRetained(site)) continue;
+        ctx.picks.emplace_back();
+        DistPick& pick = ctx.picks.back();
+        DistDraw draw{site.words};
+        if (!readDistDraw(sess, site, draw)) {
+            ctx.status = VlSolverStatus::FAIL;
+            return false;
+        }
+        // The checkpoint satisfies each retained occurrence, so one of its buckets has mass.
+        assert(VL_MOSTSETBITP1_W(site.words, WDataInP::external(draw.total.data())));
+        pick.bucket = draw.choose(ctx);
+        if (pick.bucket == noDistIndex) return false;
+        DistDraw::Mass& mass = draw.masses[pick.bucket];
+        const DistBucket& b = site.buckets[pick.bucket];
+        if (!solverSamples()) ctx.fixedTargets.insert(b.target);
+        const std::string& low = draw.values[mass.lowIndex];
+        if (b.high.empty() || low == draw.values[mass.lowIndex + 1]) {
+            command += " (= " + b.target + ' ' + low + ')';
+            continue;
+        }
+        if (b.targetWidth) {
+            if (!distCharge(ctx.budget.workLeft, distClampWorkPerWord * site.words)) return false;
+            if (!clampDistPoints(mass.low, mass.count, draw.one, b.width, b.targetWidth,
+                                 b.signedRange)) {
+                feasible = false;
+                continue;  // Remember the bucket for sequential rejection, but no point.
+            }
+        }
+        if (!distCharge(ctx.budget.workLeft, distPointWorkPerWord * site.words)) return false;
+        pick.point = draw.drawPoint(ctx, mass, b);
+        if (pick.point.empty()) return false;
+        command += " (= " + b.target + ' ' + pick.point + ')';
+    }
+    if (!feasible) return false;
+    command += suffix;
+    --ctx.budget.checksLeft;
+    sess.os() << command << distBatchCheck;
+    ctx.status = sess.readStatus();
+    if (ctx.status == VlSolverStatus::SAT) {
+        ctx.liveNewer = true;
+        ctx.batched = true;
+        ctx.drew = true;
+        return true;
+    }
+    if (ctx.status == VlSolverStatus::UNSAT) {
+        --ctx.budget.checksLeft;
+        sess.os() << restore;
+        ctx.status = sess.readStatus();
+        if (ctx.status == VlSolverStatus::SAT)
+            ctx.liveNewer = true;
+        else if (ctx.status != VlSolverStatus::UNKNOWN)
+            ctx.status = VlSolverStatus::FAIL;
+    }
+    return false;
+}
+
+bool VlRandomizer::solveDist(VlRNG& rngr, VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
+    DistSampler ctx{rngr};
+    // Setup and sampling grow with the retained descriptors, not a fixed number
+    // of array elements. Keep a finite linear allowance even for failed trials.
+    constexpr size_t workCopies = 4;
+    constexpr unsigned siteChecks = 2 * (1 + distPointTrials);
+    // Each site may use the base allowance and its own share, so a cut stops it alone.
+    std::vector<DistBudget> shares;
+    std::vector<DistBudget> firsts;  // One first draw: a copy of the work and one probe
+    for (const DistSite& site : m_dist) {
+        if (!distSiteRetained(site)) continue;
+        size_t maxText = 0;
+        for (const DistBucket& b : site.buckets) {
+            // Reserve a per-target share of a checkpoint and the longest probe.
+            maxText = std::max(maxText, distTextWork(2 * b.target.size() + 3 * b.width
+                                                     + distPointPredicateOverhead));
+        }
+        const size_t work = workCopies
+                            * (site.setupWork + maxText
+                               + VlRandLimits::distChoiceWork(site.buckets.size(), site.words)
+                               + siteChecks * site.words);
+        DistBudget share;
+        share.workLeft += std::min(work, std::numeric_limits<size_t>::max() - share.workLeft);
+        share.checksLeft += siteChecks;
+        shares.push_back(share);
+        firsts.push_back({work / workCopies, 2});
+        ctx.budget.workLeft
+            += std::min(work, std::numeric_limits<size_t>::max() - ctx.budget.workLeft);
+        ctx.budget.checksLeft
+            += std::min(siteChecks, std::numeric_limits<unsigned>::max() - ctx.budget.checksLeft);
+    }
+    // Every site keeps a first draw: retries before it may not spend its reservation.
+    std::vector<DistBudget> later(firsts.size(), DistBudget{0, 0});
+    for (size_t i = firsts.size(); i-- > 1;) {
+        later[i - 1].workLeft = later[i].workLeft
+                                + std::min(firsts[i].workLeft,
+                                           std::numeric_limits<size_t>::max() - later[i].workLeft);
+        later[i - 1].checksLeft = later[i].checksLeft + firsts[i].checksLeft;
+    }
+    // Spreading the model takes a few passes of pins over its values.
+    ctx.budget.workLeft += std::min(modelCopies * distModelWork(),
+                                    std::numeric_limits<size_t>::max() - ctx.budget.workLeft);
+    if (!saveDistModel(ctx, sess)) return false;
+    // A malformed refreshed checkpoint falls back to the one it replaced.
+    const auto applyCheckpoint = [&] {
+        return applyModel(ctx.checkpoint) || (ctx.hasPrevious && applyModel(ctx.previous));
+    };
+    // A solver failure during optional work keeps the saved satisfying model.
+    if (ctx.stopped() || !batchDist(ctx, sess)) {
+        if (ctx.status == VlSolverStatus::FAIL) return applyCheckpoint();
+        if (ctx.status != VlSolverStatus::UNKNOWN) {
+            size_t ordinal = 0;
+            for (const DistSite& site : m_dist) {
+                if (!distSiteRetained(site)) continue;
+                DistCut cut
+                    = ctx.stopped() || ctx.budget.checksLeft < 2 ? DistCut::BUDGET : DistCut::NONE;
+                const DistPick* const replayp
+                    = ordinal < ctx.picks.size() ? &ctx.picks[ordinal] : nullptr;
+                const DistBudget& share = shares[ordinal];
+                const DistBudget& reserved = later[ordinal++];
+                if (cut == DistCut::NONE) {
+                    // Charge the site's work to both its share and the shared allowance.
+                    const DistBudget shared = ctx.budget;
+                    ctx.budget.workLeft
+                        = std::min(share.workLeft,
+                                   shared.workLeft - std::min(shared.workLeft, reserved.workLeft));
+                    ctx.budget.checksLeft = std::min(
+                        share.checksLeft,
+                        shared.checksLeft - std::min(shared.checksLeft, reserved.checksLeft));
+                    const DistBudget capped = ctx.budget;
+                    const bool sampled = sampleDist(ctx, sess, site, cut, replayp);
+                    ctx.budget.workLeft
+                        = shared.workLeft - (capped.workLeft - ctx.budget.workLeft);
+                    ctx.budget.checksLeft
+                        = shared.checksLeft - (capped.checksLeft - ctx.budget.checksLeft);
+                    if (!sampled) return applyCheckpoint();
+                }
+                if (ctx.status == VlSolverStatus::UNKNOWN) break;
+                if (cut != DistCut::NONE) {
+                    sess.warnDist(site.filep, site.line, cut == DistCut::POINT);
+                }
+            }
+        }
+    }
+    bool spread = false;
+    if (!ctx.stopped() && !solverSamples()) {
+        // Keep the accepted draws if diversity stops on an unsatisfied check.
+        if (!saveDistModel(ctx, sess, true)) return false;
+        if (!ctx.stopped()) {
+            spread = true;
+            const bool chosen = solveDiversity(rngr, sess, nullptr, &ctx);
+            if (ctx.status == VlSolverStatus::FAIL) return applyCheckpoint();
+            assert(chosen || ctx.stopped());
+            static_cast<void>(chosen);
+        }
+    }
+    assert(ctx.saved);
+    bool applied = false;
+    if (ctx.status == VlSolverStatus::SAT && ctx.liveNewer) {
+        applied = applyModel(sess);
+        if (!applied) ctx.status = VlSolverStatus::FAIL;  // Fall back to the saved model
+    }
+    if (!applied) applied = applyCheckpoint();
+    // Without a weighted draw or scoped spreading, spread the values as with no retained DIST.
+    if (applied && !ctx.drew && !spread && ctx.status != VlSolverStatus::UNKNOWN
+        && ctx.status != VlSolverStatus::FAIL && !solverSamples()) {
+        solveDiversity(rngr, sess);
+    }
+    return applied;
+}
+
 // Constant-array constructors are outside the restricted array/bit-vector logics.
 static bool constraintsUseConstArray(const std::vector<std::string>& constraints) {
     for (const std::string& constraint : constraints) {
@@ -1913,7 +2551,9 @@ static bool constraintsUseConstArray(const std::vector<std::string>& constraints
 bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
                             const std::vector<std::string>& uniqueExprs)
     VL_REQUIRES(sess.m_mutex) {
-    if (!solverSamples() && m_randcVarNames.empty() && !m_checkOnly && !hasFrozenVar()
+    const bool weighted = distActive();
+    // Weighted draws share this transaction with the bounded diversity pass, not UniGen2.
+    if (!weighted && !solverSamples() && m_randcVarNames.empty() && !m_checkOnly && !hasFrozenVar()
         && unigen2(rngr, sess, uniqueExprs)) {
         return true;
     }
@@ -1963,10 +2603,14 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
             reportUnsatSetup(sess, uniqueExprs);
             return false;
         }
-        if (!applyModel(sess)) return false;
+        const bool hasDraw
+            = weighted && std::any_of(m_dist.begin(), m_dist.end(), [&](const DistSite& site) {
+                  return distSiteRetained(site);
+              });
+        if (!(hasDraw ? solveDist(rngr, sess) : applyModel(sess))) return false;
 
         if (!m_checkOnly) {
-            if (!solverSamples()) solveDiversity(rngr, sess);
+            if (!hasDraw && !solverSamples()) solveDiversity(rngr, sess);
             // Check-only must not advance randc cycle state.
             recordRandcValues();
         }
@@ -2294,8 +2938,52 @@ bool VlRandomizer::generateSamples(VlSolverSession& sess, VlRNG& rngr) VL_REQUIR
     return false;
 }
 
-void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
-                                  const std::set<std::string>* fixedp) VL_REQUIRES(sess.m_mutex) {
+VlDistCheckBudget::VlDistCheckBudget(VlRandomizer::DistSampler* scopep, int& localr,
+                                     VlDistCheckBudget*& slotr)
+    : m_scopep{scopep}
+    , m_local{localr}
+    , m_slot{slotr} {
+    assert(!m_slot);
+    if (m_scopep) m_slot = this;
+}
+
+bool VlDistCheckBudget::stopped() const { return m_local <= 0 || m_scopep->stopped(); }
+
+void VlDistCheckBudget::fail() {
+    m_scopep->status = VlSolverStatus::FAIL;
+    m_local = 0;
+}
+
+bool VlDistCheckBudget::chargeWork(size_t work) {
+    if (m_scopep->stopped()) return false;
+    auto& budget = m_scopep->budget;
+    if (distCharge(budget.workLeft, work)) return true;
+    budget.checksLeft = 0;
+    return false;
+}
+
+bool VlDistCheckBudget::reserve(size_t assumptionBytes) {
+    constexpr size_t commandBytes = sizeof("(check-sat-assuming ())\n") - 1;
+    if (!chargeWork(distTextWork(commandBytes + assumptionBytes))) return false;
+    assert(!m_pending);
+    m_pending = true;
+    --m_scopep->budget.checksLeft;
+    return true;
+}
+
+VlSolverStatus VlDistCheckBudget::observe(VlSolverStatus status) {
+    assert(m_pending);
+    m_pending = false;
+    VlRandomizer::DistSampler& scope = *m_scopep;
+    scope.status = status;
+    if (status == VlSolverStatus::SAT) scope.liveNewer = true;
+    if (scope.stopped()) m_local = 0;
+    return status;
+}
+
+bool VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
+                                  const std::set<std::string>* fixedp, DistSampler* scopep)
+    VL_REQUIRES(sess.m_mutex) {
     // Tie each variable or array element to a random value via an assumption literal and
     // drop the literals that conflict with the constraints. Dropped terms that can still
     // change are split in halves that are tied again, down to single bits, so free bits
@@ -2308,6 +2996,7 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
     // left as it is: it is likely one of a few constants, which random parts never fit,
     // so splitting would cost a check per part down to single bits. Past
     // diversityMaxChecks checks the literals kept so far are the result.
+    if (scopep && scopep->stopped()) return false;
     std::iostream& os = sess.os();
     const auto emitTerm = [&](const PinTerm& term) {
         const bool whole = term.width == term.varp->width();
@@ -2320,21 +3009,57 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         if (fixedp && fixedp->count(var.first)) continue;
         const int width = var.second->width();
         for (int j = 0; j < var.second->totalWidth() / width; ++j) {
+            if (scopep && scopep->batched) {
+                // Only an exact storage term match establishes that the batch pins it.
+                std::ostringstream name;
+                var.second->emitElement(name, j);
+                if (scopep->fixedTargets.count(name.str().substr(1))) continue;
+            }
             terms.push_back({var.second.get(), j, 0, width, static_cast<int>(terms.size())});
         }
     }
-    std::string keep;  // Surviving literals
+    std::string keep = scopep && scopep->batched ? distBatchLiteral : "";  // Surviving literals
     int lits = 0;  // Literals declared so far
-    int checksLeft = diversityMaxChecks;
+    int checksLeft
+        = scopep
+              ? static_cast<int>(std::min<unsigned>(diversityMaxChecks, scopep->budget.checksLeft))
+              : diversityMaxChecks;
+    if (scopep && (terms.empty() || checksLeft <= 0)) return true;
+    VlDistCheckBudget checks{scopep, checksLeft, sess.m_checkBudgetp};
     // Satisfied checks are the slow ones on large problems; past their limit, no further
     // check is made and the literals kept so far are the result
     int satisfiedLeft = diversityMaxSatisfied;
     const auto satisfied = [&]() {
         if (--satisfiedLeft <= 0) checksLeft = 0;
     };
+    const auto termBytes = [](const PinTerm& term) {
+        const size_t bytes = term.varp->elementBytes(term.elem);
+        if (term.width == term.varp->width()) return bytes;
+        return bytes + sizeof(" ((_ extract  ))") - 1 + decimalBytes(term.lsb + term.width - 1)
+               + decimalBytes(term.lsb);
+    };
+    const auto chargePin
+        = [&](const PinTerm& term, size_t literal, size_t valueBytes, bool negate) {
+              constexpr size_t glueBytes = sizeof("(declare-fun __Va () Bool)\n"
+                                                  "(assert (= __Va (= )))\n")
+                                           - 1;
+              const size_t bytes = glueBytes + 2 * decimalBytes(literal) + termBytes(term)
+                                   + valueBytes + (negate ? sizeof("(not )") - 1 : 0);
+              return checks.chargeWork(1 + VL_WORDS_I(term.width) + distTextWork(bytes));
+          };
+    const auto stoppedBatch = [&]() { return scopep && (checksLeft <= 0 || scopep->stopped()); };
     bool settled = true;  // The last check was satisfied, so its model satisfies keep
     std::vector<bool> dropped;
     while (!terms.empty() && checksLeft > 0) {
+        if (scopep) {
+            for (size_t k = 0; k < terms.size(); ++k) {
+                if (!chargePin(terms[k], lits + k, sizeof("#b") - 1 + terms[k].width, false)) {
+                    return false;
+                }
+            }
+            // New assertions invalidate the live model until the next satisfied check.
+            scopep->liveNewer = false;
+        }
         for (size_t k = 0; k < terms.size(); ++k) {
             os << "(declare-fun __Va" << lits + k << " () Bool)\n";
             os << "(assert (= __Va" << lits + k << " (=";
@@ -2353,6 +3078,7 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
                                  &satisfiedLeft);
         if (!settled) break;
         satisfied();
+        if (stoppedBatch()) break;
         std::vector<PinTerm> conflicted;
         std::vector<std::vector<PinTerm>> slots;  // Parts dropped for a whole array, per part
         for (size_t k = 0; k < terms.size(); ++k) {
@@ -2386,7 +3112,24 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         for (const PinTerm& term : conflicted) emitTerm(term);
         os << "))\n";
         std::vector<std::string> values;
-        if (!readValues(sess, values) || values.size() != conflicted.size()) return;
+        if (!readValues(sess, values) || values.size() != conflicted.size()) {
+            if (scopep) scopep->status = VlSolverStatus::FAIL;
+            return false;
+        }
+        if (scopep) {
+            for (size_t k = 0; k < conflicted.size(); ++k) {
+                if (!smtLiteralOfWidth(values[k], conflicted[k].width)) {
+                    scopep->status = VlSolverStatus::FAIL;
+                    return false;
+                }
+            }
+        }
+        if (scopep) {
+            for (size_t k = 0; k < conflicted.size(); ++k) {
+                if (!chargePin(conflicted[k], lits + k, values[k].size(), true)) return false;
+            }
+            scopep->liveNewer = false;
+        }
         for (size_t k = 0; k < conflicted.size(); ++k) {
             os << "(declare-fun __Va" << lits + k << " () Bool)\n";
             os << "(assert (= __Va" << lits + k << " (not (=";
@@ -2397,10 +3140,12 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         settled = assumeDropping(sess, keep, lits, conflicted, dropped, checksLeft, &guessed);
         if (!settled) break;
         satisfied();
+        if (stoppedBatch()) break;
         // A term dropped as a guess may still change on its own, which would leave its
         // bits unspread, so check it alone
         for (size_t k = 0; k < conflicted.size() && checksLeft > 0; ++k) {
             if (!guessed[k]) continue;
+            if (!sess.reserveOptionalCheck(keep.size() + assumptionBytes(lits + k))) break;
             os << "(check-sat-assuming (" << keep << " __Va" << lits + k << "))\n";
             --checksLeft;
             const VlSolverStatus status = sess.readStatus();
@@ -2411,6 +3156,7 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             }
             if (!settled && status != VlSolverStatus::UNSAT) break;
         }
+        if (stoppedBatch()) break;
         lits += conflicted.size();
         std::map<int, std::vector<size_t>> changeable;  // Parts able to change, per element
         for (size_t k = 0; k < conflicted.size(); ++k) {
@@ -2421,6 +3167,10 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             const std::vector<size_t>& parts = it.second;
             if (checksLeft <= 0) break;
             if (conflicted[parts[0]].width <= diversityWideBits || parts.size() < 2) continue;
+            size_t bytes = keep.size();
+            for (size_t i = 0; i < parts.size(); ++i) bytes += assumptionBytes(lits + i);
+            if (!sess.reserveOptionalCheck(bytes)) break;
+            if (scopep) scopep->liveNewer = false;
             std::string assumed = keep;
             for (size_t i = 0; i < parts.size(); ++i, ++lits) {
                 os << "(declare-fun __Va" << lits << " () Bool)\n";
@@ -2436,6 +3186,7 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             if (settled) satisfied();
             if (status == VlSolverStatus::UNSAT) stopped.insert(it.first);
         }
+        if (stoppedBatch()) break;
         const auto split = [&](const PinTerm& term) {
             const int step = (term.width + 1) / 2;
             for (int lsb = 0; lsb < term.width; lsb += step) {
@@ -2456,12 +3207,15 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             for (const PinTerm& term : slots[sloti]) split(term);
         }
     }
+    if (scopep && scopep->stopped()) return false;
     if (!settled) {
         // Out of checks, or the solver failed (and then likely fails this check too)
+        if (!sess.hasOptionalFollowup()) return true;
+        if (!sess.reserveOptionalCheck(keep.size())) return false;
         os << "(check-sat-assuming (" << keep << "))\n";
-        if (sess.readStatus() != VlSolverStatus::SAT) return;
+        if (sess.readStatus() != VlSolverStatus::SAT) return false;
     }
-    applyModel(sess);
+    return scopep || applyModel(sess);
 }
 
 bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
@@ -2478,6 +3232,15 @@ bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep
     // whether each of them was among others in its unsat core
     std::map<std::tuple<const VlRandomVar*, int, int, int>, std::pair<int, bool>> slotConflicts;
     while (checksLeftr-- > 0) {
+        size_t bytes = keep.size();
+        if (sess.m_checkBudgetp) {
+            // Sizing and emitting each visit all terms, including dropped ones.
+            if (!sess.m_checkBudgetp->chargeWork(2 * terms.size())) return false;
+            for (size_t k = 0; k < terms.size(); ++k) {
+                if (!droppedr[k]) bytes += assumptionBytes(first + k);
+            }
+        }
+        if (!sess.reserveOptionalCheck(bytes)) return false;
         os << "(check-sat-assuming (" << keep;
         for (size_t k = 0; k < terms.size(); ++k) {
             if (!droppedr[k]) os << " __Va" << first + k;
@@ -2486,13 +3249,19 @@ bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep
         const VlSolverStatus status = sess.readStatus();
         if (status == VlSolverStatus::SAT) return true;
         // Unknown or failure: the solution already written stands
-        if (status != VlSolverStatus::UNSAT) return false;
+        if (status != VlSolverStatus::UNSAT || !sess.hasOptionalFollowup()) return false;
         // Drop the narrowest term of the core: wide data rarely causes the conflict.
         // The core only names active literals; ones before first are kept literals.
         // A core need not be minimal, so a pick among several is only a guess.
         int pick = -1;
         int candidates = 0;
-        for (const int idx : readUnsatAssumptions(sess)) {
+        const std::vector<int> core = readUnsatAssumptions(sess);
+        // The constraints alone are satisfiable, so only an unusable reply has an empty core.
+        if (core.empty() && sess.m_checkBudgetp) {
+            sess.m_checkBudgetp->fail();
+            return false;
+        }
+        for (const int idx : core) {
             const int k = idx - first;
             if (k < 0 || k >= static_cast<int>(terms.size()) || droppedr[k]) continue;
             ++candidates;
@@ -2519,6 +3288,7 @@ bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep
         if (conflicts.first++ == 0) conflicts.second = true;
         conflicts.second &= candidates > 1;
         if (conflicts.first < diversitySlotConflicts) continue;
+        if (sess.m_checkBudgetp && !sess.m_checkBudgetp->chargeWork(terms.size())) return false;
         std::vector<size_t> members;
         for (size_t k = 0; k < terms.size(); ++k) {
             if (!droppedr[k] && slotOf(terms[k]) == slotOf(pickTerm)) members.push_back(k);
@@ -2526,9 +3296,12 @@ bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep
         bool othersFit = false;
         if (pickTerm.width == 1 && !conflicts.second) {
             for (size_t i = 0; i < std::min<size_t>(diversitySlotSamples, members.size()); ++i) {
-                if (checksLeftr-- <= 0) return false;
-                os << "(check-sat-assuming (" << keep << " __Va"
-                   << first + members[diversitySample(i, members.size())] << "))\n";
+                const size_t index = first + members[diversitySample(i, members.size())];
+                if (checksLeftr-- <= 0
+                    || !sess.reserveOptionalCheck(keep.size() + assumptionBytes(index))) {
+                    return false;
+                }
+                os << "(check-sat-assuming (" << keep << " __Va" << index << "))\n";
                 othersFit = sess.readStatus() == VlSolverStatus::SAT;
                 if (!othersFit) continue;
                 if (--*satisfiedLeftp <= 0) checksLeftr = 0;
@@ -2589,6 +3362,8 @@ VlSolverStatus VlRandomizer::relaxSoftConstraints(VlSolverSession& sess)
     // dropped, it takes up to about 1.5 checks per soft.
     std::iostream& os = sess.os();
     const size_t nsofts = m_softConstraints.size();
+    const bool trackDistSoft = m_distSoftCount && distActive();
+    if (trackDistSoft) m_distRetainedSoft.assign(nsofts, false);
     size_t chunk = nsofts;  // First try all of them
     size_t conflictEnd = 0;  // End of the last conflicting chunk, whose rest still conflicts
     for (size_t done = 0; done < nsofts;) {
@@ -2602,6 +3377,10 @@ VlSolverStatus VlRandomizer::relaxSoftConstraints(VlSolverSession& sess)
             const VlSolverStatus status = sess.readStatus();
             if (status != VlSolverStatus::SAT && status != VlSolverStatus::UNSAT) return status;
             if (status == VlSolverStatus::SAT) {
+                if (trackDistSoft) {
+                    std::fill(m_distRetainedSoft.begin() + (nsofts - done - chunk),
+                              m_distRetainedSoft.begin() + (nsofts - done), true);
+                }
                 done += chunk;
                 chunk = done < conflictEnd ? conflictEnd - done : chunk * 2;
                 continue;
@@ -2700,34 +3479,46 @@ void VlRandomizer::reportUnsatCore(VlSolverSession& sess) VL_REQUIRES(sess.m_mut
     }
 }
 
-bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
+bool VlRandomizer::readModel(VlSolverSession& sess, ModelFrame& framer) VL_REQUIRES(sess.m_mutex) {
+    framer.reply.clear();
+    framer.requested = 0;
     std::iostream& os = sess.os();
-    size_t requested = 0;
     std::stringstream getValueStr;
+    std::shared_ptr<const ArrayInfoMap> arrVarsp;  // One snapshot shared by every array
     for (const auto& var : m_vars) {
         if (var.second->dimension() > 0) {
-            auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
+            if (!arrVarsp) arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
             var.second->setArrayInfo(arrVarsp);
-            requested += var.second->countMatchingElements(m_arr_vars, var.second->name());
+            framer.requested += var.second->countMatchingElements(m_arr_vars, var.second->name());
         } else {
-            ++requested;
+            ++framer.requested;
         }
         var.second->emitGetValue(getValueStr);
     }
-    if (getValueStr.str() == "") {
+    const std::string terms = getValueStr.str();
+    if (terms.empty()) return true;
+    os << "(get-value (" << terms << "))\n";
+    if (!sess.readSExpr(framer.reply)) return false;
+    if (isSolverError(framer.reply)) {
+        warnSolverReply(framer.reply);
+        return false;
+    }
+    return true;
+}
+
+bool VlRandomizer::applyModel(const ModelFrame& frame) {
+    if (frame.reply.empty()) {
         // Mark as m_checkOnly to skip generation of any subsequent solver calls
         m_checkOnly = true;
         return true;
     }
-    os << "(get-value (" << getValueStr.str() << "))\n";
-    std::string reply;
-    if (!sess.readSExpr(reply)) return false;
-    if (isSolverError(reply)) {
-        warnSolverReply(reply);
-        return false;
-    }
-    std::istringstream is{reply};
-    return parseModel(is, requested);
+    std::istringstream is{frame.reply};
+    return parseModel(is, frame.requested);
+}
+
+bool VlRandomizer::applyModel(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
+    ModelFrame frame;
+    return readModel(sess, frame) && applyModel(frame);
 }
 
 // The element name, as ArrayInfo names it, that a select of varr with these index terms
@@ -2875,7 +3666,9 @@ void VlRandomizer::soft(std::string constraint, std::initializer_list<std::strin
                         const char* /*filename*/, uint32_t /*linenum*/, const char* /*source*/) {
     m_softConstraints.emplace_back(std::move(constraint));
     m_softVarNames.insert(m_softVarNames.end(), varNames.begin(), varNames.end());
-    m_softVarEnds.push_back(m_softVarNames.size());
+    if (m_distSoftDraw != noDistIndex) ++m_distSoftCount;
+    m_softInfo.push_back(
+        {m_softVarNames.size(), std::exchange(m_distSoftDraw, size_t{noDistIndex})});
 }
 
 void VlRandomizer::disable_soft(const std::string& varName) {
@@ -2886,28 +3679,55 @@ void VlRandomizer::disable_soft(const std::string& varName) {
     size_t keptNames = 0;
     size_t begin = 0;
     for (size_t i = 0; i < m_softConstraints.size(); ++i) {
-        const size_t end = m_softVarEnds[i];
+        const size_t end = m_softInfo[i].namesEnd;
         const bool named
             = std::find(m_softVarNames.begin() + begin, m_softVarNames.begin() + end, varName)
               != m_softVarNames.begin() + end;
+        const size_t draw = m_softInfo[i].distDraw;
+        if (named && draw != noDistIndex) --m_distSoftCount;
+        if ((named || kept != i) && draw != noDistIndex) {
+            m_dist[draw].softOrdinal = named ? size_t{noDistIndex} : kept;
+        }
         if (!named) {
-            if (kept != i) m_softConstraints[kept] = std::move(m_softConstraints[i]);
+            if (kept != i) {
+                m_softConstraints[kept] = std::move(m_softConstraints[i]);
+                m_softInfo[kept] = m_softInfo[i];
+            }
             // Names move only once an earlier constraint was removed, never onto themselves
             if (keptNames != begin) {
                 std::move(m_softVarNames.begin() + begin, m_softVarNames.begin() + end,
                           m_softVarNames.begin() + keptNames);
             }
             keptNames += end - begin;
-            m_softVarEnds[kept++] = keptNames;
+            m_softInfo[kept++].namesEnd = keptNames;
         }
         begin = end;
     }
     m_softConstraints.resize(kept);
     m_softVarNames.resize(keptNames);
-    m_softVarEnds.resize(kept);
+    m_softInfo.resize(kept);
+}
+
+void VlRandomizer::dist_add(bool sourceSoft, std::initializer_list<DistBucket> buckets,
+                            const char* filep, unsigned line, int words, size_t cost,
+                            size_t termBytes) {
+    assert(buckets.size());
+    // A standalone soft DIST registers one draw before its soft() entry.
+    if (sourceSoft) {
+        m_distSoftDraw = m_dist.size();
+    } else {
+        ++m_distHardCount;
+    }
+    m_dist.push_back({sourceSoft, buckets, filep, line, m_softConstraints.size(), words,
+                      cost + distTextWork(termBytes)});
 }
 
 void VlRandomizer::clearConstraints() {
+    m_dist.clear();
+    m_distHardCount = 0;
+    m_distSoftCount = 0;
+    m_distSoftDraw = noDistIndex;
+    m_distRetainedSoft.clear();
     m_fastConstraints.clear();
     m_fastDisabled = false;
     m_constraints.clear();
@@ -2917,7 +3737,7 @@ void VlRandomizer::clearConstraints() {
     m_solveBefore.clear();
     m_softConstraints.clear();
     m_softVarNames.clear();
-    m_softVarEnds.clear();
+    m_softInfo.clear();
     m_uniqueArrays.clear();  // Re-registered by constraint setup
     m_frozenPins.clear();  // Likewise re-added
     // Keep m_vars for class member randomization

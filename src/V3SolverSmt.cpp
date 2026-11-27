@@ -31,6 +31,8 @@
 //        the phase flag is saved/restored, and final setup rebinds real members
 //      * numeric field defaults and frozen-mode reads keep the member datatype;
 //        reduction/function values keep preparation in their own evaluation scope
+//      * Width prepares comparison views for integral DIST items; this backend
+//        selects independent sites and keeps procedural weighting for the others.
 // Each randomize() with {...} and std::randomize() with {...}:
 //      * lowers its constraints into a local VlRandomizer, derived from the
 //        class one for randomize() with {...}
@@ -43,6 +45,9 @@
 //  AstConstraint::user3p() -> AstTask*. Pointer to resize procedure
 //  AstConstraintForeach::user3p() -> AstNodeStmt*. Dist bucket preamble stmts (foreach case)
 //  AstVar::user4p()        -> AstVar*.  Size variable for constrained queues
+//  AstDist::user2()        -> Sampler word count for a selected distribution
+//  AstDist::user3()        -> Setup cost for a selected distribution
+//  AstDist::user4()        -> bool. Selected as an independent distribution
 //
 //*************************************************************************
 
@@ -52,11 +57,14 @@
 
 #include "V3SolverSmt.h"
 
+#include "verilated_rand_limits.h"
+
 #include "V3Const.h"
 #include "V3File.h"
 #include "V3MemberMap.h"
 #include "V3Randomize.h"
 #include "V3Stats.h"
+#include "V3String.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
 
@@ -65,10 +73,15 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 //######################################################################
 // Helpers shared by the lowering visitors
 
+static bool smtLiteralBinary(unsigned width) { return width % 4 != 0; }
+static unsigned smtLiteralBytes(unsigned width) {
+    return 2 + (smtLiteralBinary(width) ? width : width / 4);
+}
+
 // SMT constant with the value of nodep
 static AstSFormatF* getConstFormat(AstNodeExpr* nodep) {
-    return new AstSFormatF{nodep->fileline(), (nodep->width() & 3) ? "#b%b" : "#x%x", false,
-                           nodep};
+    return new AstSFormatF{nodep->fileline(), smtLiteralBinary(nodep->width()) ? "#b%b" : "#x%x",
+                           false, nodep};
 }
 
 // Call f on each field that the solver registers for an element object of class classp
@@ -644,18 +657,11 @@ class FastConstraintBuilder final {
         }
         return stmtp;
     }
-    // State expressions may contain pure native functions, but never hidden
-    // randomized reads, virtual/DPI dispatch, recursion, or side effects.
-    static bool checkedReceiver(AstNode* nodep) {
-        return nodep->exists([](const AstNode* partp) {
-            if (const AstMemberRef* const refp = VN_CAST(partp, MemberRef))
-                return refp->fromp()->isClassHandleValue();
-            if (const AstMethodCall* const callp = VN_CAST(partp, MethodCall))
-                return callp->fromp()->isClassHandleValue();
-            return false;
-        });
-    }
-    static bool stateExpression(AstNode* nodep, std::unordered_set<const AstNodeFTask*>& calls,
+
+public:
+    // Cache only function bodies: actual arguments are checked in their caller's context.
+    using StateFuncCache = std::unordered_map<const AstNodeFTask*, bool>;
+    static bool stateExpression(AstNode* nodep, StateFuncCache& calls,
                                 const AstNodeFTask* activationp = nullptr) {
         bool valid = true;
         nodep->foreach([&](AstNode* const partp) {
@@ -678,25 +684,46 @@ class FastConstraintBuilder final {
             } else if (AstNodeFTaskRef* const callp = VN_CAST(partp, NodeFTaskRef)) {
                 AstNodeFTask* const taskp = callp->taskp();
                 if (!VN_IS(callp, FuncRef) || !taskp || taskp->dpiImport() || taskp->isVirtual()
-                    || taskp->recursive() || !calls.emplace(taskp).second) {
+                    || taskp->recursive()) {
                     valid = false;
                     return;
                 }
+                // A body in progress is not state, so a call cycle fails the check.
+                const auto entry = calls.emplace(taskp, false);
+                if (!entry.second) {
+                    valid &= entry.first->second;
+                    return;
+                }
+                bool bodyValid = true;
                 for (AstNode* const listp :
                      std::initializer_list<AstNode*>{taskp->declsp(), taskp->stmtsp()}) {
                     for (AstNode* const itemp : VNList<AstNode>{listp}) {
-                        if (!stateExpression(itemp, calls, taskp)) valid = false;
+                        if (!stateExpression(itemp, calls, taskp)) bodyValid = false;
                     }
                 }
-                calls.erase(taskp);
+                calls.at(taskp) = bodyValid;
+                valid &= bodyValid;
             }
         });
         return valid;
     }
+    static bool checkedReceiver(AstNode* nodep) {
+        return nodep->exists([](const AstNode* partp) {
+            if (const AstMemberRef* const refp = VN_CAST(partp, MemberRef))
+                return refp->fromp()->isClassHandleValue();
+            if (const AstMethodCall* const callp = VN_CAST(partp, MethodCall))
+                return callp->fromp()->isClassHandleValue();
+            return false;
+        });
+    }
+    // State expressions may contain pure native functions, but never hidden
+    // randomized reads, virtual/DPI dispatch, recursion, or side effects.
     static bool stateExpression(AstNode* nodep) {
-        std::unordered_set<const AstNodeFTask*> calls;
+        StateFuncCache calls;
         return stateExpression(nodep, calls);
     }
+
+private:
     AstNodeStmt* newQueueDomainp(AstConstraintExpr* exprp) const {
         AstNodeExpr* nodep = exprp->exprp();
         const bool exclude = VN_IS(nodep, LogNot);
@@ -1116,9 +1143,11 @@ public:
             if (distGensp && builder.m_supported) {
                 if (const AstConstraintExpr* const exprp = VN_CAST(itemp, ConstraintExpr)) {
                     if (AstDist* const distp = VN_CAST(exprp->exprp(), Dist)) {
-                        // Promoted/sliced expressions are not assignable storage references.
-                        if (VN_IS(distp->exprp(), VarRef) || VN_IS(distp->exprp(), MemberRef))
-                            distGensp->emplace(distp, genp);
+                        // Non-storage native targets retain the legacy draw but cannot
+                        // record it by writing directly to the target expression.
+                        const bool direct
+                            = VN_IS(distp->exprp(), VarRef) || VN_IS(distp->exprp(), MemberRef);
+                        distGensp->emplace(distp, direct ? genp : nullptr);
                     }
                 }
             }
@@ -1827,6 +1856,7 @@ private:
         }
         return exprp;
     }
+    // distTargetBytes() bounds this text for DIST targets; change them together.
     AstSFormatF* editSMT(AstNodeExpr* nodep, AstNodeExpr* lhsp = nullptr,
                          AstNodeExpr* rhsp = nullptr, AstNodeExpr* thsp = nullptr) {
         // Replace incomputable (result-dependent) expression with SMT expression
@@ -2355,7 +2385,8 @@ private:
         }
     }
 
-    // Create SFormatF for array dereference inside solver
+    // Create SFormatF for array dereference inside solver.
+    // distTargetBytes() bounds this text for DIST targets; change them together.
     AstSFormatF* createSolverArrDerefp(FileLine* const fl, AstNodeExpr* const arrExprp,
                                        AstNodeExpr* const idxExprp) {
         AstNodeExpr* const argsp = AstNode::addNext(arrExprp, idxExprp);
@@ -3830,9 +3861,10 @@ private:
         AstNodeExpr* falsep;
         AstNodeExpr* errorp;
     };
-    AstVar* newGuardVarp(FileLine* const fl, AstBegin* const blockp, AstNodeDType* const dtypep) {
+    AstVar* newGuardVarp(FileLine* const fl, AstBegin* const blockp, AstNodeDType* const dtypep,
+                         const char* const prefix = "__Vguard") {
         AstVar* const varp
-            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vguard"), dtypep};
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get(prefix), dtypep};
         varp->funcLocal(true);
         // Preserve the single stored branch/proof representation through later substitution.
         varp->noSubst(true);
@@ -6158,6 +6190,172 @@ private:
         blockp->addStmtsp(new AstIf{fl, newGuardRefp(errorVarp), failp->makeStmt(), stmtp});
         return blockp;
     }
+    // Materialize a term once for both the predicate and the occurrence's metadata.
+    AstVar* newDistTermp(AstBegin* const blockp, AstNodeExpr* const valuep) {
+        FileLine* const fl = valuep->fileline();
+        AstVar* const varp = newGuardVarp(fl, blockp, blockp->findStringDType(), "__Vdist");
+        blockp->addStmtsp(
+            new AstAssign{fl, newGuardRefp(varp, VAccess::WRITE), formatValueRegion(valuep)});
+        return varp;
+    }
+    static AstSFormatF* newDistEndpoint(FileLine* const fl, const int lhsWidth, const int width,
+                                        const bool sign, const bool upper) {
+        V3Number source{fl, lhsWidth, 0U};
+        if (upper) source.setAllBits1();
+        if (sign) source.setBit(lhsWidth - 1, !upper);
+        V3Number num{fl, width, 0U};
+        if (sign) {
+            num.opExtendS(source, lhsWidth);
+        } else {
+            num.opAssign(source);
+        }
+        return getConstFormat(new AstConst{fl, num});
+    }
+    struct DistBucketTerms final {
+        AstVar* targetp;
+        AstVar* lop;
+        AstVar* hip;
+        AstVar* weightp;
+        int width;
+        int weightWidth;
+        bool sign;
+        bool interval;
+        bool perValue;
+    };
+    static void appendDistBucket(AstCExpr* const bucketsp, const AstDist* const distp,
+                                 const DistBucketTerms& terms) {
+        FileLine* const fl = distp->fileline();
+        const int lhsWidth = distp->distLhsWidth();
+        bucketsp->add("{");
+        bucketsp->add(newGuardRefp(terms.targetp));
+        bucketsp->add(", ");
+        bucketsp->add(terms.lop ? static_cast<AstNodeExpr*>(newGuardRefp(terms.lop))
+                                : newDistEndpoint(fl, lhsWidth, terms.width, terms.sign, false));
+        bucketsp->add(", ");
+        if (terms.hip) {
+            bucketsp->add(newGuardRefp(terms.hip));
+        } else if (terms.interval) {
+            bucketsp->add(newDistEndpoint(fl, lhsWidth, terms.width, terms.sign, true));
+        } else {
+            bucketsp->add(new AstConst{fl, AstConst::String{}, ""});
+        }
+        bucketsp->add(", " + std::to_string(terms.width)
+                      + (terms.sign ? ", true, " : ", false, "));
+        bucketsp->add(newGuardRefp(terms.weightp));
+        const int targetWidth = distp->distVarRef() && lhsWidth < terms.width ? lhsWidth : 0;
+        bucketsp->add(", " + std::to_string(terms.weightWidth)
+                      + (terms.perValue ? ", true, " : ", false, ") + std::to_string(targetWidth)
+                      + "}, ");
+    }
+    AstCMethodHard* newDistAddp(const AstDist* const nodep, AstCExpr* const bucketsp,
+                                AstCExpr* const termBytesp) {
+        FileLine* const fl = nodep->fileline();
+        AstCMethodHard* const callp = new AstCMethodHard{
+            fl,
+            new AstVarRef{fl, VN_CAST(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_DIST_ADD};
+        callp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, m_inSoftItem});
+        callp->addPinsp(bucketsp);
+        UASSERT_OBJ(callp->method().isConstraintFilenameArg(callp->pinspList().size()), nodep,
+                    "Unexpected DIST diagnostic filename argument");
+        callp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "\"" + fl->filename() + "\""});
+        callp->addPinsp(new AstConst{fl, static_cast<uint32_t>(fl->lineno())});
+        callp->addPinsp(new AstConst{fl, static_cast<uint32_t>(nodep->user2())});
+        callp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, nodep->user3()});
+        callp->addPinsp(termBytesp);
+        callp->dtypeSetVoid();
+        return callp;
+    }
+    void visit(AstDist* nodep) override {
+        if (!nodep->user4()) {
+            visit(static_cast<AstNodeExpr*>(nodep));
+            return;
+        }
+        FileLine* const fl = nodep->fileline();
+        AstBegin* const blockp = new AstBegin{fl, m_uniqueNames.get("__Vdist"), nullptr, true};
+        AstCExpr* const bucketsp = new AstCExpr{fl, AstCExpr::Pure{}, "{"};
+        AstCExpr* const termBytesp = new AstCExpr{fl, AstCExpr::Pure{}, "size_t{0}"};
+        unsigned literalBytes = 0;
+        const auto countTerm = [&](AstVar* const varp) {
+            termBytesp->add(" + ");
+            termBytesp->add(newGuardRefp(varp));
+            termBytesp->add(".size()");
+        };
+        AstNodeExpr* pinsp = nullptr;
+        AstNodeExpr* const sharedTargetp = nodep->exprp();
+        const int sharedWidth = sharedTargetp->width();
+        const bool sharedSigned = sharedTargetp->isSigned();
+        AstVar* sharedp = nullptr;
+        std::string predicate = "(__Vbv (or false";
+        for (AstDistItem* const itemp : nodep->itemspList()) {
+            AstNodeExpr* const weightp = itemp->weightp();
+            if (weightp->isZero()) continue;
+            AstNodeExpr* const viewp = itemp->itemTargetp();
+            AstNodeExpr* const rangep = viewp ? itemp->itemRangep() : itemp->rangep();
+            AstInsideRange* const intervalp = VN_CAST(rangep, InsideRange);
+            const int width = viewp ? viewp->width() : sharedWidth;
+            const int weightWidth = weightp->width();
+            const bool sign = rangep->isSigned() && (viewp ? viewp->isSigned() : sharedSigned);
+            const bool openLow = itemp->distOpenLow();
+            const bool openHigh = itemp->distOpenHigh();
+            if (!viewp && !sharedp) sharedp = newDistTermp(blockp, sharedTargetp);
+            AstVar* const targetp = viewp ? newDistTermp(blockp, viewp) : sharedp;
+            AstVar* const wp = newDistTermp(blockp, weightp);
+            AstVar* const lop
+                = openLow ? nullptr : newDistTermp(blockp, intervalp ? intervalp->lhsp() : rangep);
+            AstVar* const hip
+                = intervalp && !openHigh ? newDistTermp(blockp, intervalp->rhsp()) : nullptr;
+
+            predicate += " (and (distinct %s (_ bv0 " + std::to_string(weightWidth) + "))";
+            pinsp = AstNode::addNextNull(pinsp, newGuardRefp(wp));
+            const auto appendComparison = [&](const char* op, AstVar* const boundp) {
+                predicate += std::string{" ("} + op + " %s %s)";
+                pinsp->addNext(newGuardRefp(targetp));
+                pinsp->addNext(newGuardRefp(boundp));
+            };
+            if (intervalp) {
+                if (lop) appendComparison(sign ? "bvsge" : "bvuge", lop);
+                if (hip) appendComparison(sign ? "bvsle" : "bvule", hip);
+            } else {
+                appendComparison("=", lop);
+            }
+            predicate += ")";
+            appendDistBucket(bucketsp, nodep,
+                             {targetp, lop, hip, wp, width, weightWidth, sign,
+                              intervalp != nullptr, intervalp && !itemp->isWhole()});
+            const unsigned endpointBytes = smtLiteralBytes(width);
+            countTerm(targetp);
+            countTerm(wp);
+            if (lop) {
+                countTerm(lop);
+            } else {
+                literalBytes += endpointBytes;
+            }
+            if (hip) {
+                countTerm(hip);
+            } else if (intervalp) {
+                literalBytes += endpointBytes;
+            }
+        }
+        if (!pinsp) {
+            // No active bucket exists, even though this is a well-formed DIST.
+            VL_DO_DANGLING(bucketsp->deleteTree(), bucketsp);
+            VL_DO_DANGLING(termBytesp->deleteTree(), termBytesp);
+            VL_DO_DANGLING(blockp->deleteTree(), blockp);
+            nodep->replaceWith(new AstSFormatF{fl, "#b0", false, nullptr});
+        } else {
+            bucketsp->add("}");
+            if (literalBytes) termBytesp->add(" + " + std::to_string(literalBytes));
+            AstNodeStmt* addp = newDistAddp(nodep, bucketsp, termBytesp)->makeStmt();
+            if (AstNodeExpr* const gatep = nodep->drawGatep()) {
+                addp = new AstIf{fl, gatep->unlinkFrBack(), addp};
+            }
+            blockp->addStmtsp(addp);
+            nodep->replaceWith(finishValuePreparation(
+                new AstSFormatF{fl, predicate + "))", false, pinsp}, blockp));
+        }
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstConstraintExpr* nodep) override {
         // IEEE 1800-2023 18.5.13: 'disable soft' is a meta-level directive on
         // the constraint graph, lowered to a void RANDOMIZER_DISABLE_SOFT
@@ -6873,12 +7071,132 @@ public:
 };
 
 //######################################################################
+// Classes whose constraint setup is reused by phased solves
+
+static bool hasPreparedDist(const AstNode* const itemsp) {
+    return itemsp && itemsp->existsAndNext([](const AstDist* const distp) {
+        return distp->distLhsWidth() != 0;
+    });
+}
+
+// The random size of a dynamic array or queue is solved in a phase of its own.
+static const AstVar* randomSizeArrayp(const AstNode* const nodep) {
+    const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard);
+    if (!methodp || methodp->method() != VCMethod::DYN_SIZE || !methodp->fromp()->user1()
+        || SmtUtil::isSolveBeforeItem(methodp)) {
+        return nullptr;
+    }
+    if (const AstMemberRef* const refp = VN_CAST(methodp->fromp(), MemberRef)) return refp->varp();
+    const AstVarRef* const refp = VN_CAST(methodp->fromp(), VarRef);
+    return refp ? refp->varp() : nullptr;
+}
+
+static bool distSetupUnphased(const AstNode* const itemsp) {
+    return !itemsp || !itemsp->existsAndNext([](const AstNode* const nodep) {
+        if (VN_IS(nodep, ConstraintBefore) || randomSizeArrayp(nodep)) return true;
+        const AstNodeFTaskRef* const callp = VN_CAST(nodep, NodeFTaskRef);
+        return callp && callp->user1();
+    });
+}
+
+class SolverSmtDistSetupVisitor final : public VNVisitorConst {
+public:
+    using ClassChildren = std::map<AstClass*, std::vector<AstClass*>>;
+    using ClassSet = std::unordered_set<AstClass*>;
+
+private:
+    const ClassChildren& m_derivedClasses;  // Direct inheritance edges
+    ClassSet m_roots;  // Classes requiring phases, not including ancestors added for setup reuse
+    AstClass* m_classp = nullptr;  // Enclosing class, if any
+    AstClass* m_readerp = nullptr;  // Class whose constraint or with-clause is being visited
+    std::unordered_set<const AstVar*> m_sizedArrays;  // Arrays with a random size anywhere
+    // Arrays each class's constraints read; a sized array is resized in a size phase
+    std::unordered_map<AstClass*, std::unordered_set<const AstVar*>> m_readArrays;
+
+    void visit(AstClass* nodep) override {
+        VL_RESTORER(m_classp);
+        m_classp = nodep;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstConstraint* nodep) override {
+        if (m_classp && !distSetupUnphased(nodep->itemsp())) m_roots.insert(m_classp);
+        VL_RESTORER(m_readerp);
+        m_readerp = m_classp;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstCMethodHard* nodep) override {
+        if (const AstVar* const varp = randomSizeArrayp(nodep)) m_sizedArrays.insert(varp);
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        if (m_readerp) m_readArrays[m_readerp].insert(nodep->varp());
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeFTaskRef* nodep) override {
+        if (nodep->name() != "randomize" || !nodep->withp()) {
+            iterateChildrenConst(nodep);
+            return;
+        }
+        AstClass* classp = VN_CAST(nodep->classOrPackagep(), Class);
+        if (const AstMethodCall* const methodp = VN_CAST(nodep, MethodCall)) {
+            const AstClassRefDType* const dtypep
+                = VN_CAST(methodp->fromp()->dtypep()->skipRefp(), ClassRefDType);
+            if (dtypep) classp = dtypep->classp();
+        }
+        if (classp && !distSetupUnphased(nodep->withp()->exprp())) m_roots.insert(classp);
+        VL_RESTORER(m_readerp);
+        if (classp) m_readerp = classp;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+    SolverSmtDistSetupVisitor(AstNetlist* const rootp, const ClassChildren& derivedClasses,
+                              ClassSet& phased)
+        : m_derivedClasses{derivedClasses} {
+        iterateConst(rootp);
+        for (const auto& entry : m_readArrays) {
+            for (const AstVar* const varp : entry.second) {
+                if (!m_sizedArrays.count(varp)) continue;
+                m_roots.insert(entry.first);
+                break;
+            }
+        }
+        // Ancestors own setup shared by the phase roots. Other descendants of those
+        // ancestors do not run the roots' phases, and their own setup is unaffected.
+        for (AstClass* const rootClassp : m_roots) {
+            for (AstClass* classp = rootClassp; classp && phased.insert(classp).second;
+                 classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr) {}
+        }
+        std::vector<AstClass*> pending{m_roots.begin(), m_roots.end()};
+        for (size_t i = 0; i < pending.size(); ++i) {
+            const auto it = m_derivedClasses.find(pending[i]);
+            if (it == m_derivedClasses.end()) continue;
+            for (AstClass* const derivedp : it->second) {
+                if (m_roots.insert(derivedp).second) {
+                    phased.insert(derivedp);
+                    pending.push_back(derivedp);
+                }
+            }
+        }
+    }
+
+public:
+    static void apply(AstNetlist* const rootp, const ClassChildren& derivedClasses,
+                      ClassSet& phased) {
+        const SolverSmtDistSetupVisitor visitor{rootp, derivedClasses, phased};
+    }
+};
+
+//######################################################################
 // SMT-LIB solver back-end
 
 class SolverSmtLowering final : public V3SolverLowering {
     // STATE
-    FastDistGens m_fastDistGens;  // Original eligible dist -> generator recording its draw
+    FastDistGens m_fastDistGens;  // Native sites; non-null generators also record the draw
     int m_distNum = 0;  // Dist bucket variable counter within a class for var naming
+    bool m_hasDistCandidates = false;  // Width prepared at least one DIST comparison view
+    std::unordered_set<AstClass*> m_phasedDistClasses;  // Inheritance families with phased setup
+    FastConstraintBuilder::StateFuncCache m_stateFuncs;  // Function bodies checked as DIST state
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
     // m_writtenVars of each class, with those of its base classes
     std::map<const AstClass*, std::set<std::string>> m_classWrittenVars;
@@ -7324,18 +7642,25 @@ class SolverSmtLowering final : public V3SolverLowering {
         callp->dtypeSetVoid();
         return callp->makeStmt();
     }
-    // Find m_randcClasses: the classes with a randc variable, and, from those, the classes with
-    // a rand handle to one, or extending one
-    void findRandcClasses(AstNetlist* const nodep) {
+    // Collect direct inheritance edges, classes affected by randc, and whether DIST
+    // needs the additional phased-setup discovery pass.
+    void collectClassInfo(AstNetlist* const nodep) {
         // Classes with a rand handle to, or extending, each class
         std::unordered_map<const AstClass*, std::vector<const AstClass*>> reachingClasses;
         std::vector<const AstClass*> worklist;  // Classes found, whose reaching classes are next
-        nodep->foreach([&](const AstClass* const classp) {
+        nodep->foreach([&](AstNode* const itemp) {
+            if (const AstDist* const distp = VN_CAST(itemp, Dist)) {
+                m_hasDistCandidates |= distp->distLhsWidth() != 0;
+            }
+            AstClass* const classp = VN_CAST(itemp, Class);
+            if (!classp) return;
             if (classp->extendsp()) {
                 reachingClasses[classp->extendsp()->classp()].push_back(classp);
+                m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
             }
-            for (const AstNode* itemp = classp->membersp(); itemp; itemp = itemp->nextp()) {
-                const AstVar* const varp = VN_CAST(itemp, Var);
+            for (const AstNode* memberp = classp->membersp(); memberp;
+                 memberp = memberp->nextp()) {
+                const AstVar* const varp = VN_CAST(memberp, Var);
                 if (!varp || !varp->isRand()) continue;
                 if (varp->isRandC()) worklist.push_back(classp);
                 const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
@@ -7940,7 +8265,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
         AstNodeExpr* valuep = new AstAdd{fl, irp->lhsp()->cloneTreePure(false), offsetp};
         const auto fastIt = m_fastDistGens.find(distp);
-        if (recordPick && fastIt != m_fastDistGens.end()) {
+        if (recordPick && fastIt != m_fastDistGens.end() && fastIt->second) {
             // Record at the original RHS evaluation point, not hoisted across a
             // mode/condition/solve round. The solver fallback sees the same value.
             AstVar* const pickVarp
@@ -8008,10 +8333,238 @@ class SolverSmtLowering final : public V3SolverLowering {
         return chainExprp;
     }
 
-    // Replace AstDist with weighted bucket selection via AstConstraintIf chain.
-    // Supports both constant and variable weight expressions.
+    // Size proxies are not setup state. Member size proxies have class
+    // receivers, which the receiver check already excludes. Setup state must
+    // format as one literal, but counts and powers expand into solver arithmetic.
+    bool isDistState(AstNode* const nodep) {
+        return !nodep->exists([](const AstNodeExpr* const exprp) {
+            if (const AstVarRef* const refp = VN_CAST(exprp, VarRef)) {
+                return refp->varp()->isRandSizeVar();
+            }
+            return VN_IS(exprp, CountOnes) || VN_IS(exprp, Pow) || VN_IS(exprp, PowSS)
+                   || VN_IS(exprp, PowSU) || VN_IS(exprp, PowUS);
+        }) && !FastConstraintBuilder::checkedReceiver(nodep)
+               && FastConstraintBuilder::stateExpression(nodep, m_stateFuncs);
+    }
+
+    // Estimate emitted text using the templates in ConstraintExprVisitor and emitSMT().
+    // The result must stay an upper bound on every text shape those templates emit.
+    static size_t distTargetBytes(const AstNodeExpr* const targetp,
+                                  const bool drawnStorage = false) {
+        if (!targetp->user1() || VN_IS(targetp, Const)) return smtLiteralBytes(targetp->width());
+        if (const AstVarRef* const refp = VN_CAST(targetp, VarRef)) {
+            const RandomizeMode mode = {.asUQuad = refp->varp()->user1()};
+            size_t bytes = refp->name().size();
+            if (v3Global.opt.protectIds()) {
+                // The protector adds PS to the identifier in debug mode or to a digest.
+                bytes = v3Global.opt.debugProtect()
+                            ? bytes + 2
+                            : std::max(bytes, 2 + VHashSha512::DIGEST_SYMBOL24_LENGTH);
+            }
+            if (!drawnStorage && mode.usesMode
+                && refp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+                bytes = std::max(bytes, size_t{smtLiteralBytes(refp->width())});
+            }
+            return bytes;
+        }
+        if (VN_IS(targetp, Extend) || VN_IS(targetp, ExtendS)) {
+            const AstNodeExpr* const fromp = VN_AS(targetp, NodeUniop)->lhsp();
+            // The emitted extension template has one two-character operand placeholder.
+            return targetp->emitSMT().size() - 2 + distTargetBytes(fromp, drawnStorage);
+        }
+        if (const AstSel* const selp = VN_CAST(targetp, Sel)) {
+            const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
+            static constexpr size_t maxDecimalIndexBytes = 11;  // Signed 32-bit decimal index.
+            const size_t indices
+                = lsbp && !lsbp->num().isFourState() && lsbp->width() <= 32
+                      ? std::to_string(selp->lsbConst()).size()
+                            + std::to_string(selp->lsbConst() + selp->widthConst() - 1).size()
+                      : 2 * maxDecimalIndexBytes;
+            return selp->emitSMT().size() - 6 + indices + distTargetBytes(selp->fromp());
+        }
+        const AstNodeExpr* fromp = nullptr;
+        const AstNodeExpr* indexp = nullptr;
+        unsigned indexWidth = 0;
+        if (const AstArraySel* const selp = VN_CAST(targetp, ArraySel)) {
+            fromp = selp->fromp();
+            indexp = selp->bitp();
+            indexWidth = 32;  // The unpacked-array formatter uses #x%8x.
+        } else if (const AstAssocSel* const selp = VN_CAST(targetp, AssocSel)) {
+            fromp = selp->fromp();
+            indexp = selp->bitp();
+            const unsigned width = indexp->width();
+            static constexpr unsigned packedStringKeyBits = 128;
+            indexWidth = !indexp->dtypep()->skipRefp()->isIntegralOrPacked() ? packedStringKeyBits
+                         : width <= 8                                        ? 8
+                         : width <= 16                                       ? 16
+                                       : VL_WORDS_I(width) * VL_EDATASIZE;
+        } else if (const AstCMethodHard* const atp = VN_CAST(targetp, CMethodHard)) {
+            UASSERT_OBJ(atp->method() == VCMethod::ARRAY_AT, targetp,
+                        "Unexpected method in DIST target");
+            fromp = atp->fromp();
+            indexp = atp->pinsp();
+            indexWidth = indexp->width();
+        }
+        if (fromp && indexp) {
+            size_t bytes
+                = sizeof("(select  )") - 1 + distTargetBytes(fromp) + smtLiteralBytes(indexWidth);
+            if (const AstVarRef* const refp = VN_CAST(fromp, VarRef)) {
+                const RandomizeMode mode = {.asUQuad = refp->varp()->user1()};
+                if (!drawnStorage && mode.usesMode) {
+                    bytes = std::max(bytes, size_t{smtLiteralBytes(targetp->width())});
+                }
+            }
+            return bytes;
+        }
+        static constexpr size_t operatorBytes = 32;  // Operator, delimiters, and width operands.
+        if (const AstNodeBiop* const opp = VN_CAST(targetp, NodeBiop)) {
+            // A shift with a wider shift amount adds both extension and extraction templates.
+            static constexpr size_t shiftWrapperBytes = 64;
+            const size_t wrapperBytes
+                = (VN_IS(opp, ShiftL) || VN_IS(opp, ShiftR) || VN_IS(opp, ShiftRS))
+                          && opp->lhsp()->width() != opp->rhsp()->width()
+                      ? shiftWrapperBytes
+                      : 0;
+            return operatorBytes + wrapperBytes + distTargetBytes(opp->lhsp())
+                   + distTargetBytes(opp->rhsp());
+        }
+        // These reductions compare against a zero literal of the operand width.
+        const AstNodeExpr* const operandp = VN_AS(targetp, NodeUniop)->lhsp();
+        const size_t literalBytes = VN_IS(targetp, RedAnd) || VN_IS(targetp, RedOr)
+                                        ? smtLiteralBytes(operandp->width())
+                                        : 0;
+        return operatorBytes + literalBytes + distTargetBytes(operandp);
+    }
+
+    bool isIndependentDistTarget(AstNodeExpr* const nodep) {
+        if (const AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
+            AstVar* const varp = refp->varp();
+            if (varp->isRandSizeVar()) return false;
+            if (!refp->user1()) return !isSolvedVar(varp);
+            return isSolvedVar(varp) && !varp->rand().isRandC() && !m_elemModes.hasModes(varp);
+        }
+        if (const AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) {
+            return (VN_IS(selp, ArraySel) || VN_IS(selp, AssocSel)) && isDistState(selp->bitp())
+                   && isIndependentDistTarget(selp->fromp());
+        }
+        if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+            return isDistState(selp->lsbp()) && isIndependentDistTarget(selp->fromp());
+        }
+        if (const AstCMethodHard* const atp = VN_CAST(nodep, CMethodHard)) {
+            return atp->method() == VCMethod::ARRAY_AT && isDistState(atp->pinsp())
+                   && isIndependentDistTarget(atp->fromp());
+        }
+        // These unary operators use a bounded template or a single comparison with
+        // zero. Count/reduction expansions that duplicate the operand stay procedural.
+        if (VN_IS(nodep, Extend) || VN_IS(nodep, ExtendS) || VN_IS(nodep, LogNot)
+            || VN_IS(nodep, Negate) || VN_IS(nodep, Not) || VN_IS(nodep, RedAnd)
+            || VN_IS(nodep, RedOr)) {
+            return isIndependentDistTarget(VN_AS(nodep, NodeUniop)->lhsp());
+        }
+        if (VN_IS(nodep, Add) || VN_IS(nodep, And) || VN_IS(nodep, Concat) || VN_IS(nodep, Div)
+            || VN_IS(nodep, DivS) || VN_IS(nodep, Eq) || VN_IS(nodep, EqWild) || VN_IS(nodep, Gt)
+            || VN_IS(nodep, Gte) || VN_IS(nodep, GteS) || VN_IS(nodep, GtS) || VN_IS(nodep, LogAnd)
+            || VN_IS(nodep, LogEq) || VN_IS(nodep, LogOr) || VN_IS(nodep, Lt) || VN_IS(nodep, Lte)
+            || VN_IS(nodep, LteS) || VN_IS(nodep, LtS) || VN_IS(nodep, ModDiv)
+            || VN_IS(nodep, ModDivS) || VN_IS(nodep, Mul) || VN_IS(nodep, MulS)
+            || VN_IS(nodep, Neq) || VN_IS(nodep, Or) || VN_IS(nodep, Replicate)
+            || VN_IS(nodep, ShiftL) || VN_IS(nodep, ShiftR) || VN_IS(nodep, ShiftRS)
+            || VN_IS(nodep, Sub) || VN_IS(nodep, Xor)) {
+            const AstNodeBiop* const opp = VN_AS(nodep, NodeBiop);
+            // Whole-array equality emits one predicate per element, not one SMT operator.
+            return opp->lhsp()->dtypep()->skipRefp()->isIntegralOrPacked()
+                   && opp->rhsp()->dtypep()->skipRefp()->isIntegralOrPacked()
+                   && isIndependentDistTarget(opp->lhsp()) && isIndependentDistTarget(opp->rhsp());
+        }
+        return VN_IS(nodep, Const);
+    }
+
+    // A selected target may combine solver values; selectors and bucket operands
+    // must be known during setup.
+    bool markIndependentDist(AstDist* const distp, const bool allow, AstVar* const randModeVarp) {
+        if (!allow || !distp->distLhsWidth() || m_fastDistGens.count(distp)) return false;
+        AstNodeExpr* const exprp = distp->exprp();
+        if (!exprp->user1() || !isIndependentDistTarget(exprp)) return false;
+        // Reject a site before replacing its procedural weighting if the descriptor
+        // cannot fit the sampler's per-call budget.
+        unsigned nonzero = 0;
+        unsigned perValueItems = 0;
+        unsigned maxCombinedWidth = 0;
+        size_t termBytes = 0;
+        size_t firstBucketWork = 0;
+        // Items in the same comparison domain share the original target expression.
+        std::unordered_map<unsigned, size_t> checkpointTargets;  // Width and signedness key
+        // Zero-weight items are skipped below, but their operands must be setup state too.
+        for (const AstDistItem* const itemp : distp->itemspList()) {
+            if (!isDistState(itemp->weightp())
+                || !isDistState(itemp->itemTargetp() ? itemp->itemRangep() : itemp->rangep())) {
+                return false;
+            }
+        }
+        // Count each encoded operand in every bucket, even when its formatted string is shared.
+        for (const AstDistItem* const itemp : distp->itemspList()) {
+            AstNodeExpr* const weightp = itemp->weightp();
+            if (weightp->isZero()) continue;
+            const AstNodeExpr* const targetp = itemp->itemTargetp();
+            AstNodeExpr* const rangep = targetp ? itemp->itemRangep() : itemp->rangep();
+            const int width = (targetp ? targetp : exprp)->width();
+            ++nonzero;  // V3Width capped every item, zero-weight ones included
+            const bool range = VN_IS(rangep, InsideRange);
+            const AstNodeExpr* const itemTargetp = targetp ? targetp : exprp;
+            // The direct storage gate guarantees a symbolic term when a draw can run.
+            const size_t targetBytes = distTargetBytes(itemTargetp, distp->distVarRef());
+            termBytes += targetBytes + (range ? 2 : 1) * smtLiteralBytes(width)
+                         + smtLiteralBytes(weightp->width());
+            // Store signedness in the low bit; V3Width checked the width against distMaxBits.
+            const unsigned targetKey = (static_cast<unsigned>(width) << 1)
+                                       | (rangep->isSigned() && itemTargetp->isSigned());
+            size_t& checkpointBytes = checkpointTargets[targetKey];
+            checkpointBytes = std::max(checkpointBytes, targetBytes);
+            maxCombinedWidth
+                = std::max(maxCombinedWidth, static_cast<unsigned>(width + weightp->width()));
+            const unsigned boundBytes = width + 2;  // Solver replies may use binary literals.
+            firstBucketWork = std::max(
+                firstBucketWork,
+                VlRandLimits::distBucketTextWork(targetBytes, boundBytes, range ? boundBytes : 0));
+            if (range && !itemp->isWhole()) ++perValueItems;
+        }
+        const unsigned words = VlRandLimits::distWords(maxCombinedWidth);
+        const unsigned cost = VlRandLimits::distSiteWork(nonzero, words, perValueItems);
+        static constexpr size_t checkpointSyntaxBytes = 16;
+        static constexpr size_t checkpointEntryWork = 1;
+        size_t checkpointWork = 0;
+        for (const auto& entry : checkpointTargets) {
+            const unsigned width = entry.first >> 1;
+            checkpointWork
+                += VlRandLimits::distTextWork(2 * entry.second + width + checkpointSyntaxBytes)
+                   + checkpointEntryWork + VL_WORDS_I(width);
+        }
+        // Estimate the first draw only. The runtime still checks the actual model and text.
+        if (cost + VlRandLimits::distTextWork(termBytes)
+                + VlRandLimits::distChoiceWork(nonzero, words) + checkpointWork + firstBucketWork
+            > VlRandLimits::distStaticMaxWork) {
+            return false;
+        }
+        distp->user2(words);
+        distp->user3(cost);
+        if (nonzero) {
+            AstNodeExpr* const gatep = newDistGate(exprp, randModeVarp, distp->fileline());
+            if (gatep->isOne()) {
+                VL_DO_DANGLING(pushDeletep(gatep), gatep);
+            } else {
+                distp->drawGatep(new AstRedOr{distp->fileline(), gatep});
+            }
+        }
+        distp->user4(true);
+        V3Stats::addStat("Constraint DIST, Independent sites", 1);
+        return true;
+    }
+
+    // Replace AstDist with weighted bucket selection via AstConstraintIf chain, except
+    // for independent SMT items handled during predicate formatting.
     void lowerDistConstraints(AstNodeFTask* taskp, AstNodeConstraintItem* constrItemsp,
-                              AstVar* randModeVarp, AstConstraintForeach* foreachp = nullptr) {
+                              AstVar* randModeVarp, const bool allowIndependent,
+                              AstConstraintForeach* foreachp = nullptr) {
         // When inside a foreach, bucket preamble stmts are stored in foreachp->user3p()
         // (as a linked list) so visit(AstConstraintForeach*) can inject them into the
         // real AstForeach body. Recursive branches share and append to the same list. The
@@ -8027,40 +8580,48 @@ class SolverSmtLowering final : public V3SolverLowering {
         for (AstNodeConstraintItem* const itemp : VNList<AstNodeConstraintItem>{constrItemsp}) {
             // dist can appear inside an if/else or foreach constraint.
             if (AstConstraintIf* const cifp = VN_CAST(itemp, ConstraintIf)) {
-                lowerDistConstraints(taskp, cifp->thensp(), randModeVarp, foreachp);
+                const bool independentHere = allowIndependent && isDistState(cifp->condp());
+                lowerDistConstraints(taskp, cifp->thensp(), randModeVarp, independentHere,
+                                     foreachp);
                 if (cifp->elsesp()) {
-                    lowerDistConstraints(taskp, cifp->elsesp(), randModeVarp, foreachp);
+                    lowerDistConstraints(taskp, cifp->elsesp(), randModeVarp, independentHere,
+                                         foreachp);
                 }
                 continue;
             }
             if (AstConstraintForeach* const cfep = VN_CAST(itemp, ConstraintForeach)) {
-                lowerDistConstraints(taskp, cfep->bodyp(), randModeVarp, cfep);
+                lowerDistConstraints(taskp, cfep->bodyp(), randModeVarp, allowIndependent, cfep);
                 continue;
             }
 
             AstConstraintExpr* const constrExprp = VN_CAST(itemp, ConstraintExpr);
             if (!constrExprp) continue;
-
             // `cond -> x dist {...}` parses as ConstraintExpr(LogIf(cond, Dist)).
             // This pass only scans ConstraintExpr/If/Foreach for Dist, so lift the
             // LogIf chain into nested ConstraintIf first. Chains like
             // `a -> b -> dist` nest accordingly.
             if (AstLogIf* const topLogIfp = VN_CAST(constrExprp->exprp(), LogIf)) {
-                AstNode* chainEndp = topLogIfp->rhsp();
+                AstNodeExpr* chainEndp = topLogIfp;
                 while (AstLogIf* const innerp = VN_CAST(chainEndp, LogIf)) {
                     chainEndp = innerp->rhsp();
                 }
-                if (VN_IS(chainEndp, Dist)) {
+                if (AstDist* const distp = VN_CAST(chainEndp, Dist)) {
+                    bool independentHere = allowIndependent && distp->distLhsWidth();
+                    for (AstLogIf* guardp = topLogIfp; independentHere && guardp;
+                         guardp = VN_CAST(guardp->rhsp(), LogIf)) {
+                        independentHere = isDistState(guardp->lhsp());
+                    }
+                    if (markIndependentDist(distp, independentHere, randModeVarp)) continue;
                     AstConstraintIf* const liftedp = liftLogIfChainToConstraintIf(topLogIfp);
                     constrExprp->replaceWith(liftedp);
                     VL_DO_DANGLING(pushDeletep(constrExprp), constrExprp);
-                    lowerDistConstraints(taskp, liftedp->thensp(), randModeVarp, foreachp);
+                    lowerDistConstraints(taskp, liftedp->thensp(), randModeVarp, false, foreachp);
                     continue;
                 }
             }
 
             AstDist* const distp = VN_CAST(constrExprp->exprp(), Dist);
-            if (!distp) continue;
+            if (!distp || markIndependentDist(distp, allowIndependent, randModeVarp)) continue;
 
             FileLine* const fl = distp->fileline();
 
@@ -8699,11 +9260,11 @@ public:
                       const RandModeVars& modeVars, ElemRandModes& elemModes,
                       const ClonedConstraints& cloneObjps, VNDeleter& deleter)
         : V3SolverLowering{memberMap, uniqueNames, modeVars, elemModes, cloneObjps, deleter} {
-        findRandcClasses(v3Global.rootp());
-        v3Global.rootp()->foreach([&](AstClass* const classp) {
-            if (classp->extendsp())
-                m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
-        });
+        collectClassInfo(v3Global.rootp());
+        if (m_hasDistCandidates) {
+            SolverSmtDistSetupVisitor::apply(v3Global.rootp(), m_derivedClasses,
+                                             m_phasedDistClasses);
+        }
     }
     ~SolverSmtLowering() override {
         for (auto& classEntry : m_gatedMemberPaths) {
@@ -8827,7 +9388,10 @@ public:
                     expandUniqueElementList(constrp->itemsp());
                 }
                 if (constrp->itemsp()) {
-                    lowerDistConstraints(taskp, constrp->itemsp(), randModeVarp);
+                    lowerDistConstraints(taskp, constrp->itemsp(), randModeVarp,
+                                         m_hasDistCandidates && !m_phasedDistClasses.count(classp)
+                                             && !m_cloneObjps.count(constrp)
+                                             && hasPreparedDist(constrp->itemsp()));
                 }
                 VInsertionSet<AstVar*>& sizeArrays = m_sizeConstrainedArrays[classp];
                 if (constrp->itemsp()) {
@@ -9121,8 +9685,10 @@ public:
         randomizeFuncp->addStmtsp(FastConstraintBuilder::apply(holderp->declsp(), localGenp, true,
                                                                &m_fastDistGens, &m_uniqueNames));
         // Dist bucket draws go into the function, ahead of the constraints reading them
-        lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
-                             randModeVarp);
+        lowerDistConstraints(
+            randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem), randModeVarp,
+            m_hasDistCandidates && !m_phasedDistClasses.count(classp) && calls.empty()
+                && hasPreparedDist(holderp->declsp()) && distSetupUnphased(holderp->declsp()));
         capturedTreep = holderp->declsp();
         randomizeFuncp->addStmtsp(setupBlockp);
         // With a class generator the class setup above added them
@@ -9564,8 +10130,9 @@ public:
         }
         randomizeFuncp->addStmtsp(FastConstraintBuilder::apply(
             holderp->declsp(), stdrandp, fastArgs, &m_fastDistGens, &m_uniqueNames));
-        lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
-                             nullptr);
+        lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem), nullptr,
+                             m_hasDistCandidates && hasPreparedDist(holderp->declsp())
+                                 && distSetupUnphased(holderp->declsp()));
         randomizeFuncp->addStmtsp(setupBlockp);
         expandUniqueElementList(holderp->declsp());
         const std::set<std::string> memberSizePaths;

@@ -1653,7 +1653,8 @@ class RandomizeVisitor final : public VNVisitor {
     //  AstVar::user3()         -> bool. Handled in constraints (skipped by __VBasicRand)
     //  AstClass::user4p()      -> AstVar*.  Constraint mode state variable
     //  AstNodeFTaskRef::user4() -> bool.  Processed
-    //  Other user3/user4 fields are used by the solver back-end, see V3SolverSmt.cpp
+    //  AstDist::user2() and other user3/user4 fields are used by the solver back-end, see
+    //  V3SolverSmt.cpp
     //  AstMemberRef::user2p()  -> AstNodeModule*. Pointer to containing module
     // VNUser1InUse    m_inuser1;      (Allocated for use in RandomizeMarkVisitor)
     // VNUser2InUse    m_inuser2;      (Allocated for use in RandomizeMarkVisitor)

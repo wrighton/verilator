@@ -2281,12 +2281,26 @@ void AstDisplay::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "displayType", displayType().ascii());
     dumpJsonGen(str);
 }
+void AstDist::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (distLhsWidth()) str << " [DISTLHSWIDTH=" << distLhsWidth() << ']';
+    if (distVarRef()) str << " [DISTVARREF]";
+}
+void AstDist::dumpJson(std::ostream& str) const {
+    if (distLhsWidth()) dumpJsonNumFunc(str, distLhsWidth);
+    dumpJsonBoolFuncIf(str, distVarRef);
+    dumpJsonGen(str);
+}
 void AstDistItem::dump(std::ostream& str) const {
     Super::dump(str);
     if (isWhole()) str << " [WHOLE]";
+    if (distOpenLow()) str << " [OPENLOW]";
+    if (distOpenHigh()) str << " [OPENHIGH]";
 }
 void AstDistItem::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isWhole);
+    dumpJsonBoolFuncIf(str, distOpenLow);
+    dumpJsonBoolFuncIf(str, distOpenHigh);
     dumpJsonGen(str);
 }
 void AstDot::dump(std::ostream& str) const {

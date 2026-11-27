@@ -1936,6 +1936,50 @@ function int rand_size(input ClsSize obj);
         disable label11;
     end
 endfunction
+class EmitDist;
+    rand bit [7:0]  dist_lhs;
+    rand bit [7:0]  dist_rhs;
+    rand bit [7:0]  dist_zero;
+    constraint dist_c {
+
+        ???? // CONSTRAINTEXPR
+
+        ???? // DIST
+        (dist_lhs + dist_rhs)
+        ???? // DISTITEM
+        16'h032'sh1
+        ???? // DISTITEM
+        16'h12c32'sh1
+        ???? // DISTITEM
+        dist_zero32'sh0}
+    constraint open_c {
+
+        ???? // CONSTRAINTEXPR
+
+        ???? // DIST
+        (dist_lhs + dist_rhs)
+        ???? // DISTITEM
+        [8'h0:8'h9]32'sh1
+        ???? // DISTITEM
+        [8'hfa:8'hff]32'sh1}
+    constraint scalar_c {
+
+        ???? // CONSTRAINTEXPR
+
+        ???? // DIST
+        dist_zero
+        ???? // DISTITEM
+        8'h032'sh1
+        ???? // DISTITEM
+        [8'h1:8'h3]32'sh2}
+    function new();
+    endfunction
+    function bit signed [31:0]  randomize();
+    endfunction
+endclass
+task rand_emit_dist(input EmitDist obj);
+    obj.randomize();
+endtask
 process __VprocessQueue_named__0[$];
 package __Vconstpool;
     const string CONSARRAY_0[1:0] = '{0:"ZERO", 1:"ONE"};

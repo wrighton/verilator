@@ -1088,6 +1088,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_CLEAR_ELEM_VARS,         "clear_elem_vars",        false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_CLEAR_VAR,               "clear_var",              false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_DISABLE_SOFT,            "disable_soft",           false,  CLEAN,  false,      "r", "") \
+    macro(RANDOMIZER_DIST_ADD,                "dist_add",               false,  CLEAN,  false,      "rrrrrrr", "") \
     macro(RANDOMIZER_END_PRIOR,               "end_prior",              false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_ENUM_DOMAIN,             "enum_domain",            false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_FAST_BEGIN,              "fast_begin",             false,  CLEAN,  false,      "mrrrrrrr", "") \
@@ -1169,6 +1170,10 @@ public:
     explicit VCMethod(int _e)
         : m_e(static_cast<en>(_e)) {}  // Need () or GCC 4.8 false warning
     constexpr operator en() const { return m_e; }
+    bool isConstraintFilenameArg(size_t arg) const VL_PURE {
+        return arg == 2
+               && (m_e == RANDOMIZER_HARD || m_e == RANDOMIZER_SOFT || m_e == RANDOMIZER_DIST_ADD);
+    }
     // Indexed element access to an array or queue, including writable and back-indexed forms.
     bool isDynElementAccess() const VL_PURE {
         switch (m_e) {

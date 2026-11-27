@@ -134,7 +134,7 @@ class DistSignedWide;
   constraint c_w {w dist {[80'sd3 : 80'sd10] := 1};}
 endclass
 
-// A single-range draw has the same global RNG consumption at narrow and wide widths.
+// A single-range distribution used at both native and solver-backed widths.
 class DistDrawOnce #(parameter int WIDTH = 32);
   rand bit [WIDTH-1:0] x;
   constraint c_x {x dist {[WIDTH'(3) : WIDTH'(10)] := 1};}
@@ -333,14 +333,12 @@ module t;
       end
     end
 
-    // --- T11: a wide offset must not advance the global RNG twice ---
+    // --- T11: preserve narrow membership and wide thread RNG ---
     begin
       automatic DistDrawOnce #(32) narrow = new();
       automatic DistDrawOnce #(80) wide = new();
-      int narrow_seed;
-      int wide_seed;
-      int unsigned after_narrow;
-      int unsigned after_wide;
+      int narrow_seed, wide_seed, reference_seed;
+      int unsigned after_wide, without_wide;
       narrow.srandom(32'h31415926);
       wide.srandom(32'h31415926);
       narrow_seed = 32'h27182818;
@@ -348,15 +346,16 @@ module t;
       void'($urandom(narrow_seed));
       randomize_result = narrow.randomize();
       `checkd(randomize_result, 1);
-      after_narrow = $urandom();
+      `check_range(narrow.x, 3, 10)
+      reference_seed = wide_seed;
       void'($urandom(wide_seed));
       randomize_result = wide.randomize();
       `checkd(randomize_result, 1);
       after_wide = $urandom();
-      `check_range(narrow.x, 3, 10)
+      void'($urandom(reference_seed));
+      without_wide = $urandom();
       `check_range(wide.x, 3, 10)
-      `checkd(wide.x, 80'(narrow.x));
-      `checkd(after_wide, after_narrow);
+      `checkd(after_wide, without_wide);
     end
 
     $write("*-* All Finished *-*\n");

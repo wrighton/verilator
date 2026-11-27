@@ -177,12 +177,12 @@ module t;
       `check_range(zw.x, 1, 2);
     end
 
-    // All-zero weights: dist constraint is effectively unconstrained, randomize succeeds
+    // No value is a member of an all-zero distribution.
     azw = new;
-    repeat (20) begin
-      randomize_result = azw.randomize();
-      `checkd(randomize_result, 1);
-    end
+    azw.x = 8'd99;
+    randomize_result = azw.randomize();
+    `checkd(randomize_result, 0);
+    `checkd(azw.x, 8'd99);
 
     // Variable := scalar weights: w1=1, w2=3 => expect ~75% for value 255
     vw = new;

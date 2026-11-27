@@ -27,6 +27,7 @@
 #define VERILATOR_VERILATED_RANDOM_H_
 
 #include "verilated.h"
+#include "verilated_rand_limits.h"
 
 #include <initializer_list>
 #include <iomanip>
@@ -91,6 +92,10 @@ public:
     // for scalars, "(select arr idx...)" for array element j). Used by BSAT
     // to query/re-assert one whole element's value, not a single bit.
     virtual void emitElement(std::ostream& s, int j) const;
+    // Size of the term, including the leading space written by emitElement.
+    size_t elementBytes(int j) const;
+    // Size an emitted term, or reserve for its echoed spelling in a solver reply.
+    size_t elementBytes(const ArrayInfo* infop, bool reply) const;
     // Emit the current runtime value of element j (see emitElement) as an SMT literal
     void emitConcreteValue(std::ostream& s, int j) const;
     virtual int totalWidth() const;
@@ -252,7 +257,10 @@ enum class VlSolverStatus : uint8_t;
 
 //=============================================================================
 // Object holding constraints and variable references.
+class VlDistCheckBudget;
+
 class VlRandomizer VL_NOT_FINAL {
+    friend class VlDistCheckBudget;
     // MEMBERS
     std::vector<std::string> m_constraints;  // Solver-dependent hard constraints
     // Solver variables the hard constraints name, flattened in m_constraints order; the
@@ -266,8 +274,65 @@ class VlRandomizer VL_NOT_FINAL {
     // Solver variables the soft constraints are disabled by, flattened in m_softConstraints
     // order; copied, as the name of an object in an array is formatted at runtime
     std::vector<std::string> m_softVarNames;
-    // Per soft constraint, the end of its names in m_softVarNames
-    std::vector<size_t> m_softVarEnds;
+    static constexpr size_t noDistIndex = std::numeric_limits<size_t>::max();
+    struct SoftInfo final {
+        size_t namesEnd;  // End of this constraint's names in m_softVarNames
+        size_t distDraw;  // Index in m_dist of this entry's draw, or noDistIndex
+    };
+    std::vector<SoftInfo> m_softInfo;  // Metadata in m_softConstraints order
+    struct DistBucket final {
+        std::string target;  // SMT expression in the item's comparison type
+        std::string low;  // Singleton value or inclusive lower bound
+        std::string high;  // Inclusive upper bound, empty for a singleton
+        int width;  // Width of the comparison
+        bool signedRange;  // Interpret the bounds in signed order
+        std::string weight;  // Read as an unsigned bit vector (IEEE 1800-2023 18.5.3)
+        int weightWidth;  // Width of the unsigned weight operand
+        bool perValue;  // Multiply weight by the declared cardinality
+        int targetWidth;  // Narrower variable width for point draws, or zero
+    };
+    struct DistSite final {
+        bool sourceSoft;  // Skip this draw if its soft constraint was relaxed
+        std::vector<DistBucket> buckets;  // Items of this active occurrence
+        const char* filep;  // Diagnostic source filename
+        unsigned line;  // Diagnostic source line
+        size_t softOrdinal;  // Retention index for a soft constraint
+        int words;  // Words for weight arithmetic, including carry bits
+        size_t setupWork;  // Initial bucket arithmetic and operand text
+    };
+    struct DistBudget final {
+        size_t workLeft = VlRandLimits::distMaxWork;
+        unsigned checksLeft = VlRandLimits::diversityMaxChecks;
+    };
+    std::vector<DistSite> m_dist;  // Active DIST occurrences in setup order
+    size_t m_distHardCount = 0;  // Hard occurrences with a draw
+    size_t m_distSoftCount = 0;  // Soft entries with a draw
+    size_t m_distSoftDraw = noDistIndex;  // Draw for the next soft() entry
+    std::vector<bool> m_distRetainedSoft;  // Soft constraints kept by relaxation, by ordinal
+    // A disabled soft draw is never retained, so it does not take the place of UniGen2.
+    bool distActive() const {
+        return (m_distHardCount || m_distSoftCount) && !m_checkOnly && !m_sizeSolve
+               && !funcPreRound();
+    }
+    bool distSoftRetained(size_t ordinal) const {
+        return ordinal < m_distRetainedSoft.size() && m_distRetainedSoft[ordinal];
+    }
+    bool distSiteRetained(const DistSite& site) const {
+        return !site.sourceSoft || distSoftRetained(site.softOrdinal);
+    }
+    struct DistSampler;
+    struct DistDraw;
+    struct DistPick;
+    size_t distModelWork() const;
+    bool saveDistModel(DistSampler& ctx, VlSolverSession& sess, bool refresh = false);
+    VlSolverStatus probeDist(DistSampler& ctx, VlSolverSession& sess,
+                             const std::string& predicate);
+    enum class DistCut : uint8_t { NONE, BUDGET, POINT };
+    bool readDistDraw(VlSolverSession& sess, const DistSite& site, DistDraw& drawr);
+    bool sampleDist(DistSampler& ctx, VlSolverSession& sess, const DistSite& site, DistCut& cutr,
+                    const DistPick* replayp);
+    bool batchDist(DistSampler& ctx, VlSolverSession& sess);
+    bool solveDist(VlRNG& rngr, VlSolverSession& sess);
     std::map<std::string, std::shared_ptr<const VlRandomVar>> m_vars;  // Solver-dependent
     // Scratch buffer for randomConstraint(), reused across calls
     std::vector<const VlRandomVar*> m_randomConstraintVars;
@@ -390,6 +455,12 @@ class VlRandomizer VL_NOT_FINAL {
     void randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
                           const std::vector<std::string>* layerVarsp = nullptr);
     // Fetch the model and write it into the registered variables.
+    struct ModelFrame final {
+        std::string reply;
+        size_t requested = 0;
+    };
+    bool readModel(VlSolverSession& sess, ModelFrame& frame);
+    bool applyModel(const ModelFrame& frame);
     bool applyModel(VlSolverSession& sess);
     // The element name a select of varr with these index terms names, as ArrayInfo names it
     bool elementName(const VlRandomVar& varr, std::vector<std::string> indices,
@@ -474,8 +545,9 @@ class VlRandomizer VL_NOT_FINAL {
         int value0 = 0;  // Lowest bit of the value it is pinned to
     };
     // Move the solution towards random values the constraints allow
-    void solveDiversity(VlRNG& rngr, VlSolverSession& sess,
-                        const std::set<std::string>* fixedp = nullptr);
+    bool solveDiversity(VlRNG& rngr, VlSolverSession& sess,
+                        const std::set<std::string>* fixedp = nullptr,
+                        DistSampler* scopep = nullptr);
     // Assume literals __Va<first>... (one per term) with keep, dropping conflicting ones until SAT
     bool assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
                         const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
@@ -535,6 +607,9 @@ public:
     ~VlRandomizer() = default;
 
     // METHODS
+    /// Register an active occurrence with bucket operands fixed for this solve.
+    void dist_add(bool sourceSoft, std::initializer_list<DistBucket> buckets, const char* filep,
+                  unsigned line, int words, size_t cost, size_t termBytes);
     /// Start one original, univariate constraint, bound to the actual SV storage.
     template <typename T>
     void fast_begin(T& var, int width, bool isSigned, bool isSoft, bool isDist, bool isEnum,

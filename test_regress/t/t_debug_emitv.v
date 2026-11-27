@@ -980,5 +980,22 @@ function int rand_size(ClsSize obj);
   return obj.randomize();
 endfunction
 
+class EmitDist;
+  rand bit [7:0] dist_lhs, dist_rhs, dist_zero;
+  constraint dist_c {
+    // verilator lint_off WIDTHEXPAND
+    (dist_lhs + dist_rhs) dist {8'd0 := 1, 16'd300 := 1, dist_zero := 0};
+    // verilator lint_on WIDTHEXPAND
+  }
+  constraint open_c {
+    (dist_lhs + dist_rhs) dist {[$:8'd9] := 1, [8'd250:$] := 1};
+  }
+  constraint scalar_c {dist_zero dist {8'd0 := 1, [8'd1:8'd3] :/ 2};}
+endclass
+
+task automatic rand_emit_dist(EmitDist obj);
+  void'(obj.randomize());
+endtask
+
 `verilator_config
 threads_group -module "sub"

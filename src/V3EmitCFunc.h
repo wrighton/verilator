@@ -994,11 +994,8 @@ public:
         int argNum = 0;
         for (AstNode* const subnodep : nodep->pinspList()) {
             if (comma) puts(", ");
-            if ((nodep->method() == VCMethod::RANDOMIZER_HARD
-                 || nodep->method() == VCMethod::RANDOMIZER_SOFT)
-                && argNum == 2) {
-                // For the filename argument of RANDOMIZER_HARD/SOFT (after the constraint and
-                // the variables it names), apply protect() similar to VL_STOP for --protected
+            if (nodep->method().isConstraintFilenameArg(argNum)) {
+                // Protect source filenames in constraint and DIST diagnostics.
                 if (const AstCExpr* const cexprp = VN_CAST(subnodep, CExpr)) {
                     // Extract filename from the CExpr (which contains "filename")
                     std::string filename;
