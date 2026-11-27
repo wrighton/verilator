@@ -14,7 +14,8 @@ test.scenarios('vlt')
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
-test.compile(verilator_flags2=['-fno-constraint-fast'])
+# Arrays stay SMT arrays, so the replies have select terms to mangle
+test.compile(verilator_flags2=['-fno-constraint-fast', '-fno-constraint-scalar'])
 
 # 16 randomize calls; each entry names the reply the solver mangles
 runs = [
