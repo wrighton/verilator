@@ -12,6 +12,9 @@
 module t;
   typedef int int_q_t[$];
   typedef byte byte_q_t[$];
+  typedef int int_bq_t[$:3];
+  shortint short_bq[$:4];
+  int int_br[$:3];
   shortint short_q[$];
   shortint short_d[];
   typedef bit [31:0] q32_t[$];
@@ -84,6 +87,16 @@ module t;
     `checkh(int_r[0], 32'h44443333);
     `checkh(int_r[1], 32'h22221111);
     {<<32'h8000_0000{int_r}} = short_q;
+    `checkh(int_r.size(), 2);
+    `checkh(int_r[0], 32'h11112222);
+    `checkh(int_r[1], 32'h33334444);
+    // To and from a bounded queue
+    int_br = int_bq_t'({>>{short_q}});
+    `checkh(int_br.size(), 2);
+    `checkh(int_br[0], 32'h11112222);
+    `checkh(int_br[1], 32'h33334444);
+    short_bq = '{16'h1111, 16'h2222, 16'h3333, 16'h4444};
+    int_r = int_q_t'({>>{short_bq}});
     `checkh(int_r.size(), 2);
     `checkh(int_r[0], 32'h11112222);
     `checkh(int_r[1], 32'h33334444);
