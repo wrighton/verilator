@@ -7892,11 +7892,16 @@ class WidthVisitor final : public VNVisitor {
                 }
                 // Cast to the element type (IEEE 1800-2023 7.12.3), as an integral chain
                 // would otherwise take the width of its context
+                AstCast* castp = nullptr;
                 if (adtypep->subDTypep()->skipRefp()->isIntegralOrPacked()) {
-                    newp = new AstCast{fl, newp, adtypep->subDTypep()};
+                    castp = new AstCast{fl, newp, adtypep->subDTypep()};
+                    newp = castp;
                 }
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                // Widthed here, as a self-determined operand, e.g. of a logical operator, is
+                // not visited again once replaced
+                if (castp) userIterate(castp, m_vup);
             }
         } else if (AstCMethodHard* newp = methodCallArray(nodep, adtypep)) {
             newp->protect(false);
