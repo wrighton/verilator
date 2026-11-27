@@ -16,8 +16,8 @@ test.compile(verilator_flags2=[
     '--binary', '--x-assign unique', '--x-initial unique', '--debug', '--debugi 0', '--stats'
 ])
 
-# One copy of c_n for each other set of defaults: 12, 109, 55 and 77
-test.file_grep(test.stats, r'Assertions, checker copies for formal defaults\s+(\d+)', 4)
+# One copy of c_n for each other set of defaults: 12, 109, 55 and 77; of c_out and c_in: 42
+test.file_grep(test.stats, r'Assertions, checker copies for formal defaults\s+(\d+)', 6)
 
 # Unknown bits take random values, so run with several seeds
 for seed in (1, 2, 3, 4, 5, 6, 7, 8):
