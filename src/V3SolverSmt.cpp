@@ -1348,6 +1348,21 @@ class ConstraintExprVisitor final : public VNVisitor {
                 createSolverVarHandle(varp, structSelOrCMeth, isGlobalConstrained, foreignStatic,
                                       randMode, memberRefp, smtName, classOrPackagep, classp,
                                       initp);
+                AstNodeDType* dtp = varp->dtypep()->skipRefp();
+                const bool fixedArray = VN_IS(dtp, UnpackArrayDType);
+                while (VN_IS(dtp, UnpackArrayDType)) dtp = dtp->subDTypep()->skipRefp();
+                if (fixedArray
+                    && (VN_IS(dtp, DynArrayDType) || VN_IS(dtp, QueueDType)
+                        || VN_IS(dtp, AssocArrayDType))
+                    && !memberRefp && !structSelOrCMeth && !foreignStatic && !m_inlineInitBlockp) {
+                    // The arrays of a fixed-size array can be resized after new(), so
+                    // randomize() registers it again for their current elements. new() still
+                    // registers it for a randomize() of a base class, which does not run this
+                    // one.
+                    createSolverVarHandle(varp, false, isGlobalConstrained, false, randMode,
+                                          nullptr, smtName, classOrPackagep, classp,
+                                          getInitp(varp, true, classp));
+                }
             }
         } else {
             // Variable already written, clean up cloned memberRefp if any

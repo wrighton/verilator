@@ -505,6 +505,15 @@ public:
             = std::make_shared<const VlRandomVar>(name, width, &var, dimension, randmodeIdx);
     }
 
+    // Unregister the members of the elements of struct array 'name', which its registration
+    // records again for the elements it holds now, whose storage may have moved
+    void eraseStructElements(const std::string& name) {
+        const std::string prefix = name + ".";
+        auto it = m_vars.lower_bound(prefix);
+        while (it != m_vars.end() && it->first.compare(0, prefix.size(), prefix) == 0) {
+            it = m_vars.erase(it);
+        }
+    }
     // Register user-defined struct variable by recursively writing members
     template <typename T>
     typename std::enable_if<VlIsCustomStruct<T>::value, void>::type
@@ -535,6 +544,7 @@ public:
     typename std::enable_if<VlContainsCustomStruct<T>::value, void>::type
     write_var(VlQueue<T, N_MaxSize>& var, int width, const char* name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        eraseStructElements(name);
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
     // Register unpacked array of non-struct types
@@ -561,6 +571,7 @@ public:
     typename std::enable_if<VlContainsCustomStruct<T>::value, void>::type
     write_var(VlUnpacked<T, N_Depth>& var, int /*width*/, const char* name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        eraseStructElements(name);
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
 
@@ -589,6 +600,7 @@ public:
     typename std::enable_if<VlContainsCustomStruct<T_Value>::value, void>::type
     write_var(VlAssocArray<T_Key, T_Value>& var, int /*width*/, const char* name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        eraseStructElements(name);
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
 
