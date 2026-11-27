@@ -5704,6 +5704,104 @@ public:
                                  assertp->userType());
     }
 
+    // Return failp run once for each attempt pending in the strong vertices at end of
+    // simulation, or nullptr if their threads cannot tell the attempts apart. A thread at a
+    // fixed offset from the attempt start belongs to the attempt that started that many ticks
+    // ago, so the attempts pending are the ages of the threads, each counted once however
+    // many vertices hold it. Threads of a vertex without a fixed offset may merge attempts.
+    AstNodeStmt* newPendingAttemptsFailp(const LowerCtx& c,
+                                         const std::vector<SvaStateVertex*>& vtxps,
+                                         AstNodeStmt* failp) {
+        const std::vector<int> offsets = vertexOffsets(c.graph);
+        int maxAge = 0;
+        for (size_t i = 0; i < vtxps.size(); ++i) {
+            const int offset = offsets[vtxps[i]->color()];
+            if (offset < 0) return nullptr;
+            maxAge = std::max(maxAge, offset);
+        }
+        FileLine* const flp = c.flp;
+        AstNodeDType* const u32p = m_u32DTypep;
+        const auto newTempp = [&](AstNodeDType* dtypep) {
+            AstVar* const varp = new AstVar{flp, VVarType::MODULETEMP, m_names.get("eos"), dtypep};
+            varp->lifetime(VLifetime::STATIC_EXPLICIT);
+            m_modp->addStmtsp(varp);
+            return varp;
+        };
+        const auto u32Const = [&](uint32_t value) {
+            return new AstConst{flp, AstConst::WidthedValue{}, 32, value};
+        };
+        // ages = 0; then for each thread, ages[its age at the next tick] = 1
+        AstVar* const agesp
+            = newTempp(m_modp->findBitDType(maxAge + 1, maxAge + 1, VSigning::UNSIGNED));
+        AstNodeStmt* const stmtsp
+            = new AstAssign{flp, new AstVarRef{flp, agesp, VAccess::WRITE},
+                            new AstConst{flp, AstConst::WidthedValue{}, maxAge + 1, 0}};
+        const auto setAgep = [&](AstNodeExpr* agep) {
+            return new AstAssign{
+                flp, new AstSel{flp, new AstVarRef{flp, agesp, VAccess::WRITE}, agep, 1},
+                new AstConst{flp, AstConst::BitTrue{}}};
+        };
+        for (size_t i = 0; i < vtxps.size(); ++i) {
+            SvaStateVertex* const vtxp = vtxps[i];
+            const int offset = offsets[vtxp->color()];
+            // A state or slot holds a thread bit or a thread count
+            if (AstVar* const statep = vtxp->datap()->stateVarp) {
+                AstNodeExpr* const condp
+                    = new AstRedOr{flp, new AstVarRef{flp, statep, VAccess::READ}};
+                stmtsp->addNext(new AstIf{flp, condp, setAgep(u32Const(offset))});
+                continue;
+            }
+            // The slot written k ticks ago, k = 1..size, at (idx + size - k) % size, holds the
+            // attempt of age offset - size + k. A clear leaves the slots, but restarts idx and
+            // wrapped, so only the slots written since are held.
+            const uint32_t size = vtxp->m_delayRingSize;
+            AstVar* const kp = newTempp(u32p);
+            stmtsp->addNext(
+                new AstAssign{flp, new AstVarRef{flp, kp, VAccess::WRITE}, u32Const(1)});
+            AstLoop* const loopp = new AstLoop{flp};
+            loopp->addStmtsp(new AstLoopTest{
+                flp, loopp,
+                new AstLte{flp, new AstVarRef{flp, kp, VAccess::READ}, u32Const(size)}});
+            AstNodeExpr* const idxp = new AstModDiv{
+                flp,
+                new AstSub{
+                    flp,
+                    new AstAdd{flp,
+                               new AstVarRef{flp, vtxp->datap()->delayRingIdxVarp, VAccess::READ},
+                               u32Const(size)},
+                    new AstVarRef{flp, kp, VAccess::READ}},
+                u32Const(size)};
+            AstNodeExpr* const heldp = new AstLogOr{
+                flp, new AstVarRef{flp, vtxp->datap()->delayRingWrappedVarp, VAccess::READ},
+                new AstLte{flp, new AstVarRef{flp, kp, VAccess::READ},
+                           new AstVarRef{flp, vtxp->datap()->delayRingIdxVarp, VAccess::READ}}};
+            AstNodeExpr* const slotp
+                = new AstLogAnd{flp, heldp, new AstRedOr{flp, delayRingSlot(flp, vtxp, idxp)}};
+            AstNodeExpr* const agep = new AstAdd{flp, new AstVarRef{flp, kp, VAccess::READ},
+                                                 u32Const(static_cast<uint32_t>(offset) - size)};
+            loopp->addStmtsp(new AstIf{flp, slotp, setAgep(agep)});
+            loopp->addStmtsp(new AstAssign{
+                flp, new AstVarRef{flp, kp, VAccess::WRITE},
+                new AstAdd{flp, new AstVarRef{flp, kp, VAccess::READ}, u32Const(1)}});
+            stmtsp->addNext(loopp);
+        }
+        // for (remaining = $countones(ages); remaining != 0; --remaining) failp;
+        AstVar* const remainingp = newTempp(u32p);
+        stmtsp->addNext(
+            new AstAssign{flp, new AstVarRef{flp, remainingp, VAccess::WRITE},
+                          new AstCountOnes{flp, new AstVarRef{flp, agesp, VAccess::READ}}});
+        AstLoop* const loopp = new AstLoop{flp};
+        loopp->addStmtsp(new AstLoopTest{
+            flp, loopp,
+            new AstNeq{flp, new AstVarRef{flp, remainingp, VAccess::READ}, u32Const(0)}});
+        loopp->addStmtsp(failp);
+        loopp->addStmtsp(new AstAssign{
+            flp, new AstVarRef{flp, remainingp, VAccess::WRITE},
+            new AstSub{flp, new AstVarRef{flp, remainingp, VAccess::READ}, u32Const(1)}});
+        stmtsp->addNext(loopp);
+        return stmtsp;
+    }
+
     // Lower NFA graph to synthesizable AstAlways blocks and raw result signals.
     // Links are combinational; Edges are registered (NBA).
     SignalSet lower(AstNodeCoverOrAssert* const assertp, SvaGraph& graph,
@@ -5891,9 +5989,10 @@ public:
         // Strong s_always[m:n] end-of-simulation liveness: if any state of an attempt
         // is still set at $finish, the universal-quantifier window never completed
         // (IEEE 1800-2023 16.12.11 strong semantics). Fire the assertion failure
-        // from a final block.
+        // from a final block, once for each attempt pending.
         // pending = |{strong state registers, strong delay live counts != 0};
         AstNodeExpr* pendingp = nullptr;
+        std::vector<SvaStateVertex*> strongVtxps;
         for (int i = 0; i < N; ++i) {
             if (!vtx[i]->m_strongPending) continue;
             AstNodeExpr* pendingExprp = nullptr;
@@ -5905,6 +6004,7 @@ public:
             } else {
                 continue;
             }
+            strongVtxps.push_back(vtx[i]);
             if (!pendingp) {
                 pendingp = pendingExprp;
             } else {
@@ -5915,7 +6015,10 @@ public:
             AstCExpr* const assertOnp
                 = new AstCExpr{flp, AstCExpr::Pure{}, "vlSymsp->_vm_contextp__->assertOn()", 1};
             AstNodeExpr* const condp = new AstLogAnd{flp, assertOnp, pendingp};
-            m_modp->addStmtsp(new AstFinal{flp, new AstIf{flp, condp, newFinalFailp(assertp)}});
+            AstNodeStmt* const failp = newFinalFailp(assertp);
+            AstNodeStmt* stmtsp = newPendingAttemptsFailp(c, strongVtxps, failp);
+            if (!stmtsp) stmtsp = failp;
+            m_modp->addStmtsp(new AstFinal{flp, new AstIf{flp, condp, stmtsp}});
         }
 
         // Clear userp on every vertex before vertexData is destroyed.
