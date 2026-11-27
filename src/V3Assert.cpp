@@ -2803,6 +2803,9 @@ class AssertVisitor final : public VNVisitor {
             forkp->capturesValues(true);
             forkp->addForksp(new AstForkItem{nodep->fileline(), pexprp->bodyp()->unlinkFrBack()});
             if (AstNodeStmt* const finalp = pexprp->finalp()) {
+                // An attempt starts at once, so one starting on the tick of $finish is pending
+                // in the end-of-simulation check (IEEE 1800-2023 16.12.11)
+                forkp->immediateStart(true);
                 // The end-of-simulation check runs action blocks in a final block, where an
                 // NBA, legal in an action block, executes as a blocking assignment
                 finalp->foreach([](AstAssignDly* const dlyp) {
