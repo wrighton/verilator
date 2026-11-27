@@ -53,6 +53,10 @@ module t;
   function automatic void recAnd(int k);
     ++andCalls[k];
   endfunction
+  int andRepCalls[3];
+  function automatic void recAndRep(int k);
+    ++andRepCalls[k];
+  endfunction
 
   /* verilator lint_off SIDEEFFECT */
   property p_rec(int i);
@@ -119,6 +123,15 @@ module t;
   else;
   assert property (@(posedge clk) (1 ##2 1) and (1 ##1 (rb, recAnd(4))))
   else;
+  // Test: the same, the other operand of variable length
+  assert property (@(posedge clk) (1 ##1 (rb, recAndRep(0))) and ra [* 1: 2])
+  else;
+  // Test: the same, the operand of the item unbounded, merging its attempts
+  assert property (@(posedge clk) (ra [* 1: $] ##1 (rb, recAndRep(1))) and (1 ##1 1))
+  else;
+  // Test: the same, with a disable condition that does not hold
+  assert property (@(posedge clk) disable iff (cyc < 0) (1 ##1 (rb, recAndRep(2))) and ra [* 1: 2])
+  else;
   // Test: an item after a range delay, which several attempts reach on one tick
   assert property (@(posedge clk) ra ##[1:3] (rb, recRange()) ##1 1)
   else;
@@ -136,12 +149,16 @@ module t;
   bit started = 0;
   bit startedb = 0;
   int reachedRb = 0;
+  int reachedRep = 0;
+  bit pra = 0;
   int reachedOr = 0;
   int reachedOr2 = 0;
   bit started2 = 0;
   always @(posedge clk) begin
     if (started) ++reached;
     if (rb) ++reachedRb;
+    if (pra && rb) ++reachedRep;
+    pra <= ra;
     if (started && rb) ++reachedOr;
     if (started2 && rb) ++reachedOr2;
     started2 <= started;
@@ -189,6 +206,9 @@ module t;
       `checkd(seqCalls[7], 2 * reachedOr);
       `checkd(andCalls[1], reachedRb);
       for (int k = 2; k <= 4; ++k) `checkd(andCalls[k], reachedOr);
+      `checkd(andRepCalls[0], reachedOr);
+      `checkd(andRepCalls[1], reachedRep);
+      `checkd(andRepCalls[2], reachedOr);
       `checkd(localCalls, reached);
       `checkd(localBad, 0);
       `checkd(p[2], reached);

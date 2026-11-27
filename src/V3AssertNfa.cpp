@@ -2611,7 +2611,9 @@ public:
     // the condition holding it. Every signal derived from the condition clones it, so each would
     // call them again; they run instead once per tick a thread passes the item.
     struct MatchItemStmts final {
-        const SvaTransEdge* edgep;  // Edge whose condition held the item, nullptr if the final
+        const SvaStateVertex* fromVtxp;  // Source of the threads passing it, nullptr if final
+        const SvaTransEdge* edgep;  // Edge whose condition held the item, if any, or else
+        AstNodeExpr* const* condpp;  // The 'and' operand's final condition at fromVtxp
         AstNodeStmt* stmtsp;  // The statements, reading sampled values as in the condition
         AstNodeExpr* resultp;  // Copy of the result of the item, which must hold to run them
         const FileLine* itemFlp;  // Of the item instance, shared by its copies
@@ -2676,7 +2678,8 @@ public:
     // Take the statements out of the match items of condpr calling subroutines only, leaving
     // their results. Calls reading a variable that match items write, such as a local variable
     // (IEEE 1800-2023 16.10), stay, reading it as the conditions do.
-    static void takeMatchItemStmts(AstNodeExpr*& condpr, const SvaTransEdge* edgep,
+    static void takeMatchItemStmts(AstNodeExpr*& condpr, const SvaStateVertex* fromVtxp,
+                                   const SvaTransEdge* edgep,
                                    const std::unordered_set<const AstVar*>& writtenVars,
                                    std::vector<MatchItemStmts>& itemsr) {
         if (!condpr) return;
@@ -2704,7 +2707,8 @@ public:
                 VL_DO_DANGLING(stmtsp->deleteTree(), stmtsp);
             } else {
                 sampleInputArgs(stmtsp);
-                itemsr.push_back({edgep, stmtsp, exprStmtp->resultp()->cloneTreePure(false),
+                itemsr.push_back({fromVtxp, edgep, &condpr, stmtsp,
+                                  exprStmtp->resultp()->cloneTreePure(false),
                                   exprStmtp->fileline()});
             }
             AstNodeExpr* const resultp = exprStmtp->resultp()->unlinkFrBack();
@@ -2720,7 +2724,7 @@ public:
     static void dropMatchItemStmts(AstNodeExpr*& condpr,
                                    const std::unordered_set<const AstVar*>& writtenVars) {
         std::vector<MatchItemStmts> itemps;
-        takeMatchItemStmts(condpr, nullptr, writtenVars, itemps);
+        takeMatchItemStmts(condpr, nullptr, nullptr, writtenVars, itemps);
         for (MatchItemStmts& itemr : itemps) {
             VL_DO_DANGLING(itemr.stmtsp->deleteTree(), itemr.stmtsp);
             VL_DO_DANGLING(itemr.resultp->deleteTree(), itemr.resultp);
@@ -2760,17 +2764,20 @@ private:
                     "Thread count signal is not 32 bits");
         return countp->cloneTreePure(false);
     }
-    // Run the statements of match items once per thread passing the item: taking its edge, or
-    // matching at the end of the sequence, through any of the Links to the match vertex
+    // Run the statements of match items once per thread passing the item: taking its edge,
+    // matching an operand of an 'and', or matching at the end of the sequence, through any of
+    // the Links to the match vertex
     void addMatchItemStmts(LowerCtx& c, std::vector<MatchItemStmts>& itemsr) {
         // A thread passes an item once, also onto several edges holding copies of it, like the
         // last edges of an 'or' operand, so the copies from one source join the first one
         std::map<std::pair<const SvaStateVertex*, const FileLine*>, MatchItemStmts*> firstps;
         for (MatchItemStmts& itemr : itemsr) {
-            if (!itemr.edgep) continue;
-            AstNodeExpr* const gatep = gatedEdgeSigp(c, *itemr.edgep);
+            if (!itemr.fromVtxp) continue;
+            AstNodeExpr* const gatep = itemr.edgep
+                                           ? gatedEdgeSigp(c, *itemr.edgep)
+                                           : gatedMatchNowp(c, itemr.fromVtxp, *itemr.condpp);
             MatchItemStmts& firstr
-                = *firstps.emplace(std::make_pair(itemr.edgep->fromVtxp(), itemr.itemFlp), &itemr)
+                = *firstps.emplace(std::make_pair(itemr.fromVtxp, itemr.itemFlp), &itemr)
                        .first->second;
             if (&firstr == &itemr) {
                 itemr.gatep = gatep;
@@ -2785,11 +2792,11 @@ private:
         }
         for (MatchItemStmts& itemr : itemsr) {
             if (!itemr.stmtsp) continue;  // Joined a copy
-            if (itemr.edgep) {
+            if (itemr.fromVtxp) {
                 // The edge may also be taken without the item matching, like a rejection
                 AstNodeExpr* const condp
                     = new AstLogAnd{c.flp, itemr.gatep, sampled(itemr.resultp)};
-                addMatchItemStmts(c, gateNotKill(c, condp), threadCountp(itemr.edgep->fromVtxp()),
+                addMatchItemStmts(c, gateNotKill(c, condp), threadCountp(itemr.fromVtxp),
                                   itemr.stmtsp);
                 itemr.stmtsp = nullptr;
                 continue;
@@ -3000,6 +3007,15 @@ private:
             = andCond(c.flp, fromVtxp->datap()->stateSigp->cloneTreePure(false), tedger.m_condp);
         if (!c.disableExprp) return srcSigp;
         return new AstLogAnd{c.flp, srcSigp,
+                             new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)}};
+    }
+    // The threads at vtxp matching condp, the final condition of an 'and' operand ending there,
+    // when not disabled
+    static AstNodeExpr* gatedMatchNowp(LowerCtx& c, const SvaStateVertex* vtxp,
+                                       AstNodeExpr* condp) {
+        AstNodeExpr* const matchNowp = buildMatchNow(c.flp, vtxp->datap()->stateSigp, condp);
+        if (!c.disableExprp) return matchNowp;
+        return new AstLogAnd{c.flp, matchNowp,
                              new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)}};
     }
 
@@ -5290,16 +5306,24 @@ class AssertNfaVisitor final : public VNVisitor {
                 if (tedger.m_copiesItems) {
                     SvaNfaLowering::dropMatchItemStmts(tedger.m_condp, itemWrites);
                 } else {
-                    SvaNfaLowering::takeMatchItemStmts(tedger.m_condp, &tedger, itemWrites,
-                                                       itemStmts);
+                    SvaNfaLowering::takeMatchItemStmts(tedger.m_condp, tedger.fromVtxp(), &tedger,
+                                                       itemWrites, itemStmts);
                 }
+            }
+            SvaStateVertex& svtxr = static_cast<SvaStateVertex&>(vtxr);
+            // An 'and' matches an operand with its final condition, as a copy of its last edge
+            if (svtxr.m_isAndCombiner) {
+                SvaNfaLowering::takeMatchItemStmts(svtxr.m_andLhsCondp, svtxr.m_andLhsTermp,
+                                                   nullptr, itemWrites, itemStmts);
+                SvaNfaLowering::takeMatchItemStmts(svtxr.m_andRhsCondp, svtxr.m_andRhsTermp,
+                                                   nullptr, itemWrites, itemStmts);
             }
             // A ring of candidates clears on one passing its final condition, a copy of the
             // condition of the edge it passes
-            SvaStateVertex& svtxr = static_cast<SvaStateVertex&>(vtxr);
             SvaNfaLowering::dropMatchItemStmts(svtxr.m_delayRingClearCondp, itemWrites);
         }
-        SvaNfaLowering::takeMatchItemStmts(result.finalCondp, nullptr, itemWrites, itemStmts);
+        SvaNfaLowering::takeMatchItemStmts(result.finalCondp, nullptr, nullptr, itemWrites,
+                                           itemStmts);
         const auto signals = m_loweringp->lower(
             assertp, graph, senTreep, result.finalCondp, disableExprp, replayFails || countPasses,
             replayFails || countPasses, trackAntecedentEnd, itemStmts, replaySuccesses,
