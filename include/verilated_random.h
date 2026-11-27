@@ -400,6 +400,22 @@ class VlRandomizer VL_NOT_FINAL {
     bool m_checkOnly = false;  // Set for randomize(null)
     bool m_spreadFailed = false;  // A solver failure cut this call's spreading short
     bool m_warnedSpreadFailed = false;  // Warned of a spreading cut short
+    bool m_warnedSpreadBroke = false;  // Warned of a spreading that broke the solver
+    // The pause of spreading after it broke the solver. A copy of the object spreads afresh.
+    struct SpreadPause final {
+        uint32_t skips = 0;  // Later calls that do not spread
+        uint32_t length = 0;  // Calls the last break paused spreading for
+        bool now = false;  // This call does not spread
+        SpreadPause() = default;
+        SpreadPause(const SpreadPause&) {}
+        SpreadPause& operator=(const SpreadPause&) {
+            skips = 0;
+            length = 0;
+            now = false;
+            return *this;
+        }
+    };
+    SpreadPause m_spreadPause;
     // Members of null handles constraints may read, by solver name, with their source names
     std::vector<std::pair<std::string, std::string>> m_nullReads;
     // Why this randomize() fails without solving, e.g. a constraint reading one of them;
@@ -444,6 +460,7 @@ class VlRandomizer VL_NOT_FINAL {
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
+    bool spreads() const;  // Whether this call spreads its solution
     // Remove from m_vars, into hiddenr, the frozen arrays of m_heldLookups no constraint of
     // this call names
     void hideUnnamedFrozen(std::map<std::string, std::shared_ptr<const VlRandomVar>>& hiddenr);

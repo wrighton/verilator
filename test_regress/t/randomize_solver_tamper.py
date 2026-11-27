@@ -12,7 +12,8 @@
 # Input arguments from environment variables:
 # TAMPER: bad_base | bad_digits | bad_index | bad_value | bare_hash | bin_literals
 #         | binary | bv_digits | bv_literals | bv_long | bv_overflow | bv_sort | bv_spaced
-#         | close_stdin_at | core_junk | crlf | csa_unsupported | die_at | die_status_at
+#         | close_stdin_at | core_junk | crlf | csa_unsupported | die_assuming | die_at
+#         | die_status_at
 #         | diversity_model | dup_model | err_assume | err_cell | err_core | err_extra
 #         | err_marker | err_multiline | err_mute | err_once | err_phase | err_reply | err_trunc
 #         | err_unbal | err_unbal_cont | frozen_value
@@ -61,6 +62,8 @@
 #   csa_unsupported  - answer every check-sat-assuming with unsupported
 #   die_at           - kill the solver at the Nth model reply and exit, closing every pipe end
 #   die_status_at    - kill the solver at the Nth status line and exit, closing every pipe end
+#   die_assuming     - kill the solver when a check-sat-assuming is sent and exit, closing
+#                      every pipe end
 #   diversity_model  - replace the Nth array model reply with one holding an unusable value
 #   dup_model        - replace the Nth model reply with one answering a variable twice
 #   err_assume       - replace the first unsat-assumptions reply with (error ...)
@@ -192,8 +195,9 @@
 #                      a solver may (cvc5 nearly does)
 #   wide_core_cut    - as wide_core, and answer the status after the first such reply unknown
 # TAMPER_AT: reply index to act on (default 3)
-# TAMPER_EXIT: exit status of die_at, die_status_at and model_trunc (default 0); z3
-#   exits with 101 when out of memory
+# TAMPER_EXIT: exit status of die_assuming, die_at, die_status_at and model_trunc (default
+#   0); z3 exits with 101 when out of memory
+# TAMPER_MATCH: text a check-sat-assuming must hold for die_assuming to act (default any)
 # TAMPER_ONCE: file marking that the tamper already acted. The runtime restarts
 #   a solver that died, which starts this wrapper again, so without the file a
 #   mode acts once per solver rather than once per simulation.
@@ -213,6 +217,7 @@ mode = os.environ.get("TAMPER", "none")
 at = int(os.environ.get("TAMPER_AT", "3"))
 once = os.environ.get("TAMPER_ONCE", "")
 exit_status = int(os.environ.get("TAMPER_EXIT", "0"))
+match = os.environ.get("TAMPER_MATCH", "")
 
 # Modes acting on the TAMPER_AT'th status line rather than the Nth model reply
 STATUS_MODES = ("close_stdin_at", "die_status_at", "err_extra", "err_marker", "err_multiline",
@@ -362,7 +367,8 @@ CORE_MODES = ("core_junk", "err_core")
 STREAM_MODES = ("bin_literals", "bv_literals", "bv_spaced", "crlf", "csa_unsupported", "indent",
                 "limit_unsupported", "multiline", "success", "wide_core", "wide_core_cut")
 # Modes that read or change the commands on their way to the solver
-INPUT_MODES = ("csa_unsupported", "err_cell", "limit_unsupported", "wide_core", "wide_core_cut")
+INPUT_MODES = ("csa_unsupported", "die_assuming", "err_cell", "limit_unsupported", "wide_core",
+               "wide_core_cut")
 # Echoed in place of a command, to mark where in the replies its answer belongs
 TAMPER_MARK = "vl_tamper"
 
@@ -397,6 +403,15 @@ def feed():
         text = cmd.lstrip()
         if mode == "csa_unsupported" and text.startswith("(check-sat-assuming"):
             cmd = '(echo "' + TAMPER_MARK + '")\n'
+        if (mode == "die_assuming" and text.startswith("(check-sat-assuming") and match in text
+                and not (once and os.path.exists(once))):
+            if once:
+                with open(once, "w", encoding="utf-8"):
+                    pass
+            proc.kill()
+            proc.wait()
+            sys.stdout.flush()
+            os._exit(exit_status)  # pylint: disable=protected-access
         if mode == "limit_unsupported" and text.startswith(
                 "(set-option :reproducible-resource-limit"):
             cmd = '(echo "' + TAMPER_MARK + '")\n'
