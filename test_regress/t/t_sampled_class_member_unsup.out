@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_sampled_class_member_unsup.v:14:23: Unsupported: sampled value of class property 'v' read through non-static class property 'm'.
+                                                          : ... note: In instance 't'
+   14 |     return $sampled(m.v);
+      |                       ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
