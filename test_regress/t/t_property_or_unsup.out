@@ -65,31 +65,26 @@
 %Error-UNSUPPORTED: t/t_property_or_unsup.v:45:60: Unsupported: property 'or' with a property operand in an asserted property (IEEE 1800-2023 16.12.4)
    45 |   assert property (@(posedge clk) (reject_on(a) (b ##1 c)) or (reject_on(b) (c ##1 a)));
       |                                                            ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:46:59: Unsupported: property 'or' with a property operand in an asserted property (IEEE 1800-2023 16.12.4)
-   46 |   assert property (@(posedge clk) a |-> ((always [0:1] b) or (always [0:2] c)));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:47:56: Unsupported: unbounded 'always' in complex property expression
+                                                 : ... note: In instance 't'
+   47 |   assert property (@(posedge clk) (always [0:1] a) or (always [0:$] b));
+      |                                                        ^~~~~~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:50:59: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   50 |       or (##6 b))) or (b ##2 a) or (c ##3 b) or (a ##4 c) or (b ##5 a)));
       |                                                           ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:47:52: Unsupported: property 'or' with a property operand in an asserted property (IEEE 1800-2023 16.12.4)
-   47 |   assert property (@(posedge clk) (always [0:1] a) or (b ##1 c));
-      |                                                    ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:48:52: Unsupported: property 'or' with a property operand in an asserted property (IEEE 1800-2023 16.12.4)
-   48 |   assert property (@(posedge clk) (always [0:0] a) or (s_always [2:2] b));
-      |                                                    ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:51:59: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
-   51 |       or (##6 b))) or (b ##2 a) or (c ##3 b) or (a ##4 c) or (b ##5 a)));
-      |                                                           ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:53:20: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
-   53 |       or (a ##4 a) or (b ##5 b)));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:52:20: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   52 |       or (a ##4 a) or (b ##5 b)));
       |                    ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:55:33: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
-   55 |       or (c ##3 c) or (a ##4 a) or (b ##5 b));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:54:33: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   54 |       or (c ##3 c) or (a ##4 a) or (b ##5 b));
       |                                 ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:57:33: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
-   57 |       or (c ##3 c) or (a ##4 a) or (b ##5 b));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:56:33: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   56 |       or (c ##3 c) or (a ##4 a) or (b ##5 b));
       |                                 ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:59:20: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
-   59 |       or (a ##4 a) or (b ##5 b));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:58:20: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   58 |       or (a ##4 a) or (b ##5 b));
       |                    ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:61:20: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
-   61 |       or (a ##4 a) or (b ##5 b));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:60:20: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   60 |       or (a ##4 a) or (b ##5 b));
       |                    ^~
 %Error: Exiting due to
