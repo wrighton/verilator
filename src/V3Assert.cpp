@@ -4171,7 +4171,13 @@ class AssertVisitor final : public VNVisitor {
                                 onep = rcondp->newAndFromInside(
                                     nodep->exprp()->cloneTreePure(true),
                                     rcondp->lhsp()->cloneTreePure(true),
-                                    rcondp->rhsp()->cloneTreePure(true));
+                                    rcondp->rhsp()->cloneTreePure(true), true);
+                            } else if (icondp->width() != nodep->exprp()->width()) {
+                                // A case inside item of its own width (see V3Width)
+                                onep = AstNodeBiop::newTypedCompare(
+                                    VNType::EqWild, itemp->fileline(),
+                                    nodep->exprp()->cloneTreePure(false),
+                                    icondp->cloneTreePure(false));
                             } else if (nodep->casex() || nodep->casez() || nodep->caseInside()) {
                                 onep = AstEqWild::newTyped(itemp->fileline(),
                                                            nodep->exprp()->cloneTreePure(false),
