@@ -5762,6 +5762,10 @@ class WidthVisitor final : public VNVisitor {
         // Any real operand makes the comparisons real (IEEE 1800-2023 11.3.1)
         bool anyDouble = dtypep && dtypep->isDouble();
         for (const AstNode* const itemp : nodep->itemspList()) anyDouble |= itemp->isDouble();
+        // An integral expression is compared with each integral item by that item's own '==?',
+        // '>=' or '<=', which sizes and signs the pair of operands (IEEE 1800-2023 11.4.13,
+        // 11.4.4)
+        bool perItem = false;
 
         if (dtypep && dtypep->isString()) {
             nodep->dtypeSetString();
@@ -5774,32 +5778,48 @@ class WidthVisitor final : public VNVisitor {
             int width = nodep->exprp()->width();
             int mwidth = nodep->exprp()->widthMin();
             bool isFourstate = nodep->exprp()->dtypep()->isFourstate();
+            perItem = nodep->exprp()->dtypep()->skipRefp()->isIntegralOrPacked();
             for (const AstNode* const itemp : nodep->itemspList()) {
                 width = std::max(width, itemp->width());
                 mwidth = std::max(mwidth, itemp->widthMin());
                 isFourstate |= itemp->dtypep()->isFourstate();
+                if (const AstInsideRange* const rangep = VN_CAST(itemp, InsideRange)) {
+                    perItem &= insideOperandIntegral(rangep->lhsp())
+                               && insideOperandIntegral(rangep->rhsp());
+                } else {
+                    perItem &= insideOperandIntegral(itemp);
+                }
             }
             nodep->dtypeSetBit();
             const VSigning numeric = nodep->exprp()->dtypep()->numeric();
             expDTypep = nodep->findBitOrLogicDType(width, mwidth, numeric, isFourstate);
         }
 
-        iterateCheck(nodep, "Inside expression", nodep->exprp(), CONTEXT_DET, FINAL, expDTypep,
-                     EXTEND_EXP);
-        for (AstNode* const itemp : nodep->itemspList()) {
-            if (VN_IS(itemp, InsideRange)) {
-                userIterate(itemp, WidthVP{expDTypep, FINAL}.p());
-            } else if (!itemp->dtypep()->skipRefp()->isNonPackedArray()) {
-                iterateCheck(nodep, "Inside Item", itemp, CONTEXT_DET, FINAL, expDTypep,
-                             EXTEND_EXP);
-            }
+        // Skip constraints since those are declarative expressions and they are never actually
+        // executed so, there is no need for purification since they cannot generate sideeffects.
+        const bool useTemp = !m_constraintp && !nodep->exprp()->isPure();
+        if (!perItem) {
+            widthInsideCommon(nodep, expDTypep);
+        } else {
+            // Width warnings are those of the common type; the comparisons below are typed per
+            // item, from the operands as they were before
+            AstInside* const prelimp = nodep->cloneTree(false);
+            widthInsideCommon(nodep, expDTypep);
+            AstNodeExpr* const finalExprp = nodep->exprp();
+            finalExprp->replaceWith(prelimp->exprp()->unlinkFrBack());
+            VL_DO_DANGLING(pushDeletep(finalExprp), finalExprp);
+            pushDeletep(nodep->itemsp()->unlinkFrBackWithNext());
+            nodep->addItemsp(prelimp->itemsp()->unlinkFrBackWithNext());
+            VL_DO_DANGLING(prelimp->deleteTree(), prelimp);
         }
 
         AstNodeExpr* exprp;
         AstExprStmt* exprStmtp = nullptr;
-        // Skip constraints since those are declarative expressions and they are never actually
-        // executed so, there is no need for purification since they cannot generate sideeffects.
-        if (!m_constraintp && !nodep->exprp()->isPure()) {
+        // Each impure term of a per-item expression is evaluated once, into a temporary of its
+        // own type, and its operators are typed by each comparison as for a pure expression
+        AstNodeStmt* const termsp
+            = useTemp && perItem ? newInsideTerms(nodep, nodep->exprp(), nullptr) : nullptr;
+        if (useTemp && !perItem) {
             FileLine* const fl = nodep->exprp()->fileline();
             // Ensure sized dtype for temp variable
             AstNodeDType* const exprDtp = nodep->exprp()->dtypep();
@@ -5823,21 +5843,119 @@ class WidthVisitor final : public VNVisitor {
         // Now rip out the inside and replace with simple math
         AstNodeExpr* newp = nullptr;
         for (AstNodeExpr* const itemp : nodep->itemspList()) {
-            AstNodeExpr* inewp;
-            if (exprStmtp) {
-                inewp = insideItem(nodep, exprStmtp, itemp);
-                exprStmtp = nullptr;
-            } else {
-                inewp = insideItem(nodep, exprp->cloneTreePure(false), itemp);
-            }
+            AstNodeExpr* inewp = insideItem(nodep, exprp->cloneTreePure(false), itemp);
             if (!inewp) continue;
+            // The replacement is not always iterated, so type the comparisons now
+            if (perItem) {
+                waiveInsideWidth(inewp);
+                inewp = VN_AS(userIterateSubtreeReturnEdits(inewp, WidthVP{SELF, BOTH}.p()),
+                              NodeExpr);
+            }
             newp = newp ? new AstLogOr{nodep->fileline(), newp, inewp} : inewp;
         }
-        if (exprStmtp) VL_DO_DANGLING(exprStmtp->deleteTree(), exprStmtp);
         if (!newp) newp = new AstConst{nodep->fileline(), AstConst::BitFalse{}};
+        // An impure expression is evaluated once before all items, so that folding an item
+        // to a constant cannot drop the evaluation
+        if (termsp) {
+            exprStmtp = new AstExprStmt{nodep->fileline(), termsp, newp};
+            userIterateAndNext(exprStmtp->stmtsp(), nullptr);
+            exprStmtp->dtypeSetBit();
+            newp = exprStmtp;
+        } else if (exprStmtp) {
+            exprp->replaceWith(newp);
+            VL_DO_DANGLING(exprp->deleteTree(), exprp);
+            exprStmtp->dtypeSetBit();
+            newp = exprStmtp;
+        }
         UINFOTREE(9, newp, "", "inside-out");
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    // Replace each impure term of an inside expression with a temporary of its type; return the
+    // statements that assign the temporaries, in evaluation order. A unary or binary operator
+    // with an impure operand stays, so that each comparison determines its width (IEEE 1800-2023
+    // 11.6.1). A conditional operator's condition is held first, and a term of an arm is
+    // evaluated only when guardp, the selection of that arm, holds. A logical operator has
+    // self-determined operands and a 1-bit result, and the other ternary operators give strings
+    // or arrays, so each is held whole.
+    AstNodeStmt* newInsideTerms(AstInside* insidep, AstNodeExpr* nodep, AstNodeExpr* guardp) {
+        if (nodep->isPure()) return nullptr;
+        if (AstCond* const condp = VN_CAST(nodep, Cond)) {
+            FileLine* const fl = condp->fileline();
+            AstNodeStmt* stmtsp = newInsideTemp(insidep, condp->condp(), guardp);
+            AstVar* const selectp = VN_AS(condp->condp(), VarRef)->varp();
+            for (const bool selected : {true, false}) {
+                AstNodeExpr* armGuardp = new AstVarRef{fl, selectp, VAccess::READ};
+                if (!selected) armGuardp = new AstLogNot{fl, armGuardp};
+                if (guardp) armGuardp = new AstLogAnd{fl, guardp->cloneTree(false), armGuardp};
+                AstNodeStmt* const termsp = newInsideTerms(
+                    insidep, selected ? condp->thenp() : condp->elsep(), armGuardp);
+                if (termsp) stmtsp = AstNode::addNext(stmtsp, termsp);
+                VL_DO_DANGLING(armGuardp->deleteTree(), armGuardp);
+            }
+            return stmtsp;
+        }
+        std::array<AstNodeExpr*, 2> operandsp{};
+        if (const AstNodeUniop* const uniopp = VN_CAST(nodep, NodeUniop)) {
+            operandsp = {uniopp->lhsp(), nullptr};
+        } else if (const AstNodeBiop* const biopp = VN_CAST(nodep, NodeBiop)) {
+            operandsp = {biopp->lhsp(), biopp->rhsp()};
+        }
+        const bool logical = VN_IS(nodep, LogAnd) || VN_IS(nodep, LogOr) || VN_IS(nodep, LogIf);
+        bool impureOperand = false;
+        for (AstNodeExpr* const operandp : operandsp) {
+            impureOperand |= operandp && !operandp->isPure();
+        }
+        if (!impureOperand || logical) return newInsideTemp(insidep, nodep, guardp);
+        AstNodeStmt* stmtsp = nullptr;
+        for (AstNodeExpr* const operandp : operandsp) {
+            if (!operandp) continue;
+            AstNodeStmt* const termsp = newInsideTerms(insidep, operandp, guardp);
+            if (termsp) stmtsp = AstNode::addNext(stmtsp, termsp);
+        }
+        return stmtsp;
+    }
+    // Hold a term of an inside expression in a temporary of its type, assigned when guardp holds
+    AstNodeStmt* newInsideTemp(AstInside* insidep, AstNodeExpr* nodep, AstNodeExpr* guardp) {
+        FileLine* const fl = nodep->fileline();
+        AstVar* const varp = makeTempVarp(m_insideTempNames.get(nodep), nodep, nodep->dtypep());
+        nodep->replaceWith(new AstVarRef{fl, varp, VAccess::READ});
+        AstNodeStmt* const assignp
+            = new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, nodep};
+        if (!guardp) return assignp;
+        return new AstIf{fl, guardp->cloneTree(false), assignp};
+    }
+    // Type an inside expression and its items as one common type
+    void widthInsideCommon(AstInside* nodep, AstNodeDType* expDTypep) {
+        iterateCheck(nodep, "Inside expression", nodep->exprp(), CONTEXT_DET, FINAL, expDTypep,
+                     EXTEND_EXP);
+        for (AstNode* const itemp : nodep->itemspList()) {
+            if (VN_IS(itemp, InsideRange)) {
+                userIterate(itemp, WidthVP{expDTypep, FINAL}.p());
+            } else if (!itemp->dtypep()->skipRefp()->isNonPackedArray()) {
+                iterateCheck(nodep, "Inside Item", itemp, CONTEXT_DET, FINAL, expDTypep,
+                             EXTEND_EXP);
+            }
+        }
+    }
+    // Width warnings of an inside come from its common type; turn them off on the
+    // comparisons of an item
+    static void waiveInsideWidth(AstNodeExpr* nodep) {
+        if (AstLogAnd* const andp = VN_CAST(nodep, LogAnd)) {
+            waiveInsideWidth(andp->lhsp());
+            waiveInsideWidth(andp->rhsp());
+        } else if (VN_IS(nodep, NodeBiop)) {
+            nodep->fileline(new FileLine{nodep->fileline()});
+            nodep->fileline()->modifyWarnOff(V3ErrorCode::WIDTHEXPAND, true);
+            nodep->fileline()->modifyWarnOff(V3ErrorCode::WIDTHTRUNC, true);
+        }
+    }
+    // Whether an inside item or range bound is integral, by element for an unpacked array
+    static bool insideOperandIntegral(const AstNode* valuep) {
+        if (VN_IS(valuep, Unbounded)) return true;  // '$' takes the expression's type
+        const AstNodeDType* dtp = valuep->dtypep()->skipRefp();
+        if (dtp->isNonPackedArray()) dtp = dtp->subDTypep()->skipRefp();
+        return dtp->isIntegralOrPacked();
     }
     AstNodeExpr* insideItem(AstNode* nodep, AstNodeExpr* exprp, AstNodeExpr* itemp) {
         const AstNodeDType* const itemDtp = itemp->dtypep()->skipRefp();
