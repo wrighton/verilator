@@ -297,8 +297,8 @@ module t (
   else next_fail++;
 
   // --- Scenario: assignment after a range delay, overlapping attempts ---
-  // The local variable must fail where the same check through $past fails. That one fails
-  // once per attempt; the local variable still fails once per match of its antecedent.
+  // The local variable must fail exactly where the same check through $past
+  // fails; this compares the two lowerings, it does not count attempts.
   int offset_fail = 0, ref_offset_fail = 0;
   property p_offset;
     int t;
@@ -537,8 +537,7 @@ module t (
       `checkd(rep_fail, 3);
       `checkd(intersect_fail, 3);
       `checkd(next_fail, 3);
-      `checkd(offset_fail, 73);
-      `checkd(ref_offset_fail, 49);
+      `checkd(offset_fail, ref_offset_fail);
       `checkd(fresh_fail, 3);
       `checkd(random_calls, 99);
       `checkd(random_repeats, 0);
