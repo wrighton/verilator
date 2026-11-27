@@ -2157,6 +2157,35 @@ class AssertVisitor final : public VNVisitor {
                 + cvtToStr(nodep->fileline()->lineno()) + ": %m" + ((message != "") ? ": " : "")
                 + message + "\n");
     }
+    // Report a display in the Postponed region of a non-static class property, method or 'this':
+    // its process is static, so not of each object
+    static void checkPostponedDisplay(const AstDisplay* nodep) {
+        nodep->fmtp()->foreach([&](const AstNodeExpr* exprp) {
+            if (VN_IS(exprp, ThisRef)) {
+                exprp->v3warn(E_UNSUPPORTED,
+                              "Unsupported: " << nodep->verilogKwd() << " of 'this'.");
+                return;
+            }
+            if (const AstFuncRef* const callp = VN_CAST(exprp, FuncRef)) {
+                // A call of a non-static method without an object is of 'this'
+                if (callp->taskp()->classMethod() && !callp->taskp()->isStatic()) {
+                    callp->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: " << nodep->verilogKwd()
+                                                  << " of non-static class method call "
+                                                  << callp->prettyNameQ() << ".");
+                }
+                return;
+            }
+            const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
+            if (!refp) return;
+            const AstVar* const varp = refp->varp();
+            if (varp->isClassMember() && !varp->lifetime().isStatic()) {
+                refp->v3warn(E_UNSUPPORTED, "Unsupported: " << nodep->verilogKwd()
+                                                            << " of non-static class property "
+                                                            << refp->prettyNameQ() << ".");
+            }
+        });
+    }
     void replaceDisplay(AstDisplay* nodep, const string& prefix) {
         nodep->fmtp()->text(
             assertDisplayMessage(nodep, prefix, nodep->fmtp()->text(), nodep->displayType()));
@@ -4490,6 +4519,7 @@ class AssertVisitor final : public VNVisitor {
         } else if (nodep->displayType() == VDisplayType::DT_FATAL) {
             replaceDisplay(nodep, "%%Fatal");
         } else if (nodep->displayType() == VDisplayType::DT_MONITOR) {
+            checkPostponedDisplay(nodep);
             nodep->displayType(VDisplayType::DT_DISPLAY);
             FileLine* const fl = nodep->fileline();
 
@@ -4557,13 +4587,14 @@ class AssertVisitor final : public VNVisitor {
             ifp->branchPred(VBranchPred::BP_UNLIKELY);
             m_modp->addStmtsp(new AstAlwaysPostponed{fl, ifp});
         } else if (nodep->displayType() == VDisplayType::DT_STROBE) {
+            checkPostponedDisplay(nodep);
             nodep->displayType(VDisplayType::DT_DISPLAY);
             // Need one-shot
             FileLine* const fl = nodep->fileline();
             AstVar* const varp
                 = new AstVar{fl, VVarType::MODULETEMP, "__Vstrobe" + cvtToStr(m_modStrobeNum++),
                              nodep->findBitDType()};
-            m_modp->addStmtsp(varp);
+            addStateVar(varp);
             // Where $strobe was we do "__Vstrobe = '1;"
             AstAssign* const newsetp = new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE},
                                                      new AstConst{fl, AstConst::BitTrue{}}};
