@@ -63,7 +63,9 @@ module t (
     `checkd(fails4, ref_fails4);
     `checkd(ref_fails1, 12);
     `checkd(ref_fails2, 29);
-    `checkd(ref_passes3, 37);
+    // On each tick, one pass for attempts succeeding vacuously, their antecedent ending
+    // without a match, and one for attempts whose consequent matches
+    `checkd(ref_passes3, 33);
     `checkd(ref_fails3, 4);
     `checkd(ref_fails4, 14);
     $write("*-* All Finished *-*\n");
