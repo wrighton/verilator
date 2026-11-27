@@ -46,6 +46,7 @@ static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to dro
 static constexpr int diversitySlotSamples = 4;  // Elements checked for a part dropped for all
 static constexpr int diversitySlotShare = 2;  // Of checks left, 1/this for a part one by one
 static constexpr int diversitySlotFew = 128;  // Of its elements, 1/this conflicting one by one
+static constexpr int diversityCoreFew = 4;  // Terms of an unsat core picked from as it is
 // Resource limit of each spreading check, in the solver's own units (SMT-LIB 2.6
 // :reproducible-resource-limit): diversityCheckLimit, plus diversityCheckLimitSquare times
 // n^2, n the number of terms spread (variables and array elements, not bits). It bounds
@@ -1776,16 +1777,102 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
     // share of the checks left and a few of the elements, as a constraint that rules out
     // many values (say d[i] < 200) would spend every check so
     std::map<std::tuple<const VlRandomVar*, int, int, int>, int> oneByOneLeft;
-    while (checksLeftr-- > 0) {
-        os << "(check-sat-assuming (" << keep;
-        for (size_t k = 0; k < terms.size(); ++k) {
-            if (!droppedr[k]) os << " __Va" << first + k;
+    // Into corer, the terms of an unsat core that are not dropped yet
+    const auto coreTerms = [&](std::vector<int>& corer) VL_REQUIRES(sess.m_mutex) {
+        corer.clear();
+        for (const int idx : readUnsatAssumptions(sess)) {
+            const int k = idx - first;
+            if (k >= 0 && k < static_cast<int>(terms.size()) && !droppedr[k]) corer.push_back(k);
         }
-        os << "))\n";
-        const VlSolverStatus status = sess.readStatus();
-        if (status == VlSolverStatus::SAT) return true;
-        // Unknown or failure: the solution already written stands
-        if (status != VlSolverStatus::UNSAT) return false;
+    };
+    // A solver need not give a minimal core, and one such as cvc5 names most of the ties
+    // checked, so picking among them drops ties that fit. Once a core holds more than a few,
+    // the ties left are taken in an order, the widest first and those alike at random, and
+    // each conflict is the first tie that conflicts with those before it, so it is in a
+    // minimal core: found by checking ever longer prefixes from the one known to fit, then
+    // bisecting, and dropped unless the core of its prefix is small, to pick from as usual.
+    std::vector<int> order;  // Ties in that order, once a core was large
+    size_t fits = 0;  // How many of them are known to fit
+    // The next conflict into corer: 1 if found, 0 if every tie left fits, -1 if cut short
+    const auto nextConflict = [&](std::vector<int>& corer) VL_REQUIRES(sess.m_mutex) {
+        // Only ties left; those of the prefix that fits still fit
+        size_t kept = 0;
+        size_t keptFits = 0;
+        for (size_t i = 0; i < order.size(); ++i) {
+            if (droppedr[order[i]]) continue;
+            if (i < fits) ++keptFits;
+            order[kept++] = order[i];
+        }
+        order.resize(kept);
+        fits = keptFits;
+        const auto check = [&](size_t n) VL_REQUIRES(sess.m_mutex) {
+            --checksLeftr;
+            // Marked in the solver's log as checks of a prefix
+            os << "; prefix\n(check-sat-assuming (" << keep;
+            for (size_t i = 0; i < n; ++i) os << " __Va" << first + order[i];
+            os << "))\n";
+            // Not counted as a satisfied check: a prefix fitting is no part of the result
+            const VlSolverStatus status = sess.readStatus();
+            if (status == VlSolverStatus::UNSAT) coreTerms(corer);
+            return status;
+        };
+        size_t lo = fits;  // A prefix of this many fits
+        size_t hi = 0;  // A prefix of this many conflicts, once known
+        size_t step = 1;  // Past lo, while hi is not known
+        std::vector<int> prefixCore;  // The core of the prefix hi
+        while (!hi || hi - lo > 1) {
+            if (checksLeftr <= 0) return -1;
+            const size_t n = hi ? (lo + hi) / 2 : std::min(lo + step, order.size());
+            const VlSolverStatus status = check(n);
+            if (status == VlSolverStatus::UNSAT) {
+                hi = n;
+                prefixCore = corer;
+            } else if (status != VlSolverStatus::SAT) {
+                return -1;
+            } else if (n == order.size()) {
+                return 0;
+            } else {
+                lo = n;
+                step *= 2;
+            }
+        }
+        fits = lo;
+        if (prefixCore.size() > static_cast<size_t>(diversityCoreFew)) {
+            prefixCore.assign(1, order[lo]);
+        }
+        corer.swap(prefixCore);
+        return 1;
+    };
+    while (checksLeftr > 0) {
+        std::vector<int> core;
+        if (order.empty()) {
+            --checksLeftr;
+            os << "(check-sat-assuming (" << keep;
+            for (size_t k = 0; k < terms.size(); ++k) {
+                if (!droppedr[k]) os << " __Va" << first + k;
+            }
+            os << "))\n";
+            const VlSolverStatus status = sess.readStatus();
+            if (status == VlSolverStatus::SAT) return true;
+            // Unknown or failure: the solution already written stands
+            if (status != VlSolverStatus::UNSAT) return false;
+            coreTerms(core);
+            if (core.size() > static_cast<size_t>(diversityCoreFew)) {
+                for (size_t k = 0; k < terms.size(); ++k) {
+                    if (!droppedr[k]) order.push_back(static_cast<int>(k));
+                }
+                for (size_t i = order.size(); i > 1; --i) {
+                    std::swap(order[i - 1], order[VL_RANDOM_RNG_I(rngr) % i]);
+                }
+                std::stable_sort(order.begin(), order.end(),
+                                 [&](int a, int b) { return terms[a].width > terms[b].width; });
+            }
+        }
+        if (!order.empty()) {
+            const int found = nextConflict(core);
+            if (found == 0) return true;
+            if (found < 0) return false;
+        }
         // Drop the narrowest term of the core: wide data rarely causes the conflict.
         // The core only names active literals; ones before first are kept literals.
         // A core need not be minimal, so a pick among several is only a guess. Among the
@@ -1795,9 +1882,7 @@ bool VlRandomizer::assumeDropping(VlRNG& rngr, VlSolverSession& sess, const std:
         int pick = -1;
         int candidates = 0;
         int ties = 0;  // Candidates like the pick, which is a random one of them
-        for (const int idx : readUnsatAssumptions(sess)) {
-            const int k = idx - first;
-            if (k < 0 || k >= static_cast<int>(terms.size()) || droppedr[k]) continue;
+        for (const int k : core) {
             ++candidates;
             if (pick < 0 || terms[k].width < terms[pick].width) {
                 pick = k;

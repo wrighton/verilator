@@ -23,13 +23,17 @@ solver_log = test.obj_dir + "/solver.log"
 test.execute(all_run_flags=['+verilator+solver+file+' + solver_log])
 
 # Per randomize(), few checks rather than one per element, and at most 64 satisfied ones,
-# which Wide reaches
+# which Wide reaches. Checks of a prefix, narrowing down a large unsat core as cvc5 gives,
+# are marked in the log and count only towards the total.
 most_satisfied = 0
 with open(solver_log, encoding="utf8") as fh:
     for session in fh.read().split("  (reset)"):
-        replies = re.findall(r'^  \(check-sat-assuming.*\n(?:  .*\n)*?< (\w+)', session, re.M)
-        if len(replies) > 400:
-            test.error("Too many solver checks in one randomize(): " + str(len(replies)))
+        checks = re.findall(r'^(  ; prefix\n)?  \(check-sat-assuming.*\n(?:  .*\n)*?< (\w+)',
+                            session, re.M)
+        replies = [reply for prefix, reply in checks if not prefix]
+        if len(replies) > 400 or len(checks) > 600:
+            test.error("Too many solver checks in one randomize(): " + str(len(replies)) + " of " +
+                       str(len(checks)))
         most_satisfied = max(most_satisfied, replies.count("sat"))
 if most_satisfied != 64:
     test.error("Most satisfied checks in one randomize(): " + str(most_satisfied))

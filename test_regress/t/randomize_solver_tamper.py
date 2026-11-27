@@ -22,6 +22,7 @@
 #         | short_model | stale_assume | success | unknown_once | unknown_thrice
 #         | unknown_twice
 #         | unknown_var | unsat_recheck | unsupported_once | upper_hex
+#         | wide_core | wide_core_cut
 #   bad_base         - replace the Nth model reply with a base character that is not b, o, x or h
 #   bad_digits       - replace the Nth model reply with one value holding digits outside its base
 #   bad_index        - replace the first array model reply with a bad select index
@@ -81,6 +82,9 @@
 #   unsat_recheck    - answer the status that follows an unsat with sat
 #   unsupported_once - answer the Nth status with unsupported
 #   upper_hex        - replace the Nth model reply with uppercase hex digits
+#   wide_core        - answer every unsat assumptions reply with all the literals assumed, as
+#                      a solver may (cvc5 nearly does)
+#   wide_core_cut    - as wide_core, and answer the status after the first such reply unknown
 # TAMPER_AT: reply index to act on (default 3)
 # TAMPER_ONCE: file marking that the tamper already acted. The runtime restarts
 #   a solver that died, which starts this wrapper again, so without the file a
@@ -120,9 +124,10 @@ ASSUME_MODES = ("err_assume", "garbage_assume", "oor_assume", "stale_assume")
 # Modes acting on an unsat-core reply, which lists __Vcons<N> names
 CORE_MODES = ("core_junk", "err_core")
 # Modes rewriting every line, so they never consume the index
-STREAM_MODES = ("crlf", "csa_unsupported", "indent", "limit_unsupported", "multiline", "success")
-# Modes that change commands on their way to the solver
-INPUT_MODES = ("csa_unsupported", "err_cell", "limit_unsupported")
+STREAM_MODES = ("crlf", "csa_unsupported", "indent", "limit_unsupported", "multiline", "success",
+                "wide_core", "wide_core_cut")
+# Modes that read or change the commands on their way to the solver
+INPUT_MODES = ("csa_unsupported", "err_cell", "limit_unsupported", "wide_core", "wide_core_cut")
 # Echoed in place of a command, to mark where in the replies its answer belongs
 TAMPER_MARK = "vl_tamper"
 
@@ -145,6 +150,8 @@ proc = subprocess.Popen(real_solver(),
 # whether the last of them was a push, and cell_after the scope the estimate
 # ended in, once known
 scopes = types.SimpleNamespace(count=0, pushed=False, cell_after=None)
+# wide_core: the literals of the last check-sat-assuming sent
+assumed = types.SimpleNamespace(literals=[])
 
 
 def feed():
@@ -165,6 +172,8 @@ def feed():
             scopes.pushed = text.startswith("(push")
         if text.startswith("(reset)"):
             scopes.cell_after = None
+        if text.startswith("(check-sat-assuming"):
+            assumed.literals = re.findall(r"__Va\d+", text)
         proc.stdin.write(cmd)
         proc.stdin.flush()
     proc.stdin.close()
@@ -241,6 +250,7 @@ replies = 0
 seen_unsat = False
 done = bool(once) and os.path.exists(once)
 marker_next = False  # err_marker: the next status follows an error holding the marker
+cut_next = False  # wide_core_cut: the next status is answered unknown
 sat_scope = None  # err_cell: the scope of the last sat
 depth = 0  # Paren depth of the reply being forwarded, so wrapped ones stay intact
 inside = False  # Inside an SMT string literal, where parens do not nest
@@ -290,6 +300,18 @@ for line in proc.stdout:
         emit('(error "injected command rejected, then')
         emit("vl_resync")
         emit('in its text")')
+    # wide_core: an unsat assumptions reply names every literal assumed
+    if mode in ("wide_core", "wide_core_cut") and at_reply_start and line.startswith("(__Va"):
+        swallow(line)
+        depth, inside = 0, False
+        emit("(" + " ".join(assumed.literals) + ")")
+        cut_next = mode == "wide_core_cut" and not done
+        continue
+    if cut_next and is_status:
+        cut_next = False
+        done = True
+        emit("unknown")
+        continue
     acting = counted and replies >= at and not done and mode not in STREAM_MODES
     if not acting:
         forward(line, at_reply_start)
