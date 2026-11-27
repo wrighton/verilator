@@ -3,4 +3,8 @@
    13 |   assert property (@(posedge clk) a [*0] ##0 a |-> 1);
       |                                     ^~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_consec_rep_empty_unsup.v:14:43: Unsupported: [*0] consecutive repetition
+                                                             : ... note: In instance 't'
+   14 |   assert property (@(posedge clk) a ##1 a [*0] ##0 a |-> 1);
+      |                                           ^~
 %Error: Exiting due to
