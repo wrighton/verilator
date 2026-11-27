@@ -9,8 +9,9 @@
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
-// An associative array index with X or Z bits is invalid: a read returns the default value and a
-// write is ignored (IEEE 1800-2023 7.8.6)
+// An associative array index with X or Z bits is invalid: a read returns the default value, a
+// write is ignored, no element exists there, and deleting there does nothing
+// (IEEE 1800-2023 7.8.6)
 
 module t;
   initial begin
@@ -41,6 +42,12 @@ module t;
     l[8'bx0000001] = 96;
     w[8'bx] = 95;
     d[32'bz] = 94;
+    `checkd(a.exists(32'bx), 0);
+    `checkd(b.exists(32'bz), 0);
+    `checkd(w.exists(8'bx1), 0);
+    a.delete(32'bx);
+    b.delete(32'bz);
+    w.delete(8'bz);
     // verilator lint_on SELRANGE
     `checkd(a[0], 10);
     `checkd(a[1], 11);
