@@ -66,8 +66,10 @@
 #include <iostream>
 #include <limits>
 #include <list>
+#include <map>
 #include <memory>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 
 #include <sys/stat.h>  // mkdir
@@ -4485,12 +4487,16 @@ void VlRefPinBase::release() VL_MT_UNSAFE {
     if (--m_keptp->m_pins == 0) delete m_keptp;
 }
 
+// Pins of each element of a container with many pins, and its slots by address
+class VlRefIndex final {
+public:
+    std::unordered_map<const void*, VlRefPinBase*> m_pins;  // First pin of each element
+    std::map<const char*, VlRefSlot*> m_slots;  // Slots by address
+    size_t m_slotsAtEnd = 0;  // Slots in a node kept beyond the last element
+};
+
 VlRefSlot::~VlRefSlot() {
-    if (m_listp) {
-        VlRefSlot** slotpp = &m_listp->m_slotsp;
-        while (*slotpp != this) slotpp = &(*slotpp)->m_nextp;
-        *slotpp = m_nextp;
-    }
+    if (m_listp) m_listp->removeSlot(this);
     if (m_nodep && --m_nodep->m_slots == 0) {
         ::operator delete(m_nodep->m_p);
         VL_DO_DANGLING(delete m_nodep, m_nodep);
@@ -4498,67 +4504,143 @@ VlRefSlot::~VlRefSlot() {
 }
 
 VlRefList::~VlRefList() {
-    for (VlRefSlot* slotp = m_slotsp; slotp; slotp = slotp->m_nextp) slotp->m_listp = nullptr;
+    if (!m_indexp) return;
+    for (const auto& itr : m_indexp->m_slots) itr.second->m_listp = nullptr;
+    VL_DO_DANGLING(delete m_indexp, m_indexp);
+}
+
+VlRefIndex& VlRefList::index() VL_MT_UNSAFE {
+    if (!m_indexp) m_indexp = new VlRefIndex;
+    return *m_indexp;
+}
+
+void VlRefList::indexPin(VlRefPinBase* pinp) VL_MT_UNSAFE {
+    VlRefIndex& idx = index();
+    if (m_pins == MAX_WALKED_PINS + 1) {
+        // Index all pins, the new one first
+        for (VlRefPinBase* otherp = m_pinsp; otherp; otherp = otherp->m_nextp) {
+            otherp->m_prevSamep = nullptr;
+            VlRefPinBase*& firstp = idx.m_pins[otherp->m_elemp];
+            otherp->m_nextSamep = firstp;
+            if (firstp) firstp->m_prevSamep = otherp;
+            firstp = otherp;
+        }
+        return;
+    }
+    pinp->m_prevSamep = nullptr;
+    VlRefPinBase*& firstp = idx.m_pins[pinp->m_elemp];
+    pinp->m_nextSamep = firstp;
+    if (firstp) firstp->m_prevSamep = pinp;
+    firstp = pinp;
+}
+
+void VlRefList::unindexPin(VlRefPinBase* pinp) VL_MT_UNSAFE {
+    if (m_pins == MAX_WALKED_PINS + 1) {
+        // Walked again once the pin is removed
+        m_indexp->m_pins.clear();
+        return;
+    }
+    if (pinp->m_nextSamep) pinp->m_nextSamep->m_prevSamep = pinp->m_prevSamep;
+    if (pinp->m_prevSamep) {
+        pinp->m_prevSamep->m_nextSamep = pinp->m_nextSamep;
+    } else if (pinp->m_nextSamep) {
+        m_indexp->m_pins[pinp->m_elemp] = pinp->m_nextSamep;
+    } else {
+        m_indexp->m_pins.erase(pinp->m_elemp);
+    }
+}
+
+bool VlRefList::indexed(const void* elemp) const VL_MT_UNSAFE {
+    return m_indexp->m_pins.count(elemp);
 }
 
 void VlRefList::outdate(const void* elemp, VlRefKept* keptp) {
-    VlRefPinBase** pinpp = &m_pinsp;
-    while (VlRefPinBase* const pinp = *pinpp) {
-        if (elemp && pinp->m_elemp != elemp) {
-            pinpp = &pinp->m_nextp;
-            continue;
+    VlRefPinBase* pinp;
+    if (!elemp) {
+        pinp = m_pinsp;
+        m_pinsp = nullptr;
+        m_pins = 0;
+        if (m_indexp) m_indexp->m_pins.clear();
+    } else if (m_pins > MAX_WALKED_PINS) {
+        // The pins of the element, from the index
+        const auto it = m_indexp->m_pins.find(elemp);
+        if (it == m_indexp->m_pins.end()) return;
+        pinp = it->second;
+        m_indexp->m_pins.erase(it);
+        for (VlRefPinBase* samep = pinp; samep; samep = samep->m_nextSamep) detach(samep);
+        if (m_pins <= MAX_WALKED_PINS) m_indexp->m_pins.clear();
+    } else {
+        // The pins of the element, from the list
+        VlRefPinBase* samesp = nullptr;
+        VlRefPinBase* nextp;
+        for (VlRefPinBase* otherp = m_pinsp; otherp; otherp = nextp) {
+            nextp = otherp->m_nextp;
+            if (otherp->m_elemp != elemp) continue;
+            detach(otherp);
+            otherp->m_nextSamep = samesp;
+            samesp = otherp;
         }
-        *pinpp = pinp->m_nextp;
+        pinp = samesp;
+    }
+    while (pinp) {
+        VlRefPinBase* const nextp = elemp ? pinp->m_nextSamep : pinp->m_nextp;
         pinp->m_listp = nullptr;
         pinp->m_keptp = keptp;
         ++keptp->m_pins;
+        pinp = nextp;
     }
 }
 
 void VlRefList::addSlot(VlRefSlot* slotp, bool atEnd) {
     slotp->m_atEnd = atEnd;
-    slotp->m_nextp = m_slotsp;
     slotp->m_listp = this;
-    m_slotsp = slotp;
+    index().m_slots.emplace(slotp->m_slotp, slotp);
+    ++m_slots;
+    if (atEnd) ++m_indexp->m_slotsAtEnd;
 }
 
-bool VlRefList::slotAtEnd() const {
-    for (const VlRefSlot* slotp = m_slotsp; slotp; slotp = slotp->m_nextp) {
-        if (slotp->m_atEnd) return true;
-    }
-    return false;
+void VlRefList::removeSlot(VlRefSlot* slotp) VL_MT_UNSAFE {
+    m_indexp->m_slots.erase(slotp->m_slotp);
+    --m_slots;
+    if (slotp->m_atEnd) --m_indexp->m_slotsAtEnd;
+    slotp->m_listp = nullptr;
 }
+
+const void* VlRefList::slotsOpsp() const VL_MT_UNSAFE {
+    return m_indexp->m_slots.begin()->second->m_opsp;
+}
+
+bool VlRefList::slotAtEnd() const { return m_indexp && m_indexp->m_slotsAtEnd; }
 
 bool VlRefList::slotIn(const void* p, size_t bytes) const {
+    if (!m_slots) return false;
     const char* const beginp = static_cast<const char*>(p);
-    for (const VlRefSlot* slotp = m_slotsp; slotp; slotp = slotp->m_nextp) {
-        if (slotp->m_slotp >= beginp && slotp->m_slotp < beginp + bytes) return true;
-    }
-    return false;
+    const auto it = m_indexp->m_slots.lower_bound(beginp);
+    return it != m_indexp->m_slots.end() && it->first < beginp + bytes;
 }
 
 bool VlRefList::keepNode(void* p, size_t bytes) {
     const char* const beginp = static_cast<const char*>(p);
     VlRefNode* nodep = nullptr;
-    VlRefSlot** slotpp = &m_slotsp;
-    while (VlRefSlot* const slotp = *slotpp) {
-        if (slotp->m_slotp < beginp || slotp->m_slotp >= beginp + bytes) {
-            slotpp = &slotp->m_nextp;
-            continue;
-        }
+    auto it = m_indexp->m_slots.lower_bound(beginp);
+    while (it != m_indexp->m_slots.end() && it->first < beginp + bytes) {
+        VlRefSlot* const slotp = it->second;
+        ++it;
         if (!nodep) nodep = new VlRefNode{p, 0};
         ++nodep->m_slots;
         slotp->m_nodep = nodep;
-        slotp->m_listp = nullptr;
-        *slotpp = slotp->m_nextp;
+        removeSlot(slotp);
     }
     return nodep;
 }
 
 void VlRefList::takeSlots(VlRefList& from) {
-    while (VlRefSlot* const slotp = from.m_slotsp) {
-        from.m_slotsp = slotp->m_nextp;
-        addSlot(slotp, slotp->m_atEnd);
+    if (!from.m_slots) return;
+    while (!from.m_indexp->m_slots.empty()) {
+        VlRefSlot* const slotp = from.m_indexp->m_slots.begin()->second;
+        const bool atEnd = slotp->m_atEnd;
+        from.removeSlot(slotp);
+        addSlot(slotp, atEnd);
     }
 }
 
