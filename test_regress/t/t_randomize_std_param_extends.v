@@ -74,6 +74,40 @@ class leaf_c extends mid_c;
 endclass
 
 module t;
+  typedef struct {
+    int qp;
+    logic [1:0] profile;
+  } item_s;
+
+  class Base #(parameter int CFG = 0);
+    item_s items[$];
+    int limit = 100;
+  endclass
+
+  class Derived #(parameter int CFG = 0) extends Base #(CFG);
+    // IEEE 1800-2023 18.12.1: non-randomized names remain in the calling scope.
+    task body(output int got);
+      int profile;
+      int ok;
+      items.shuffle();
+      ok = std::randomize(profile) with {
+        profile inside {[0:2]};
+        profile != int'(items[0].profile);
+      };
+      `checkd(ok, 1);
+      got = profile;
+    endtask
+
+    // A method argument shadows an inherited state member, even after deferral.
+    task check_scalar(int limit);
+      int value;
+      int ok;
+      ok = std::randomize(value) with {value == limit;};
+      `checkd(ok, 1);
+      `checkd(value, limit);
+    endtask
+  endclass
+
   initial begin
     automatic my_pkg::foo_t foo = new;
     automatic my_pkg::bar_t bar = new;
@@ -97,6 +131,28 @@ module t;
 
     // Multi-level parameterized inheritance outside package
     lc.test_std_rand();
+
+    begin
+      automatic Derived #(1) d = new;
+      automatic Derived #(2) d2 = new;
+      item_s it;
+      int p;
+      it.qp = 7;
+      it.profile = 2'd1;
+      d.items.push_back(it);
+      d2.items.push_back(it);
+      for (int i = 0; i < 20; ++i) begin
+        d.items[0].profile = 2'(i % 3);
+        d.body(p);
+        `checkd(p inside {[0:2]}, 1);
+        `checkd(p != int'(d.items[0].profile), 1);
+        d.check_scalar(i + 1);
+        d2.body(p);
+        `checkd(p inside {[0:2]}, 1);
+        `checkd(p != 1, 1);
+        d2.check_scalar(i + 2);
+      end
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
