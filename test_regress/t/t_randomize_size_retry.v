@@ -78,6 +78,52 @@ class Back;
   }
 endclass
 
+// Calls a pure function, so retried as without it
+class PureFn;
+  rand bit [7:0] q[$];
+  static function int low();
+    return 1;
+  endfunction
+  constraint c {
+    q.size() inside {[low() : 5]};
+    foreach (q[i]) if (i == 3) {
+      q[i] > 10;
+      q[i] < 5;
+    }
+  }
+endclass
+
+// Calls a function counting its calls, which a retry would call again, so not retried
+class CountFn;
+  rand bit [7:0] q[$];
+  static int calls = 0;
+  static function int counted();
+    ++calls;
+    return 1;
+  endfunction
+  constraint c {
+    q.size() inside {[counted() : 16]};
+    foreach (q[i]) if (i == 3) {
+      q[i] > 10;
+      q[i] < 5;
+    }
+  }
+endclass
+
+// Calls $urandom, whose random state a retry would advance again, so not retried
+class RandFn;
+  rand bit [7:0] q[$];
+  rand bit [7:0] x;
+  constraint c {
+    q.size() inside {[1 : 16]};
+    foreach (q[i]) if (i == 3) {
+      q[i] > 10;
+      q[i] < 5;
+    }
+    x == 8'($urandom() % 4);
+  }
+endclass
+
 // Not satisfiable with any size allowed
 class Never;
   rand bit [7:0] q[$];
@@ -95,6 +141,10 @@ module t;
     automatic Sum sum = new;
     automatic Never never = new;
     automatic Idx idx = new;
+    automatic PureFn pure_fn = new;
+    automatic CountFn count_fn = new;
+    automatic RandFn rand_fn = new;
+    automatic int rand_fails = 0;
     automatic Fixed fixed = new;
     automatic SizeOf sizeof_q = new;
     automatic Conj conj = new;
@@ -143,6 +193,21 @@ module t;
       `checkh(ok, 1);
       if (back.q.size() < 1 || back.q.size() > 5) `stop;
     end
+    for (int k = 0; k < 20; ++k) begin
+      ok = pure_fn.randomize();
+      `checkh(ok, 1);
+      if (pure_fn.q.size() < 1 || pure_fn.q.size() > 3) `stop;
+      pure_fn.q.delete();
+      void'(count_fn.randomize());
+      count_fn.q.delete();
+    end
+    if (CountFn::calls > 40) `stop;
+    // Without retries, a size the elements cannot be solved with fails the call
+    for (int k = 0; k < 20; ++k) begin
+      if (rand_fn.randomize() == 0) ++rand_fails;
+      rand_fn.q.delete();
+    end
+    if (rand_fails == 0) `stop;
     // It still fails
     ok = never.randomize();
     `checkh(ok, 0);
