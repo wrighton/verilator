@@ -39,8 +39,8 @@
 #         | unknown_twice
 #         | unknown_var | unsat_recheck | unsupported_once | upper_hex | value_digit
 #         | value_lead | value_narrow | value_wide | whole_asarray | whole_chain
-#         | whole_cycle | whole_dup_let | whole_fail | whole_lambda | whole_let_alias
-#         | whole_let_scalar | whole_lets | whole_narrow | whole_twice
+#         | whole_cycle | whole_dup_let | whole_error | whole_fail | whole_lambda
+#         | whole_let_alias | whole_let_scalar | whole_lets | whole_narrow | whole_twice
 #   bad_base         - replace the Nth model reply with a base character that is not b, o, x or h
 #   bad_digits       - replace the Nth model reply with one value holding digits outside its base
 #   bad_index        - replace the first array model reply with a bad select index
@@ -178,6 +178,7 @@
 #   whole_chain      - as whole_asarray, with stores written as cvc5 does, binary and no lets
 #   whole_cycle      - as whole_asarray, with lets binding names to each other
 #   whole_dup_let    - as whole_asarray, with lets binding one name twice
+#   whole_error      - replace the Nth reply asking d whole with an error
 #   whole_fail       - as whole_asarray, then replace the next reply with an unknown variable
 #   whole_lambda     - as whole_asarray, with a lambda
 #   whole_let_alias  - as whole_lets, with a name bound to a let of a value
@@ -231,6 +232,8 @@ WHOLE_MODES = {
     "(let ((a!1 a!2) (a!2 a!1)) (store " + WA + " #x00000005 a!1))",
     "whole_dup_let":
     "(let ((a!1 " + WA + ")) (let ((a!1 (store a!1 #x00000005 #x09))) a!1))",
+    "whole_error":
+    "",
     "whole_fail":
     "(_ as-array k!0)",
     "whole_lambda":
@@ -553,6 +556,9 @@ for line in proc.stdout:
             if nest == 0:
                 break
         entry = whole_text[start:end + 1]
+        if mode == "whole_error":
+            emit('(error "line 1 column 13: unsupported term")')
+            continue
         if mode == "whole_twice":
             entry += " " + entry
         else:
