@@ -531,6 +531,7 @@ class WidthVisitor final : public VNVisitor {
     const bool m_paramsOnly;  // Computing parameter value; limit operation
     const bool m_doGenerate;  // Do errors later inside generate statement
     bool m_streamConcat = false;  // True if visiting arguments of stream concatenation
+    AstQueueDType* m_byteQueueDTypep = nullptr;  // Queue of bytes, as which strings stream
     bool m_castStreamOperand = false;  // Under a stream that an AstCast casts, see castError
     // Function whose port default or static initial value is visited, evaluated outside it
     const AstNodeFTask* m_valueOutsideFTaskp = nullptr;
@@ -1531,6 +1532,48 @@ class WidthVisitor final : public VNVisitor {
 
         return VN_IS(backp, NodeAssign);
     }
+    // A dynamic array or queue of strings read by a stream is the bytes of its strings, each
+    // string a dynamic array of bytes (IEEE 1800-2023 6.24.3): stream it as a queue of those bytes
+    void flattenStringArrayOperand(AstNodeStream* nodep) {
+        const AstNodeDType* const dtypep = nodep->lhsp()->dtypep()->skipRefp();
+        if (!VN_IS(dtypep, QueueDType) && !VN_IS(dtypep, DynArrayDType)) return;
+        if (!dtypep->subDTypep()->skipRefp()->isString()) return;
+        // Not when unpacked into, which is unsupported
+        const AstNodeExpr* basep = nodep->lhsp();
+        while (true) {
+            if (const AstNodeSel* const selp = VN_CAST(basep, NodeSel)) {
+                basep = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(basep, StructSel)) {
+                basep = selp->fromp();
+            } else {
+                break;
+            }
+        }
+        const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
+        const AstMemberRef* const memberp = VN_CAST(basep, MemberRef);
+        if ((refp && refp->access().isWriteOrRW())
+            || (memberp && memberp->access().isWriteOrRW())) {
+            return;  // See badStreamTargetArray
+        }
+        FileLine* const flp = nodep->fileline();
+        // The strings concatenated, as a stream of them assigned to a string is
+        AstStreamR* const stringsp
+            = new AstStreamR{flp, nodep->lhsp()->unlinkFrBack(), new AstConst{flp, 1}};
+        stringsp->dtypeSetStream();
+        stringsp->didWidth(true);
+        AstCvtPackString* const stringp = new AstCvtPackString{flp, stringsp};
+        stringp->didWidth(true);
+        if (!m_byteQueueDTypep) {
+            m_byteQueueDTypep = new AstQueueDType{
+                flp, nodep->findBitDType(VL_BYTESIZE, VL_BYTESIZE, VSigning::UNSIGNED), nullptr};
+            m_byteQueueDTypep->dtypep(m_byteQueueDTypep);
+            v3Global.rootp()->typeTablep()->addTypesp(m_byteQueueDTypep);
+        }
+        AstCvtStringToQueue* const bytesp
+            = new AstCvtStringToQueue{flp, stringp, m_byteQueueDTypep};
+        bytesp->didWidth(true);
+        nodep->lhsp(bytesp);
+    }
     void visit(AstNodeStream* nodep) override {
         const bool nested = m_streamConcat;  // In the concatenation of another stream
         VL_RESTORER(m_streamConcat);
@@ -1557,6 +1600,7 @@ class WidthVisitor final : public VNVisitor {
             }
             iterateCheckSelf(nodep, "LHS", nodep->lhsp(), SELF, FINAL);
             m_streamConcat = false;
+            flattenStringArrayOperand(nodep);
             iterateCheckSelf(nodep, "RHS", nodep->rhsp(), SELF, BOTH);
             // A non-constant size is reported below, so without the generic error
             V3Const::constifyParamsNoWarnEdit(nodep->rhsp());  // rhsp may change
