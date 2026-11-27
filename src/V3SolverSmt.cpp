@@ -586,6 +586,10 @@ class FastConstraintBuilder final {
     uint64_t key(uint64_t bits) const {
         return (bits & mask()) ^ (m_viewSigned ? uint64_t{1} << (m_viewWidth - 1) : 0);
     }
+    static const AstNode* ownerOf(const AstNode* nodep) {
+        while (nodep && !VN_IS(nodep, NodeModule)) nodep = nodep->backp();
+        return nodep;
+    }
     void findTarget(AstNodeExpr* exprp) {
         exprp->foreach([&](AstNodeExpr* const nodep) {
             AstVar* varp = nullptr;
@@ -598,7 +602,13 @@ class FastConstraintBuilder final {
                     && refp->user2p() == refp->varp()->user2p())
                     varp = refp->varp();
             }
-            if (!varp || !(varp->rand().isRandomizable() || varp->isStdRandomizeArg())) return;
+            // A solved array size too, so its spreading draws in its ranges, if it is of the
+            // class constrained here rather than one it extends
+            if (!varp
+                || !(varp->rand().isRandomizable() || varp->isStdRandomizeArg()
+                     || (varp->isRandSizeVar() && ownerOf(varp) == ownerOf(exprp)))) {
+                return;
+            }
             const AstNodeDType* const dtp = varp->dtypep()->skipRefToEnump();
             if ((!VN_IS(dtp, BasicDType) && !VN_IS(dtp, EnumDType)) || !dtp->isIntegralOrPacked()
                 || varp->width() > 64 || varp->width() < 1 || varp->rand().isRandC()) {
@@ -1283,6 +1293,10 @@ class FastConstraintBuilder final {
         FileLine* const fl = exprp->fileline();
         if (!m_supported) return newCallp(fl, VCMethod::RANDOMIZER_FAST_DISABLE)->makeStmt();
         if (!stmtp) stmtp = newDomainp(fl, ranges, exprp->isSoft(), distp);
+        // The size is solved before the array's elements, never sampled without the solver
+        if (m_varp->isRandSizeVar()) {
+            stmtp->addNext(newCallp(fl, VCMethod::RANDOMIZER_FAST_DISABLE)->makeStmt());
+        }
         if (const AstEnumDType* const enumDtp
             = VN_CAST(m_varp->dtypep()->skipRefToEnump(true), EnumDType)) {
             Ranges enumRanges;
