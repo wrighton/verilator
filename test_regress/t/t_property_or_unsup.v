@@ -30,7 +30,7 @@ module t (
       or (always [0:2] b));
   // Negated, each operand end would fail the attempt again
   assert property (@(posedge clk) not ((a ##1 b) or (a ##[2:$] c)));
-  assert property (@(posedge clk) not (((a ##1 b) or c) ##1 a));
+  assert property (@(posedge clk) not (((a ##1 b) or c) ##[1:$] a));
   assert property (@(posedge clk) not ((always [0:1] a) or (b ##[2:3] c)));
   assert property (@(posedge clk) not ((a #=# b) or (c ##[2:$] a)));
   assert property (@(posedge clk) not ((s_eventually a) or (b ##1 c)));
