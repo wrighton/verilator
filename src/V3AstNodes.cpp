@@ -2562,6 +2562,7 @@ AstNodeBiop* AstGte::newTyped(FileLine* fl, AstNodeExpr* lhsp, AstNodeExpr* rhsp
 void AstIf::dump(std::ostream& str) const {
     Super::dump(str);
     if (isBoundsCheck()) str << " [BOUNDS]";
+    if (isAssertPassGate()) str << " [PASSGATE]";
     if (!branchPred().unknown()) str << " [" << branchPred().asciiShort() << "]";
     str << " " << verilogKwd();
     if (priorityPragma()) str << " [PRI]";
@@ -2570,6 +2571,7 @@ void AstIf::dump(std::ostream& str) const {
 }
 void AstIf::dumpJson(std::ostream& str) const {
     dumpJsonBoolIf(str, "isBoundsCheck", isBoundsCheck());
+    dumpJsonBoolIf(str, "isAssertPassGate", isAssertPassGate());
     if (!branchPred().unknown()) dumpJsonStr(str, "branchPred", branchPred().ascii());
     dumpJsonStr(str, "kwd", verilogKwd());
     dumpJsonBoolIf(str, "priority", priorityPragma());
