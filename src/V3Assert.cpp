@@ -2157,9 +2157,10 @@ class AssertVisitor final : public VNVisitor {
                 + cvtToStr(nodep->fileline()->lineno()) + ": %m" + ((message != "") ? ": " : "")
                 + message + "\n");
     }
-    // Report a display in the Postponed region of a non-static class property, method or 'this':
-    // its process is static, so not of each object
-    static void checkPostponedDisplay(const AstDisplay* nodep) {
+    // Report a display in the Postponed region of what its static process cannot read: a
+    // non-static class property, method or 'this', or an argument or automatic variable of a
+    // task or function, which ends before the display
+    void checkPostponedDisplay(const AstDisplay* nodep) const {
         nodep->fmtp()->foreach([&](const AstNodeExpr* exprp) {
             if (VN_IS(exprp, ThisRef)) {
                 exprp->v3warn(E_UNSUPPORTED,
@@ -2183,6 +2184,23 @@ class AssertVisitor final : public VNVisitor {
                 refp->v3warn(E_UNSUPPORTED, "Unsupported: " << nodep->verilogKwd()
                                                             << " of non-static class property "
                                                             << refp->prettyNameQ() << ".");
+            } else if (varp->isFuncLocal()) {
+                UASSERT_OBJ(m_ftaskp, refp, "Task or function variable outside of it");
+                // An argument has the lifetime of its task or function
+                const bool automatic = varp->isIO() ? m_ftaskp->lifetime().isAutomatic()
+                                                    : varp->lifetime().isAutomatic();
+                if (automatic && nodep->displayType() == VDisplayType::DT_MONITOR) {
+                    refp->v3error("Automatic variable "
+                                  << refp->prettyNameQ()
+                                  << " traced by $monitor, but it is deallocated when its task"
+                                     " or function returns (IEEE 1800-2023 13.3.2).");
+                } else if (automatic || varp->isIO()) {
+                    refp->v3warn(E_UNSUPPORTED,
+                                 "Unsupported: " << nodep->verilogKwd()
+                                                 << " of argument or automatic variable "
+                                                 << refp->prettyNameQ()
+                                                 << " of a task or function.");
+                }
             }
         });
     }
