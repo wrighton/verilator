@@ -8458,9 +8458,11 @@ class AssertNfaVisitor final : public VNVisitor {
             prop.nonvacuousp = newOrNonvacuous(flp, lhs.nonvacuousp, rhs.nonvacuousp);
             return true;
         }
-        // A side effect is left where V3AssertPre evaluates it once
-        if (!nodep->isPure() || hasMultiCycleExpr(nodep)
-            || nodep->exists([](const AstImplication*) { return true; })) {
+        // A side effect is left where V3AssertPre evaluates it once. An s_eventually waits for
+        // its operand.
+        if (!nodep->isPure() || hasMultiCycleExpr(nodep) || nodep->exists([](const AstNode* np) {
+                return VN_IS(np, Implication) || VN_IS(np, SEventually);
+            })) {
             return false;
         }
         prop.successp = nodep->cloneTreePure(false);  // A boolean, so nonvacuous (16.14.8 a)

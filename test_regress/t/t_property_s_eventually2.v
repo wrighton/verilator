@@ -44,12 +44,15 @@ module t;
     bh[ticks] = b;
     ++ticks;
   end
-  // Passes of the attempts of ticks before n
-  function automatic int expPasses(int n);
+  // Without vacuous passes, only those waiting for b run their pass action
+  sub u_nonvac (.*);
+  initial $assertvacuousoff(0, u_nonvac);
+  // Passes of the attempts of ticks before n, vacuous ones too if vacuous is set
+  function automatic int expPasses(int n, bit vacuous);
     int count = 0;
     for (int s = 0; s < n; ++s) begin
       if (!ah[s]) begin
-        ++count;
+        if (vacuous) ++count;
       end
       else begin
         for (int t = s; t < n; ++t) begin
@@ -69,9 +72,20 @@ module t;
       $display("%d", passed);
       if (passed != 999) $stop;
       if (passed_until != 999) $stop;  // Same as 'passed': each attempt passes on its first edge
-      if (imp_n != expPasses(ticks)) $stop;
+      if (imp_n != expPasses(ticks, 1)) $stop;
+      if (u_nonvac.n != expPasses(ticks, 0)) $stop;
       $write("*-* All Finished *-*\n");
       $finish;
     end
   end
+endmodule
+
+module sub (
+    input clk,
+    input a,
+    input b
+);
+  int n = 0;
+  assert property (@(negedge clk) a |-> s_eventually b) ++n;
+  else;
 endmodule
