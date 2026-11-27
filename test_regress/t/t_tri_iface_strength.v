@@ -237,6 +237,23 @@ module mixed_scope (
   end
 endmodule
 
+// A port written inside and outside a named block of one process, with nothing shadowing it.
+module port_write (
+    proc_value p
+);
+  bit on = 1'b1;
+  initial begin
+    begin : b
+      p.value = on ? 33'h1_0000_0003 : 'z;
+      #1;
+      `checkh(p.value, 33'h1_0000_0003);
+    end
+    p.value = 33'h0_0000_0005;
+    #1;
+    `checkh(p.value, 33'h0_0000_0005);
+  end
+endmodule
+
 module port_shadow (
     proc_value p
 );
@@ -492,6 +509,9 @@ module t;
   // The same with writes and reads both inside and outside a named block of one process.
   proc_value mixed_port ();
   mixed_scope mixed_drive (mixed_port);
+  // A port with nothing shadowing it, written inside and outside a named block.
+  proc_value written_port ();
+  port_write port_drive (written_port);
 
   // A path from the top module, written inside a named block.
   proc_value upward ();
