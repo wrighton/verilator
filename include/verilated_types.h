@@ -1663,14 +1663,36 @@ public:
         for (int32_t i = lsb; i <= msb; ++i) out.push_back(m_deque[i]);
         return out;
     }
-    VlQueue sliceFrontBack(int32_t lsb, int32_t msb) const {
-        return slice(lsb, lastIndex() - msb);
+    // Index 'offset' from the back, saturated so a large negative offset stays past the end
+    int32_t backIndex(int32_t offset) const {
+        return static_cast<int32_t>(std::min<int64_t>(static_cast<int64_t>(lastIndex()) - offset,
+                                                      std::numeric_limits<int32_t>::max()));
     }
+    VlQueue sliceFrontBack(int32_t lsb, int32_t msb) const { return slice(lsb, backIndex(msb)); }
     VlQueue sliceBackBack(int32_t lsb, int32_t msb) const {
-        return slice(lastIndex() - lsb, lastIndex() - msb);
+        return slice(backIndex(lsb), backIndex(msb));
+    }
+    // Last index of q[lsb+:width] within the queue, computed without overflow
+    int32_t plusMsb(int32_t lsb, int32_t width) const {
+        return static_cast<int32_t>(
+            std::min<int64_t>(static_cast<int64_t>(lsb) + width - 1, lastIndex()));
     }
     // Return slice q[lsb+:width]
-    VlQueue slicePlus(int32_t lsb, int32_t width) const { return slice(lsb, lsb + width - 1); }
+    VlQueue slicePlus(int32_t lsb, int32_t width) const { return slice(lsb, plusMsb(lsb, width)); }
+    // Return count items from lsb, an index outside the array reading the default value, as a
+    // dynamic array slice does (IEEE 1800-2023 7.4.5). The result is unbounded: the bound of a
+    // queue limits the variable, not the values selected from it.
+    VlQueue<T_Value> slicePadCount(int64_t lsb, int64_t count) const {
+        VlQueue<T_Value> out;
+        const int64_t sz = static_cast<int64_t>(m_deque.size());
+        for (int64_t i = lsb; i < lsb + count; ++i) {
+            out.push_back((i >= 0 && i < sz) ? m_deque[i] : m_defaultValue);
+        }
+        return out;
+    }
+    VlQueue<T_Value> slicePlusPad(int32_t lsb, int32_t width) const {
+        return slicePadCount(lsb, width);
+    }
     // Assign src elements to q[lsb:msb]
     void sliceAssign(int32_t lsb, int32_t msb, const VlQueue& src) {
         const int32_t sz = static_cast<int32_t>(m_deque.size());
@@ -1683,14 +1705,24 @@ public:
         std::copy_n(src.m_deque.begin(), count, m_deque.begin() + lsb);
     }
     void sliceAssignFrontBack(int32_t lsb, int32_t msb, const VlQueue& src) {
-        sliceAssign(lsb, lastIndex() - msb, src);
+        sliceAssign(lsb, backIndex(msb), src);
     }
     void sliceAssignBackBack(int32_t lsb, int32_t msb, const VlQueue& src) {
-        sliceAssign(lastIndex() - lsb, lastIndex() - msb, src);
+        sliceAssign(backIndex(lsb), backIndex(msb), src);
     }
     // Assign src elements to q[lsb+:width]
     void sliceAssignPlus(int32_t lsb, int32_t width, const VlQueue& src) {
-        sliceAssign(lsb, lsb + width - 1, src);
+        sliceAssign(lsb, plusMsb(lsb, width), src);
+    }
+    // Assign src elements to q[lsb+:width], skipping an index outside the array, as writing a
+    // dynamic array slice does (IEEE 1800-2023 7.4.5)
+    void sliceAssignPlusPad(int32_t lsb, int32_t width, const VlQueue& src) {
+        const int64_t sz = static_cast<int64_t>(m_deque.size());
+        const int64_t n = std::min<int64_t>(width, src.m_deque.size());
+        for (int64_t i = std::max<int64_t>(0, -static_cast<int64_t>(lsb)); i < n && lsb + i < sz;
+             ++i) {
+            m_deque[lsb + i] = src.m_deque[i];
+        }
     }
 
     // For save/restore
