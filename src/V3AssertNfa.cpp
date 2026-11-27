@@ -2274,6 +2274,28 @@ public:
         }
         return false;
     }
+    // Whether an 'or' at the root of an asserted property is lowered by buildFixedSeqOrProp,
+    // which keeps one state per attempt, and whether its operands have different lengths
+    static bool isFixedSeqOr(AstSOr* orp, bool* mixedLengthsp = nullptr) {
+        std::vector<AstNodeExpr*> opps;
+        collectOrOperands(orp, opps);
+        if (opps.size() > MAX_FIXED_OR_OPERANDS) return false;
+        std::vector<FixedOrOperand> ops(opps.size());
+        std::set<int> offsets{0};
+        std::set<int> lengths;
+        for (size_t i = 0; i < opps.size(); ++i) {
+            if (!flattenFixedSeq(opps[i], 0, ops[i].checks)) return false;
+            for (const auto& offsetChecks : ops[i].checks) offsets.insert(offsetChecks.first);
+            // The offset of the last check, also of an implication of one tick
+            ops[i].length = ops[i].checks.empty() ? 0 : ops[i].checks.rbegin()->first;
+            offsets.insert(ops[i].length);
+            lengths.insert(ops[i].length);
+        }
+        // With more transitions it keeps the merge vertex (see buildFixedSeqOrProp)
+        if (fixedOrTransitions(ops, offsets) > MAX_FIXED_OR_TRANSITIONS) return false;
+        if (mixedLengthsp) *mixedLengthsp = lengths.size() > 1;
+        return true;
+    }
     // Free a dropped sub-result condition that is not linked into the AST
     // (abort folds synthesize unparented finalCondp trees).
     static void freeUnlinkedCondp(AstNodeExpr* condp) {
@@ -2739,6 +2761,8 @@ class SvaNfaLowering final {
         // Rejections on this tick, of threads and at the end of the sequence
         AstNodeExpr* rejectCountp = nullptr;
         AstNodeExpr* antecedentRejectp = nullptr;  // A followed-by's antecedent not matching
+        // With exact counts, the attempts matching on this tick
+        AstNodeExpr* matchThreadCountp = nullptr;
     };
 
     // Disable condition also aborts attempts between clock events. A constant disable
@@ -3054,6 +3078,7 @@ class SvaNfaLowering final {
     // wireMatchAndMidSources. For cover sequence, also count each end-of-match
     // so the action can be replayed without unrolling endpoints.
     void computeTerminalMatchAndReject(LowerCtx& c, SignalSet& sigs, const bool needMatchCount,
+                                       const bool needMatchThreadCount,
                                        AstNodeExpr** const terminalCountpp) {
         // If terminalCountpp is set, also count the threads whose final check decides this tick.
         for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
@@ -3064,6 +3089,15 @@ class SvaNfaLowering final {
 
             AstNodeExpr* srcSigp = fromVtxp->datap()->stateSigp->cloneTreePure(false);
             srcSigp = andCond(c.flp, srcSigp, tedgep->m_condp);
+            if (needMatchThreadCount) {
+                // Attempts reaching the match vertex together each match, as each has one thread
+                UASSERT_OBJ(c.exactCounts && fromVtxp->datap()->stateCountSigp, fromVtxp,
+                            "Terminal-link source missing exact stateCountSig");
+                sigs.matchThreadCountp
+                    = addCountp(c.flp, sigs.matchThreadCountp,
+                                fromVtxp->datap()->stateCountSigp->cloneTreePure(false),
+                                tedgep->m_condp ? tedgep->m_condp->cloneTreePure(false) : nullptr);
+            }
             if (needMatchCount) {
                 UASSERT_OBJ(fromVtxp->datap()->stateCountSigp, fromVtxp,
                             "Terminal-link source missing stateCountSig");
@@ -3418,7 +3452,7 @@ class SvaNfaLowering final {
 
     SignalSet computeSignals(LowerCtx& c, const bool needThreadFailCount,
                              const bool needThroughoutThreadFailCount, const bool needMatchCount,
-                             const bool countAttempts) {
+                             const bool needMatchThreadCount, const bool countAttempts) {
         SignalSet sigs;
 
         // Exact counts always count failures, from zero
@@ -3430,7 +3464,7 @@ class SvaNfaLowering final {
                                        && !c.matchCondp->exists([](const AstNodeExpr* np) {
                                               return np->isMultiCycleSva();
                                           });
-        computeTerminalMatchAndReject(c, sigs, needMatchCount,
+        computeTerminalMatchAndReject(c, sigs, needMatchCount, needMatchThreadCount,
                                       needTerminalCount ? &terminalCountp : nullptr);
         if (terminalCountp) {
             // thread_fail_count += final_condition ? 0 : terminal_count;
@@ -3496,6 +3530,13 @@ class SvaNfaLowering final {
             }
             sigs.matchCountp = gateCheckedCountp(c.flp, sigs.matchCountp, sigs.matchCountOverflowp,
                                                  notKillActive(c));
+        }
+        if (sigs.matchThreadCountp) {
+            // Only operand-set lowerings count matching threads, and they end with no final
+            // condition
+            UASSERT_OBJ(!c.matchCondp, c.matchCondp, "Matching threads with a final condition");
+            sigs.matchThreadCountp
+                = addCountp(c.flp, nullptr, sigs.matchThreadCountp, notKillActive(c));
         }
         sigs.terminalActivep = gateNotKill(c, sigs.terminalActivep);
         AstNodeExpr* vacuousCountp = nullptr;  // Vacuous successes this tick, before gating
@@ -3567,17 +3608,28 @@ class SvaNfaLowering final {
                     = addCountp(c.flp, nullptr, sigs.threadFailCountp,
                                 new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
             }
+            if (sigs.matchThreadCountp) {
+                sigs.matchThreadCountp
+                    = addCountp(c.flp, nullptr, sigs.matchThreadCountp,
+                                new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
+            }
         }
 
-        // Matches and vacuous successes of different attempts can coincide; the NFA state
-        // aggregates attempts, so the match and each implication count at most once per tick
+        // A match and vacuous successes of different attempts can coincide. Without exact
+        // counts the NFA state aggregates attempts, so the match and each implication count at
+        // most once per tick.
         if (c.needSuccessCount) {
-            AstNodeExpr* matchp = sigs.terminalActivep->cloneTreePure(false);
-            if (c.matchCondp) {
-                matchp = new AstLogAnd{c.flp, matchp, sampled(c.matchCondp->cloneTreePure(false))};
+            if (sigs.matchThreadCountp) {
+                sigs.successCountp = sigs.matchThreadCountp->cloneTreePure(false);
+            } else {
+                AstNodeExpr* matchp = sigs.terminalActivep->cloneTreePure(false);
+                if (c.matchCondp) {
+                    matchp = new AstLogAnd{c.flp, matchp,
+                                           sampled(c.matchCondp->cloneTreePure(false))};
+                }
+                sigs.successCountp = addCountp(c.flp, nullptr,
+                                               new AstExtend{c.flp, matchp, m_u32DTypep->width()});
             }
-            sigs.successCountp
-                = addCountp(c.flp, nullptr, new AstExtend{c.flp, matchp, m_u32DTypep->width()});
             if (vacuousCountp) {
                 sigs.successCountp = addCountp(c.flp, sigs.successCountp, vacuousCountp,
                                                sigs.vacuousp->cloneTreePure(false));
@@ -3836,7 +3888,7 @@ public:
                     const bool needThroughoutThreadFailCount, const bool trackAntecedentEnd,
                     const bool needSuccessCount = false, const bool needRejectCount = false,
                     const bool exactCounts = false, const AstAbortOn* const exactAbortp = nullptr,
-                    const bool countAttempts = false) {
+                    const bool needMatchThreadCount = false, const bool countAttempts = false) {
         FileLine* const flp = assertp->fileline();
         AstCover* const coverp = VN_CAST(assertp, Cover);
         const bool isSeqEvent = coverp && coverp->isSeqEvent();
@@ -4017,8 +4069,9 @@ public:
         emitKillAckNba(c);
 
         // Phase 3/3a/3b: Compute terminal match/reject signals (cleans up stateSig).
-        const SignalSet sigs = computeSignals(
-            c, needThreadFailCount, needThroughoutThreadFailCount, countMatches, countAttempts);
+        const SignalSet sigs
+            = computeSignals(c, needThreadFailCount, needThroughoutThreadFailCount, countMatches,
+                             needMatchThreadCount, countAttempts);
 
         // Strong s_always[m:n] end-of-simulation liveness: if any in-window state
         // is still set at $finish, the universal-quantifier window never completed
@@ -4877,7 +4930,7 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     // True if an evaluation attempt of a property has at most one thread at a time
-    static bool oneThreadPerAttempt(const AstNodeExpr* nodep, bool top) {
+    static bool oneThreadPerAttempt(AstNodeExpr* nodep, bool top) {
         // Only a top-level synchronous abort keeps each live thread one whole attempt
         if (const AstAbortOn* const abortp = VN_CAST(nodep, AbortOn)) {
             const VAbortKind kind = abortp->kind();
@@ -4891,6 +4944,9 @@ class AssertNfaVisitor final : public VNVisitor {
                    && (!sexprp->preExprp() || oneThreadPerAttempt(sexprp->preExprp(), false))
                    && oneThreadPerAttempt(sexprp->exprp(), false);
         }
+        // At the root, an 'or' of fixed-length sequences tracks one set of operands per attempt
+        if (AstSOr* const orp = VN_CAST(nodep, SOr))
+            return top && SvaNfaBuilder::isFixedSeqOr(orp);
         // A goto repetition repeats a boolean (IEEE 1800-2023 16.9.2); a consecutive repetition
         // of a multi-cycle sequence is reported as unsupported
         if (const AstSGotoRep* const repp = VN_CAST(nodep, SGotoRep)) return !repp->maxCountp();
@@ -5034,22 +5090,34 @@ class AssertNfaVisitor final : public VNVisitor {
                        || VN_IS(m_modp, Class)));
         const bool replaySuccesses = assertAssertp && negated;
         const bool countPasses = needMatch && negated && !parts.hasImplication;
-        // Counting threads counts the failed attempts when each attempt has one thread
-        // Counting each state's threads evaluates the conditions of its incoming transitions
-        // whether or not a thread takes them, so a sequence match item would run again or
-        // without its thread (IEEE 1800-2023 16.10); such a property keeps the state bits
+        // Attempts of an 'or' with operands of different lengths, started on different ticks,
+        // can match on one tick, where each passes, or fails a negated property
+        AstSOr* const rootOrp = VN_CAST(seqBodyp, SOr);
+        bool mixedLengths = false;
+        const bool matchesTogether = !parts.hasImplication && rootOrp
+                                     && SvaNfaBuilder::isFixedSeqOr(rootOrp, &mixedLengths)
+                                     && mixedLengths;
+        const bool replayMatches = needMatch && !negated && matchesTogether;
+        // Counting threads counts the attempts failing, and matching, when each attempt has one
+        // thread. Counting each state's threads evaluates the conditions of its incoming
+        // transitions whether or not a thread takes them, so a sequence match item would run
+        // again or without its thread (IEEE 1800-2023 16.10); such a property keeps the state
+        // bits.
         const bool exactCounts
-            = replayFails && !parts.hasImplication && oneThreadPerAttempt(seqBodyp, true)
-              && !seqBodyp->exists([](const AstExprStmt* itemp) { return itemp->isMatchItem(); });
+            = !parts.hasImplication && oneThreadPerAttempt(seqBodyp, true)
+              && !seqBodyp->exists([](const AstExprStmt* itemp) { return itemp->isMatchItem(); })
+              && (replayFails
+                  || ((countPasses || replaySuccesses || replayMatches) && matchesTogether));
         const auto signals = m_loweringp->lower(
             assertp, graph, senTreep, result.finalCondp, disableExprp, replayFails || countPasses,
             replayFails || countPasses, trackAntecedentEnd, replaySuccesses, countPasses,
             exactCounts, exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr,
+            exactCounts && matchesTogether && (replaySuccesses || replayMatches),
             coverp && !isCoverSeq && !negated && v3Global.opt.coverageUser());
         AstNodeExpr* matchExprp = nullptr;
-        AstNodeExpr* const outputExprp
-            = m_loweringp->assembleResult(assertp, negated, result.finalCondp, signals,
-                                          needMatch && !countPasses ? &matchExprp : nullptr);
+        AstNodeExpr* const outputExprp = m_loweringp->assembleResult(
+            assertp, negated, result.finalCondp, signals,
+            needMatch && !countPasses && !replayMatches ? &matchExprp : nullptr);
         if (result.finalCondp && !result.finalCondp->backp()) pushDeletep(result.finalCondp);
         // The pass action is gated by a copy of the match, see withoutMatchItemsp
         if (matchExprp) matchExprp = withoutMatchItemsp(matchExprp);
@@ -5061,9 +5129,19 @@ class AssertNfaVisitor final : public VNVisitor {
         if (threadFailCountp && !replayFails) {
             VL_DO_DANGLING(threadFailCountp->deleteTree(), threadFailCountp);
         }
+        // The passes counted per attempt: rejections of a negated property's operand, or the
+        // attempts matching together
+        AstNodeExpr* matchThreadCountp = signals.matchThreadCountp;
+        AstNodeExpr* passCountp = signals.rejectCountp;
+        if (replayMatches) {
+            UASSERT_OBJ(!passCountp, assertp, "Pass counts of a negated and a matching property");
+            passCountp = matchThreadCountp;
+        } else if (matchThreadCountp) {
+            VL_DO_DANGLING(pushDeletep(matchThreadCountp), matchThreadCountp);
+        }
         finishDirective(assertp, parts, senTreep, outputExprp, matchExprp, signals.matchCountp,
                         replayFails ? threadFailCountp : signals.successCountp,
-                        signals.antecedentEndCountp, signals.rejectCountp, antecedentRejectp);
+                        signals.antecedentEndCountp, passCountp, antecedentRejectp);
         VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
 
         UINFO(4, "NFA converted assertion at " << flp << endl);
