@@ -71,7 +71,7 @@ static constexpr const char* BASIC_RANDOMIZE_ELEMS_FAIL_PRE_FUNC_NAME = "__VBasi
 // Parts of randomize(): its pre-randomize phase, then the rest, which ends with its
 // post-randomize phase if successful (IEEE 1800-2023 18.6)
 static constexpr const char* PRE_RANDOMIZE_TASK_NAME = "__VrandPre";
-static constexpr const char* NOPRE_RANDOMIZE_FUNC_NAME = "__VrandNoPre";
+static constexpr const char* NOCB_RANDOMIZE_FUNC_NAME = "__VrandNoCb";
 static constexpr const char* POST_RANDOMIZE_TASK_NAME = "__VrandPost";
 
 // ######################################################################
@@ -2281,7 +2281,7 @@ class RandomizeVisitor final : public VNVisitor {
         m_randomizeNullFuncs;  // randomize(null) methods, body added after lowering
     NullPhase m_nullPhase = NullPhase::NONE;  // Building a randomize(null) method
     // Part of randomize() called on the objects of an array of handles not in a cycle
-    enum class ElemPart : uint8_t { WHOLE, PRE, NOPRE, POST };
+    enum class ElemPart : uint8_t { WHOLE, PRE, NOCB, POST };
     ElemPart m_elemPart = ElemPart::WHOLE;  // Part called on the objects, see populatePhaseTask
     std::unordered_set<const AstClass*> m_globalOwnerClassps;  // Classes solving sub-objects
     RandModeVars m_modeVars;  // Static rand_mode/constraint_mode state vars per class
@@ -2869,9 +2869,9 @@ class RandomizeVisitor final : public VNVisitor {
             AstFunc* const memberFuncp
                 = m_nullPhase != NullPhase::NONE
                       ? getCreateRandomizeNullFunc(classRefDtp->classp(), m_nullPhase)
-                  : m_elemPart == ElemPart::NOPRE
+                  : m_elemPart == ElemPart::NOCB
                       ? V3Randomize::newRandomizeFunc(m_memberMap, classRefDtp->classp(),
-                                                      NOPRE_RANDOMIZE_FUNC_NAME)
+                                                      NOCB_RANDOMIZE_FUNC_NAME)
                       : V3Randomize::newRandomizeFunc(m_memberMap, classRefDtp->classp());
             AstMethodCall* const callp = new AstMethodCall{fl, exprp, memberFuncp->name()};
             callp->taskp(memberFuncp);
@@ -3052,11 +3052,9 @@ class RandomizeVisitor final : public VNVisitor {
         FileLine* const fl = classp->fileline();
         classp->foreachMember([&](AstClass* ownerClassp, AstVar* memberVarp) {
             if (!memberVarp->rand().isRandomizable()) return;
-            // The objects of an array of handles too, unless of a cycle; their own
-            // __VrandNoPre runs their post-randomize phase, unless the solve sets them
+            // The objects of an array of handles too, unless of a cycle
             if (RandomizeUtil::isClassHandleArray(memberVarp)) {
                 if (classInRandHandleCycle(handleArrayClassp(memberVarp))) return;
-                if (!pre && !memberVarp->user3()) return;
                 VL_RESTORER(m_elemPart);
                 m_elemPart = pre ? ElemPart::PRE : ElemPart::POST;
                 AstNodeStmt* const stmtp = newMemberRandStmtsp(
@@ -3081,8 +3079,9 @@ class RandomizeVisitor final : public VNVisitor {
                 m_solverp->startClass(classp);
             }
 
-            // One randomized by its own __VrandNoPre runs its post-randomize phase there
-            if (!pre && !memberVarp->globalConstrained()) return;
+            // Also one randomized by its own __VrandNoCb, which runs no callback, so its
+            // post_randomize() is called only once the whole call succeeded (IEEE 1800-2023
+            // 18.6.3)
             // Called on the object, so the phase of its dynamic type runs
             AstTask* const memberPhasep = getCreatePhaseTask(
                 memberClassp, pre ? PRE_RANDOMIZE_TASK_NAME : POST_RANDOMIZE_TASK_NAME);
@@ -3480,7 +3479,7 @@ class RandomizeVisitor final : public VNVisitor {
                 } else if (!inCycle) {
                     // Its pre-randomize phase is called by this object's
                     addBasicMemberCall(objsFuncp, nodep, classp, memberVarp, inCycle,
-                                       NOPRE_RANDOMIZE_FUNC_NAME);
+                                       NOCB_RANDOMIZE_FUNC_NAME);
                 } else {
                     addBasicMemberCall(objsFuncp, nodep, classp, memberVarp, inCycle, "randomize");
                     // The pre_randomize of the object and of its rand objects, as randomize()
@@ -3507,7 +3506,7 @@ class RandomizeVisitor final : public VNVisitor {
                         new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), prep, false}));
                 }
                 VL_RESTORER(m_elemPart);
-                if (handles && !inCycle) m_elemPart = ElemPart::NOPRE;
+                if (handles && !inCycle) m_elemPart = ElemPart::NOCB;
                 AstVarRef* const refp
                     = new AstVarRef{memberVarp->fileline(), classp, memberVarp, VAccess::WRITE};
                 AstFunc* const funcp = handles ? elemsFuncp : varsFuncp;
@@ -3990,9 +3989,12 @@ class RandomizeVisitor final : public VNVisitor {
         if (!nodep->isInterfaceClass()) nodep->baseMostClassp()->needRNG(true);
 
         FileLine* const fl = nodep->fileline();
+        // randomize() calls the pre-randomize phase, __VrandNoCb, the rest but the callbacks,
+        // which a rand class member randomized by its own randomization also runs, then, if
+        // all succeeded, the post-randomize phase
         AstFunc* const userRandp = V3Randomize::newRandomizeFunc(m_memberMap, nodep);
         AstFunc* const randomizep
-            = V3Randomize::newRandomizeFunc(m_memberMap, nodep, NOPRE_RANDOMIZE_FUNC_NAME);
+            = V3Randomize::newRandomizeFunc(m_memberMap, nodep, NOCB_RANDOMIZE_FUNC_NAME);
         AstVar* const fvarp = randomizep->fvarp();
         AstVar* const randModeVarp = RandModeVars::randModeVarp(nodep);
         // An object of a cycle of rand handles is flagged while randomized, so it is not
@@ -4005,6 +4007,12 @@ class RandomizeVisitor final : public VNVisitor {
                                             randomizingVarp, VAccess::WRITE},
                               new AstConst{fl, AstConst::BitTrue{}}});
         }
+        const bool split = basicRandSplit(nodep);
+        // Members randomized after the solve may fail then, so the random variables are copied
+        // first, assigned back if the call fails (18.6.3)
+        AstNodeStmt* const restoresp = split && !nodep->isInterfaceClass()
+                                           ? m_solverp->addFailureRestore(randomizep, nodep)
+                                           : nullptr;
         // The phases call pre/post_randomize of the object and its rand class members
         // (IEEE 1800-2023 18.6)
         AstTask* const preTaskp = getCreatePhaseTask(nodep, PRE_RANDOMIZE_TASK_NAME);
@@ -4020,7 +4028,6 @@ class RandomizeVisitor final : public VNVisitor {
         // The solve of a global constraint owner also sets leaves of its member objects, so
         // their own randomization runs before it and its registrations, and its solution is kept
         // over their basic randomization. Other classes randomize them after a successful solve.
-        const bool split = basicRandSplit(nodep);
         const bool globalOwner = m_globalOwnerClassps.count(nodep);
         const bool objsBeforeSolve = split && globalOwner;
         if (objsBeforeSolve) {
@@ -4059,8 +4066,9 @@ class RandomizeVisitor final : public VNVisitor {
                 ? V3Randomize::newRandomizeFunc(m_memberMap, nodep, BASIC_RANDOMIZE_VARS_FUNC_NAME)
                 : basicRandomizep,
             afterp, failp);
+        if (restoresp) randomizep->addStmtsp(restoresp);
 
-        addPostRandomizeStmts(randomizep, (new AstTaskRef{fl, postTaskp})->makeStmt());
+        addPostRandomizeStmts(userRandp, (new AstTaskRef{fl, postTaskp})->makeStmt());
         if (randomizingVarp) {
             randomizep->addStmtsp(
                 new AstAssign{fl,
@@ -4382,6 +4390,11 @@ class RandomizeVisitor final : public VNVisitor {
         // 18.6)
         randomizeFuncp->addStmtsp(
             newThisTaskCall(classp, getCreatePhaseTask(classp, PRE_RANDOMIZE_TASK_NAME)));
+        // As for randomize(), also through a base-class handle
+        const bool split = basicRandSplit(classp);
+        AstNodeStmt* const restoresp = split && !classp->isInterfaceClass()
+                                           ? m_solverp->addFailureRestore(randomizeFuncp, classp)
+                                           : nullptr;
 
         // Detach the expression and prepare variable copies
         // (randomize() in class method is a FuncRef, not a MethodCall)
@@ -4392,7 +4405,6 @@ class RandomizeVisitor final : public VNVisitor {
 
         // The member objects are randomized after a successful solve, see addBasicRandomizeBody;
         // the array elements, with a solve of array sizes, before the final solve
-        const bool split = basicRandSplit(classp);
         FileLine* const fl = nodep->fileline();
         AstVar* const fvarp = randomizeFuncp->fvarp();
         AstNodeStmt* const basicp = new AstAssign{
@@ -4414,6 +4426,7 @@ class RandomizeVisitor final : public VNVisitor {
             split ? newBasicPartCallp(fl, classp, BASIC_RANDOMIZE_OBJS_FUNC_NAME, fvarp) : nullptr,
             split ? newBasicPartCallp(fl, classp, BASIC_RANDOMIZE_OBJS_PRE_FUNC_NAME, fvarp)
                   : nullptr);
+        if (restoresp) randomizeFuncp->addStmtsp(restoresp);
 
         addPostRandomizeStmts(
             randomizeFuncp,
