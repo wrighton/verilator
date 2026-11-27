@@ -4567,8 +4567,11 @@ class SolverSmtLowering final : public V3SolverLowering {
     // iterative constraints (IEEE 1800-2023 18.5.8.1), but sizes the elements cannot be
     // solved with no longer make a satisfiable randomize() fail. Only the last try reports
     // why it failed.
-    void addSizeRetries(AstFunc* const randomizep, AstVar* const genp, AstVar* const sizeOkVarp,
-                        AstVar* const finalOkVarp, const VInsertionSet<AstVar*>& sizeArrayVars,
+    // stateGenp is the randomizer the setup copies genp from, if any, else genp, so holds what
+    // the retries need kept across it
+    void addSizeRetries(AstFunc* const randomizep, AstVar* const genp, AstVar* const stateGenp,
+                        AstVar* const sizeOkVarp, AstVar* const finalOkVarp,
+                        const VInsertionSet<AstVar*>& sizeArrayVars,
                         const VInsertionSet<AstVar*>& pinnedArrays,
                         const MemberArrays& memberArrays, const std::set<std::string>& writtenVars,
                         AstNodeStmt* const setupFirstp, AstNodeStmt* const sizeSolvep,
@@ -4585,7 +4588,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         // A try between the first and the last does not report, the others do
         const auto quietp = [&]() {
             return newGenTextCallp(
-                genp, ".quiet_unsat(",
+                stateGenp, ".quiet_unsat(",
                 new AstLogAnd{fl, new AstLtS{fl, new AstConst{fl, 0}, retryRefp(VAccess::READ)},
                               new AstLtS{fl, retryRefp(VAccess::READ), retriesp()}});
         };
@@ -4616,21 +4619,22 @@ class SolverSmtLowering final : public V3SolverLowering {
         const auto excludep = [&](AstVar* const arrVarp, const AstMemberRef* const mselp) {
             AstVar* const sizeVarp = sizeVarOf(arrVarp, mselp);
             AstCExpr* const callp = newGenTextExprp(
-                genp, ".exclude_size(\"" + siblingSmtName(sizeVarp, mselp) + "\", ");
+                stateGenp, ".exclude_size(\"" + siblingSmtName(sizeVarp, mselp) + "\", ");
             callp->add(newSiblingRefp(fl, sizeVarp, mselp, VAccess::READ));
             callp->add(")");
             loopp->addStmtsp(new AstStmtExpr{fl, callp});
         };
         for (AstVar* const arrVarp : pinnedArrays) excludep(arrVarp, nullptr);
         for (const auto& entry : memberArrays) excludep(entry.second->varp(), entry.second);
-        loopp->addStmtsp(newGenTextCallp(genp, ".end_size_exclusion()"));
+        loopp->addStmtsp(newGenTextCallp(stateGenp, ".end_size_exclusion()"));
         loopp->addStmtsp(restoresp->cloneTree(true));
         // The arrays assigned back hold their elements elsewhere, so the solver is given them
         // again, as after a resize
-        for (AstVar* const varp : sizeArrayVars) addArrayElemRefresh(fl, varp, randomizep, genp);
+        for (AstVar* const vp : sizeArrayVars) addArrayElemRefresh(fl, vp, randomizep, stateGenp);
         const auto refreshMember = [&](const MemberArrays::value_type& pathMsel) {
             if (!writtenVars.count(pathMsel.first)) return;
-            addArrayElemRefresh(fl, pathMsel.second->varp(), randomizep, genp, pathMsel.second);
+            addArrayElemRefresh(fl, pathMsel.second->varp(), randomizep, stateGenp,
+                                pathMsel.second);
         };
         for (const auto& pathMsel : memberArrays) refreshMember(pathMsel);
         if (AstNode* const refreshp = loopp->nextp()) {
@@ -4654,7 +4658,10 @@ class SolverSmtLowering final : public V3SolverLowering {
                               new AstLogNot{fl, newGenTextExprp(genp, ".unsat()")}}},
             newGenTextCallp(genp, ".report_retry_failure()")});
         randomizep->addStmtsp(newGenTextCallp(genp, ".quiet_unsat(false)"));
-        randomizep->addStmtsp(newGenTextCallp(genp, ".clear_size_exclusions()"));
+        if (stateGenp != genp) {
+            randomizep->addStmtsp(newGenTextCallp(stateGenp, ".quiet_unsat(false)"));
+        }
+        randomizep->addStmtsp(newGenTextCallp(stateGenp, ".clear_size_exclusions()"));
     }
     AstVar* addSizeSolvep(AstFunc* const randomizep, AstVar* const genp) {
         FileLine* const fl = randomizep->fileline();
@@ -4998,9 +5005,9 @@ public:
                 // Retrying needs the variables back as they were
                 if (restoresp) {
                     if (!impureConstraintCalls(nodep)) {
-                        addSizeRetries(randomizep, genp, sizeOkVarp, finalOkVarp, sizeArrayVars,
-                                       pinnedArrays, memberArrays, writtenVars, setupFirstp,
-                                       sizeSolvep, restoresp);
+                        addSizeRetries(randomizep, genp, genp, sizeOkVarp, finalOkVarp,
+                                       sizeArrayVars, pinnedArrays, memberArrays, writtenVars,
+                                       setupFirstp, sizeSolvep, restoresp);
                     }
                     randomizep->addStmtsp(new AstIf{
                         fl,
@@ -5069,8 +5076,19 @@ public:
             AstFunc* const mainRandomizep
                 = VN_CAST(m_memberMap.findMember(classp, "randomize"), Func);
             if (mainRandomizep) copyVariableRegistrations(mainRandomizep, randomizeFuncp);
+        }
+        // The setup starts after this, and a size retry runs it again, so it starts without the
+        // constraints of an earlier try
+        AstNodeStmt* const beforeSetupp = lastStmtp(randomizeFuncp);
+        if (classGenp) {
             randomizeFuncp->addStmtsp(
                 implementConstraintsClear(randomizeFuncp->fileline(), classGenp));
+        } else {
+            AstCMethodHard* const clearp = new AstCMethodHard{
+                nodep->fileline(), new AstVarRef{nodep->fileline(), localGenp, VAccess::READWRITE},
+                VCMethod::RANDOMIZER_CLEARCONSTRAINTS};
+            clearp->dtypeSetVoid();
+            randomizeFuncp->addStmtsp(clearp->makeStmt());
         }
 
         randomizeFuncp->addDeclsp(localGenp);
@@ -5206,6 +5224,9 @@ public:
         // mutation, in case a size phase (below) needs to re-lower it a second time
         // against post-resize arrays.
         AstBegin* const capturedClonep = holderp->cloneTree(false);
+        // A function that is not pure the with-block calls would be called again on each retry
+        // of the size solve, so then the sizes are not retried (see impureConstraintCalls)
+        const bool withImpureCalls = hasImpureCalls(capturedClonep);
 
         // Arrays that gain a size var from THIS with-block's own inline .size()==expr
         // constraint (as opposed to a class-level one) and are also referenced by a
@@ -5242,7 +5263,15 @@ public:
         if (needsSizePhase) {
             // The size solve writes the variables, and the resize changes the arrays, before
             // the call can still fail
+            AstNodeStmt* const setupFirstp
+                = beforeSetupp ? VN_AS(beforeSetupp->nextp(), NodeStmt) : randomizeFuncp->stmtsp();
+            AstNodeStmt* const beforep = lastStmtp(randomizeFuncp);
             AstNodeStmt* const restoresp = addFailureRestore(randomizeFuncp, classp);
+            // Copied before the setup, which a retry runs again
+            if (setupFirstp && beforep->nextp()) {
+                setupFirstp->addHereThisAsNext(
+                    VN_AS(beforep->nextp()->unlinkFrBackWithNext(), NodeStmt));
+            }
             AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
                                                    classp->findBasicDType(VBasicDTypeKwd::BIT)};
             finalOkVarp->funcLocal(true);
@@ -5250,6 +5279,7 @@ public:
 
             // First pass: solve to determine sizes
             AstVar* const sizeOkVarp = addSizeSolvep(randomizeFuncp, localGenp);
+            AstNodeStmt* const sizeSolvep = lastStmtp(randomizeFuncp);
 
             // Resize constrained arrays before rebuilding constraints: both any
             // class-wide resize task (class-level size constraints) and this
@@ -5404,6 +5434,13 @@ public:
             AstCExpr* const solverCall2p = newSolverCallp(localGenp);
             randomizeFuncp->addStmtsp(
                 new AstAssign{fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE}, solverCall2p});
+            // Retrying needs the variables back as they were. The setup copies localGenp from
+            // the class randomizer, which so holds what the retries keep.
+            if (restoresp && setupFirstp && !withImpureCalls && !impureConstraintCalls(classp)) {
+                addSizeRetries(randomizeFuncp, localGenp, classGenp ? classGenp : localGenp,
+                               sizeOkVarp, finalOkVarp, allSizeArrays, sizedArrays, memberArrays,
+                               classWrittenVars, setupFirstp, sizeSolvep, restoresp);
+            }
 
             randomizeFuncp->addStmtsp(new AstAssign{
                 fl, new AstVarRef{fl, retVarp, VAccess::WRITE},
