@@ -1452,14 +1452,16 @@ class AssertPastSplitVisitor final : public VNVisitor {
     // Operands below another node, such as a function argument, belong to the expression above
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
+    void replaceSplit(AstPast* pastp, AstNodeExpr* splitp) {
+        pastp->replaceWith(splitp);
+        VL_DO_DANGLING(pushDeletep(pastp), pastp);
+    }
+
     // CONSTRUCTORS
     explicit AssertPastSplitVisitor(AstPast* pastp)
         : m_pastp{pastp} {
         iterate(pastp->exprp());
-        for (auto& splitPast : m_splitPastps) {
-            splitPast.first->replaceWith(splitPast.second);
-            VL_DO_DANGLING(pushDeletep(splitPast.first), splitPast.first);
-        }
+        for (const auto& entry : m_splitPastps) replaceSplit(entry.first, entry.second);
         if (m_operands.front().automatic) m_splitp = pastp->exprp()->unlinkFrBack();
     }
 
