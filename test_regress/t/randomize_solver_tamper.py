@@ -515,8 +515,9 @@ for line in proc.stdout:
     if mode in STATUS_MODES:
         counted = is_status
     elif mode in REPLY_MODES:
-        # Only a first line opens a reply; a wrapped continuation is not a new one
-        counted = at_reply_start and line.startswith("(")
+        # Only a first line opens a reply; a wrapped continuation is not a new one. The
+        # solver's name, asked once as it starts, is not counted.
+        counted = at_reply_start and line.startswith("(") and not line.startswith("(:name ")
     elif mode in SELECT_MODES:
         counted = at_reply_start and line.startswith("(((select")
     elif mode in CELL_MODES:

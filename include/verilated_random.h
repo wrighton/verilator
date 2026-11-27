@@ -512,6 +512,11 @@ class VlRandomizer VL_NOT_FINAL {
     void emitAsserts(std::ostream& os, const std::vector<std::string>& extras, bool named) const;
     // A flat solve's logic, variables and constraints, and randc exclusions
     void emitFlat(std::ostream& os, const std::vector<std::string>& uniqueExprs) const;
+    // Whether the constraints have constant arrays, outside the restricted logics
+    bool usesConstArrays() const;
+    // (set-logic logicp), after any option the solver needs for constant arrays, if
+    // constArrays
+    static void emitSetLogic(std::ostream& os, const char* logicp, bool constArrays);
     bool nextFlat(VlRNG& rngr, VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
 
     // --- UniGen2 (a near-uniform constrained randomization sampler) fields ---
