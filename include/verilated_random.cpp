@@ -53,6 +53,7 @@ static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to dro
 static constexpr int diversitySlotSamples = 4;  // Elements checked for a part dropped for all
 static constexpr int diversitySlotShare = 2;  // Of checks left, 1/this for a part one by one
 static constexpr int diversitySlotFew = 128;  // Of its elements, 1/this conflicting one by one
+static constexpr int freeDropRounds = 16;  // Unsat cores dropped from free elements, at most
 static constexpr int diversityCoreFew = 4;  // Terms of an unsat core picked from as it is
 // Elements past which a model's array is read whole, one value, rather than by element
 static constexpr int modelWholeRead = 64;
@@ -1566,6 +1567,83 @@ static std::string randcElementTerm(const VlRandomVar& var, int j) {
     return termOs.str();
 }
 
+// With the solver sampler, a variable that no enabled constraint names, as one whose constraints
+// are off (IEEE 1800-2023 18.9), would get the value the solver picks for a free variable, which
+// its seed need not randomize (z3 gives 0). Its values are drawn here instead, as those of a
+// variable in no constraint are, see checkFree. Not those of randc, rand_mode off and array size
+// variables, which keep their own rules, nor of an enum, whose values are constrained.
+VlRandomizer::FreeElements VlRandomizer::freeElements() const {
+    FreeElements elements;
+    if (!solverSamples() || m_checkOnly) return elements;
+    std::unordered_set<std::string> named{m_constraintVarNames.begin(),
+                                          m_constraintVarNames.end()};
+    named.insert(m_softVarNames.begin(), m_softVarNames.end());
+    named.insert(m_sizeVars.begin(), m_sizeVars.end());
+    named.insert(m_randcVarNames.begin(), m_randcVarNames.end());
+    for (const auto& domain : m_enumDomains) named.insert(domain.first);
+    for (const auto& group : m_uniqueArrays) {
+        named.insert(group.second.begin(), group.second.end());
+    }
+    for (const auto& pair : m_solveBefore) {
+        named.insert(pair.first.name);
+        named.insert(pair.second.name);
+    }
+    const auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
+    for (const auto& var : m_vars) {
+        if (named.count(var.first) || isFrozenVar(var.first, *var.second)) continue;
+        if (var.second->dimension() > 0) var.second->setArrayInfo(arrVarsp);
+        for (int j = 0; j < var.second->totalWidth() / var.second->width(); ++j) {
+            elements.emplace_back(var.second.get(), j);
+        }
+    }
+    return elements;
+}
+
+// Check the constraints asserted, each of the elements tied to a random value by an assumption
+// literal. The constraints decide still: elements whose values conflict with them, as members
+// of objects in an array a constraint names by the array, are left to the solver, for a few
+// unsat cores at most, as each check names every element left. The session must produce unsat
+// assumptions.
+VlSolverStatus VlRandomizer::checkFree(VlRNG& rngr, VlSolverSession& sess,
+                                       const FreeElements& elements) VL_REQUIRES(sess.m_mutex) {
+    std::iostream& os = sess.os();
+    for (size_t k = 0; k < elements.size(); ++k) {
+        const VlRandomVar& var = *elements[k].first;
+        std::string value(var.width(), '0');
+        IData bits = 0;
+        for (int b = 0; b < var.width(); ++b) {
+            if (!(b & VL_SIZEBITS_I)) bits = VL_RANDOM_RNG_I(rngr);
+            if (VL_BITISSET_I(bits, b & VL_SIZEBITS_I)) value[var.width() - 1 - b] = '1';
+        }
+        os << "(declare-fun __Va" << k << " () Bool)\n";
+        os << "(assert (= __Va" << k << " (= ";
+        var.emitElement(os, elements[k].second);
+        os << " #b" << value << ")))\n";
+    }
+    std::vector<bool> dropped(elements.size(), false);
+    for (int round = 0; round < freeDropRounds; ++round) {
+        std::ostringstream assumed;
+        for (size_t k = 0; k < elements.size(); ++k) {
+            if (!dropped[k]) assumed << " __Va" << k;
+        }
+        if (assumed.str().empty()) break;
+        os << "(check-sat-assuming (" << assumed.str() << "))\n";
+        const VlSolverStatus status = sess.readStatus();
+        if (status != VlSolverStatus::UNSAT) return status;
+        // None when the constraints conflict without the values
+        bool more = false;
+        for (const int k : readUnsatAssumptions(sess)) {
+            if (static_cast<size_t>(k) < elements.size() && !dropped[k]) {
+                dropped[k] = true;
+                more = true;
+            }
+        }
+        if (!more) break;
+    }
+    os << "(check-sat)\n";
+    return sess.readStatus();
+}
+
 void VlRandomizer::emitRandcExclusions(std::ostream& os) const {
     for (const auto& name : m_randcVarNames) {
         const auto varIt = m_vars.find(name);
@@ -2768,18 +2846,19 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
     const bool hasRandc = !m_randcVarNames.empty();
     decltype(m_randcUsedValues) usedValues;  // The history cleared for the retry
     for (int attempt = 0; attempt < (hasRandc ? 2 : 1); ++attempt) {
+        const FreeElements free = freeElements();
         os << "(set-option :produce-models true)\n";
-        if (spreads()) {
-            // Lets the diversity pins learn which assumptions conflict.
+        if (spreads() || !free.empty()) {
+            // Lets the diversity pins, or checkFree, learn which assumptions conflict.
             os << "(set-option :produce-unsat-assumptions true)\n";
-        } else if (!m_checkOnly) {
+        }
+        if (!spreads() && !m_checkOnly) {
             // Check-only results are not random, so leave the random state alone
             emitSolverSeed(os, rngr);
         }
         emitFlat(os, uniqueExprs);
         if (relaxSoftConstraints(sess) != VlSolverStatus::SAT) return false;
-        os << "(check-sat)\n";
-        const VlSolverStatus status = sess.readStatus();
+        const VlSolverStatus status = checkFree(rngr, sess, free);
 
         if (status != VlSolverStatus::SAT) {
             if (status != VlSolverStatus::UNSAT) return false;
@@ -4991,9 +5070,12 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
         // A kept base with the previous layer's sampled pins has a model by construction
         const bool reused = keepBase;
 
+        // The final phase solves the variables outside every layer too
+        const FreeElements free = isFinalPhase ? freeElements() : FreeElements{};
         if (!keepBase) {
             os << "(set-option :produce-models true)\n";
             if (!spreads()) {
+                if (!free.empty()) os << "(set-option :produce-unsat-assumptions true)\n";
                 emitSolverSeed(os, rngr);
             } else {
                 // Every phase's variables are spread (solvePhaseValues, solveDiversity)
@@ -5020,8 +5102,7 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
 
         // Initial check-sat WITHOUT diversity (guaranteed sat if constraints are consistent)
         if (!reused) {
-            os << "(check-sat)\n";
-            const VlSolverStatus status = sess.readStatus();
+            const VlSolverStatus status = checkFree(rngr, sess, free);
             if (status != VlSolverStatus::SAT) {
                 // Only exhausted randc values are worth a retry; a lost solver is not
                 if (status == VlSolverStatus::UNSAT) exhaustedr = !m_randcUsedValues.empty();
