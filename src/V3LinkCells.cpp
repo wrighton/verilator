@@ -1236,9 +1236,10 @@ class LinkCellsVisitor final : public VNVisitor {
                                         << " (IEEE 1800-2023 25.3)");
         }
         // A checker body can instantiate only checkers (IEEE 1800-2023 17.2)
-        const AstModule* const modp = VN_CAST(m_modp, Module);
+        const AstModule* const parentModp = VN_CAST(m_modp, Module);
         const AstModule* const cellModp = VN_CAST(nodep->modp(), Module);
-        if (modp && modp->isChecker() && nodep->modp() && !(cellModp && cellModp->isChecker())) {
+        if (parentModp && parentModp->isChecker() && nodep->modp()
+            && !(cellModp && cellModp->isChecker())) {
             nodep->v3error("Instance of " << nodep->modp()->verilogKwd() << " "
                                           << nodep->modp()->prettyNameQ()
                                           << " in a checker, which can instantiate only checkers"
