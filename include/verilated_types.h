@@ -934,6 +934,7 @@ IData vl_with_extreme_index(const T_Array& array, IData size, T_Func with_func, 
 #define VL_REF_SLOTS 0
 #endif
 
+class VlRefIndex;
 class VlRefList;
 
 // What keeps outdated elements alive; deleted with the last pin referring to it
@@ -949,7 +950,10 @@ class VlRefPinBase VL_NOT_FINAL {
     void* const m_elemp;  // Element passed by reference
     const void* const m_opsp;  // Functions of the container for elements passed by reference
     VlRefList* m_listp;  // Container's list, nullptr once outdated
-    VlRefPinBase* m_nextp;  // Next pin of the list
+    VlRefPinBase* m_prevp = nullptr;  // Previous pin of the list, nullptr if the first
+    VlRefPinBase* m_nextp = nullptr;  // Next pin of the list
+    VlRefPinBase* m_prevSamep = nullptr;  // Previous pin of the same element, while indexed
+    VlRefPinBase* m_nextSamep = nullptr;  // Next pin of the same element, while indexed
     VlRefKept* m_keptp = nullptr;  // What keeps the element alive, once outdated
     void release() VL_MT_UNSAFE;
 
@@ -960,7 +964,6 @@ protected:
         : m_elemp{elemp}
         , m_opsp{nullptr}
         , m_listp{nullptr}
-        , m_nextp{nullptr}
         , m_keptp{keptp} {
         ++keptp->m_pins;
     }
@@ -1009,7 +1012,6 @@ public:
 // Slot of an element removed from an end of a queue while pinned
 class VlRefSlot VL_NOT_FINAL : public VlRefKept {
     friend class VlRefList;
-    VlRefSlot* m_nextp = nullptr;  // Next slot of the list
     VlRefList* m_listp = nullptr;  // List of the storage holding the node, while it does
     VlRefNode* m_nodep = nullptr;  // Node holding the slot, once the storage deallocated it
     bool m_atEnd = false;  // First in a node that the storage keeps beyond its last element
@@ -1044,8 +1046,39 @@ public:
 class VlRefList final {
     friend class VlRefPinBase;
     friend class VlRefSlot;
+    // Pins found by walking the list; with more, the pins of each element are indexed
+    static constexpr uint32_t MAX_WALKED_PINS = 8;
     VlRefPinBase* m_pinsp = nullptr;  // Most recent pin
-    VlRefSlot* m_slotsp = nullptr;  // Slots in nodes of the container's storage
+    VlRefIndex* m_indexp = nullptr;  // Pins of each element, while indexed, and slots by address
+    uint32_t m_pins = 0;  // Number of pins
+    uint32_t m_slots = 0;  // Number of slots in nodes of the container's storage
+
+    void link(VlRefPinBase* pinp) VL_MT_UNSAFE {
+        pinp->m_nextp = m_pinsp;
+        if (m_pinsp) m_pinsp->m_prevp = pinp;
+        m_pinsp = pinp;
+        if (VL_UNLIKELY(++m_pins > MAX_WALKED_PINS)) indexPin(pinp);
+    }
+    void unlink(VlRefPinBase* pinp) VL_MT_UNSAFE {
+        if (VL_UNLIKELY(m_pins > MAX_WALKED_PINS)) unindexPin(pinp);
+        detach(pinp);
+    }
+    // Remove a pin from the list, leaving the index
+    void detach(VlRefPinBase* pinp) VL_MT_UNSAFE {
+        if (pinp->m_prevp) {
+            pinp->m_prevp->m_nextp = pinp->m_nextp;
+        } else {
+            m_pinsp = pinp->m_nextp;
+        }
+        if (pinp->m_nextp) pinp->m_nextp->m_prevp = pinp->m_prevp;
+        --m_pins;
+    }
+    void indexPin(VlRefPinBase* pinp) VL_MT_UNSAFE;
+    void unindexPin(VlRefPinBase* pinp) VL_MT_UNSAFE;
+    bool indexed(const void* elemp) const VL_MT_UNSAFE;
+    VlRefIndex& index() VL_MT_UNSAFE;
+    void removeSlot(VlRefSlot* slotp) VL_MT_UNSAFE;
+    const void* slotsOpsp() const VL_MT_UNSAFE;
 
 public:
     VlRefList() = default;
@@ -1056,10 +1089,11 @@ public:
     ~VlRefList();
     bool any() const { return hasPins() | hasSlots(); }
     bool hasPins() const { return m_pinsp; }
-    bool hasSlots() const { return m_slotsp; }
+    bool hasSlots() const { return m_slots; }
     // The container functions of the pins or slots, if any()
-    const void* opsp() const { return m_pinsp ? m_pinsp->m_opsp : m_slotsp->m_opsp; }
+    const void* opsp() const { return m_pinsp ? m_pinsp->m_opsp : slotsOpsp(); }
     bool has(const void* elemp) const {
+        if (VL_UNLIKELY(m_pins > MAX_WALKED_PINS)) return indexed(elemp);
         for (const VlRefPinBase* pinp = m_pinsp; pinp; pinp = pinp->m_nextp) {
             if (pinp->m_elemp == elemp) return true;
         }
@@ -1080,16 +1114,13 @@ public:
 VL_ATTR_ALWINLINE VlRefPinBase::VlRefPinBase(VlRefList& list, void* elemp, const void* opsp)
     : m_elemp{elemp}
     , m_opsp{opsp}
-    , m_listp{&list}
-    , m_nextp{list.m_pinsp} {
-    list.m_pinsp = this;
+    , m_listp{&list} {
+    list.link(this);
 }
 
 VL_ATTR_ALWINLINE VlRefPinBase::~VlRefPinBase() {
     if (VL_LIKELY(m_listp)) {
-        VlRefPinBase** pinpp = &m_listp->m_pinsp;
-        while (*pinpp != this) pinpp = &(*pinpp)->m_nextp;
-        *pinpp = m_nextp;
+        m_listp->unlink(this);
     } else {
         release();
     }
@@ -1209,8 +1240,21 @@ private:
     static const RefOps s_refOps;
     const RefOps& refOps() const { return *static_cast<const RefOps*>(m_refs.opsp()); }
     void outdateRefs(bool keepContents) {
-        if (VL_UNLIKELY(m_refs.any())) refOps().outdate(*this, keepContents);
+        if (VL_UNLIKELY(m_refs.any())) refOutdating(keepContents);
     }
+    // Calls of the functions for elements passed by reference, not inlined into the operations
+    VL_ATTR_NOINLINE void refOutdating(bool keepContents) {
+        refOps().outdate(*this, keepContents);
+    }
+    VL_ATTR_NOINLINE void refPushing(const T_Value& value, bool front) {
+        refOps().push(*this, value, front);
+    }
+    VL_ATTR_NOINLINE T_Value refPopping(bool front) { return refOps().pop(*this, front); }
+    VL_ATTR_NOINLINE void refErasing(int32_t index) { refOps().erase(*this, index); }
+    VL_ATTR_NOINLINE void refInserting(int32_t index, const T_Value& value) {
+        refOps().insert(*this, index, value);
+    }
+    VL_ATTR_NOINLINE void refResizing(size_t size) { refOps().resize(*this, size); }
     // Keep the storage for the pins, outdating them, and leave a copy of it, or nothing
     static void refOutdate(VlQueue& q, bool keepContents) {
         if (!q.m_refs.hasPins()) {
@@ -1398,7 +1442,7 @@ public:
     // cppcheck-suppress uninitMemberVar // m_defaultValue isn't defaulted, caller must
     VlQueue() = default;
     ~VlQueue() {
-        if (VL_UNLIKELY(m_refs.hasPins())) refOps().outdate(*this, false);
+        if (VL_UNLIKELY(m_refs.hasPins())) refOutdating(false);
     }
     VlQueue(const VlQueue& rhs)
         : m_deque{rhs.m_deque, VlRefAlloc<T_Value>{&m_refs}}
@@ -1506,12 +1550,12 @@ public:
     // Clear array. Verilog: function void delete([input index])
     void clear() {
         // Also with only slots, as the deque may keep a node holding one for new elements
-        if (VL_UNLIKELY(m_refs.any())) refOps().outdate(*this, false);
+        if (VL_UNLIKELY(m_refs.any())) refOutdating(false);
         m_deque.clear();
     }
     void erase(int32_t index) {
         if (VL_UNLIKELY(index < 0 || index >= m_deque.size())) return;
-        if (VL_UNLIKELY(m_refs.hasPins())) return refOps().erase(*this, index);
+        if (VL_UNLIKELY(m_refs.hasPins())) return refErasing(index);
         m_deque.erase(m_deque.begin() + index);
     }
 
@@ -1535,7 +1579,7 @@ public:
     void renew_copy(size_t size, const VlUnpacked<T_UnpackedValue, N_UnpackedDepth>& rhs);
 
     void resize(size_t size) {
-        if (VL_UNLIKELY(m_refs.any())) return refOps().resize(*this, size);
+        if (VL_UNLIKELY(m_refs.any())) return refResizing(size);
         m_deque.resize(size, atDefault());
     }
     // Assign the elements of a range, as DPI does from a C layout copy
@@ -1548,13 +1592,13 @@ public:
 
     // function void q.push_front(value)
     void push_front(const T_Value& value) {
-        if (VL_UNLIKELY(m_refs.any())) return refOps().push(*this, value, true);
+        if (VL_UNLIKELY(m_refs.any())) return refPushing(value, true);
         m_deque.push_front(value);
         applyBound();
     }
     // function void q.push_back(value)
     void push_back(const T_Value& value) {
-        if (VL_UNLIKELY(m_refs.any())) return refOps().push(*this, value, false);
+        if (VL_UNLIKELY(m_refs.any())) return refPushing(value, false);
         m_deque.push_back(value);
         applyBound();
     }
@@ -1572,7 +1616,7 @@ public:
     // function value_t q.pop_front();
     T_Value pop_front() {
         if (m_deque.empty()) return m_defaultValue;
-        if (VL_UNLIKELY(m_refs.hasPins())) return refOps().pop(*this, true);
+        if (VL_UNLIKELY(m_refs.hasPins())) return refPopping(true);
         T_Value v = m_deque.front();
         m_deque.pop_front();
         return v;
@@ -1580,7 +1624,7 @@ public:
     // function value_t q.pop_back();
     T_Value pop_back() {
         if (m_deque.empty()) return m_defaultValue;
-        if (VL_UNLIKELY(m_refs.hasPins())) return refOps().pop(*this, false);
+        if (VL_UNLIKELY(m_refs.hasPins())) return refPopping(false);
         T_Value v = m_deque.back();
         m_deque.pop_back();
         return v;
@@ -1629,7 +1673,7 @@ public:
     // function void q.insert(index, value);
     void insert(int32_t index, const T_Value& value) {
         if (VL_UNLIKELY(index < 0 || index > m_deque.size())) return;
-        if (VL_UNLIKELY(m_refs.any())) return refOps().insert(*this, index, value);
+        if (VL_UNLIKELY(m_refs.any())) return refInserting(index, value);
         m_deque.insert(m_deque.begin() + index, value);
         applyBound();
     }
@@ -2102,8 +2146,13 @@ private:
     static const RefOps s_refOps;
     const RefOps& refOps() const { return *static_cast<const RefOps*>(m_refs.opsp()); }
     void outdateRefs(bool keepContents) {
-        if (VL_UNLIKELY(m_refs.hasPins())) refOps().outdate(*this, keepContents);
+        if (VL_UNLIKELY(m_refs.hasPins())) refOutdating(keepContents);
     }
+    // Calls of the functions for elements passed by reference, not inlined into the operations
+    VL_ATTR_NOINLINE void refOutdating(bool keepContents) {
+        refOps().outdate(*this, keepContents);
+    }
+    VL_ATTR_NOINLINE void refErasing(typename Map::iterator it) { refOps().erase(*this, it); }
     // Keep the storage for the pins, outdating them, and leave a copy of it, or nothing
     static void refOutdate(VlAssocArray& a, bool keepContents) {
         VlRefMap<Map>* const keptp = new VlRefMap<Map>{a.m_map};
@@ -2193,7 +2242,7 @@ public:
     void erase(const T_Key& index) {
         const auto it = m_map.find(index);
         if (it == m_map.end()) return;
-        if (VL_UNLIKELY(m_refs.hasPins())) return refOps().erase(*this, it);
+        if (VL_UNLIKELY(m_refs.hasPins())) return refErasing(it);
         m_map.erase(it);
     }
     // Return 0/1 if element exists. Verilog: function int exists(input index)
