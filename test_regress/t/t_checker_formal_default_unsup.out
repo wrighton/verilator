@@ -1,0 +1,14 @@
+-Info: t/t_checker_formal_default_unsup.v:16:7: Default sampled value of checker formal 'a' of instance 'udk' is that of its type, as its actual has no constant one (IEEE 1800-2023 16.5.1).
+                                              : ... note: In instance 't'
+   16 |   c_f udk (clk, dk);   
+      |       ^~~
+%Error-UNSUPPORTED: t/t_checker_formal_default_unsup.v:51:7: Unsupported: instance of checker 'c_f' with more than 16 other sets of default sampled values of its formals, such as 'a'.
+                                                           : ... note: In instance 't'
+   51 |   c_f u16 (clk, d16);
+      |       ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_checker_formal_default_unsup.v:52:7: Unsupported: instance of checker 'c_f' with more than 16 other sets of default sampled values of its formals, such as 'a'.
+                                                           : ... note: In instance 't'
+   52 |   c_f u17 (clk, d17);   
+      |       ^~~
+%Error: Exiting due to
