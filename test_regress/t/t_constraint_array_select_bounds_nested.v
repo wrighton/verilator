@@ -113,7 +113,7 @@ module t;
       end
     end
     begin
-      // A null handle on the path reads no size: the solve fails as without the check
+      // A null handle on the path is an evaluation error (IEEE 1800-2023 18.5.12)
       automatic Nested n = new;
       n.hh.b = null;
       randomize_result = n.randomize();
