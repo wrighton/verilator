@@ -513,6 +513,11 @@ class WidthVisitor final : public VNVisitor {
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstProperty* m_propertyp = nullptr;  // Current property
     bool m_underConcAssert = false;  // Visiting a concurrent assertion expression
+    const AstNodeSchema* m_assertDeclp = nullptr;  // Property or sequence declaration widthed
+    // Non-static class members referenced by each property or sequence declaration, reported
+    // where it is instanced
+    std::unordered_map<const AstNodeSchema*, std::vector<const AstNode*>> m_declMembers;
+    std::unordered_set<const AstNode*> m_reportedMembers;  // Members of declarations reported
     AstNodeModule* m_modep = nullptr;  // Current module
     const AstConstraint* m_constraintp = nullptr;  // Current constraint
     bool m_inConstraintExpr = false;  // Under a class or inline ('with') constraint expression
@@ -6423,11 +6428,34 @@ class WidthVisitor final : public VNVisitor {
         nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    // Report a non-static class member referenced in a concurrent assertion
+    // Report a non-static class member referenced in a concurrent assertion. One in a property
+    // or sequence declaration is reported where the declaration is instanced, as only there is
+    // it part of a concurrent assertion.
     void checkConcAssertClassMember(const AstNode* nodep) {
-        if (!m_underConcAssert) return;
+        if (m_underConcAssert && m_assertDeclp) {
+            m_declMembers[m_assertDeclp].push_back(nodep);
+        } else if (m_underConcAssert) {
+            reportConcAssertMember(nodep);
+        }
+    }
+    static void reportConcAssertMember(const AstNode* nodep) {
         nodep->v3error("Concurrent assertion expression references non-static class member "
                        << nodep->prettyNameQ() << " (IEEE 1800-2023 16.6)");
+    }
+    // At an instance of property or sequence declaration declp, its members
+    void addDeclInstanceMembers(const AstNodeSchema* declp) {
+        // Copied, as adding them to an enclosing declaration may rehash
+        const std::vector<const AstNode*> memberps = m_declMembers[declp];
+        for (const AstNode* const memberp : memberps) addDeclMember(memberp);
+    }
+    // A member of a declaration instanced here: one of the enclosing declaration, if any, else
+    // reported, once for all instances
+    void addDeclMember(const AstNode* memberp) {
+        if (m_assertDeclp) {
+            m_declMembers[m_assertDeclp].push_back(memberp);
+        } else if (m_reportedMembers.insert(memberp).second) {
+            reportConcAssertMember(memberp);
+        }
     }
     // Append classp and, depth first, each class it extends or implements, once each
     static void memberClassesRecurse(AstClass* classp, std::vector<AstClass*>& classps) {
@@ -9418,6 +9446,9 @@ class WidthVisitor final : public VNVisitor {
             if (nodep->disablep()) {
                 VL_RESTORER(m_underDisableIff);
                 m_underDisableIff = true;
+                // Part of the concurrent assertion (IEEE 1800-2023 16.12)
+                VL_RESTORER(m_underConcAssert);
+                m_underConcAssert = true;
                 // The condition is an expression, so may not contain an instance
                 VL_RESTORER(m_underSvaExpr);
                 m_underSvaExpr = false;
@@ -9779,8 +9810,8 @@ class WidthVisitor final : public VNVisitor {
                 const AstNodeDType* const rhsDtp = nodep->rhsp()->dtypep()->skipRefp();
                 const bool declared
                     = hasDeclaredDType(nodep->lhsp()) && hasDeclaredDType(nodep->rhsp());
-                const bool bothRefs = VN_IS(nodep->lhsp(), NodeVarRef)
-                                      && VN_IS(nodep->rhsp(), NodeVarRef);
+                const bool bothRefs
+                    = VN_IS(nodep->lhsp(), NodeVarRef) && VN_IS(nodep->rhsp(), NodeVarRef);
                 // Other than between variable references, which get full element-type checks,
                 // an aggregate assigned to an integral is reported as such, but a stream target
                 // unpacks the value (IEEE 1800-2023 11.4.14)
@@ -11034,6 +11065,8 @@ class WidthVisitor final : public VNVisitor {
         VL_RESTORER(m_underSvaExpr);
         VL_RESTORER(m_inConcurrentAssert);
         m_propertyp = nodep;
+        VL_RESTORER(m_assertDeclp);
+        m_assertDeclp = nodep;
         registerLocalVars(nodep, "property");
         // The body is not in the context of the instance that may be widthing it
         m_underSExpr = false;
@@ -11121,6 +11154,8 @@ class WidthVisitor final : public VNVisitor {
         m_underSvaExpr = true;
         m_underConcAssert = true;
         m_inConcurrentAssert = true;  // Keep const casts, for wherever it is used
+        VL_RESTORER(m_assertDeclp);
+        m_assertDeclp = nodep;
         VL_RESTORER(m_underDisableIff);
         m_underDisableIff = false;
         VL_RESTORER(m_underSampledArg);
@@ -11227,6 +11262,8 @@ class WidthVisitor final : public VNVisitor {
             return;
         }
         userIterate(nodep->schemap(), nullptr);
+        // A property or sequence instance is part of the assertion instancing it
+        addDeclInstanceMembers(nodep->schemap());
         size_t argn = 0;
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
             const AstVar* const portp = tconnect.first;
