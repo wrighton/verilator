@@ -18,6 +18,7 @@
 #include VM_PREFIX_INCLUDE
 
 #include <cstdio>
+#include <vector>
 
 static int errors = 0;
 
@@ -87,6 +88,27 @@ int main() {
             CHECK(q.at(q.size() - 1) == 99);
         }
         for (int i = 0; i < q.size(); ++i) CHECK(q.at(i) != 0xdeadbeefU);
+    }
+
+    // Many references: the pins of each element are indexed, also several to one element
+    {
+        VlQueue<IData> q;
+        for (int i = 0; i < 100; ++i) q.push_back(i);
+        std::vector<VlRefPin<IData>*> pins;
+        for (int i = 0; i < 12; ++i) pins.push_back(new VlRefPin<IData>(q.atWriteAppendRef(i)));
+        for (int i = 0; i < 3; ++i) pins.push_back(new VlRefPin<IData>(q.atWriteAppendRef(0)));
+        // Release a pin between others of its element, then the newest of them
+        VL_DO_DANGLING(delete pins[13], pins[13]);
+        pins[13] = nullptr;
+        VL_DO_DANGLING(delete pins[14], pins[14]);
+        pins[14] = nullptr;
+        // Popping an element outdates only its pins
+        CHECK(q.pop_front() == 0);
+        pins[0]->elem() = 1000;
+        pins[1]->elem() = 1001;
+        CHECK(pins[12]->elem() == 1000);
+        CHECK(q.at(0) == 1001);
+        for (VlRefPin<IData>* const pinp : pins) delete pinp;
     }
 
     if (!errors) VL_PRINTF("*-* All Finished *-*\n");
