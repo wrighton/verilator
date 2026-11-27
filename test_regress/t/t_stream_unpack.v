@@ -611,6 +611,43 @@ module t;
       `checkh(y64, x64);
     end
 
+    // Also from an array source, whose items are the stream, without a width warning
+    begin
+      automatic logic [3:0] fa[3] = '{4'ha, 4'hb, 4'hc};
+      automatic logic [3:0] qa[$] = '{4'ha, 4'hb, 4'hc};
+      automatic logic [3:0] da[] = '{4'ha, 4'hb, 4'hc};
+      automatic logic [7:0] ub3[3];
+      automatic logic [15:0] p16;
+      automatic logic [3:0] q7[$];
+      automatic logic [7:0] b8;
+      {<<4{b8}} = fa;
+      `checkh(b8, 8'hba);
+      {<<4{b8}} = qa;
+      `checkh(b8, 8'hba);
+      {<<4{b8}} = da;
+      `checkh(b8, 8'hba);
+      {>>{b8}} = fa;
+      `checkh(b8, 8'hab);
+      {>>{b8}} = qa;
+      `checkh(b8, 8'hab);
+      {>>{b8}} = da;
+      `checkh(b8, 8'hab);
+      {<<{b8}} = fa;
+      `checkh(b8, 8'hd5);
+      ub3 = '{8'h11, 8'h22, 8'h33};
+      {>>{p16}} = ub3;
+      `checkh(p16, 16'h1122);
+      {<<8{p16}} = ub3;
+      `checkh(p16, 16'h2211);
+      // A shorter source, an error that is warned, is zero-filled on the right, as a
+      // packed one is
+      q7 = '{4'h7};
+      // verilator lint_off WIDTHEXPAND
+      {<<4{b8}} = q7;
+      // verilator lint_on WIDTHEXPAND
+      `checkh(b8, 8'h07);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
