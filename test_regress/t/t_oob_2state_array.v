@@ -198,4 +198,26 @@ module t;
     `checkh(nv, 8'b1000_0110);
   end
   // verilator lint_on WIDTH
+
+  // An array with the lowest low bound of an int range
+  // verilator lint_off WIDTH
+  int amin[-2147483648:-2147483647] = '{5, 6};
+  int imin = -2147483648;
+  longint lmin = -64'sd2147483648;
+  bit signed [39:0] smin = -40'sd2147483648;
+  initial begin
+    `checkh(amin[imin], 5);
+    `checkh(amin[imin + 1], 6);
+    `checkh(amin[imin + 2], 0);
+    `checkh(amin[lmin], 5);
+    `checkh(amin[lmin + 1], 6);
+    `checkh(amin[lmin - 1], 0);
+    `checkh(amin[smin], 5);
+    `checkh(amin[smin + 2], 0);
+    amin[lmin + 1] = 7;
+    amin[imin - 1] = 8;
+    `checkh(amin[-2147483648], 5);
+    `checkh(amin[-2147483647], 7);
+  end
+  // verilator lint_on WIDTH
 endmodule
