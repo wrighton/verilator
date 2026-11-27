@@ -3291,6 +3291,7 @@ void AstNodeCoverOrAssert::dump(std::ostream& str) const {
     if (immediate()) str << " [IMMEDIATE]";
     if (senFromAlways()) str << " [SENALW]";
     if (nfaLowered()) str << " [NFALOWERED]";
+    if (failsGated()) str << " [FAILSGATED]";
 }
 void AstNodeCoverOrAssert::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "directive", this->directive().ascii());
@@ -3299,6 +3300,7 @@ void AstNodeCoverOrAssert::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, immediate);
     dumpJsonBoolFuncIf(str, senFromAlways);
     dumpJsonBoolFuncIf(str, nfaLowered);
+    dumpJsonBoolFuncIf(str, failsGated);
 }
 uint32_t AstNodeDType::arrayUnpackedElements() const {
     uint32_t entries = 1;
