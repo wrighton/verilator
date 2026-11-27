@@ -65,7 +65,7 @@ module t (
 
   // A sequence operator needing a match of an intersect that never matches never matches
   // either, so each attempt of an assertion of it fails, and an 'or' is its other operand
-  localparam int NPROP = 6;
+  localparam int NPROP = 12;
   wire e = crc[4] | crc[11];
   wire en = crc[13];
   int passes[NPROP];
@@ -92,6 +92,19 @@ module t (
   else ++fails[4];
   assert property (((e ##[1:2] c) intersect e) or (c ##1 a)) ++passes[5];
   else ++fails[5];
+  // The same in concatenation forms, as in the upstream form of this test
+  assert property ((e ##[0:1] e) and ((e ##1 e) intersect b)) ++passes[6];
+  else ++fails[6];
+  assert property (((a ##1 a) intersect (b ##1 b ##1 b)) and c) ++passes[7];
+  else ++fails[7];
+  assert property (((a ##1 a) intersect (b ##1 b ##1 b)) or c) ++passes[8];
+  else ++fails[8];
+  assert property ((c ##1 a) and ((a ##1 a) intersect (b ##1 b ##1 b))) ++passes[9];
+  else ++fails[9];
+  assert property (en |-> ((e ##[0:1] e) and ((e ##1 e) intersect b))) ++passes[10];
+  else ++fails[10];
+  assert property (((e ##[1:2] c) intersect e) or (c ##1 1'b1)) ++passes[11];
+  else ++fails[11];
   // verilog_format: on
 
   // Check the actions of the attempts resolving by tick last
@@ -102,10 +115,11 @@ module t (
       for (int s = 0; s <= last; ++s) begin
         bit pass = 0;
         // Each attempt resolves on its start tick, but one of the last 'or' with c
-        if (i == 5 && hc[s] && s == last) continue;
-        if (i == 2) pass = hc[s];
-        if (i == 4) pass = !hen[s];
+        if (i % 6 == 5 && hc[s] && s == last) continue;
+        if (i % 6 == 2) pass = hc[s];
+        if (i % 6 == 4) pass = !hen[s];
         if (i == 5) pass = hc[s] && ha[s+1];
+        if (i == 11) pass = hc[s];
         if (pass) ++expPasses;
         else ++expFails;
       end
