@@ -51,8 +51,7 @@ module t;
   // Test: disabled attempts end without a pass or fail
   assert property (@(posedge clk) disable iff (dis) a |-> ##[1:$] b) ++p[5];
   else ++f[5];
-  // Test: killed attempts end too. An attempt starting on the tick after the kill is killed
-  // too, as by the other properties.
+  // Test: killed attempts end too
   a_kill :
   assert property (@(posedge clk) a |-> b [-> 1]) ++p[6];
   else ++f[6];
@@ -108,7 +107,6 @@ module t;
         if (!ha[s]) begin
           for (int i = 0; i < 9; ++i) ++ep[i];
           if (hd[s]) --ep[5];
-          if (s == KILL) --ep[6];
           continue;
         end
         r = gotoEnd(s + 1, 1);
@@ -119,7 +117,7 @@ module t;
         if (r < CYCLES) ++ep[1];
         r = gotoEnd(s, 1);
         if (r < CYCLES) ++ep[2];
-        if (r < CYCLES && !(s <= KILL && r >= KILL)) ++ep[6];
+        if (r < CYCLES && !(s < KILL && r >= KILL)) ++ep[6];
         r = gotoEnd(s + 1, 2);
         if (r < CYCLES) ++ep[3];
         r = gotoEnd(s + 1, 1);
