@@ -1980,15 +1980,18 @@ class ConstraintExprVisitor final : public VNVisitor {
             VL_DO_DANGLING(origp->deleteTree(), origp);
         }
     }
-    void renameArrayExpr(AstSFormatF* const newp) const {
+    // Name an element of an array of structs or objects the way the solver registers it
+    void renameArrayExpr(AstSFormatF* const newp, const bool objectElem) const {
         if (m_structSel) {
             newp->name("%s.%s");
-            newp->exprsp()->nextp()->name("%x");
+            // Objects are registered with an unpadded index (createWriteVarForClassFields)
+            newp->exprsp()->nextp()->name(objectElem ? "%0x" : "%x");
         }
     }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
+        const bool objectElem = VN_IS(nodep->dtypep()->skipRefp(), ClassRefDType);
         VNRelinker handle;
         // Check if index actually references a rand variable (not just user1,
         // which can be over-marked in sum/with expansion contexts). A
@@ -2003,8 +2006,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (m_nestedAccessp) {
             AstNodeExpr* const bitp = nodep->bitp()->cloneTreePure(false);
             AstNodeExpr* const bitFormatp
-                = indexIsRand ? new AstSFormatF{bitp->fileline(), bitp->name(), false, nullptr}
-                              : new AstSFormatF{bitp->fileline(), "%x", false, bitp};
+                = indexIsRand
+                      ? new AstSFormatF{bitp->fileline(), bitp->name(), false, nullptr}
+                      : new AstSFormatF{bitp->fileline(), objectElem ? "%0x" : "%x", false, bitp};
             AstSFormatF* const herep
                 = new AstSFormatF{nodep->fileline(), "%s.%s", false, bitFormatp};
             if (AstSel* const selp = VN_CAST(bitp, Sel)) {
@@ -2031,7 +2035,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
             handle.relink(indexp);
             AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
-            renameArrayExpr(newp);
+            renameArrayExpr(newp, objectElem);
         } else {
             // Index is constant or non-rand -- format as hex literal.
             // Keep a pre-edit clone for the rand_mode hoist below.
@@ -2040,7 +2044,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 = new AstSFormatF{fl, "#x%8x", false, nodep->bitp()->unlinkFrBack(&handle)};
             handle.relink(indexp);
             AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
-            renameArrayExpr(newp);
+            renameArrayExpr(newp, objectElem);
             if (!newp || !hoistRandModeOverSelectAndMember(newp, origp)) {
                 VL_DO_DANGLING(origp->deleteTree(), origp);
             }

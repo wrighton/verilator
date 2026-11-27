@@ -22,8 +22,24 @@ class Bar;
   }
 endclass
 
+// More than 16 objects, so an element's index takes more than one hex digit
+class Big;
+  rand Foo foo_arr[17];
+
+  function new();
+    foreach (foo_arr[i]) foo_arr[i] = new;
+  endfunction
+
+  constraint c {
+    foreach (foo_arr[i]) foo_arr[i].abcd < 8;
+    foo_arr[1].abcd == 3;
+    foo_arr[16].abcd == 5;
+  }
+endclass
+
 module t;
   Bar bar;
+  Big big;
   initial begin
     bar = new();
     bar.randomize();
@@ -31,6 +47,13 @@ module t;
     foreach (bar.foo_arr[i]) begin
       if (bar.foo_arr[i].abcd >= 8) $stop;
     end
+    big = new();
+    if (big.randomize() != 1) $stop;
+    foreach (big.foo_arr[i]) begin
+      if (big.foo_arr[i].abcd >= 8) $stop;
+    end
+    if (big.foo_arr[1].abcd != 3) $stop;
+    if (big.foo_arr[16].abcd != 5) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
   end
