@@ -35,7 +35,7 @@ module t (
     {>>{arr2d[1:2]}} <= w[15:0];
   end
 
-  // Narrower source (warned about), zero-fills like an unpack into a whole array
+  // Narrower source (warned about), zero-filled on the right like an unpack into a whole array
   logic [7:0] nar[3];
   always @(posedge clk) begin
     nar <= '{default: 8'hff};
@@ -160,8 +160,8 @@ module t (
       `checkh(arr2d[2][0], w_d[7:4]);
       `checkh(arr2d[2][1], w_d[3:0]);
       `checkh(nar[0], 8'hff);
-      `checkh(nar[1], 8'h0);
-      `checkh(nar[2], w_d[7:0]);
+      `checkh(nar[1], w_d[7:0]);
+      `checkh(nar[2], 8'h0);
       `checkh(sl[1], 8'h0);
       `checkh(sl[2], w_d[7:0]);
       `checkh(sl[3], w_d[15:8]);

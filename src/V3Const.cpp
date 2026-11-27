@@ -3328,6 +3328,20 @@ class ConstVisitor final : public VNVisitor {
                     flp, fromp, new AstConst{flp, AstConst::WidthedValue{}, padWidth, 0}});
             }
             return true;
+        } else if (m_doV && VN_IS(nodep->rhsp(), CvtPackedToArray)
+                   && VN_IS(nodep->rhsp()->dtypep()->skipRefp(), UnpackArrayDType)
+                   && VN_AS(nodep->rhsp(), CvtPackedToArray)->fromp()->width()
+                          < nodep->rhsp()->dtypep()->widthStream()) {
+            // An unpack needing more bits than its source provides, an error that is warned
+            // (IEEE 1800-2023 11.4.14.3), takes zero bits for the rest, as a narrower stream
+            // assigned to the array does (IEEE 1800-2023 11.4.14)
+            AstCvtPackedToArray* const cvtp = VN_AS(nodep->rhsp(), CvtPackedToArray);
+            FileLine* const flp = cvtp->fileline();
+            const int padWidth = cvtp->dtypep()->widthStream() - cvtp->fromp()->width();
+            AstNodeExpr* const fromp = cvtp->fromp()->unlinkFrBack();
+            cvtp->fromp(new AstConcat{flp, fromp,
+                                      new AstConst{flp, AstConst::WidthedValue{}, padWidth, 0}});
+            return true;
         } else if (m_doV && VN_IS(nodep->rhsp(), StreamR)
                    && (!VN_IS(nodep->lhsp()->dtypep()->skipRefp(), QueueDType)
                        || isDynamicArray(VN_AS(nodep->rhsp(), StreamR)->lhsp()->dtypep()))) {
