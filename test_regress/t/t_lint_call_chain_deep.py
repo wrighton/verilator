@@ -12,7 +12,7 @@ import re
 
 import vltest_bootstrap
 
-test.scenarios('vlt')
+test.scenarios('vltmt')
 
 # Sanitizer and debug compiler stack frames are larger, so other passes recursing along the call
 # chain overflow
@@ -42,18 +42,16 @@ def gen(filename):
                 fh.write("    if (nxt != null) nxt.run();\n")
             fh.write("  endfunction\n")
             fh.write("endclass\n")
-        fh.write("module t;\n")
-        fh.write("  initial begin\n")
-        fh.write("    automatic C0 c = new;\n")
-        fh.write("    c.run();\n")
-        fh.write("  end\n")
+        fh.write("module t (input clk);\n")
+        fh.write("  C0 c = new;\n")
+        fh.write("  always @(posedge clk) c.run();\n")
         fh.write("endmodule\n")
 
 
 gen(test.top_filename)
 
-# Statistics count the instructions of the evaluation functions along the chain. Run with the
-# default stack limit, and without V3Combine, as its hashing recurses along the chain too.
-test.lint(verilator_flags2=["--stats", "--no-unlimited-stack", "-fno-combine"])
+# Statistics count the instructions of the evaluation functions along the chain, and V3Combine and
+# thread scheduling hash the functions along it. Run with the default stack limit.
+test.lint(threads=2, verilator_flags2=["--stats", "--no-unlimited-stack"])
 
 test.passes()
