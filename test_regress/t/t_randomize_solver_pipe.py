@@ -89,6 +89,34 @@ test.execute(logfile=logfile,
 test.file_grep(logfile, r'NPASS=(\d+)', 11)
 test.file_grep(logfile, r'Solver died or replied unreadably')
 
+# The replies of the phased call, found from the solver log of a run left alone, as the
+# spreading of the calls before it reads more or fewer: its phase value reply is the first
+# model read of x, the variable of its first layer, and its phase diversity round answers
+# the next status
+reference_log = test.obj_dir + '/solver_reference.smt2'
+test.execute(logfile=test.obj_dir + '/sim_reference.log',
+             all_run_flags=['+verilator+solver+file+' + reference_log])
+phase_value_at = None
+phase_round_at = None
+models = 0
+statuses = 0
+command = ''
+with open(reference_log, encoding="utf8") as fh:
+    for line in fh:
+        line = line.rstrip('\n')
+        if line.startswith('  (') and not line.startswith(('  (assert', '  (declare')):
+            command = line
+        elif line.startswith('< (('):
+            models += 1
+            if phase_value_at is None and command.startswith('  (get-value (x '):
+                phase_value_at = models
+        elif line in ('< sat', '< unsat', '< unknown'):
+            statuses += 1
+            if phase_value_at is not None and phase_round_at is None:
+                phase_round_at = statuses
+if phase_round_at is None:
+    test.error("No phased call found in " + reference_log)
+
 # A solver that rejects a phase diversity round and then stops answering fails that
 # call, leaving its variables alone, and is replaced
 logfile = test.obj_dir + '/sim_phase_mute.log'
@@ -97,7 +125,7 @@ if os.path.exists(latch):
     os.unlink(latch)
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=err_mute TAMPER_AT=9 TAMPER_ONCE="' + latch + '" ')
+             'TAMPER=err_mute TAMPER_AT=' + str(phase_round_at) + ' TAMPER_ONCE="' + latch + '" ')
 test.file_grep(logfile, r'NPASS=(\d+)', 11)
 test.file_grep(logfile, r'Solver died or replied unreadably')
 
@@ -141,7 +169,7 @@ test.file_grep_not(logfile, r'Solver died')
 logfile = test.obj_dir + '/sim_phase_value.log'
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=bad_base TAMPER_AT=5 ')
+             'TAMPER=bad_base TAMPER_AT=' + str(phase_value_at) + ' ')
 test.file_grep(logfile, r'NPASS=(\d+)', 11)
 
 # A reply naming a variable the sampler didn't ask for.
