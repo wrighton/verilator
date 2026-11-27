@@ -1121,6 +1121,8 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_TABLE_ENTRY,             "table_entry",            false,  CLEAN,  false,      "rr") \
     macro(RANDOMIZER_TABLE_PREFIX_FROM,       "table_prefix_from",      false,  CLEAN,  false,      "m") \
     macro(RANDOMIZER_UNIQUE,                  "rand_unique",            false,  CLEAN,  false,      "rr") \
+    macro(RANDOMIZER_UNIQUE_DOMAIN,           "unique_domain",          false,  CLEAN,  false,      "rrr") \
+    macro(RANDOMIZER_UNIQUE_RANGE,            "unique_range",           false,  CLEAN,  false,      "rr") \
     macro(RANDOMIZER_MARK_RANDC,              "markRandc",              false,  CLEAN,  false,      "r") \
     macro(RANDOMIZER_MARK_HELD_LOOKUP,        "markHeldLookup",         false,  CLEAN,  false,      "r") \
     macro(RANDOMIZER_MARK_SIZE_VAR,           "markSizeVar",            false,  CLEAN,  false,      "r") \
