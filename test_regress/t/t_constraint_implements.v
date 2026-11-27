@@ -310,6 +310,9 @@ module t;
       randomize_result = c0.randomize();
       `checkd(randomize_result, 1);
       `checkd(c1.n < 5, 1);
+      // Break the cycle, so that its objects are freed and runtime leak checking stays clean
+      c0.inner = null;
+      c1.inner = null;
     end
     g = i;
     `checkd(g.get(), int'(i.v));
