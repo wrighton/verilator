@@ -9571,8 +9571,51 @@ class WidthVisitor final : public VNVisitor {
         }
         // Deal with case(type(data_type))
         handleCaseType(nodep, nodep->exprp(), nodep->itemsp());
+        // A case inside item compares as 'inside' does (IEEE 1800-2023 12.5.4), which with a
+        // signed expression differs from the common type only if items differ in signedness;
+        // then the expression and each item keep their own types
+        if (nodep->caseInside() && caseInsideMixedSign(nodep)) {
+            iterateCheckSelf(nodep, "Case expression", nodep->exprp(), SELF, BOTH);
+            for (AstCaseItem* const itemp : nodep->itemspList()) {
+                for (AstNode* condp : itemp->condspList()) {
+                    AstInsideRange* const irangep = VN_CAST(condp, InsideRange);
+                    if (!irangep) {
+                        iterateCheckSelf(nodep, "Case Item", condp, SELF, BOTH);
+                        continue;
+                    }
+                    for (AstNode* const boundp : {irangep->lhsp(), irangep->rhsp()}) {
+                        if (!VN_IS(boundp, Unbounded)) {
+                            iterateCheckSelf(irangep, "Range bound", boundp, SELF, BOTH);
+                        }
+                    }
+                }
+            }
+            return;
+        }
         // Type check
         handleCase(nodep, nodep->exprp(), nodep->itemsp());
+    }
+    // Whether a case inside has a signed integral expression, and integral items or range
+    // bounds of both signednesses
+    static bool caseInsideMixedSign(const AstCase* nodep) {
+        if (!nodep->exprp()->isSigned()
+            || !nodep->exprp()->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            return false;
+        }
+        bool anySigned = false;
+        bool anyUnsigned = false;
+        for (const AstCaseItem* const itemp : nodep->itemspList()) {
+            for (const AstNode* const condp : itemp->condspList()) {
+                const AstInsideRange* const irangep = VN_CAST(condp, InsideRange);
+                for (const AstNode* const valuep :
+                     {irangep ? irangep->lhsp() : condp, irangep ? irangep->rhsp() : condp}) {
+                    if (VN_IS(valuep, Unbounded)) continue;
+                    if (!valuep->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
+                    (valuep->isSigned() ? anySigned : anyUnsigned) = true;
+                }
+            }
+        }
+        return anySigned && anyUnsigned;
     }
     void visit(AstRandCase* nodep) override {
         // IEEE says each item is a int (32-bits), and sizes are based on natural sizing,
