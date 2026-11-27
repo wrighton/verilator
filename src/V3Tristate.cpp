@@ -2600,6 +2600,16 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstDynArraySel* nodep) override { visitDynElement(nodep); }
     void visit(AstQueueSel* nodep) override { visitDynElement(nodep); }
     void visit(AstWildcardSel* nodep) override { visitDynElement(nodep); }
+    void visit(AstCMethodHard* nodep) override {
+        // Likewise a constant key of an associative array method
+        if ((nodep->method() == VCMethod::ASSOC_EXISTS || nodep->method() == VCMethod::ASSOC_ERASE)
+            && VN_IS(nodep->pinsp(), Const)) {
+            iterateAndNextNull(nodep->fromp());
+        } else {
+            iterateChildren(nodep);
+        }
+        checkUnhandled(nodep);
+    }
     void visit(AstNode* nodep) override {
         iterateChildren(nodep);
         checkUnhandled(nodep);

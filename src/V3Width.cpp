@@ -5832,6 +5832,9 @@ class WidthVisitor final : public VNVisitor {
     AstNodeExpr* methodCallWildcardIndexExpr(AstMethodCall* nodep,
                                              AstWildcardArrayDType* adtypep) {
         AstNode* const index_exprp = nodep->argsp()->exprp();
+        // An index with X or Z bits has no string form; V3Unknown reads it as invalid
+        const AstConst* const constp = VN_CAST(index_exprp, Const);
+        if (constp && constp->num().isFourState()) return nodep->argsp()->exprp();
         iterateCheck(nodep, "index", index_exprp, CONTEXT_DET, FINAL, adtypep->findStringDType(),
                      EXTEND_EXP);
         VL_DANGLING(index_exprp);  // May have been edited
