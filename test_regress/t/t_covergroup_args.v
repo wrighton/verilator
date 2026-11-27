@@ -412,6 +412,16 @@ module t;
     cross_ab: cross cp_a, cp_b;
   endgroup
 
+  // Constructed with a variable-indexed element of a one-element array
+  covergroup cg_ref_elem(ref int value);
+    cp_ref_elem: coverpoint value {
+      bins lo = {[0 : 3]};
+      bins hi = {[4 : $]};
+    }
+  endgroup
+  int ref_elems[1];
+  cg_ref_elem cov_ref_elems[1];
+
   cg cov1 = new(69, 77);
   cg cov2 = new(69);
   cg_clocked cov_clocked = new(10);
@@ -637,6 +647,9 @@ module t;
     basic_if_b.value = 0;
     param_if_b.value = 0;
     cov_sample_interfaces.sample(basic_input_vif, param_ref_vif);
+    for (int i = 0; i < 1; ++i) cov_ref_elems[i] = new(ref_elems[i]);
+    ref_elems[0] = 7;
+    cov_ref_elems[0].sample();
     $finish;
   end
 
