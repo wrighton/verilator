@@ -112,6 +112,37 @@ class SizeRangeMultiDim;
 endclass
 
 // An enum has only its named values
+// Multidimensional queues of random size: a new element brings the leaves of its type,
+// none if that is dynamically sized
+class SizeMultiDimGrow;
+  rand bit [1:0] q[$][2];
+  rand bit [1:0] a;
+  int lo;
+  constraint c {q.size() inside {[lo:3]}; unique {q, a};}
+endclass
+
+class SizeMultiDimDyn;
+  rand bit [1:0] q[$][$];
+  rand bit [1:0] a;
+  constraint c {q.size() inside {[1:3]}; unique {q, a};}
+endclass
+
+// Whole arrays whose elements are set after the object is constructed
+class WholeSized;
+  rand val_t q1[$];
+  rand val_t q2[$];
+  int n1;
+  constraint s {q1.size() == n1;}
+  constraint u {unique {q1, q2};}
+endclass
+
+class WholeFree;
+  rand val_t q1[$];
+  rand val_t d[];
+  rand val_t aa[int];
+  constraint u {unique {q1, d, aa};}
+endclass
+
 class SizeRangeEnum;
   rand sparse_t q[$];
   rand sparse_t x;
@@ -127,6 +158,31 @@ class SizeMember;
   rand SizeSub s;
   rand bit [1:0] x;
   constraint c {s.q.size() inside {[1:3]}; unique {s.q, x};}
+  function new;
+    s = new;
+  endfunction
+endclass
+
+// Only some sizes of the queue of a member object leave a value for each member
+class SizeMemberTight;
+  rand SizeSub s;
+  rand bit [1:0] x, y;
+  int lo;
+  constraint c {s.q.size() inside {[lo:4]}; unique {s.q, x, y};}
+  function new;
+    s = new;
+  endfunction
+endclass
+
+// A multidimensional queue of a member object
+class SizeSubMultiDim;
+  rand bit [1:0] q[$][2];
+endclass
+
+class SizeMemberMultiDim;
+  rand SizeSubMultiDim s;
+  rand bit [1:0] x;
+  constraint c {s.q.size() inside {[1:2]}; unique {s.q, x};}
   function new;
     s = new;
   endfunction
@@ -288,8 +344,14 @@ module t;
     automatic SizeRange sr = new;
     automatic SizeRangeWide srw = new;
     automatic SizeRangeMultiDim srm = new;
+    automatic SizeMultiDimGrow smg = new;
+    automatic SizeMultiDimDyn smd = new;
+    automatic WholeSized wsz = new;
+    automatic WholeFree wfr = new;
     automatic SizeRangeEnum sre = new;
     automatic SizeMember smb = new;
+    automatic SizeMemberTight smt = new;
+    automatic SizeMemberMultiDim smm = new;
     automatic Reserved rsv = new;
     automatic SizeRangeInt sri = new;
     automatic Small sm = new;
@@ -307,6 +369,7 @@ module t;
     automatic val_t sx;
     automatic val_t sarr[3];
     val_t vals[$];
+    bit [1:0] nibs[$];
     bit [7:0] lvals[$];
     int ok;
 
@@ -403,6 +466,59 @@ module t;
       `checkd(srm.q.size(), 1);
       Check#(bit [1:0])::distinct({srm.a, srm.q[0][0], srm.q[0][1]}, `__LINE__);
 
+      // Growing, from none and from one element, where only one element fits
+      smg.lo = 1;
+      smg.q = '{};
+      ok = smg.randomize();
+      `checkd(ok, 1);
+      `checkd(smg.q.size(), 1);
+      Check#(bit [1:0])::distinct({smg.a, smg.q[0][0], smg.q[0][1]}, `__LINE__);
+
+      smg.q = '{'{0, 0}};
+      ok = smg.randomize();
+      `checkd(ok, 1);
+      `checkd(smg.q.size(), 1);
+      Check#(bit [1:0])::distinct({smg.a, smg.q[0][0], smg.q[0][1]}, `__LINE__);
+
+      // No size leaves a value for each member
+      smg.lo = 2;
+      smg.q = '{'{0, 0}};
+      ok = smg.randomize();
+      `checkd(ok, 0);
+
+      // The elements gained are empty, so only the first two elements limit the size
+      smd.q = '{'{0, 0, 0}, '{0}};
+      ok = smd.randomize();
+      `checkd(ok, 1);
+      `checkd(smd.q.size(), 1);
+      Check#(bit [1:0])::distinct({smd.a, smd.q[0][0], smd.q[0][1], smd.q[0][2]}, `__LINE__);
+
+      smd.q = '{'{0}, '{0}};
+      ok = smd.randomize();
+      `checkd(ok, 1);
+      `checkd(smd.q.size() inside {[1:3]}, 1);
+      nibs = '{smd.a};
+      foreach (smd.q[i, j]) nibs.push_back(smd.q[i][j]);
+      Check#(bit [1:0])::distinct(nibs, `__LINE__);
+
+      wsz.n1 = 2;
+      wsz.q1 = '{0, 0, 0};
+      wsz.q2 = '{0, 0, 0};
+      ok = wsz.randomize();
+      `checkd(ok, 1);
+      `checkd(wsz.q1.size(), 2);
+      `checkd(wsz.q2.size(), 3);
+      Check#()::distinct({wsz.q1, wsz.q2}, `__LINE__);
+
+      wfr.q1 = '{0, 0};
+      wfr.d = new[2];
+      wfr.aa[-3] = 0;
+      wfr.aa[7] = 0;
+      ok = wfr.randomize();
+      `checkd(ok, 1);
+      `checkd(wfr.aa.size(), 2);
+      Check#()::distinct({wfr.q1, wfr.d, wfr.aa[-3], wfr.aa[7]}, `__LINE__);
+
       sre.q = '{};
       ok = sre.randomize();
       `checkd(ok, 1);
@@ -416,6 +532,30 @@ module t;
       `checkd(ok, 1);
       `checkd(smb.s.q.size() inside {[1:3]}, 1);
       Check#(bit [1:0])::distinct({smb.x, smb.s.q}, `__LINE__);
+
+      smt.lo = 1;
+      smt.s.q = '{0, 0, 0, 0, 0};
+      ok = smt.randomize();
+      `checkd(ok, 1);
+      `checkd(smt.s.q.size() inside {[1:2]}, 1);
+      Check#(bit [1:0])::distinct({smt.x, smt.y, smt.s.q}, `__LINE__);
+
+      smt.s.q = '{0};
+      ok = smt.randomize();
+      `checkd(ok, 1);
+      `checkd(smt.s.q.size() inside {[1:2]}, 1);
+      Check#(bit [1:0])::distinct({smt.x, smt.y, smt.s.q}, `__LINE__);
+
+      smt.lo = 3;
+      smt.s.q = '{0};
+      ok = smt.randomize();
+      `checkd(ok, 0);
+
+      smm.s.q = '{};
+      ok = smm.randomize();
+      `checkd(ok, 1);
+      `checkd(smm.s.q.size(), 1);
+      Check#(bit [1:0])::distinct({smm.x, smm.s.q[0][0], smm.s.q[0][1]}, `__LINE__);
 
       ok = rsv.randomize();
       `checkd(ok, 1);
