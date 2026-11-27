@@ -193,7 +193,7 @@ public:
 
 // Where a delayed coroutine waits: the time queue, the #0 queue, or forever, for a delay past
 // the maximum simulation time
-enum class VlDelayPhase : uint8_t { ACTIVE, INACTIVE, NEVER };
+enum class VlDelayPhase : uint8_t { ACTIVE, INACTIVE, NEVER, FORK_START };
 
 //=============================================================================
 // VlDelayScheduler stores coroutines to be resumed at a certain simulation time. If the current
@@ -215,6 +215,9 @@ class VlDelayScheduler final {
         void await_suspend(std::coroutine_handle<VlPromise> coro) {
             if (phase == VlDelayPhase::ACTIVE) {
                 sched.m_queue.emplace(time, VlCoroutineHandle{coro, process, fileline});
+            } else if (phase == VlDelayPhase::FORK_START) {
+                sched.m_forkStarts.push_back(
+                    sched.m_queue.emplace(time, VlCoroutineHandle{coro, process, fileline}));
             } else if (phase == VlDelayPhase::INACTIVE) {
                 sched.m_zeroDelayed.emplace_back(VlCoroutineHandle{coro, process, fileline});
             } else {
@@ -229,6 +232,10 @@ class VlDelayScheduler final {
     VerilatedContext& m_context;  // Context to get current time from
     VlDelayedCoroutineQueue m_queue;  // Coroutines to be restored at a certain simulation time
     std::vector<VlCoroutineHandle> m_zeroDelayed;  // Coroutines waiting for #0
+    // Forked processes queued to start when the process forking them returns
+    std::vector<VlDelayedCoroutineQueue::iterator> m_forkStarts;
+    bool m_collectForkStarts = false;  // Forked processes start when the forking one returns
+    std::vector<VlDelayedCoroutineQueue::iterator> m_forkStartsSwap;  // Being started now
     // Coroutines that waited for #0 and are being resumed now. As member to avoid reallocations
     std::vector<VlCoroutineHandle> m_zeroDelayesSwap;
     std::vector<VlCoroutineHandle>
@@ -284,9 +291,16 @@ public:
     // active region of the current time slot
     auto forkStart(VlProcessRef process, const char* filename = VL_UNKNOWN_FILENAME,
                    int lineno = 0) {
-        return DelayAwaitable{*this, process, m_context.time(), VlDelayPhase::ACTIVE,
+        return DelayAwaitable{*this, process, m_context.time(),
+                              m_collectForkStarts ? VlDelayPhase::FORK_START
+                                                  : VlDelayPhase::ACTIVE,
                               VlFileLineDebug{filename, lineno}};
     }
+    // Make the processes forked from now on start when the forking process returns, which
+    // calls resumeForkStarts
+    void collectForkStarts() { m_collectForkStarts = true; }
+    // Start the processes forked since collectForkStarts, and those they fork before suspending
+    void resumeForkStarts();
 
     // Helper awaitable func for suspending coroutines forever.
     // Used for constant wait statements.
