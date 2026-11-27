@@ -44,6 +44,10 @@
 #define _VL_SOLVER_HASH_LEN 1
 static constexpr int diversityMaxChecks = 512;  // Most solver checks to spread one solution
 static constexpr int diversityMaxSatisfied = 64;  // Most of them satisfied
+// Most terms one solution's spreading ties: each check costs the solver time and memory in the
+// terms it ties, which over a large array is many times the solve itself. Past it, a random
+// sample of the terms is spread, and the others keep the solution's values.
+static constexpr size_t diversityMaxTerms = 4096;
 static constexpr int diversityWideBits = 64;  // Parts wider than this may stay unsplit
 static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to drop a part of all
 static constexpr int diversitySlotSamples = 4;  // Elements checked for a part dropped for all
@@ -2765,6 +2769,13 @@ bool VlRandomizer::spreadTerms(VlRNG& rngr, VlSolverSession& sess, std::vector<P
     // left as it is: it is likely one of a few constants, which random parts never fit,
     // so splitting would cost a check per part down to single bits. Past
     // diversityMaxChecks checks the literals kept so far are the result.
+    // A random sample of the terms, past diversityMaxTerms
+    if (terms.size() > diversityMaxTerms) {
+        for (size_t i = 0; i < diversityMaxTerms; ++i) {
+            std::swap(terms[i], terms[i + VL_RANDOM_RNG_I(rngr) % (terms.size() - i)]);
+        }
+        terms.resize(diversityMaxTerms);
+    }
     std::iostream& os = sess.os();
     const auto emitTerm = [&](const PinTerm& term) {
         const bool whole = term.width == term.varp->width();
