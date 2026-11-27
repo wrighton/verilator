@@ -452,6 +452,9 @@ class VlRandomizer VL_NOT_FINAL {
     bool m_failWarned = false;  // The cause was reported where it was found
     bool m_sizeSolve = false;  // Set for the solve of array sizes before the final solve
     bool m_sizeSolved = false;  // The sizes are solved, so the final solve is next
+    bool m_keepSizes = false;  // This solve keeps sizes over the limit, see boundSizes
+    std::unordered_map<std::string, IData> m_sizeStarts;  // Size variables' values before
+    std::unordered_set<std::string> m_resized;  // See markResized
     // Function argument variable solved in an earlier round (IEEE 1800-2023 18.5.11)
     struct FuncArgRound final {
         std::string name;  // Solver name of the variable
@@ -693,6 +696,11 @@ class VlRandomizer VL_NOT_FINAL {
     // constArrays
     static void emitSetLogic(std::ostream& os, const char* logicp, bool constArrays);
     bool nextFlat(VlRNG& rngr, VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
+    // Whether a size this solve gave is over randArrayMax()
+    bool sizeOverLimit() const;
+    // Keep the sizes the constraints leave unbounded; false if the solver failed
+    bool boundSizes(VlSolverSession& sess, const std::vector<std::string>& uniqueExprs,
+                    std::vector<std::string>& boundedr);
 
     // --- UniGen2 (a near-uniform constrained randomization sampler) fields ---
     // Implementation based on the following paper:
@@ -1600,6 +1608,8 @@ public:
     bool func_args_ready(std::initializer_list<const char*> names) const;
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
     void markSizeVar(const std::string& name) { m_sizeVars.insert(name); }  // Of array size
+    // Mark 'name' as the size variable of an array this randomize() resizes
+    void markResized(const std::string& name) { m_resized.insert(name); }
     // Of an array whose element reads by a random index name it only while it is solved
     void markHeldLookup(const std::string& name) { m_heldLookups.insert(name); }
     /// Exclude the sizes the size variables hold from the next size solves of this call, as
