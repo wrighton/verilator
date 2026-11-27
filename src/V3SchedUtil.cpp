@@ -400,6 +400,7 @@ computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleW
     // deferred assertion, wake no combinational logic. What they hold is the process's own state
     // between runs, so an always_comb reading one is not idempotent.
     std::unordered_set<const AstVarScope*> internalReads;
+    const size_t excludedBefore = excludedr;
     foreachLogicActionAccess(procp, [&](const AstVarScope* vscp, VAccess access, bool inAction) {
         if (access.isWriteOrRW() && !vscp->varp()->ignoreSchedWrite()) assigned.emplace(vscp);
         if (access.isReadOrRW() && !assigned.count(vscp)) {
@@ -416,10 +417,14 @@ computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleW
         if (!implicitSensitivities.count(vscp)) ++excludedr;
     }
     excludedr += userComb ? internalReads.size() : 0;
+    std::unordered_set<const AstVarScope*> unexcluded;  // Before anything is left out
     // A user's always_comb is not sensitive to what it writes (IEEE 1800-2023 9.2.2.2.1), so does
     // not wake itself. Only the whole variables it alone writes are excluded, as another process
     // may drive other parts (IEEE 1800-2023 9.2.2.2). A task's writes count, being inlined.
     if (userComb) {
+        unexcluded = implicitSensitivities;
+        unexcluded.insert(actionReads.begin(), actionReads.end());
+        unexcluded.insert(internalReads.begin(), internalReads.end());
         for (const AstVarScope* const vscp : assigned) {
             const auto it = soleWriters.find(vscp);
             if (it != soleWriters.end() && it->second == procp
@@ -427,6 +432,21 @@ computeImplicitSensitivities(AstNodeProcedure* procp, const SoleWriterMap& soleW
                 ++excludedr;
             }
         }
+    }
+    // A user's always_comb leaving a variable out is run only by changes of the rest (see
+    // V3Sched). If a change of one of those cannot be detected, is of a variable whose writes
+    // scheduling ignores, or is of a public variable, which may be written from outside the model
+    // and whose readers the 'ico' region runs, leave nothing out: it then stays as before, a
+    // cycle that is reported, rather than logic silently running more often than IEEE allows.
+    if (excludedr != excludedBefore
+        && !std::all_of(implicitSensitivities.begin(), implicitSensitivities.end(),
+                        [](const AstVarScope* vscp) {
+                            return SenExprBuilder::isSupportedDType(vscp->dtypep())
+                                   && !vscp->varp()->ignoreSchedWrite()
+                                   && !vscp->varp()->isSigPublic();
+                        })) {
+        excludedr = excludedBefore;
+        implicitSensitivities = std::move(unexcluded);
     }
     // Reads through forced values the process computes itself do not trigger it either
     VarScopeSet forceReadEdgeIgnores;

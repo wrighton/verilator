@@ -266,20 +266,7 @@ LogicClasses gatherLogicClasses(AstNetlist* netlistp) {
                     implicitSensitivities
                         = util::computeImplicitSensitivities(procp, soleWriters, selfWritten);
                     const AstAlways* const alwaysp = VN_CAST(procp, Always);
-                    // Whether changes of what it is sensitive to can be detected, and are not
-                    // of variables whose writes scheduling ignores, or of public variables, as
-                    // logic reading those, which may be written from outside the model, runs as
-                    // the 'ico' region decides
-                    const bool triggerable
-                        = std::all_of(implicitSensitivities.begin(), implicitSensitivities.end(),
-                                      [](const AstVarScope* vscp) {
-                                          return SenExprBuilder::isSupportedDType(vscp->dtypep())
-                                                 && !vscp->varp()->ignoreSchedWrite()
-                                                 && !vscp->varp()->isSigPublic();
-                                      });
-                    // Otherwise it stays combinational logic, which may run more often
-                    if (alwaysp && alwaysp->userComb() && selfWritten != excludedBefore
-                        && triggerable) {
+                    if (alwaysp && alwaysp->userComb() && selfWritten != excludedBefore) {
                         // An always_comb reading what it writes runs once at time zero, and then
                         // once per change of what it is sensitive to (IEEE 1800-2023
                         // 9.2.2.2.2). Comb logic may run more often, as its result does not
