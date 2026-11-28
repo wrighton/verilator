@@ -536,7 +536,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             return new AstConst{fl, AstConst::String{}, refp->name()};
         }
 
-        // Empty if not rooted in a variable, as under an unsupported MemberRef reported below
+        // Empty if not rooted in a variable
         const AstNodeExpr* const fromp = getFromp(nodep);
         AstNodeExpr* const namep
             = fromp ? buildNamePrefix(fl, fromp) : new AstConst{fl, AstConst::String{}, ""};
@@ -544,7 +544,13 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (const AstStructSel* const selp = VN_CAST(nodep, StructSel)) {
             return new AstConcatN{fl, namep,
                                   new AstConst{fl, AstConst::String{}, "." + selp->name()}};
-        } else if (VN_IS(nodep, MemberRef)) {
+        } else if (const AstMemberRef* const refp = VN_CAST(nodep, MemberRef)) {
+            // A rand member object of rand member objects, named by its path; one of an
+            // array element is not supported (reported once, for the object of the element)
+            if (VN_IS(refp->fromp(), VarRef) || VN_IS(refp->fromp(), MemberRef)) {
+                return new AstConcatN{fl, namep,
+                                      new AstConst{fl, AstConst::String{}, "." + refp->name()}};
+            }
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported: Nested array element access in global constraint");
         } else if (const AstDynArraySel* const selp = VN_CAST(nodep, DynArraySel)) {
