@@ -16916,7 +16916,36 @@ public:
     static bool checkedStreamOperand(AstNodeExpr* exprp) {
         return dynamicStreamUnitBits(exprp->dtypep()) && exprp->isPure();
     }
+    // Unpacking a stream of a dynamic array or queue into a stream unpacks its bits, as those of
+    // a queue of its elements reordered as the stream is (IEEE 1800-2023 11.4.14.3)
+    static void unpackFromDynamicStream(AstNodeAssign* nodep) {
+        if (!VN_IS(nodep->lhsp(), NodeStream)) return;
+        AstNodeStream* const srcStreamp = VN_CAST(nodep->rhsp(), NodeStream);
+        if (!srcStreamp) return;
+        const AstNodeDType* const operandDTypep = srcStreamp->lhsp()->dtypep()->skipRefp();
+        if (!VN_IS(operandDTypep, QueueDType) && !VN_IS(operandDTypep, DynArrayDType)) return;
+        AstNodeDType* const elemDTypep = operandDTypep->subDTypep();
+        if (!elemDTypep->skipRefp()->isIntegralOrPacked()) return;
+        const AstConst* const sliceConstp = VN_CAST(srcStreamp->rhsp(), Const);
+        if (!sliceConstp) return;  // Reported in visit(AstNodeStream)
+        FileLine* const flp = srcStreamp->fileline();
+        srcStreamp->unlinkFrBack();
+        AstNodeExpr* srcp = srcStreamp->lhsp()->unlinkFrBack();
+        // A right stream does not reorder
+        if (VN_IS(srcStreamp, StreamL)) {
+            AstQueueDType* const queueDTypep = new AstQueueDType{flp, elemDTypep, nullptr};
+            queueDTypep->dtypep(queueDTypep);  // The queue itself, not its elements
+            v3Global.rootp()->typeTablep()->addTypesp(queueDTypep);
+            const int elemBits = elemDTypep->width();
+            srcp = new AstCvtArrayToArray{
+                flp, srcp, queueDTypep, true, sliceConstp->toUInt(), elemBits, elemBits};
+            srcp->didWidth(true);
+        }
+        nodep->rhsp(srcp);
+        VL_DO_DANGLING(srcStreamp->deleteTree(), srcStreamp);
+    }
     void streamAssignLower(AstNodeAssign* nodep) {
+        unpackFromDynamicStream(nodep);
         AstNodeDType* lhsDTypep = nodep->lhsp()->dtypep();
         // Check width of stream and wrap if needed
         if (AstNodeStream* const streamp = VN_CAST(nodep->rhsp(), NodeStream)) {
