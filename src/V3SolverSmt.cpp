@@ -2174,6 +2174,92 @@ public:
     }
 };
 
+// Whether the body of a 'foreach' over a dynamic array or queue runs for each of its elements:
+// the header names the loop variable of the array, and no inner dimension it iterates can be
+// empty
+static bool foreachBodyRunsPerElement(const AstConstraintForeach* foreachp) {
+    const AstNode* elemp = foreachp->headerp()->elementsp();
+    if (!VN_IS(elemp, Var)) return false;
+    const AstNodeDType* dtypep = foreachp->headerp()->fromp()->dtypep()->skipRefp();
+    for (elemp = elemp->nextp(); elemp; elemp = elemp->nextp()) {
+        const AstNodeDType* const subp = dtypep->subDTypep();
+        if (!subp) return false;
+        dtypep = subp->skipRefp();
+        const AstBasicDType* const basicp = VN_CAST(dtypep, BasicDType);
+        const bool fixed = VN_IS(dtypep, UnpackArrayDType) || VN_IS(dtypep, PackArrayDType)
+                           || (basicp && !basicp->isString());
+        if (!fixed) return false;
+    }
+    return true;
+}
+
+// A conjunct of a constraint in a 'foreach' over a dynamic array or queue whose size is solved,
+// which reads that size and no loop variable, holds whenever the array has an element, if the
+// body runs for each element. The solve of the size expands the 'foreach' over the elements the
+// array has before it, none if it is empty (see gateOnCurrentSize), so each such conjunct is
+// also added after the 'foreach', as '<size> > 0 -> <conjunct>' (IEEE 1800-2023 18.5.8.1: size
+// constraints are solved first).
+static void addForeachSizeConjuncts(AstNode* itemsp) {
+    std::vector<AstConstraintForeach*> foreachps;
+    for (AstNode* nodep = itemsp; nodep; nodep = nodep->nextp()) {
+        nodep->foreach([&](AstConstraintForeach* foreachp) { foreachps.push_back(foreachp); });
+    }
+    for (AstConstraintForeach* const foreachp : foreachps) {
+        const AstVarRef* const arrRefp = VN_CAST(foreachp->headerp()->fromp(), VarRef);
+        const AstVar* const sizeVarp = arrRefp ? VN_CAST(arrRefp->varp()->user4p(), Var) : nullptr;
+        if (!sizeVarp || foreachp->isSoft() || !foreachBodyRunsPerElement(foreachp)) continue;
+        std::unordered_set<const AstVar*> loopVarps;
+        for (AstNode* elemp = foreachp->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
+            if (const AstVar* const varp = VN_CAST(elemp, Var)) loopVarps.insert(varp);
+        }
+        AstNode* lastp = foreachp;
+        for (AstNode* itemp = foreachp->bodyp(); itemp; itemp = itemp->nextp()) {
+            const AstConstraintExpr* const exprp = VN_CAST(itemp, ConstraintExpr);
+            if (!exprp || exprp->isSoft() || exprp->isDisableSoft()) continue;
+            // The conjuncts, in order
+            std::vector<AstNodeExpr*> conjps;
+            std::vector<AstNodeExpr*> pendingps{exprp->exprp()};
+            while (!pendingps.empty()) {
+                AstNodeExpr* const termp = pendingps.back();
+                pendingps.pop_back();
+                if (const AstLogAnd* const andp = VN_CAST(termp, LogAnd)) {
+                    pendingps.push_back(andp->rhsp());
+                    pendingps.push_back(andp->lhsp());
+                } else {
+                    conjps.push_back(termp);
+                }
+            }
+            for (size_t i = 0; i < conjps.size(); ++i) {
+                AstNodeExpr* const conjp = conjps[i];
+                AstVarRef* sizeRefp = nullptr;
+                bool hoistable = true;
+                conjp->foreach([&](AstNode* nodep) {
+                    if (AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
+                        if (loopVarps.count(refp->varp())) hoistable = false;
+                        if (refp->varp() == sizeVarp && !sizeRefp) sizeRefp = refp;
+                    } else if (VN_IS(nodep, Dist) || VN_IS(nodep, NodeFTaskRef)) {
+                        // Not copied, as it is solved, or called, once per constraint
+                        hoistable = false;
+                    }
+                });
+                if (!hoistable || !sizeRefp) continue;
+                FileLine* const fl = conjp->fileline();
+                AstGtS* const nonEmptyp
+                    = new AstGtS{fl, sizeRefp->cloneTree(false),
+                                 new AstConst{fl, AstConst::WidthedValue{}, 32, 0}};
+                nonEmptyp->dtypeSetBit();
+                nonEmptyp->user1(true);
+                AstLogIf* const impliesp = new AstLogIf{fl, nonEmptyp, conjp->cloneTree(false)};
+                impliesp->dtypeSetBit();
+                impliesp->user1(true);
+                AstConstraintExpr* const newp = new AstConstraintExpr{fl, impliesp};
+                lastp->addNextHere(newp);
+                lastp = newp;
+            }
+        }
+    }
+}
+
 class ConstraintExprVisitor final : public VNVisitor {
 public:
     struct MemberSizeBindings final {
@@ -12848,6 +12934,7 @@ public:
                     }
                 }
                 if (constrp->itemsp()) {
+                    addForeachSizeConjuncts(constrp->itemsp());
                     lowerDistConstraints(taskp, constrp->itemsp(), randModeVarp);
                 }
                 VInsertionSet<AstVar*>& sizeArrays = m_sizeConstrainedArrays[classp];
@@ -13332,6 +13419,7 @@ public:
             for (const auto& ref : ConstraintSizeGuardVisitor::apply(capturedTreep, nullptr)) {
                 addSizeRef(ref.arrVarp, ref.guardp, sizeRefs);
             }
+            addForeachSizeConjuncts(capturedTreep);
             const SizeDefaults defaults
                 = newSizeDefaults(nodep->fileline(), nullptr, randomizeFuncp, sizeRefs);
             if (defaults.itemsp) {
