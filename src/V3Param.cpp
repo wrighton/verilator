@@ -4653,6 +4653,14 @@ class ParamVisitor final : public VNVisitor {
     // being processed, until relinkScopedClassRef relinks it, or nullptr once it rejected it.
     // Like m_cellps entries, the references outlive the drain (see iterateGenerateCond).
     std::unordered_map<const AstClassOrPackageRef*, AstClassOrPackageRef*> m_scopeRefps;
+    // Plain instances and variables among a module's statements, and whether it has an
+    // interface port; gathered for type queries through instances (see moduleItems)
+    struct ModuleItems final {
+        std::unordered_map<std::string, AstCell*> m_cells;  // Plain instances, by name
+        VarsByName m_vars;  // Variables, by name
+        bool m_ifacePorts = false;  // Has an interface port
+    };
+    std::unordered_map<const AstNodeModule*, ModuleItems> m_moduleItems;
 
     // STATE - for current visit position (use VL_RESTORER)
     AstNodeModule* m_modp = nullptr;  // Module iterating
@@ -4929,6 +4937,8 @@ class ParamVisitor final : public VNVisitor {
             AstNodeModule* const modp = itm->second;
             workQueue.erase(itm);
             m_processor.visitModp(modp);
+            // Starting a new module, so what was learned about the last one no longer holds
+            m_moduleItems.clear();
 
             // Process once; note user2 will be cleared on specialization, so we will do the
             // specialized module if needed
@@ -5167,6 +5177,103 @@ class ParamVisitor final : public VNVisitor {
             checkParamNotHierRecurse(nodep->op3p(), childUnderQuery);
             checkParamNotHierRecurse(nodep->op4p(), childUnderQuery);
         }
+    }
+
+    // For each type query in parameter value 'valuep' of a reference into an instance below
+    // this module, specialize the instances on its path now, so it reads the declaration of
+    // the instance; widthing the declaration in a module that later instances are copied from
+    // would size theirs alike. Return false if a reference is not handled so, and is left to
+    // V3LinkDot to relink before the value is evaluated.
+    bool specializeTypeQueryRefs(AstNode* valuep) {
+        std::vector<AstVarXRef*> xrefps;
+        bool handled = true;
+        valuep->foreach([&](AstAttrOf* attrp) {
+            if (!attrp->attrType().isTypeQuery()) return;
+            attrp->fromp()->foreach([&](AstVarXRef* xrefp) {
+                if (xrefp->dotted().empty()) return;
+                if (xrefp == attrp->fromp()) {
+                    xrefps.push_back(xrefp);
+                } else {
+                    handled = false;
+                }
+            });
+        });
+        for (AstVarXRef* const xrefp : xrefps) {
+            if (!specializeTypeQueryRef(xrefp)) handled = false;
+        }
+        return handled;
+    }
+    // The plain instances and variables among the statements of 'modp', and whether it has
+    // an interface port, gathered once
+    const ModuleItems& moduleItems(const AstNodeModule* modp) {
+        const auto pair = m_moduleItems.emplace(modp, ModuleItems{});
+        ModuleItems& itemsr = pair.first->second;
+        if (!pair.second) return itemsr;
+        for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                // An arrayed instance is replaced by its elements
+                if (!cellp->rangep()) itemsr.m_cells.emplace(cellp->name(), cellp);
+            } else if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                itemsr.m_vars.emplace(varp->name(), varp);
+                itemsr.m_ifacePorts |= varp->isIfaceRef();
+            }
+        }
+        return itemsr;
+    }
+    // Specialize the instances on the path of type query operand 'xrefp', a plain instance in
+    // each module from this one down, and link it to their declaration. If the module reached
+    // is not a specialization, the query reads a copy of the declaration's data type instead.
+    bool specializeTypeQueryRef(AstVarXRef* xrefp) {
+        // A generate block may hold an instance of the same name
+        if (!m_generateHierName.empty()) return false;
+        AstNodeModule* modp = m_modp;
+        for (const string& name : VString::split(xrefp->dotted(), '.')) {
+            // Below a module not specialized, the instances are shared with its other copies
+            if (modp != m_modp && modp->name() == modp->origName()) return false;
+            const ModuleItems& items = moduleItems(modp);
+            const auto it = items.m_cells.find(name);
+            if (it == items.m_cells.end()) return false;
+            AstCell* const cellp = it->second;
+            if (!VN_IS(cellp->modp(), Module) || cellp->modp()->hierBlock()) return false;
+            // An instance connected to an interface is specialized after the interface
+            if (moduleItems(cellp->modp()).m_ifacePorts) return false;
+            // Below this module, a defparam's value is registered when its module is
+            // specialized, which is still to come
+            if (modp != m_modp) {
+                for (const AstPin* const pinp : cellp->paramspList()) {
+                    if (!pinp->paramPath().empty()) return false;
+                }
+            }
+            // On an error, the instance keeps the module it is specialized from
+            if (cellp->paramsp()) {
+                m_processor.nodeDeparam(cellp, cellp->modp(), modp, modp->someInstanceName());
+            }
+            modp = cellp->modp();
+        }
+        const VarsByName& vars = moduleItems(modp).m_vars;
+        const auto varIt = vars.find(xrefp->name());
+        if (varIt == vars.end()) return false;
+        AstVar* const varp = varIt->second;
+        AstNodeDType* const dtypep = varp->subDTypep();
+        // Widthing a reference in the data type into an instance still to be specialized would
+        // size the declaration in the module that instance is specialized from
+        if (dtypep && dtypep->exists([](const AstVarXRef*) { return true; })) return false;
+        if (modp->name() != modp->origName()) {
+            xrefp->varp(varp);
+            return true;
+        }
+        // Widthing the copy would still resolve a data type it refers to, or constify a
+        // parameter value it reads, in place
+        if (!dtypep || dtypep->exists([](const AstNode* nodep) {
+                if (VN_IS(nodep, RefDType) || VN_IS(nodep, NodeFTaskRef)) return true;
+                const AstVarRef* const refp = VN_CAST(nodep, VarRef);
+                return refp && (!refp->varp() || !VN_IS(refp->varp()->valuep(), Const));
+            })) {
+            return false;
+        }
+        xrefp->replaceWith(dtypep->cloneTree(false));
+        VL_DO_DANGLING(pushDeletep(xrefp), xrefp);
+        return true;
     }
 
     // Deparameterize and constify nested interface cells within ifaceModp.
@@ -5579,6 +5686,10 @@ class ParamVisitor final : public VNVisitor {
                     }
                 });
                 if (hasUnresolvedLparamXRef) return;
+                if (!specializeTypeQueryRefs(nodep->valuep())) {
+                    v3Global.rootp()->pushDeferredParamVarp(nodep);
+                    return;
+                }
                 // Defer if value has any unresolved Dot, or references a deferred lparam
                 const bool hasDot = nodep->valuep()->exists([](AstDot*) { return true; });
                 bool refsDeferred = false;
