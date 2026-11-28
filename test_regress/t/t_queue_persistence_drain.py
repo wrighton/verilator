@@ -19,11 +19,12 @@ test.compile(verilator_flags2=["--binary", "--timing"])
 
 test.execute()
 
-# Keeping each whole queue would allocate about 2 GB
-with open(test.run_log_filename, 'r', encoding="utf8") as fh:
-    allocated = re.search(r'allocated (\d+) MB', fh.read())
-if not allocated or int(allocated.group(1)) > 400:
-    test.error("Allocated more memory than expected: " +
-               (allocated.group(0) if allocated else "?"))
+# Keeping each whole queue would allocate about 2 GB; sanitizers add their own allocations
+if not (test.have_dev_asan or test.tsan):
+    with open(test.run_log_filename, 'r', encoding="utf8") as fh:
+        allocated = re.search(r'allocated (\d+) MB', fh.read())
+    if not allocated or int(allocated.group(1)) > 400:
+        test.error("Allocated more memory than expected: " +
+                   (allocated.group(0) if allocated else "?"))
 
 test.passes()
