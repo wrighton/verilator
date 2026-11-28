@@ -1743,7 +1743,7 @@ class WidthVisitor final : public VNVisitor {
         AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
             width, width, fromp->dtypep()->numeric(), fromp->dtypep()->isFourstate());
         if (!fromp->dtypep()->isFourstate()) {
-            widthCheckSized(nodep, "errorless...", fromp, subDTypep, EXTEND_EXP,
+            widthCheckSized(nodep, "errorless...", fromp, subDTypep, EXTEND_ZERO,
                             false /*noerror*/);
             return;
         }

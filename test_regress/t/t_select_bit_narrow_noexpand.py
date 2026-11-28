@@ -21,6 +21,6 @@ test.compile(verilator_flags2=[
 
 test.execute(all_run_flags=["+pos2=17", "+pos4=4294967"])
 
-test.file_grep(test.stats, r'Unknowns, partial range reads\s+(\d+)', 159)
+test.file_grep(test.stats, r'Unknowns, partial range reads\s+(\d+)', 169)
 
 test.passes()
