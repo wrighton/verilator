@@ -3287,34 +3287,53 @@ class ConstraintExprVisitor final : public VNVisitor {
             if (m_conditionp) VL_DO_DANGLING(pushDeletep(m_conditionp), m_conditionp);
         }
         // The value of none, never read where the comparison requires k to select an object
-        AstNodeExpr* const nonep
+        AstNodeExpr* nonep
             = getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0});
         if (!keysVarp) {
             iter.ifp->addElsesp(
                 newTextPushp(fl, leavesVarp, nonep->cloneTree(false), sel.descending));
         }
         blockp->addStmtsp(iter.loopp);
+        // A key an associative array of objects does not hold reads its default (IEEE
+        // 1800-2023 7.8.6), whose member is read if it is not null
+        const bool keyedDefault = keysVarp && sel.objects;
+        if (keyedDefault) {
+            VL_DO_DANGLING(pushDeletep(nonep), nonep);
+            AstCMethodHard* const atDefaultp = new AstCMethodHard{
+                fl, sel.arrayp->cloneTreePure(false), VCMethod::ASSOC_AT_DEFAULT};
+            atDefaultp->dtypeFrom(sel.elemDtp);
+            AstMemberRef* const memberp
+                = new AstMemberRef{fl, atDefaultp->cloneTreePure(false), nodep->varp()};
+            memberp->dtypeFrom(nodep);
+            AstCond* const condp = new AstCond{
+                fl, new AstNeq{fl, atDefaultp, new AstConst{fl, AstConst::Null{}}}, memberp,
+                new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0}};
+            condp->dtypeFrom(nodep);
+            nonep = getConstFormat(condp);
+        }
         // Where k's validity cannot be required, the select of an array not randomized
-        // reads the value of none for a null or missing object, a key that does not exist too
-        AstNodeExpr* const missingp = !validate && keysVarp ? nonep->cloneTree(false) : nullptr;
+        // reads the value of none for a null or missing object, a key that does not exist too,
+        // as does a key not held of an associative array of objects
+        AstNodeExpr* const missingp
+            = (!validate || keyedDefault) && keysVarp ? nonep->cloneTree(false) : nullptr;
         AstNodeExpr* selectp = newObjIndexSelectp(sel, keysVarp, leavesVarp, indexTextVarp, nonep);
+        if (missingp) {
+            AstSFormatF* const condp = new AstSFormatF{
+                fl, "(ite %s %s %s)", false,
+                newObjIndexSelectp(sel, keysVarp, nullptr, indexTextVarp,
+                                   new AstConst{fl, AstConst::String{}, "false"})};
+            condp->addExprsp(selectp);
+            condp->addExprsp(missingp);
+            selectp = condp;
+        }
         if (!validate) {
-            if (missingp) {
-                AstSFormatF* const condp = new AstSFormatF{
-                    fl, "(ite %s %s %s)", false,
-                    newObjIndexSelectp(sel, keysVarp, nullptr, indexTextVarp,
-                                       new AstConst{fl, AstConst::String{}, "false"})};
-                condp->addExprsp(selectp);
-                condp->addExprsp(missingp);
-                selectp = condp;
-            }
             nodep->replaceWith(
                 new AstSFormatF{fl, "%s", false, new AstExprStmt{fl, blockp, selectp}});
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return true;
         }
         // The validity, in a block of its own, for the comparison
-        AstSFormatF* const validp = newObjIndexExistsp(sel);
+        AstSFormatF* const validp = newObjIndexExistsp(sel, keyedDefault);
         if (m_objIndexValidp) {
             AstSFormatF* const bothp = new AstSFormatF{fl, "(and %s %s)", false, m_objIndexValidp};
             bothp->addExprsp(validp);
