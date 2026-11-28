@@ -471,6 +471,9 @@ class WidthVisitor final : public VNVisitor {
     V3UniqueNames m_insideTempNames;  // For generating unique temporary variable names for
                                       // `inside` expressions
     V3UniqueNames m_bitstreamTempNames;  // Impure values in bit-stream casts
+    // Variable of the bits of an output stream connected to the instance array whose elements are
+    // being connected, by the formal (see pinInstArrayStream)
+    std::unordered_map<const AstVar*, AstVar*> m_arrayStreamVarps;
     VMemberMap m_memberMap;  // Member names cached for fast lookup
     VDouble0 m_statIfaceMemberSteps;  // Interface items examined, or lookups, for member refs
     std::unordered_map<const AstModport*, std::unordered_map<string, const AstNode*>>
@@ -10606,6 +10609,65 @@ class WidthVisitor final : public VNVisitor {
     // connection has had its PRELIM visit. Returns true if the pin needs nothing else (the
     // selected connection matches the port, or there was an error), false if the pin still
     // needs the usual checks.
+    // Bits of a stream of fixed-size operands
+    static int fixedStreamBits(const AstNodeExpr* exprp) {
+        if (const AstConcat* const concatp = VN_CAST(exprp, Concat)) {
+            return fixedStreamBits(concatp->lhsp()) + fixedStreamBits(concatp->rhsp());
+        }
+        if (const AstNodeStream* const streamp = VN_CAST(exprp, NodeStream)) {
+            return fixedStreamBits(streamp->lhsp());
+        }
+        return exprp->dtypep()->skipRefp()->widthStream();
+    }
+    // Connect to the unpacked array port of type portDTypep of the element at row-major position
+    // idx of an array of 'instances' instances, from the dimension rangep inwards, its slice of
+    // the bits of the stream of pin nodep, if the stream has the bits of all the instances, the
+    // leftmost instance the leftmost slice, as for a packed connection (IEEE 1800-2023 23.3.3.5).
+    // Otherwise the stream is connected to every instance.
+    void pinInstArrayStream(AstPin* nodep, const AstNodeDType* portDTypep, const AstRange* rangep,
+                            int instances, int idx) {
+        AstNodeStream* const streamp = VN_AS(nodep->exprp(), NodeStream);
+        if (streamBits(streamp->lhsp()) == StreamBits::OTHER) return;
+        const int portBits = portDTypep->widthStream();
+        const int bits = fixedStreamBits(streamp);
+        if (bits != portBits * instances) return;
+        if (rangep->ascending()) {
+            streamp->v3warn(ASCRANGE, "Ascending instance range connecting to vector: left < "
+                                      "right of instance range: ["
+                                          << rangep->leftConst() << ":" << rangep->rightConst()
+                                          << "]");
+        }
+        FileLine* const flp = streamp->fileline();
+        const int lsb = portBits * (instances - 1 - idx);
+        AstNodeExpr* selp;
+        if (!nodep->modVarp()->direction().isWritable()) {
+            // Into an input: a stream of its slice of the bits of the stream
+            if (VN_IS(streamp->dtypep(), StreamDType)) packStreamOperand(streamp);
+            userIterateAndNext(streamp, WidthVP{streamp->dtypep(), FINAL, STREAM_USE_ASSIGN}.p());
+            selp = new AstSel{flp, VN_AS(nodep->exprp(), NodeExpr)->unlinkFrBack(), lsb, portBits};
+            selp->didWidth(true);
+        } else {
+            // From an output: into its slice of a variable of the bits of all the instances, the
+            // continuous assignment of which to the stream every instance shares. It is made when
+            // the first instance is connected, as the elements of an instance array are adjacent,
+            // from the left (see V3Param), so are connected one after another.
+            AstVar*& varp = m_arrayStreamVarps[nodep->modVarp()];
+            if (!varp) {
+                varp = makeTempVarp(m_bitstreamTempNames.get(streamp), streamp,
+                                    streamp->findBitOrLogicDType(bits, bits, VSigning::UNSIGNED,
+                                                                 portDTypep->isFourstate()));
+                m_modep->addStmtsp(new AstAlways{new AstAssignW{
+                    flp, streamp->unlinkFrBack(), new AstVarRef{flp, varp, VAccess::READ}}});
+            } else {
+                VL_DO_DANGLING(pushDeletep(streamp->unlinkFrBack()), streamp);
+            }
+            selp = new AstSel{flp, new AstVarRef{flp, varp, VAccess::WRITE}, lsb, portBits};
+        }
+        AstStreamR* const newp = new AstStreamR{flp, selp, new AstConst{flp, 1}};
+        newp->dtypeSetBitOrLogicUnsized(portBits, portBits, VSigning::UNSIGNED,
+                                        portDTypep->isFourstate());
+        nodep->exprp(newp);
+    }
     bool pinInstArrayElement(AstPin* nodep, const AstRange* rangep, int idx) {
         AstNodeDType* const modDTypep = nodep->modVarp()->dtypep()->skipRefp();
         AstNodeDType* const conDTypep = nodep->exprp()->dtypep()->skipRefp();
@@ -10660,6 +10722,12 @@ class WidthVisitor final : public VNVisitor {
                 ++m_pinProjections[nodep];
             }
             return pinInstArrayElement(nodep, subRangep, idx % subElems);
+        }
+
+        // A stream into an unpacked array port of a bit-stream type connects its bits
+        if (VN_IS(nodep->exprp(), NodeStream) && VN_IS(modDTypep, UnpackArrayDType)) {
+            pinInstArrayStream(nodep, modDTypep, rangep, elements * subElems, idx);
+            return false;
         }
 
         // Otherwise if not packed (including an unpacked array with the port's number of unpacked
@@ -10958,6 +11026,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstCell* nodep) override {
         VL_RESTORER(m_cellp);
         m_cellp = nodep;
+        // The first element of an instance array (see pinInstArrayStream)
+        if (nodep->arrayIdx() == 0) m_arrayStreamVarps.clear();
         if (!m_paramsOnly) {
             if (VN_IS(nodep->modp(), NotFoundModule)) {
                 // We've resolved parameters and hit a module that we couldn't resolve.  It's
