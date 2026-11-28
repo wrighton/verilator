@@ -36,6 +36,15 @@ module mid_dp (
   defparam u.W = 9;
 endmodule
 
+// Several defparams to one parameter in the module of the instance: the last one wins
+module mid_dp2 (
+    output int o
+);
+  sub u (.o(o));
+  defparam u.W = 4;
+  defparam u.W = 6;
+endmodule
+
 module t;
   int o;
   sub #(4) u (.o(o));
@@ -57,6 +66,14 @@ module t;
   int c;
   mid_dp mc (.o(c));
 
+  // Several defparams to one parameter: the last one in the source text wins (IEEE 1800-2023
+  // 23.10.1)
+  int d, e;
+  sub #(1) ud (.o(d));
+  defparam ud.W = 2;
+  defparam ud.W = 3;
+  mid_dp2 me (.o(e));
+
   // A defparam to an element of an instance array overrides only that element's assignment
   int ar[2];
   sub #(.W(7)) ua[2] (.o(ar));
@@ -70,6 +87,8 @@ module t;
     `checkd(b1, 5);
     `checkd(b2, 3);
     `checkd(c, 9);
+    `checkd(d, 3);
+    `checkd(e, 6);
     `checkd(ar[0], 7);
     `checkd(ar[1], 5);
     $write("*-* All Finished *-*\n");

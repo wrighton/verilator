@@ -2525,6 +2525,14 @@ class LinkDotParamVisitor final : public VNVisitor {
     // STATE
     LinkDotState* const m_statep;  // State to pass between visitors, including symbol table
     AstNodeModule* m_modp = nullptr;  // Current module
+    // A defparam's pin
+    struct DefParamPin final {
+        AstPin* m_pinp;  // The pin
+        const VSymEnt* m_scopeSymp;  // Scope of the defparam
+        AstDefParam* m_keptp;  // The defparam, kept for V3Param to give the value, or nullptr
+    };
+    // Instance -> "path.parameter" -> its defparam's pin
+    std::unordered_map<const AstCell*, std::unordered_map<string, DefParamPin>> m_defParamPins;
 
     void pinImplicitExprRecurse(AstNode* nodep) {
         // Under a pin, Check interconnect expression for a pin reference or a concat.
@@ -2673,6 +2681,13 @@ class LinkDotParamVisitor final : public VNVisitor {
         return dim == indices.size();
     }
 
+    // Whether a scope is in a generate block, so may not be built
+    static bool inGenerate(const VSymEnt* symp) {
+        for (; symp && !VN_IS(symp->nodep(), NodeModule); symp = symp->parentp()) {
+            if (VN_IS(symp->nodep(), NodeGen)) return true;
+        }
+        return false;
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         iterateChildren(nodep);
         AstParseRef* const targetp = VN_CAST(nodep->targetp(), ParseRef);
@@ -2752,7 +2767,23 @@ class LinkDotParamVisitor final : public VNVisitor {
             pinp->param(true);
             pinp->paramPath(path);
             cellp->addParamsp(pinp);
+            // Of several defparams to a parameter, the last in the source text gives its value
+            // (IEEE 1800-2023 23.10.1). Only one in the same scope outside any generate block is
+            // replaced: others may be in generate blocks not built.
+            const auto pair = m_defParamPins[cellp].emplace(path + "." + name,
+                                                            DefParamPin{pinp, scopeSymp, nullptr});
+            if (!pair.second) {
+                DefParamPin& prev = pair.first->second;
+                if (prev.m_scopeSymp == scopeSymp && !inGenerate(scopeSymp)) {
+                    VL_DO_DANGLING(pushDeletep(prev.m_pinp->unlinkFrBack()), prev.m_pinp);
+                    if (prev.m_keptp) {
+                        VL_DO_DANGLING(pushDeletep(prev.m_keptp->unlinkFrBack()), prev.m_keptp);
+                    }
+                }
+                prev = DefParamPin{pinp, scopeSymp, nullptr};
+            }
             if (!exprp) {
+                pair.first->second.m_keptp = nodep;
                 pushDeletep(nodep->pathp()->unlinkFrBack());
                 targetp->replaceWith(
                     new AstVarXRef{targetp->fileline(), name, belowPath, VAccess::WRITE});

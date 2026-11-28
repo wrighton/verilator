@@ -1,0 +1,20 @@
+%Error: t/t_defparam_gen_dup_bad.v:23:26: Duplicate parameter connection: 'P'
+   23 |     defparam chosen_if.P = 11;   
+      |                          ^
+        t/t_defparam_gen_dup_bad.v:22:26: ... Location of original parameter connection
+   22 |     defparam chosen_if.P = 7;
+      |                          ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_gen_dup_bad.v:28:30: Duplicate parameter connection: 'P'
+   28 |       defparam chosen_case.P = 11;   
+      |                              ^
+        t/t_defparam_gen_dup_bad.v:27:30: ... Location of original parameter connection
+   27 |       defparam chosen_case.P = 7;
+      |                              ^
+%Error: t/t_defparam_gen_dup_bad.v:34:27: Duplicate parameter connection: 'P'
+   34 |     defparam chosen_for.P = 11;   
+      |                           ^
+        t/t_defparam_gen_dup_bad.v:33:27: ... Location of original parameter connection
+   33 |     defparam chosen_for.P = 7;
+      |                           ^
+%Error: Exiting due to

@@ -29,6 +29,8 @@ module t;
   defparam u_m3[2'sb11 + 3'd1].PAR3 = 3;
 
   m3 u_up ();
+  m3 u_up2 ();
+  m3 u_up3 ();
   m6 #(.M6_PARAM(7)) m6 ();
 
   initial begin
@@ -75,6 +77,10 @@ module m6 #(
   class Cls;
     localparam CLS_PARAM = M6_PARAM;
   endclass
-  defparam t.u_up.PAR3 = M6_PARAM;  // Instance not under the defparam
+  defparam t.u_up2.PAR3 = M6_PARAM;  // Instance not under the defparam
   defparam t.u_up.PAR3 = Cls::CLS_PARAM;
+  // The last defparam to a parameter in a scope gives its value (IEEE 1800-2023 23.10.1), so the
+  // first one's value is not used
+  defparam t.u_up3.PAR3 = M6_PARAM;
+  defparam t.u_up3.PAR3 = 5;
 endmodule
