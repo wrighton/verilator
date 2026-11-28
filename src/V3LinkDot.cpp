@@ -526,13 +526,20 @@ public:
         return symp;
     }
     void linkShadowed() {
-        for (VSymEnt* const headp : m_shadowingSyms) linkAlternatives(ownChain(headp));
+        // Only from the newest block of each chain, as that links the blocks it replaced too
+        std::unordered_set<const VSymEnt*> replacedps;
+        replacedps.reserve(m_shadowingSyms.size());
+        for (const VSymEnt* const headp : m_shadowingSyms) replacedps.insert(headp->shadowedp());
+        for (VSymEnt* const headp : m_shadowingSyms) {
+            if (!replacedps.count(headp)) linkAlternatives(ownChain(headp));
+        }
     }
     static std::vector<VSymEnt*> ownChain(VSymEnt* symp) {
         // Entry and the same-named generate blocks it replaced within the same table
         std::vector<VSymEnt*> chain;
         for (VSymEnt* curp = symp; curp && curp->parentp() == symp->parentp();
              curp = curp->shadowedp()) {
+            V3Global::opCountInc();  // For scaling tests
             chain.push_back(curp);
         }
         return chain;
