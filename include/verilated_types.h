@@ -637,6 +637,7 @@ private:
     // MEMBERS
     Deque m_deque;  // State of the assoc array
     T_Value m_defaultValue{};  // Default value
+    bool m_defaultSet = false;  // Whether m_defaultValue is a variable's, see atDefaultInit
 
     // METHODS
     // Discard elements beyond the bound, with the warning IEEE 1800-2023 7.10.5 requires
@@ -689,8 +690,23 @@ public:
     ~VlQueue() = default;
     VlQueue(const VlQueue&) = default;
     VlQueue(VlQueue&&) = default;
-    VlQueue& operator=(const VlQueue&) = default;
-    VlQueue& operator=(VlQueue&&) = default;
+    // A value without a variable's default, such as a literal, leaves this one's
+    VlQueue& operator=(const VlQueue& rhs) {
+        m_deque = rhs.m_deque;
+        if (rhs.m_defaultSet) {
+            m_defaultValue = rhs.m_defaultValue;
+            m_defaultSet = true;
+        }
+        return *this;
+    }
+    VlQueue& operator=(VlQueue&& rhs) noexcept {
+        m_deque = std::move(rhs.m_deque);
+        if (rhs.m_defaultSet) {
+            m_defaultValue = std::move(rhs.m_defaultValue);
+            m_defaultSet = true;
+        }
+        return *this;
+    }
 
     // Template constuctors that construct from containers holding sub-classes
     template <typename T_Subclass>
@@ -749,6 +765,12 @@ public:
     // METHODS
     T_Value& atDefault() { return m_defaultValue; }
     const T_Value& atDefault() const { return m_defaultValue; }
+    // The default of a variable, the value of its element type read past the end (IEEE
+    // 1800-2023 7.4.6), which an assigned value without one keeps
+    T_Value& atDefaultInit() {
+        m_defaultSet = true;
+        return m_defaultValue;
+    }
     const Deque& privateDeque() const { return m_deque; }
 
     // Size. Verilog: function int size(), or int num()

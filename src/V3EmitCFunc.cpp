@@ -535,12 +535,12 @@ string EmitCFunc::emitVarResetRecurse(const AstVar* varp, bool constructing,
         const string pre = constructing ? "" : varNameProtected + suffix + ".clear();\n";
         return pre
                + emitVarResetRecurse(varp, constructing, varNameProtected, adtypep->subDTypep(),
-                                     depth + 1, suffix + ".atDefault()", nullptr);
+                                     depth + 1, suffix + ".atDefaultInit()", nullptr);
     } else if (const AstQueueDType* const adtypep = VN_CAST(dtypep, QueueDType)) {
         const string pre = constructing ? "" : varNameProtected + suffix + ".clear();\n";
         return pre
                + emitVarResetRecurse(varp, constructing, varNameProtected, adtypep->subDTypep(),
-                                     depth + 1, suffix + ".atDefault()", nullptr);
+                                     depth + 1, suffix + ".atDefaultInit()", nullptr);
     } else if (VN_IS(dtypep, SampleQueueDType)) {
         return "";
     } else if (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
