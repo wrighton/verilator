@@ -132,6 +132,14 @@ Options:
    uses an internal algorithm to sample results provided by the solver
    to achieve well-distributed results.
 
+   This sampler may reuse work between the ``randomize()`` calls of an
+   object, which ``srandom()`` and ``set_randstate()`` discard: after
+   ``set_randstate()``, the object continues as a new object with that
+   state would. A ``randomize()`` after restoring a state read with
+   ``get_randstate()`` thus repeats the call that followed the read only
+   if the object had not called ``randomize()`` with the same constraints
+   since it was created or its state was last set.
+
    With ``solver``, the solver is responsible for providing well-distributed
    results according to the supplied seed. Verilator passes the seed with
    the SMT-LIB ``:random-seed`` option, so results only vary if the solver
