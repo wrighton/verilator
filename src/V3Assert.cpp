@@ -184,6 +184,14 @@ void V3AssertCommon::reducePlainAlways(AstPropSpec* specp) {
     if (!alwaysp || !alwaysp->isPlainAlways()) return;
     alwaysp->replaceWith(alwaysp->propp()->unlinkFrBack());
     VL_DO_DANGLING(alwaysp->deleteTree(), alwaysp);
+    // But an attempt of it holds only if p holds at every later tick, which is not known before
+    // the end of simulation, so the pass statements of an assertion of it never run (IEEE
+    // 1800-2023 16.14.1)
+    if (AstAssert* const assertp = VN_CAST(specp->backp(), Assert)) {
+        if (AstNode* const passsp = assertp->passsp()) {
+            VL_DO_DANGLING(passsp->unlinkFrBackWithNext()->deleteTree(), passsp);
+        }
+    }
 }
 
 //######################################################################

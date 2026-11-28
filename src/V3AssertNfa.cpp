@@ -86,6 +86,7 @@ public:
     AstNodeExpr* m_abortRejectp = nullptr;
     // Liveness terminal (IEEE weak semantics): reject must not fire from this source
     bool m_isUnbounded = false;
+    bool m_neverMatches = false;  // Terminal whose link to the match vertex is never taken
     // Implication antecedent vertex: a dropped throughout guard ends the attempt without
     // a verdict, as a non-matching antecedent is vacuously true (IEEE 1800-2023 16.12.7)
     bool m_isAntecedent = false;
@@ -903,6 +904,10 @@ class SvaNfaBuilder final {
             guardedEdge(holdp, holdp, sampled(propp->cloneTreePure(false)), flp);
             addCheck(holdp);
             holdp->m_isUnbounded = true;
+            // The always holds only if p holds at every later tick, which is not known before
+            // the end of simulation, so an attempt never matches (IEEE 1800-2023 16.12.11,
+            // 16.14.1)
+            holdp->m_neverMatches = true;
             return {holdp, nullptr, {}};
         }
         const unsigned hi = getConstUInt(nodep->hiBoundp());
@@ -2962,7 +2967,12 @@ class AssertNfaVisitor final : public VNVisitor {
         // Skip the main term Link when midSources already cover every
         // end-of-match (cover_sequence path); otherwise the per-mid extraction
         // double-counts via the merge vertex.
-        if (!result.termIsMidMerge) { graph.addLink(result.termVertexp, graph.m_matchVertexp); }
+        if (!result.termIsMidMerge) {
+            graph.addLink(result.termVertexp, graph.m_matchVertexp,
+                          result.termVertexp->m_neverMatches
+                              ? new AstConst{flp, AstConst::BitFalse{}}
+                              : nullptr);
+        }
         for (SvaStateVertex* srcVtxp : result.midSources) {
             AstNodeExpr* condp = nullptr;
             for (AstNodeExpr* const tcp : srcVtxp->m_throughoutConds) {
