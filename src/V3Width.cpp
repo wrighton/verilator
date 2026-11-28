@@ -504,8 +504,10 @@ class WidthVisitor final : public VNVisitor {
     bool m_underDisableIff = false;  // Visiting under a disable iff condition
     bool m_underSampledArg = false;  // Visiting under a sampled value function argument
     std::unordered_set<const AstVar*> m_propLocalVarps;  // Local variables of property/sequence
-    const AstCell* m_cellp = nullptr;  // Current cell, whose port connections are visited
+    AstCell* m_cellp = nullptr;  // Current cell, whose port connections are visited
     std::vector<AstVar*> m_splitIfaceArrayVarps;  // Interface arrays split by V3Param
+    // Stream checks to add to their assignments, see addStreamCheck
+    std::vector<std::pair<AstNode*, AstStreamCheck*>> m_streamChecks;
     // Element variables of each interface array split by V3Param, in order (see V3Param),
     // gathered when first selected from
     std::unordered_map<const AstVar*, std::vector<AstVar*>> m_splitIfaceElemVarps;
@@ -10671,6 +10673,9 @@ class WidthVisitor final : public VNVisitor {
                 = (pinDirection == VDirection::OUTPUT || pinDirection == VDirection::INOUT)
                   && !isShort && !isPinLvalue(exprp);
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
+            if (AstNodeStream* const streamp = VN_CAST(nodep->exprp(), NodeStream)) {
+                addPinStreamCheck(nodep, streamp);
+            }
             // Outputs are continuous assignments; inouts are transistor connections (23.3.3).
             if (pinDirection.isOutput() || pinDirection.isInout()) {
                 if (PortLValueVisitor::apply(nodep)) {
@@ -16027,6 +16032,10 @@ public:
         , m_doGenerate{doGenerate} {}
     AstNode* mainAcceptEdit(AstNode* nodep) {
         nodep = userIterateSubtreeReturnEdits(nodep, WidthVP{SELF, BOTH}.p());
+        // Added once iterated, so an assignment is visited only once
+        for (const std::pair<AstNode*, AstStreamCheck*>& itr : m_streamChecks)
+            insertStreamCheck(itr.first, itr.second);
+        m_streamChecks.clear();
         // All references to the whole interface array variables split by V3Param are now replaced
         for (AstVar* const varp : m_splitIfaceArrayVarps) {
             VL_DO_DANGLING(pushDeletep(varp->unlinkFrBack()), varp);
@@ -16784,6 +16793,72 @@ public:
         }
         return true;
     }
+    // The element width of a dynamically sized stream operand, a queue or dynamic array of
+    // packed elements, zero if another type
+    static int dynamicStreamUnitBits(const AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        if (!VN_IS(dtypep, QueueDType) && !VN_IS(dtypep, DynArrayDType)) return 0;
+        const AstNodeDType* const elemDTypep = dtypep->subDTypep()->skipRefp();
+        return elemDTypep->isIntegralOrPacked() ? elemDTypep->width() : 0;
+    }
+    // Queue a run-time check of a stream, of dynamically sized operand fromp if not null, else
+    // of 'bits' bits, to add before procedural assignment anchorp, else as a process beside
+    // anchorp (see AstStreamCheck)
+    void queueStreamCheck(AstNode* anchorp, FileLine* flp, AstNodeExpr* fromp, uint32_t bits,
+                          uint32_t minBits, uint32_t maxBits, uint32_t unitBits) {
+        m_streamChecks.emplace_back(
+            anchorp, new AstStreamCheck{flp, fromp ? fromp->cloneTreePure(false) : nullptr, bits,
+                                        minBits, maxBits, unitBits});
+    }
+    // Check the stream of streaming assignment nodep at run time: the stream of dynamically
+    // sized operand fromp if not null, else a stream of 'bits' bits
+    void addStreamCheck(AstNodeAssign* nodep, AstNodeExpr* fromp, uint32_t bits, uint32_t minBits,
+                        uint32_t maxBits, uint32_t unitBits) {
+        // A procedural assignment is checked by a statement before it, a continuous one by a
+        // process beside its own
+        AstNode* anchorp = nullptr;
+        if (VN_IS(nodep, Assign) || VN_IS(nodep, AssignDly)) {
+            anchorp = nodep;
+        } else if (VN_IS(nodep, AssignW) && m_procedurep) {
+            anchorp = m_procedurep;
+        } else {
+            return;
+        }
+        queueStreamCheck(anchorp, nodep->fileline(), fromp, bits, minBits, maxBits, unitBits);
+    }
+    // Check the stream of streaming concatenation streamp connected to port pinp at run time,
+    // as for the continuous assignment the connection is (IEEE 1800-2023 23.3.3), by a process
+    // beside the instance
+    void addPinStreamCheck(AstPin* pinp, AstNodeStream* streamp) {
+        const AstNodeDType* const portDTypep = pinp->modVarp()->dtypep()->skipRefp();
+        if (portDTypep->isDynamicallySized()) return;
+        const int portBits = portDTypep->widthStream();
+        if (!pinp->modVarp()->direction().isWritable()) {
+            // Into an input
+            if (checkedStreamOperand(streamp->lhsp())) {
+                queueStreamCheck(m_cellp, pinp->fileline(), streamp->lhsp(), 0, 0, portBits, 0);
+            }
+        } else if (const int unitBits = dynamicStreamUnitBits(streamp->lhsp()->dtypep())) {
+            // From an output, unpacked into whole elements
+            if (portBits % unitBits) {
+                queueStreamCheck(m_cellp, pinp->fileline(), nullptr, portBits, 0, 0, unitBits);
+            }
+        }
+    }
+    // Add stream check checkp before procedural assignment anchorp, else as a process beside
+    // anchorp
+    static void insertStreamCheck(AstNode* anchorp, AstStreamCheck* checkp) {
+        if (VN_IS(anchorp, NodeAssign)) {
+            anchorp->addHereThisAsNext(checkp);
+        } else {
+            anchorp->addNextHere(
+                new AstAlways{checkp->fileline(), VAlwaysKwd::ALWAYS_COMB, nullptr, checkp});
+        }
+    }
+    // Whether exprp is a dynamically sized stream operand whose stream is checked at run time
+    static bool checkedStreamOperand(AstNodeExpr* exprp) {
+        return dynamicStreamUnitBits(exprp->dtypep()) && exprp->isPure();
+    }
     void streamAssignLower(AstNodeAssign* nodep) {
         AstNodeDType* lhsDTypep = nodep->lhsp()->dtypep();
         // Check width of stream and wrap if needed
@@ -16821,6 +16896,12 @@ public:
                                    "Target fixed size variable ("
                                        << lwidth << " bits) is narrower than the stream ("
                                        << rwidth << " bits) (IEEE 1800-2023 11.4.14)");
+            }
+            // The stream of a dynamically sized operand is checked at run time, unless the
+            // target is a stream, which takes the bits it needs of a longer source
+            if (lwidth != 0 && !VN_IS(nodep->lhsp(), NodeStream)
+                && checkedStreamOperand(streamp->lhsp())) {
+                addStreamCheck(nodep, streamp->lhsp(), 0, 0, lwidth, 0);
             }
             const AstNodeDType* const srcDTypep = streamp->lhsp()->dtypep()->skipRefp();
             if (lwidth != 0 && srcDTypep->isDynamicallySized()
@@ -16882,6 +16963,25 @@ public:
                                    "Stream target requires "
                                        << lwidth << " bits, but source expression only provides "
                                        << rwidth << " bits (IEEE 1800-2023 11.4.14.3)");
+            }
+            // The stream of the source, or of the operand of a source stream, is checked at run
+            // time if dynamically sized; a dynamically sized target takes whole elements, which
+            // a fixed-size source may not fill
+            AstNodeExpr* sourcep = nodep->rhsp();
+            if (const AstNodeStream* const sourceStreamp = VN_CAST(sourcep, NodeStream)) {
+                sourcep = sourceStreamp->lhsp();
+            }
+            const int unitBits = lhsStreamDTypep->isDynamicallySized()
+                                     ? dynamicStreamUnitBits(lhsStreamDTypep)
+                                     : 0;
+            if (checkedStreamOperand(sourcep)) {
+                if (!lhsStreamDTypep->isDynamicallySized()) {
+                    addStreamCheck(nodep, sourcep, 0, lwidth, 0, 0);
+                } else if (unitBits) {
+                    addStreamCheck(nodep, sourcep, 0, 0, 0, unitBits);
+                }
+            } else if (unitBits && rwidth % unitBits) {
+                addStreamCheck(nodep, nullptr, rwidth, 0, 0, unitBits);
             }
             if (lowerAsFixedAggregate(lhsStreamDTypep)) {
                 AstNodeExpr* const streamExprp = nodep->lhsp()->unlinkFrBack();
