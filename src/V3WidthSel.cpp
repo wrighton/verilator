@@ -776,9 +776,33 @@ class WidthSelVisitor final : public VNVisitor {
                                "Second value of [a:b] isn't a constant, maybe you want +: or -:");
         AstNodeExpr* msbp = nodep->leftp()->unlinkFrBack();
         AstNodeExpr* lsbp = nodep->rightp()->unlinkFrBack();
-        int32_t msb = VN_AS(msbp, Const)->toSInt();
-        int32_t lsb = VN_AS(lsbp, Const)->toSInt();
-        const int32_t elem = (msb > lsb) ? (msb - lsb + 1) : (lsb - msb + 1);
+        // A bound of a packed select beyond an integer is out of range like any other
+        // (IEEE 1800-2023 11.5.1), if an integer still gives the width in bits
+        int64_t msb;
+        int64_t lsb;
+        const std::pair<bool, int64_t> msbPos = slicePosition(VN_AS(msbp, Const));
+        const std::pair<bool, int64_t> lsbPos = slicePosition(VN_AS(lsbp, Const));
+        const uint64_t posDiff
+            = msbPos.second > lsbPos.second
+                  ? static_cast<uint64_t>(msbPos.second) - static_cast<uint64_t>(lsbPos.second)
+                  : static_cast<uint64_t>(lsbPos.second) - static_cast<uint64_t>(msbPos.second);
+        const AstPackArrayDType* const packArrayp = VN_CAST(ddtypep, PackArrayDType);
+        const uint64_t bitsPerElem
+            = packArrayp && fromRange.elements() ? packArrayp->width() / fromRange.elements() : 1;
+        constexpr uint64_t maxWidth = std::numeric_limits<int32_t>::max();
+        if (msbPos.first && lsbPos.first && !VN_IS(ddtypep, UnpackArrayDType) && posDiff < maxWidth
+            && (posDiff + 1) * bitsPerElem <= maxWidth) {
+            msb = msbPos.second;
+            lsb = lsbPos.second;
+        } else {
+            msb = VN_AS(msbp, Const)->toSInt();
+            lsb = VN_AS(lsbp, Const)->toSInt();
+        }
+        // Elements selected; the difference of the bounds is known to fit
+        const int64_t elem = ((msb > lsb) ? (msb - lsb) : (lsb - msb)) + 1;
+        // Whether an integer gives each bound, for a slice data type
+        const bool intBounds
+            = msb == static_cast<int32_t>(msb) && lsb == static_cast<int32_t>(lsb);
         if (VN_IS(ddtypep, UnpackArrayDType)) {
             // Slice extraction
             if (fromRange.elements() == elem
@@ -788,7 +812,8 @@ class WidthSelVisitor final : public VNVisitor {
             } else {  // Slice
                 AstSliceSel* const newp
                     = new AstSliceSel{nodep->fileline(), fromp,
-                                      VNumRange{msb - fromRange.lo(), lsb - fromRange.lo()}};
+                                      VNumRange{static_cast<int>(msb - fromRange.lo()),
+                                                static_cast<int>(lsb - fromRange.lo())}};
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
             }
@@ -811,16 +836,23 @@ class WidthSelVisitor final : public VNVisitor {
                 std::swap(msbp, lsbp);  // Select starts at the new lsb
             }
             const int elwidth = adtypep->width() / fromRange.elements();
+            // A width in bits beyond an integer is given as zero, with no slice data type, for
+            // V3Width to report as it reports any width that is not positive
+            const bool widthFits = elem * elwidth <= static_cast<int64_t>(maxWidth);
             AstSel* const newp
                 = new AstSel{nodep->fileline(), fromp,
                              newPosition(lsbp, fromRange.ascending(),
                                          fromRange.ascending() ? int64_t{fromRange.hi()}
                                                                : -int64_t{fromRange.lo()},
                                          elwidth, adtypep->width()),
-                             (msb - lsb + 1) * elwidth};
+                             widthFits ? static_cast<int>(elem) * elwidth : 0};
             newp->declRange(fromRange);
             newp->declElWidth(elwidth);
-            newp->dtypeFrom(sliceDType(adtypep, msb, lsb));
+            // A slice with a bound beyond an integer numbers its elements from 0
+            if (widthFits) {
+                newp->dtypeFrom(intBounds ? sliceDType(adtypep, msb, lsb)
+                                          : sliceDType(adtypep, msb - lsb, 0));
+            }
             // UINFOTREE(9, newp, "", "EXTBTn");
             UASSERT_OBJ(newp->widthMin() == newp->widthConst(), nodep, "Width mismatch");
             nodep->replaceWith(newp);
@@ -837,9 +869,9 @@ class WidthSelVisitor final : public VNVisitor {
                 std::swap(msb, lsb);
                 std::swap(msbp, lsbp);  // Select starts at the new lsb
             }
-            AstSel* const newp
-                = new AstSel{nodep->fileline(), fromp,
-                             newBitPosition(lsbp, fromRange, fromp->width()), msb + 1 - lsb};
+            AstSel* const newp = new AstSel{nodep->fileline(), fromp,
+                                            newBitPosition(lsbp, fromRange, fromp->width()),
+                                            static_cast<int>(elem)};
             newp->declRange(fromRange);
             UINFO(6, "   new " << newp);
             // UINFOTREE(9, newp, "", "SELEXnew");
@@ -857,7 +889,7 @@ class WidthSelVisitor final : public VNVisitor {
                 std::swap(msbp, lsbp);  // Select starts at the new lsb
             }
             AstSel* const newp = new AstSel{nodep->fileline(), fromp, newSubLsbOf(lsbp, fromRange),
-                                            msb + 1 - lsb};
+                                            static_cast<int>(elem)};
             newp->declRange(fromRange);
             UINFO(6, "   new " << newp);
             // UINFOTREE(9, newp, "", "SELEXnew");
