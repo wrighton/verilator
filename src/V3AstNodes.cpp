@@ -1014,6 +1014,7 @@ void AstCase::dump(std::ostream& str) const {
     if (priorityPragma()) str << " [PRI]";
     if (uniquePragma()) str << " [UNQ]";
     if (unique0Pragma()) str << " [UNQ0]";
+    if (incomplete()) str << " [INCOMPLETE]";
 }
 void AstCase::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "caseType", m_caseType.ascii());
@@ -1022,6 +1023,7 @@ void AstCase::dumpJson(std::ostream& str) const {
     dumpJsonBoolIf(str, "priority", priorityPragma());
     dumpJsonBoolIf(str, "unique", uniquePragma());
     dumpJsonBoolIf(str, "unique0", unique0Pragma());
+    dumpJsonBoolIf(str, "incomplete", incomplete());
     dumpJsonGen(str);
 }
 string AstCase::pragmaString() const {

@@ -121,6 +121,7 @@
 
 #include "V3Tristate.h"
 
+#include "V3Case.h"
 #include "V3Const.h"
 #include "V3Graph.h"
 #include "V3Inst.h"
@@ -472,6 +473,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                                      // assign be recognised as a tristate contributor even
                                      // though that module's own graph has no Z on the net.
         std::map<int, int> bitPulls;  // Per-bit pull: bit_index -> direction (1=up, 0=down)
+        bool pulled = false;  // Has a pull, known once graphed
     };
 
     VNUser3Allocator<AstVar, AuxAstVar> m_varAux;
@@ -2193,6 +2195,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 varrefp->access(VAccess::WRITE);
                 m_tgraph.setTristate(nodep);
                 associateLogic(nodep, varrefp->varp());
+                m_varAux(varrefp->varp()).pulled = true;
             } else {
                 // Replace any pullup/pulldowns with assignw logic and set the
                 // direction of the pull in the var aux data.  A pull on a
@@ -2587,6 +2590,142 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstCaseItem* nodep) override {
         // don't deal with casez compare '???? values
         iterateAndNextNull(nodep->stmtsp());
+    }
+    void visit(AstCase* nodep) override {
+        iterateAndNextNull(nodep->exprp());
+        if (!m_graphing && !nodep->caseInside()) compareCaseEnables(nodep);
+        iterateAndNextNull(nodep->itemsp());
+        iterateAndNextNull(nodep->notParallelp());
+        iterateAndNextNull(nodep->coverDefaultp());
+        checkUnhandled(nodep);
+    }
+    // Whether the item condition 'condp' of case statement 'nodep' matches its expression
+    // 'exprp' with enable 'enp' (IEEE 1800-2023 12.5): in a case statement, z matches only z, so
+    // an item with z needs '(en == bits not z) && ((value & bits not z) == item with z as 0)',
+    // another '(en == all ones) && (value == item)', and one with x never matches; in casez or
+    // casex, z in either matches any bit, and in casex x too, so an item needs
+    // '((((value ^ item bits) & bits not x or z) | x bits in casez) & en) == 0'.
+    AstNodeExpr* newCaseMatchp(const AstCase* nodep, AstNodeExpr* exprp, AstNodeExpr* enp,
+                               AstNodeExpr* condp) {
+        FileLine* const flp = condp->fileline();
+        AstConst* const constp = VN_CAST(condp, Const);
+        if (nodep->casez() || nodep->casex()) {
+            AstNodeExpr* diffp;
+            if (constp) {
+                V3Number maskNum{constp, constp->width()};
+                maskNum.opBitsNonXZ(constp->num());
+                V3Number bitsNum{constp, constp->width()};
+                bitsNum.opBitsOne(constp->num());
+                diffp = new AstAnd{
+                    flp, new AstXor{flp, exprp->cloneTreePure(false), new AstConst{flp, bitsNum}},
+                    new AstConst{flp, maskNum}};
+                if (nodep->casez() && constp->num().isAnyX()) {
+                    // A bit with x matches only z
+                    V3Number zNum{constp, constp->width()};
+                    zNum.opBitsZ(constp->num());
+                    V3Number notZNum{constp, constp->width()};
+                    notZNum.opNot(zNum);
+                    V3Number xzNum{constp, constp->width()};
+                    xzNum.opBitsXZ(constp->num());
+                    V3Number xNum{constp, constp->width()};
+                    xNum.opAnd(xzNum, notZNum);
+                    diffp = new AstOr{flp, diffp, new AstConst{flp, xNum}};
+                }
+                VL_DO_DANGLING(pushDeletep(condp), condp);
+            } else {
+                diffp = new AstXor{flp, exprp->cloneTreePure(false), condp};
+            }
+            return new AstEq{flp, newAllZerosOrOnes(exprp, false),
+                             new AstAnd{flp, diffp, enp->cloneTreePure(false)}};
+        }
+        if (constp && constp->num().isAnyX()) {
+            VL_DO_DANGLING(pushDeletep(condp), condp);
+            return new AstConst{flp, AstConst::BitFalse{}};
+        }
+        if (constp && constp->num().hasZ()) {
+            AstConst* const maskp = getNonZConstp(constp);
+            V3Number valueNum{constp, constp->width()};
+            valueNum.opAnd(constp->num(), maskp->num());  // Z->0
+            VL_DO_DANGLING(pushDeletep(condp), condp);
+            return new AstLogAnd{
+                flp, new AstEq{flp, maskp, enp->cloneTreePure(false)},
+                new AstEq{flp, new AstConst{flp, valueNum},
+                          new AstAnd{flp, exprp->cloneTreePure(false), maskp->cloneTree(false)}}};
+        }
+        return new AstLogAnd{
+            flp, new AstEq{flp, newAllZerosOrOnes(condp, true), enp->cloneTreePure(false)},
+            AstEq::newTyped(flp, exprp->cloneTreePure(false), condp)};
+    }
+    // Make a case statement whose expression reads a tristate variable compare the
+    // expression's enable too, as 'case (1'b1)' with a condition for each item, and the same
+    // in the checks of 'unique' V3Assert made from the items. Not for a port, an interface
+    // variable or a pulled variable, also by a pull in a cell its port connects to, whose enable
+    // can leave out drivers in other modules or the pull.
+    void compareCaseEnables(AstCase* nodep) {
+        AstNodeExpr* const exprp = nodep->exprp();
+        if (!exprp->isPure() || exprp->user1p() || VN_IS(m_modp, Iface)) return;
+        const AstNodeExpr* basep = exprp;
+        while (true) {
+            if (const AstSel* const selp = VN_CAST(basep, Sel)) {
+                basep = selp->fromp();
+            } else if (const AstExtend* const extendp = VN_CAST(basep, Extend)) {
+                basep = extendp->lhsp();
+            } else if (const AstExtendS* const extendp = VN_CAST(basep, ExtendS)) {
+                basep = extendp->lhsp();
+            } else {
+                break;
+            }
+        }
+        const AstVarRef* const refp = VN_CAST(basep, VarRef);
+        if (!refp || !m_tgraph.isTristate(refp->varp())) return;
+        AstVar* const varp = refp->varp();
+        const AuxAstVar& aux = m_varAux(varp);
+        // A pull of a cell's port connected to it is known once graphed, as is its own
+        if (varp->isIO() || aux.pulled || aux.pullp || !aux.bitPulls.empty()
+            || aux.ifaceTristate) {
+            return;
+        }
+        for (const AstCaseItem* itemp = nodep->itemsp(); itemp;
+             itemp = VN_AS(itemp->nextp(), CaseItem)) {
+            for (const AstNode* condp = itemp->condsp(); condp; condp = condp->nextp()) {
+                if (condp->width() != exprp->width()) return;
+            }
+        }
+        UINFO(9, "       case on tristate " << nodep);
+        // Warn of the items as V3Case would, before they become conditions
+        V3Case::caseLint(nodep);
+        AstNodeExpr* const enp = getEnExprBasedOnOriginalp(exprp);
+        for (AstCaseItem* itemp = nodep->itemsp(); itemp;
+             itemp = VN_AS(itemp->nextp(), CaseItem)) {
+            for (AstNodeExpr *condp = itemp->condsp(), *nextp; condp; condp = nextp) {
+                nextp = VN_AS(condp->nextp(), NodeExpr);
+                VNRelinker relinker;
+                condp->unlinkFrBack(&relinker);
+                relinker.relink(newCaseMatchp(nodep, exprp, enp, condp));
+            }
+        }
+        // V3Assert compares the expression with each item, as '==' or '==?', constant first
+        if (AstNode* const checksp = nodep->notParallelp()) {
+            std::vector<AstNodeBiop*> cmpps;
+            checksp->foreachAndNext([&](AstNodeBiop* cmpp) {
+                if ((VN_IS(cmpp, Eq) || VN_IS(cmpp, EqWild))
+                    && (cmpp->lhsp()->sameTree(exprp) || cmpp->rhsp()->sameTree(exprp))) {
+                    cmpps.push_back(cmpp);
+                }
+            });
+            for (AstNodeBiop* const cmpp : cmpps) {
+                // The graph saw the items' constants here
+                cmpp->foreach([&](AstConst* constp) { m_tgraph.didProcess(constp, true); });
+                AstNodeExpr* const condp
+                    = cmpp->lhsp()->sameTree(exprp) ? cmpp->rhsp() : cmpp->lhsp();
+                cmpp->replaceWith(newCaseMatchp(nodep, exprp, enp, condp->unlinkFrBack()));
+                VL_DO_DANGLING(pushDeletep(cmpp), cmpp);
+            }
+        }
+        VL_DO_DANGLING(pushDeletep(enp), enp);
+        exprp->unlinkFrBack();
+        nodep->exprp(new AstConst{exprp->fileline(), AstConst::BitTrue{}});
+        VL_DO_DANGLING(pushDeletep(exprp), exprp);
     }
 
     void visit(AstCell* nodep) override {

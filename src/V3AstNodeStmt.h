@@ -408,6 +408,7 @@ class AstCase final : public AstNodeStmt {
     bool m_uniquePragma = false;  // unique case
     bool m_unique0Pragma = false;  // unique0 case
     bool m_priorityPragma = false;  // priority case
+    bool m_incomplete = false;  // Some values match no item, as found before items changed
 public:
     AstCase(FileLine* fl, VCaseType caseType, AstNodeExpr* exprp, AstCaseItem* itemsp)
         : ASTGEN_SUPER_Case(fl)
@@ -421,7 +422,8 @@ public:
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
     string verilogKwd() const override { return casez() ? "casez" : casex() ? "casex" : "case"; }
     bool sameNode(const AstNode* samep) const override {
-        return m_caseType == VN_DBG_AS(samep, Case)->m_caseType;
+        const AstCase* const asamep = VN_DBG_AS(samep, Case);
+        return m_caseType == asamep->m_caseType && m_incomplete == asamep->m_incomplete;
     }
     bool casex() const { return m_caseType == VCaseType::CT_CASEX; }
     bool casez() const { return m_caseType == VCaseType::CT_CASEZ; }
@@ -440,6 +442,8 @@ public:
     void unique0Pragma(bool flag) { m_unique0Pragma = flag; }
     bool priorityPragma() const { return m_priorityPragma; }
     void priorityPragma(bool flag) { m_priorityPragma = flag; }
+    bool incomplete() const { return m_incomplete; }
+    void incomplete(bool flag) { m_incomplete = flag; }
     string pragmaString() const;
 };
 class AstComment final : public AstNodeStmt {

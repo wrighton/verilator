@@ -21,6 +21,7 @@
 #include "verilatedos.h"
 
 class AstNetlist;
+class AstCase;
 class AstGenCase;
 
 //============================================================================
@@ -28,6 +29,7 @@ class AstGenCase;
 class V3Case final {
 public:
     static void caseAll(AstNetlist* nodep) VL_MT_DISABLED;
+    static void caseLint(AstCase* nodep) VL_MT_DISABLED;
     static void caseLint(AstGenCase* nodep) VL_MT_DISABLED;
 };
 

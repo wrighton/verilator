@@ -1,0 +1,5 @@
+[4] %Error: t_tri_case_z_unique.v:59: Assertion failed in t: unique case, but multiple matches found for '4'h8'
+-Info: t/t_tri_case_z_unique.v:59: Verilog $stop, ignored due to +verilator+error+limit
+[5] %Error: t_tri_case_z_unique.v:68: Assertion failed in t: unique case, but none matched for '4'h0'
+%Error: t/t_tri_case_z_unique.v:68: Verilog $stop
+Aborting...

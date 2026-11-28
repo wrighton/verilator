@@ -1229,7 +1229,8 @@ class CaseVisitor final : public VNVisitor {
         // Convert using the generic if/else tree method
         // If a case statement is exhaustive, presume signals involved aren't forming a latch
         // TODO: this is broken, but it is as was before
-        if (m_alwaysp && (!m_caseDetailsValid || m_caseDetails.exhaustive)) {
+        if (m_alwaysp && !nodep->incomplete()
+            && (!m_caseDetailsValid || m_caseDetails.exhaustive)) {
             m_alwaysp->fileline()->warnOff(V3ErrorCode::LATCH, true);
         }
         return convertCaseGeneric(nodep);
@@ -1325,6 +1326,22 @@ void V3Case::caseAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
     { CaseVisitor{nodep}; }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("case", 0, dumpTreeEitherLevel() >= 3);
+}
+void V3Case::caseLint(AstCase* nodep) {
+    UINFO(4, __FUNCTION__ << ": ");
+    CaseLintVisitor::apply(nodep);
+    // As CaseVisitor would, for a packed and narrow expression and constant items, also noting
+    // whether some values match no item, as CaseVisitor cannot tell once the items change
+    AstNodeExpr* const exprp = nodep->exprp();
+    if (exprp->isDouble() || exprp->isString() || exprp->width() > CaseDetails::MAX_WIDTH) return;
+    for (AstCaseItem* const itemp : nodep->itemspList()) {
+        for (AstNode* const condp : itemp->condspList()) {
+            if (!VN_IS(condp, Const)) return;
+        }
+    }
+    const std::unique_ptr<CaseDetails> detailsp{new CaseDetails};
+    detailsp->analyze(nodep);
+    nodep->incomplete(!detailsp->exhaustive);
 }
 void V3Case::caseLint(AstGenCase* nodep) {
     UINFO(4, __FUNCTION__ << ": ");
