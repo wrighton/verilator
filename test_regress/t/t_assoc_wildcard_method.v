@@ -68,6 +68,22 @@ module t;
     `checkp(qv, "'{'h1}");
     qv = q.max;
     `checkp(qv, "'{'h4}");
+    qv = q.min with (-item);
+    `checkp(qv, "'{'h4}");
+    qv = q.max with (item.index == "a" ? 9 : item);
+    `checkp(qv, "'{'h1}");
+    qv = q.unique with (item % 2);
+    `checkp(qv, "'{'h1, 'h2}");
+    begin
+      logic signed [64:0] wq[*];
+      logic signed [64:0] wv[$];
+      wq[1] = 65'sd4;
+      wq[2] = -65'sd9;
+      wv = wq.min with (-item);
+      `checkh(wv[0], 65'sd4);
+      wv = wq.max with (-item);
+      `checkh(wv[0], -65'sd9);
+    end
 
     qv = qe.min;
     `checkp(qv, "'{}");
