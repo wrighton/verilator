@@ -73,6 +73,7 @@ module range_check #(
   int failures_nested = 0;
   int expected = 0;
   int expected_nested = 0;
+  localparam bit PER_ATTEMPT = HI < 255;
 
   assert property (@(posedge clk) disable iff (rst) a |-> ##[LO:HI] b)
   else failures++;
@@ -91,6 +92,12 @@ module range_check #(
       pending_nested = {pending_nested[HI:0], a};
       if (b) pending[HI:LO] = '0;
       if (previous_b && c) pending_nested[HI+1:LO+1] = '0;
+      // An attempt fails when its last candidate misses b, or then c. Beyond the width of the
+      // lowering per attempt, it is reported once its last candidate could end (known limit).
+      if (PER_ATTEMPT && pending_nested[HI] && !b) begin
+        expected_nested++;
+        pending_nested[HI] = 0;
+      end
       if (pending[HI]) expected++;
       if (pending_nested[HI+1]) expected_nested++;
       previous_b = b;

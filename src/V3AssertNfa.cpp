@@ -3254,18 +3254,20 @@ public:
         }
         return treep;
     }
-    // True if a property has a ranged delay of a multi-cycle sequence of variable length, other
-    // than a repetition, outside an antecedent. The NFA lowering rejects each candidate of the
-    // range, a thread of the sequence started on one tick of it, rather than an attempt once no
-    // candidate can match.
-    static bool hasRangeOfVarLenSeq(AstNodeExpr* nodep) {
+    // True if a property has a ranged delay of a multi-cycle sequence, other than a repetition,
+    // outside an antecedent. For one of variable length, the NFA lowering rejects each
+    // candidate of the range, a thread of the sequence started on one tick of it, rather than an
+    // attempt once no candidate can match. For one of a fixed length, it rejects an attempt on
+    // the last tick a candidate could end, after its last candidate failed, so the failure is
+    // lost to a disable or the end of the simulation before then.
+    static bool rangeOperandNeedsEngine(AstNodeExpr* nodep) {
         if (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
-            return hasRangeOfVarLenSeq(implp->rhsp());
+            return rangeOperandNeedsEngine(implp->rhsp());
         }
         return nodep->exists([](AstSExpr* sexprp) {
             const AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
             return delayp && delayp->isRangeDelay() && sexprp->exprp()->isMultiCycleSva()
-                   && !VN_IS(sexprp->exprp(), SConsRep) && fixedLength(sexprp->exprp()) < 0;
+                   && !VN_IS(sexprp->exprp(), SConsRep);
         });
     }
     static std::unique_ptr<SvaAttemptNode> buildAttemptTree(AstNodeExpr* nodep) {
@@ -8744,7 +8746,7 @@ class AssertNfaVisitor final : public VNVisitor {
         findAttemptKinds(*treep, implications, other);
         // An implication split by the lengths of its antecedent has a pass of each attempt
         const bool lengthsSplit = treep->lengthsJoin || treep->antSeqp;
-        if (!hasVarLenAnd(*treep) && !SvaNfaBuilder::hasRangeOfVarLenSeq(bodyp)
+        if (!hasVarLenAnd(*treep) && !SvaNfaBuilder::rangeOperandNeedsEngine(bodyp)
             && (cover || !implications || (!other && implications < 2))
             && (cover || (!isVarLenSequence(*treep) && !lengthsSplit))) {
             return nullptr;
