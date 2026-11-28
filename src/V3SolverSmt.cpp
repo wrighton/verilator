@@ -2136,10 +2136,10 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
     void visit(AstStructSel* nodep) override {
         if (editFormat(nodep)) return;
-        AstNodeSel* const stateSelp = m_stateIndexAsBefore ? nullptr : stateStructIndexSelp(nodep);
-        if (stateSelp && lowerStateStructMember(nodep, stateSelp)) return;
+        AstNodeSel* const structSelp = m_stateIndexAsBefore ? nullptr : structIndexSelp(nodep);
+        if (structSelp && lowerStructMember(nodep, structSelp)) return;
         VL_RESTORER(m_stateIndexAsBefore);
-        if (stateSelp) m_stateIndexAsBefore = true;
+        if (structSelp) m_stateIndexAsBefore = true;
         const bool outermost = !m_deferRandModeHoist;
         AstNodeExpr* const origp = outermost ? nodep->cloneTree(false) : nullptr;
         VL_RESTORER(m_structSel);
@@ -2536,6 +2536,13 @@ class ConstraintExprVisitor final : public VNVisitor {
         selp->user1(false);
         editFormat(selp);
     }
+    // Width of the index naming an element of an unpacked array of structs of that many
+    // elements, as VlRandomizer::record_struct_arr registers it: a power of two of bits
+    static int structIndexNameWidth(const uint32_t elements) {
+        // 1 << clog2(clog2(elements) + 1)
+        const int addrBits = elements > 1 ? V3Number::log2b(elements - 1) + 1 : 0;
+        return addrBits ? 1 << (V3Number::log2b(addrBits) + 1) : 1;
+    }
     // Name an element of an array of structs or objects the way the solver registers it
     void renameArrayExpr(AstSFormatF* const newp, const bool objectElem) const {
         if (m_structSel) {
@@ -2634,6 +2641,16 @@ class ConstraintExprVisitor final : public VNVisitor {
                               new AstConst{fl, AstConst::WidthedValue{}, guardWidth, elements}});
                 // In range when selected
                 if (indexWidth > VL_IDATASIZE) indexp = new AstSel{fl, indexp, 0, VL_IDATASIZE};
+            }
+            // An element of an array of structs is named by its index at the width the runtime
+            // registers it with (VlRandomizer::record_struct_arr)
+            if (m_structSel && !objectElem) {
+                const int nameWidth = structIndexNameWidth(elements);
+                if (indexp->width() > nameWidth) {
+                    indexp = new AstSel{fl, indexp, 0, nameWidth};
+                } else if (indexp->width() < nameWidth) {
+                    indexp = new AstExtend{fl, indexp, nameWidth};
+                }
             }
             // Index is constant or non-rand -- format as hex literal.
             indexp = new AstSFormatF{fl, "#x%8x", false, indexp};
@@ -2848,9 +2865,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         return selp;
     }
-    // The element select of a state array variable of unpacked structs at a random index whose
+    // The element select of an array variable of unpacked structs at a random index whose
     // integral member, possibly of a nested struct, nodep reads, or nullptr
-    static AstNodeSel* stateStructIndexSelp(const AstStructSel* const nodep) {
+    static AstNodeSel* structIndexSelp(const AstStructSel* const nodep) {
         if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked()) return nullptr;
         AstNodeExpr* fromp = nodep->fromp();
         while (const AstStructSel* const structSelp = VN_CAST(fromp, StructSel)) {
@@ -2859,7 +2876,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeSel* const selp = elementSelp(fromp);
         if (!selp || !VN_IS(selp->dtypep()->skipRefp(), StructDType)) return nullptr;
         const AstVarRef* const arrayRefp = VN_CAST(selp->fromp(), VarRef);
-        if (!arrayRefp || arrayRefp->user1() || !isRandIndex(selp->bitp())) return nullptr;
+        if (!arrayRefp || !isRandIndex(selp->bitp())) return nullptr;
         return selp;
     }
     // Whether refp reads a state member of an object reached from an element selected at a
@@ -3300,13 +3317,13 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         return true;
     }
-    // A member of the struct at random index k of a state array of structs is a select among
-    // the current values of that member of the elements, built at runtime as for an object's
-    // state member. An element that does not exist reads the default of the struct (IEEE
-    // 1800-2023 7.4.6).
+    // A member of the struct at random index k of an array of structs is a select among that
+    // member of the current elements, built at runtime as for an object's member: their values
+    // for an array not randomized, else their solver variables. An element that does not exist
+    // reads the default of the struct (IEEE 1800-2023 7.4.6).
     // Whether nodep is lowered: not if its index selects through a random index too, as it is
     // then read as before
-    bool lowerStateStructMember(AstStructSel* const nodep, AstNodeSel* const selp) {
+    bool lowerStructMember(AstStructSel* const nodep, AstNodeSel* const selp) {
         FileLine* const fl = nodep->fileline();
         const ObjIndexSel sel = newObjIndexSel(fl, selp, false);
         AstBegin* const blockp
@@ -3330,14 +3347,19 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstVar* const keysVarp = sel.assoc ? newTextQueueVarp(fl, blockp, "__Vkeys") : nullptr;
         AstVar* const leavesVarp = newTextQueueVarp(fl, blockp, "__Vleaves");
         const ObjIndexIter iter = makeObjIndexLoop(sel);
-        // The member of each element, read as its value
+        // The member of each element, read as its value or named as its solver variable
         AstStructSel* const elemp = nodep->cloneTree(false);
         AstStructSel* innerp = elemp;
         while (VN_IS(innerp->fromp(), StructSel)) innerp = VN_AS(innerp->fromp(), StructSel);
         AstNodeExpr* const clonedSelp = innerp->fromp();
         clonedSelp->replaceWith(iter.elemSelp);
         VL_DO_DANGLING(pushDeletep(clonedSelp), clonedSelp);
-        elemp->user1(false);
+        const bool randArray = selp->fromp()->user1();
+        iter.elemSelp->user1(randArray);
+        for (AstStructSel* structSelp = elemp; structSelp;
+             structSelp = VN_CAST(structSelp->fromp(), StructSel)) {
+            structSelp->user1(randArray);
+        }
         if (keysVarp) {
             iter.ifp->addThensp(newTextPushp(fl, keysVarp, iter.keyp, sel.descending));
         } else {
