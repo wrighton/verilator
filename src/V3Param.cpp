@@ -2508,10 +2508,41 @@ public:
                                  << AstNode::prettyName(value.m_writtenPath) << " never declared");
         }
     }
+    // Of several defparams to one parameter of an instance, the parameter takes the value of the
+    // last in the source text (IEEE 1800-2023 23.10.1), or of any, for defparams in several
+    // files. Whether the defparam at 'flp' comes before the one at 'otherFlp' in a file, where
+    // an included file's text is at its `include.
+    static bool beforeInFile(const FileLine* flp, const FileLine* otherFlp) {
+        std::vector<const FileLine*> chain;  // 'flp', then the `include of each file outwards
+        for (const FileLine* fp = flp; fp; fp = fp->parent()) chain.push_back(fp);
+        std::vector<const FileLine*> otherChain;
+        for (const FileLine* fp = otherFlp; fp; fp = fp->parent()) otherChain.push_back(fp);
+        // From the outermost file inwards, while both are at one place
+        auto it = chain.rbegin();
+        auto otherIt = otherChain.rbegin();
+        for (; it != chain.rend() && otherIt != otherChain.rend(); ++it, ++otherIt) {
+            if ((*it)->filenameno() != (*otherIt)->filenameno()) break;
+            if (!(*it)->equalFirstLineCol(**otherIt)) {
+                return (*it)->operatorCompare(**otherIt) < 0;
+            }
+        }
+        return false;
+    }
+    // Record 'pinp' in 'pins', and return false if an earlier pin there gives the value instead
+    bool keepDefparamPin(std::unordered_map<const AstVar*, AstPin*>& pins, AstPin* pinp) {
+        const auto pair = pins.emplace(pinp->modVarp(), pinp);
+        if (pair.second) return true;
+        AstPin*& keptpr = pair.first->second;
+        if (beforeInFile(pinp->fileline(), keptpr->fileline())) return false;
+        VL_DO_DANGLING(m_deleter.pushDeletep(keptpr->unlinkFrBack()), keptpr);
+        keptpr = pinp;
+        return true;
+    }
     // A defparam, in this instance of its module, gives the parameter at 'path' this value
     void defparamValue(const string& path, AstNodeExpr* valuep) {
         m_deleter.pushDeletep(valuep);
-        m_defparamValues[path] = valuep;
+        AstNodeExpr*& valuepr = m_defparamValues[path];
+        if (!valuepr || !beforeInFile(valuep->fileline(), valuepr->fileline())) valuepr = valuep;
     }
 
     // Find 'name' declared in classp or a class it extends, setting memberClassp to the declaring
@@ -2606,8 +2637,8 @@ public:
             = nodeName.empty() ? someInstanceName : (someInstanceName + "." + nodeName);
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
-            // Parameters a defparam to this cell sets
-            std::unordered_set<const AstVar*> defparamVarps;
+            // Parameter -> the defparam pin giving its value
+            std::unordered_map<const AstVar*, AstPin*> defparamPins;
             for (AstPin* const pinp : cellp->paramspList()) {
                 if (pinp->paramPath().empty()) continue;
                 if (!pinp->exprp()) {  // Value from the instance of the defparam's module
@@ -2616,7 +2647,9 @@ public:
                     if (it != m_defparamValues.end()) {
                         m_elementValuesUsed.emplace(it->first);
                         pinp->exprp(it->second->cloneTree(false));
-                        defparamVarps.emplace(pinp->modVarp());
+                        if (!keepDefparamPin(defparamPins, pinp)) {
+                            VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
+                        }
                         continue;
                     }
                     // No value: the defparam sets another instance of this module, or is in a
@@ -2627,7 +2660,9 @@ public:
                     if (instanceName == pinp->paramPath()
                         || VString::endsWith(instanceName, "." + pinp->paramPath())) {
                         m_elementDefparamsMatched.emplace(pinp->fileline(), pinp->paramPath());
-                        defparamVarps.emplace(pinp->modVarp());
+                        if (!keepDefparamPin(defparamPins, pinp)) {
+                            VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
+                        }
                         continue;
                     }
                 }
@@ -2635,7 +2670,7 @@ public:
             }
             // IEEE 1800-2023 23.10: A defparam overrides the parameter value assignment
             for (AstPin* const pinp : cellp->paramspList()) {
-                if (pinp->paramPath().empty() && defparamVarps.count(pinp->modVarp())) {
+                if (pinp->paramPath().empty() && defparamPins.count(pinp->modVarp())) {
                     VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
                 }
             }
