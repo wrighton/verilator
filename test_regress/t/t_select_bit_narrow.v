@@ -621,10 +621,55 @@ module t;
       `checkh(v[40'shff_ffff_fffa+:2], 2'b00);
       `checkh(v[40'shff_ffff_ffff], 1'b0);
       `checkh(v[40'sh00_0000_0000], 1'b1);
+      `checkh(v[64'sh0 : 64'shffff_ffff_ffff_fffd], 4'b1000);
+      `checkh(v[1 : -64'sd1], 3'b010);
       // verilator lint_off SELRANGE
       `checkh(v[33'h1_0000_0000], 1'b0);
+      `checkh(v[64'h1_0000_0003 : 64'h1_0000_0000], 4'h0);
+      `checkh(v[64'h1_0000_0000 : 64'h1_0000_0003], 4'h0);
+      `checkh(v[-64'sd9 : -64'sd12], 4'h0);
+      `checkh(v[64'sh7fff_ffff_ffff_ffff : 64'sh7fff_ffff_ffff_fffc], 4'h0);
+      `checkh(v[64'sh8000_0000_0000_0003 : 64'sh8000_0000_0000_0000], 4'h0);
       // verilator lint_on SELRANGE
       // verilator lint_on WIDTH
+    end
+
+    begin
+      // Test: the same for a [msb:lsb] select of a packed array, a packed structure, and written
+      bit [1:0][7:0] lanes;
+      struct packed {
+        bit [7:0] hi;
+        bit [7:0] lo;
+      } st;
+      bit [7:-8] v;
+      // verilator lint_off ASCRANGE
+      bit [0:7] a;
+      // verilator lint_on ASCRANGE
+      lanes = 16'h0201 << (pos[0] - 9);
+      st = lanes;
+      a = lanes[0];
+      // verilator lint_off WIDTH
+      // verilator lint_off SELRANGE
+      `checkh(lanes[64'sh1 : 64'sh0], 16'h0201);
+      `checkh(lanes[64'h1_0000_0001 : 64'h1_0000_0000], 16'h0);
+      `checkh(lanes[64'sh7fff_ffff_ffff_ffff : 64'sh7fff_ffff_ffff_fffe], 16'h0);
+      `checkh(lanes[64'sh8000_0000_0000_0001 : 64'sh8000_0000_0000_0000], 16'h0);
+      `checkh(st[64'h1_0000_0003 : 64'h1_0000_0000], 4'h0);
+      `checkh(st[64'sh7fff_ffff_ffff_ffff : 64'sh7fff_ffff_ffff_fffc], 4'h0);
+      `checkh(st[64'sh8000_0000_0000_0003 : 64'sh8000_0000_0000_0000], 4'h0);
+      `checkh(a[64'sh0 : 64'shffff_ffff_ffff_fffe], 3'b000);
+      `checkh(a[64'sh7fff_ffff_ffff_fffc : 64'sh7fff_ffff_ffff_ffff], 4'h0);
+      `checkh(a[64'sh8000_0000_0000_0000 : 64'sh8000_0000_0000_0003], 4'h0);
+      v = '0;
+      v[64'h1_0000_0003 : 64'h1_0000_0000] = 4'hf;
+      v[1 : -64'sd1] = 3'b111;
+      v[64'sh7fff_ffff_ffff_ffff : 64'sh7fff_ffff_ffff_fffc] = 4'hf;
+      v[64'sh8000_0000_0000_0003 : 64'sh8000_0000_0000_0000] = 4'hf;
+      a[64'sh7fff_ffff_ffff_fffc : 64'sh7fff_ffff_ffff_ffff] = 4'hf;
+      // verilator lint_on SELRANGE
+      // verilator lint_on WIDTH
+      `checkh(v, 16'h0380);
+      `checkh(a, 8'h01);
     end
 
     begin

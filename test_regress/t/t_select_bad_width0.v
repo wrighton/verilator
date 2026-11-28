@@ -11,10 +11,14 @@ module t;
   initial begin
     automatic bit [31:0] val = '1;
     automatic int left = 4;
+    automatic bit [1:0][255:0] lanes = '0;
 
     automatic int part = val[left+:ZERO];
     $display(part);
     part = val[left-:ZERO];
+    $display(part);
+    // A part-select too wide for an integer
+    part = lanes[(1<<24)-1:0];
     $display(part);
 
     $write("*-* All Finished *-*\n");
