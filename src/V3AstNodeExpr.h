@@ -1404,17 +1404,22 @@ private:
         m_blockSize;  // num bits per block in a streaming operation (ex: 4 in {<<4{expr}}))
     const int m_dstElementBits;  // num bits in lhs (ex: 8 if to byte-queue, 1 if to bit-queue)
     const int m_srcElementBits;  // num bits in rhs (ex 8 if from byte-queue, 1 if from bit-queue)
+    // Reversed blocks are sliced from the left, the inverse of a pack, as an unpack into a left
+    // stream (IEEE 1800-2023 11.4.14.3)
+    const bool m_unpack;
 
 public:
     // cppcheck-suppress constParameterPointer
     // cppcheck-suppress constParameterCallback
     AstCvtArrayToArray(FileLine* fl, AstNodeExpr* fromp, AstNodeDType* dtp, bool reverse,
-                       uint32_t blockSize, int dstElementBits, int srcElementBits)
+                       uint32_t blockSize, int dstElementBits, int srcElementBits,
+                       bool unpack = false)
         : ASTGEN_SUPER_CvtArrayToArray(fl)
         , m_reverse{reverse}
         , m_blockSize{blockSize}
         , m_dstElementBits{dstElementBits}
-        , m_srcElementBits{srcElementBits} {
+        , m_srcElementBits{srcElementBits}
+        , m_unpack{unpack} {
         this->fromp(fromp);
         dtypeFrom(dtp);
     }
@@ -1423,7 +1428,7 @@ public:
         const AstCvtArrayToArray* const sp = VN_DBG_AS(samep, CvtArrayToArray);
         return reverse() == sp->reverse() && blockSize() == sp->blockSize()
                && dstElementBits() == sp->dstElementBits()
-               && srcElementBits() == sp->srcElementBits();
+               && srcElementBits() == sp->srcElementBits() && unpack() == sp->unpack();
     }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
@@ -1434,6 +1439,7 @@ public:
     uint32_t blockSize() const { return m_blockSize; }
     int dstElementBits() const { return m_dstElementBits; }
     int srcElementBits() const { return m_srcElementBits; }
+    bool unpack() const { return m_unpack; }
 };
 class AstCvtArrayToPacked final : public AstNodeExpr {
     // Cast from dynamic queue data type to packed array

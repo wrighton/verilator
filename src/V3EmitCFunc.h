@@ -560,6 +560,7 @@ public:
         puts(cvtToStr(nodep->srcElementBits()));
         puts(", ");
         puts(cvtToStr(nodep->dstElementBits()));
+        if (nodep->unpack()) puts(", true");
         puts(")");
         if (!reverseCall.empty()) puts(")");
     }
@@ -809,6 +810,7 @@ public:
             puts(cvtToStr(castp->srcElementBits()));
             puts(", ");
             puts(cvtToStr(castp->dstElementBits()));
+            if (castp->unpack()) puts(", true");
             // Descending unpacked dest: reverse after copy
             if (unpackDtp) reverseUnpackCall = EmitCUtil::unpackReverseCall(unpackDtp);
         } else if (nodep->isWide() && !unpackDtp && VN_IS(nodep->lhsp(), VarRef)  //
