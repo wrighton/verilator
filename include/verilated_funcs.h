@@ -2388,15 +2388,12 @@ inline IData VL_PACK_I_RI(int obits, int lbits, const VlQueue<T>& q) {
 
 template <typename T>
 struct VlUnpackedElements final {
-    using Leaf = T;
     static constexpr size_t count = 1;
 };
 
 template <typename T, size_t N>
 struct VlUnpackedElements<VlUnpacked<T, N>> final {
-    using Leaf = typename VlUnpackedElements<T>::Leaf;
     static constexpr size_t count = N * VlUnpackedElements<T>::count;
-    using Flat = VlUnpacked<Leaf, count>;  // One-dimensional array of the same elements
 };
 
 // Pack the elements read by a view of an unpacked array, the first the most significant, each
@@ -2481,23 +2478,41 @@ inline WDataOutP VL_PACK_W_UW(int obits, int lbits, WDataOutP owp,
     return _vl_pack_dirs_w(obits, lbits, owp, from, true);
 }
 
-// Copy the elements of a multidimensional unpacked array, in element order, to outp
-template <typename T_Leaf>
-inline void _vl_unpacked_flatten(const T_Leaf& from, T_Leaf*& outp) {
-    *outp++ = from;
+// Pack the elements of a multidimensional unpacked array of 'lbits'-bit elements in place, the
+// first the most significant, each below bit 'lsb', which is moved down past it
+inline void _vl_pack_leaves(QData& ret, int lbits, QData leaf, int& lsb) VL_MT_SAFE {
+    lsb -= lbits;
+    ret |= leaf << lsb;
 }
-template <typename T_Value, std::size_t N_Depth, typename T_Leaf>
-inline void _vl_unpacked_flatten(const VlUnpacked<T_Value, N_Depth>& from, T_Leaf*& outp) {
-    for (size_t i = 0; i < N_Depth; ++i) _vl_unpacked_flatten(from[i], outp);
+template <typename T_Value, std::size_t N_Depth>
+inline void _vl_pack_leaves(QData& ret, int lbits, const VlUnpacked<T_Value, N_Depth>& from,
+                            int& lsb) VL_MT_SAFE {
+    for (size_t i = 0; i < N_Depth; ++i) _vl_pack_leaves(ret, lbits, from[i], lsb);
 }
-
-// Return a multidimensional unpacked array as a one-dimensional array, for VL_PACK_*
-template <typename T_Array>
-inline typename VlUnpackedElements<T_Array>::Flat _vl_unpacked_flat(const T_Array& q) {
-    typename VlUnpackedElements<T_Array>::Flat ret;
-    typename VlUnpackedElements<T_Array>::Leaf* outp = ret.data();
-    _vl_unpacked_flatten(q, outp);
-    return ret;
+inline void _vl_pack_leaves(WDataOutP owp, int lbits, IData leaf, int& lsb) VL_MT_SAFE {
+    lsb -= lbits;
+    _vl_insert_WI(owp, leaf, lsb + lbits - 1, lsb);
+}
+inline void _vl_pack_leaves(WDataOutP owp, int lbits, CData leaf, int& lsb) VL_MT_SAFE {
+    _vl_pack_leaves(owp, lbits, static_cast<IData>(leaf), lsb);
+}
+inline void _vl_pack_leaves(WDataOutP owp, int lbits, SData leaf, int& lsb) VL_MT_SAFE {
+    _vl_pack_leaves(owp, lbits, static_cast<IData>(leaf), lsb);
+}
+inline void _vl_pack_leaves(WDataOutP owp, int lbits, QData leaf, int& lsb) VL_MT_SAFE {
+    lsb -= lbits;
+    _vl_insert_WQ(owp, leaf, lsb + lbits - 1, lsb);
+}
+template <std::size_t N_Words>
+inline void _vl_pack_leaves(WDataOutP owp, int lbits, const VlWide<N_Words>& leaf,
+                            int& lsb) VL_MT_SAFE {
+    lsb -= lbits;
+    _vl_insert_WW(owp, leaf, lsb + lbits - 1, lsb);
+}
+template <typename T_Value, std::size_t N_Depth>
+inline void _vl_pack_leaves(WDataOutP owp, int lbits, const VlUnpacked<T_Value, N_Depth>& from,
+                            int& lsb) VL_MT_SAFE {
+    for (size_t i = 0; i < N_Depth; ++i) _vl_pack_leaves(owp, lbits, from[i], lsb);
 }
 
 template <std::size_t N_Depth>
@@ -2565,9 +2580,12 @@ inline QData VL_PACK_Q_UI(int /*obits*/, int lbits, const VlUnpacked<IData, N_De
 }
 
 template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
-inline QData VL_PACK_Q_UI(int obits, int lbits,
+inline QData VL_PACK_Q_UI(int /*obits*/, int lbits,
                           const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
-    return VL_PACK_Q_UI(obits, lbits, _vl_unpacked_flat(q));
+    QData ret = 0;
+    int lsb = VlUnpackedElements<VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>>::count * lbits;
+    _vl_pack_leaves(ret, lbits, q, lsb);
+    return ret;
 }
 
 inline QData VL_PACK_Q_RQ(int obits, int lbits, const VlQueue<QData>& q) {
@@ -2597,9 +2615,12 @@ inline QData VL_PACK_Q_UQ(int /*obits*/, int lbits, const VlUnpacked<QData, N_De
 }
 
 template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
-inline QData VL_PACK_Q_UQ(int obits, int lbits,
+inline QData VL_PACK_Q_UQ(int /*obits*/, int lbits,
                           const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
-    return VL_PACK_Q_UQ(obits, lbits, _vl_unpacked_flat(q));
+    QData ret = 0;
+    int lsb = VlUnpackedElements<VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>>::count * lbits;
+    _vl_pack_leaves(ret, lbits, q, lsb);
+    return ret;
 }
 
 template <typename T>
@@ -2637,7 +2658,10 @@ inline WDataOutP VL_PACK_W_UI(int obits, int lbits, WDataOutP owp,
 template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
 inline WDataOutP VL_PACK_W_UI(int obits, int lbits, WDataOutP owp,
                               const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
-    return VL_PACK_W_UI(obits, lbits, owp, _vl_unpacked_flat(q));
+    VL_MEMSET_ZERO_W(owp, VL_WORDS_I(obits));
+    int lsb = VlUnpackedElements<VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>>::count * lbits;
+    _vl_pack_leaves(owp, lbits, q, lsb);
+    return owp;
 }
 
 inline WDataOutP VL_PACK_W_RQ(int obits, int lbits, WDataOutP owp, const VlQueue<QData>& q) {
@@ -2656,7 +2680,10 @@ inline WDataOutP VL_PACK_W_UQ(int obits, int lbits, WDataOutP owp,
 template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
 inline WDataOutP VL_PACK_W_UQ(int obits, int lbits, WDataOutP owp,
                               const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
-    return VL_PACK_W_UQ(obits, lbits, owp, _vl_unpacked_flat(q));
+    VL_MEMSET_ZERO_W(owp, VL_WORDS_I(obits));
+    int lsb = VlUnpackedElements<VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>>::count * lbits;
+    _vl_pack_leaves(owp, lbits, q, lsb);
+    return owp;
 }
 
 template <std::size_t N_Words>
@@ -2690,7 +2717,14 @@ inline WDataOutP VL_PACK_W_UW(int obits, int lbits, WDataOutP owp,
 template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
 inline WDataOutP VL_PACK_W_UW(int obits, int lbits, WDataOutP owp,
                               const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
-    return VL_PACK_W_UW(obits, lbits, owp, _vl_unpacked_flat(q));
+    VL_MEMSET_ZERO_W(owp, VL_WORDS_I(obits));
+    const int bits
+        = VlUnpackedElements<VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>>::count * lbits;
+    if (VL_UNLIKELY(obits < bits)) return owp;  // As for one dimension
+    // Left-justified, as for one dimension
+    int lsb = obits;
+    _vl_pack_leaves(owp, lbits, q, lsb);
+    return owp;
 }
 
 // Because concats are common and wide, it's valuable to always have a clean output.
@@ -3763,6 +3797,16 @@ template <std::size_t N_Depth>
 inline void VL_UNPACK_UQ_Q(int lbits, int /*rbits*/, VlUnpacked<QData, N_Depth>& q, QData from) {
     const QData mask = VL_MASK_Q(lbits);
     for (size_t i = 0; i < N_Depth; ++i) q[i] = (from >> ((N_Depth - 1 - i) * lbits)) & mask;
+}
+
+template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
+inline void VL_UNPACK_UQ_Q(const int lbits, const int rbits,
+                           VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q, const QData from) {
+    const int sub_bits = VlUnpackedElements<VlUnpacked<T_Sub, N_Sub>>::count * lbits;
+    for (size_t i = 0; i < N_Depth; ++i) {
+        const QData sub_from = (from >> ((N_Depth - 1 - i) * sub_bits));
+        VL_UNPACK_UQ_Q(lbits, sub_bits, q[i], sub_from);
+    }
 }
 
 template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
