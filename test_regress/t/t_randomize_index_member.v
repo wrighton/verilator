@@ -300,6 +300,15 @@ module t;
       seen[h.idx] = 1;
     end
     `checkd(seen.num(), 2)
+    // The null element has no member to compare, so it is not selected
+    repeat (30) begin
+      randomize_result = h.randomize() with {
+        idx inside {[0 : 2]};
+        x7 == fitems[idx].val;
+      };
+      `checkd(randomize_result, 1)
+      `checkd(h.fitems[h.idx] != null, 1'b1)
+    end
   endtask
 
   // std::randomize() with a local index into a local queue
@@ -374,10 +383,20 @@ module t;
       randomize_result = w.randomize() with {nodes[idx].leaves[1].f == 7;};
       `checkd(randomize_result, 1)
       `checkd(w.idx, 0)
-      // nodes[0].leaf is null, so its element reads as zero
-      randomize_result = w.randomize() with {nodes[idx].leaf.f != 3; nodes[idx].leaf.f != 5;};
+      // nodes[0].leaf is null, so its element has no member to compare and is not selected
+      randomize_result = w.randomize() with {nodes[idx].leaf.f != 3;};
       `checkd(randomize_result, 1)
-      `checkd(w.idx, 0)
+      `checkd(w.idx, 2)
+      // Nor in a negation, where it reads zero instead, a known limit
+      randomize_result = w.randomize() with {!(nodes[idx].leaf.f != 0);};
+      `checkd(randomize_result, 1)
+      // And in an implication antecedent or an if condition, so for nodes[0] it holds
+      randomize_result = w.randomize() with {idx != 2; (nodes[idx].leaf.f == 0) -> idx == 2;};
+      `checkd(randomize_result, 1)
+      `checkd(w.idx, 1)
+      randomize_result = w.randomize() with {idx != 2; if (nodes[idx].leaf.f == 0) idx == 2;};
+      `checkd(randomize_result, 1)
+      `checkd(w.idx, 1)
     end
   endtask
 

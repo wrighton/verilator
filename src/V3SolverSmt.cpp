@@ -3908,11 +3908,18 @@ private:
         }
         return new AstConst{exprp->fileline(), AstConst::WidthedValue{}, exprp->width(), 0};
     }
+    // What a table of newIndexedArrayp holds for each element of the array
+    enum class IndexedTable : uint8_t {
+        VALUE,  // The value of the expression at the element
+        EXISTS  // #b1 if the handles on the path to the expression are not null, else #b0
+    };
     // Return an SMT array of the value of exprp at each element of the array selp selects, the
     // elements stored into solver array 'baseName' if not empty, or if 'selected', the name of a
-    // table of that value at the index '?i' (see editStateArraySel)
+    // table of what 'table' says at the index '?i' (see editStateArraySel)
     AstSFormatF* newIndexedArrayp(AstNodeExpr* exprp, AstNodeExpr* selp, bool selected = false,
-                                  const std::string& baseName = "") {
+                                  const std::string& baseName = "",
+                                  IndexedTable table = IndexedTable::VALUE) {
+        const bool existing = table != IndexedTable::VALUE;
         VL_RESTORER(m_inRandIndexElems);
         m_inRandIndexElems = true;
         // Element i is exprp with the random index of selp replaced by i, so it may read
@@ -3962,10 +3969,16 @@ private:
                 = new AstNeq{fl, (*it)->cloneTreePure(false), new AstConst{fl, AstConst::Null{}}};
             nonNullp = nonNullp ? new AstLogAnd{fl, nonNullp, neqp} : neqp;
         }
-        const int width = exprp->width();
+        const int width = existing ? 1 : exprp->width();
         AstNodeExpr* const keyTextp
             = getConstFormat(posp->width() < idxWidth ? new AstExtend{fl, posp, idxWidth} : posp);
-        AstNodeExpr* const valueTextp = VN_AS(iterateSubtreeReturnEdits(elemp), NodeExpr);
+        AstNodeExpr* valueTextp;
+        if (existing) {
+            VL_DO_DANGLING(pushDeletep(elemp), elemp);
+            valueTextp = new AstConst{fl, AstConst::String{}, "#b1"};
+        } else {
+            valueTextp = VN_AS(iterateSubtreeReturnEdits(elemp), NodeExpr);
+        }
         AstVar* textVarp = nullptr;
         // The opening parentheses of the stores
         AstVar* outerVarp = nullptr;
@@ -4008,10 +4021,15 @@ private:
         }
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
+        if (existing) {
+            VL_DO_DANGLING(pushDeletep(defaultp), defaultp);
+            defaultp = new AstConst{fl, AstConst::String{}, "#b0"};
+        }
         if (selected) {
             AstNodeExpr* const otherwisep
-                = assocDtp ? getConstFormat(defaultp)
-                           : VN_AS(iterateSubtreeReturnEdits(defaultp), NodeExpr);
+                = existing   ? defaultp
+                  : assocDtp ? getConstFormat(defaultp)
+                             : VN_AS(iterateSubtreeReturnEdits(defaultp), NodeExpr);
             // The keys are the positions in order, but for an associative array, an array
             // declared high to low or an element that may be skipped
             const AstUnpackArrayDType* const udtypep
@@ -4107,12 +4125,30 @@ private:
         VL_DO_DANGLING(pushDeletep(selp), selp);
         return arrayp;
     }
+    // Whether nodep reads through a class handle of the element selp selects, or that element
+    static bool readsThroughHandle(AstNode* nodep, const AstNode* const selp) {
+        for (; nodep != selp; nodep = nodep->op1p()) {
+            UASSERT_OBJ(nodep, selp, "Element select not reached from the expression reading it");
+            if (VN_IS(nodep->dtypep()->skipRefp(), ClassRefDType)) return true;
+        }
+        return VN_IS(selp->dtypep()->skipRefp(), ClassRefDType);
+    }
     // Replace an expression reading a non-random array through a random index
     bool editStateArraySel(AstNodeExpr* nodep) {
         if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
         AstNodeExpr* const selp = RandomizeUtil::randIndexSelp(nodep, isRandIndex);
         if (!selp) return false;
         AstSFormatF* const valuep = newIndexedArrayp(nodep, selp, true);
+        // A member read through a null handle of an element, or of an element that does not
+        // exist, has no value, so a comparison reading it requires the index to select an
+        // element whose handles are not null, as for a rand array (see
+        // lowerRandIndexedObjectMember). Elsewhere, where that cannot be required, as in the
+        // condition of an implication or if, it reads zero.
+        AstSFormatF* const existsp
+            = m_inComparison && !m_inSoftItem && !m_objIndexRejectp && !m_inGuardCondition
+                      && readsThroughHandle(nodep, selp)
+                  ? newIndexedArrayp(nodep, selp, true, "", IndexedTable::EXISTS)
+                  : nullptr;
         const int sortWidth = smtIndexWidth(selp);
         AstNodeExpr* const indexp = selIndexp(selp)->unlinkFrBack();
         // The offset into a fixed-size array is unsigned, even when computed as signed
@@ -4122,7 +4158,22 @@ private:
         // The value of the element at the index: a function of '?i' defined once per
         // randomize(), so that other reads of the array, e.g. in a foreach, add no text
         AstSFormatF* const newp = new AstSFormatF{nodep->fileline(), "(%s %s)", false, valuep};
+        // The index formatted again for the validity, as its formatting may declare variables
+        AstNodeExpr* const validIndexp = existsp ? smtIndexp->cloneTreePure(false) : nullptr;
         newp->addExprsp(VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr));
+        if (existsp) {
+            AstSFormatF* const validp
+                = new AstSFormatF{nodep->fileline(), "(= #b1 (%s %s))", false, existsp};
+            validp->addExprsp(VN_AS(iterateSubtreeReturnEdits(validIndexp), NodeExpr));
+            if (m_objIndexValidp) {
+                AstSFormatF* const bothp
+                    = new AstSFormatF{nodep->fileline(), "(and %s %s)", false, m_objIndexValidp};
+                bothp->addExprsp(validp);
+                m_objIndexValidp = bothp;
+            } else {
+                m_objIndexValidp = validp;
+            }
+        }
         // Nothing is read through a null class handle on the path to the array
         AstNodeExpr* const arrayp = VN_AS(selp, NodeSel)->fromp();
         AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp);
