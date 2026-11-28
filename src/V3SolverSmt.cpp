@@ -2828,6 +2828,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         condp->user1(true);  // Mark as formatted
         return condp;
     }
+    // Whether nodep is a member select of a variable through member objects only
+    static bool isMemberPath(const AstNodeExpr* nodep) {
+        while (const AstMemberRef* const refp = VN_CAST(nodep, MemberRef)) nodep = refp->fromp();
+        return VN_IS(nodep, VarRef);
+    }
     // Whether an index depends on a variable being randomized. A std::randomize() with-clause
     // argument carries no rand qualifier of its own but is still part of the solve.
     static bool isRandIndex(const AstNodeExpr* indexp) {
@@ -3449,8 +3454,16 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstNodeDType* const elemDtp
                     = arrayDtp->subDTypep() ? arrayDtp->subDTypep()->skipRefp() : nullptr;
                 if (elemDtp && VN_IS(elemDtp, ClassRefDType)) {
+                    // An element by a constant index of a fixed-size array reached through member
+                    // objects is registered alone, by its path; by another index, as of a foreach,
+                    // the objects of the array are, as for a dynamic array
+                    // (createSolverArrayHandle)
                     const bool isSimple
-                        = nodep->fromp() == rootNodep && VN_IS(arraySelp->fromp(), VarRef);
+                        = nodep->fromp() == rootNodep
+                          && (VN_IS(arraySelp->fromp(), VarRef)
+                              || (VN_IS(arraySelp, ArraySel) && isMemberPath(arraySelp->fromp())
+                                  && arraySelp->bitp()->exists(
+                                      [](const AstNodeVarRef*) { return true; })));
                     if (!isSimple && !m_nestedAccessp) {
                         m_nestedAccessp = new NestedAccessPath(nodep->cloneTree(false),
                                                                &m_firstExpressionInsideIndexp);
