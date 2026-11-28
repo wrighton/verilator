@@ -3908,10 +3908,20 @@ private:
         }
         return new AstConst{exprp->fileline(), AstConst::WidthedValue{}, exprp->width(), 0};
     }
+    // Text of a bit of whether condp holds
+    static AstNodeExpr* newExistsTextp(FileLine* const fl, AstNodeExpr* const condp) {
+        AstCond* const textp = new AstCond{fl, condp, new AstConst{fl, AstConst::String{}, "#b1"},
+                                           new AstConst{fl, AstConst::String{}, "#b0"}};
+        textp->dtypeSetString();
+        return textp;
+    }
     // What a table of newIndexedArrayp holds for each element of the array
     enum class IndexedTable : uint8_t {
         VALUE,  // The value of the expression at the element
-        EXISTS  // #b1 if the handles on the path to the expression are not null, else #b0
+        EXISTS,  // #b1 if the handles on the path to the expression are not null, else #b0
+        // As EXISTS, but a key an associative array does not hold selects its default element,
+        // as a read of the element does
+        EXISTS_OR_DEFAULT
     };
     // Return an SMT array of the value of exprp at each element of the array selp selects, the
     // elements stored into solver array 'baseName' if not empty, or if 'selected', the name of a
@@ -3920,6 +3930,7 @@ private:
                                   const std::string& baseName = "",
                                   IndexedTable table = IndexedTable::VALUE) {
         const bool existing = table != IndexedTable::VALUE;
+        bool keyedDefault = table == IndexedTable::EXISTS_OR_DEFAULT;
         VL_RESTORER(m_inRandIndexElems);
         m_inRandIndexElems = true;
         // Element i is exprp with the random index of selp replaced by i, so it may read
@@ -3973,7 +3984,13 @@ private:
         AstNodeExpr* const keyTextp
             = getConstFormat(posp->width() < idxWidth ? new AstExtend{fl, posp, idxWidth} : posp);
         AstNodeExpr* valueTextp;
-        if (existing) {
+        // Each key of an associative array whose default element exists, so as not to select it
+        keyedDefault = keyedDefault && assocDtp && nonNullp;
+        if (keyedDefault) {
+            VL_DO_DANGLING(pushDeletep(elemp), elemp);
+            valueTextp = newExistsTextp(fl, nonNullp);
+            nonNullp = nullptr;
+        } else if (existing) {
             VL_DO_DANGLING(pushDeletep(elemp), elemp);
             valueTextp = new AstConst{fl, AstConst::String{}, "#b1"};
         } else {
@@ -4021,7 +4038,14 @@ private:
         }
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
-        if (existing) {
+        if (keyedDefault) {
+            VL_DO_DANGLING(pushDeletep(defaultp), defaultp);
+            AstCMethodHard* const atDefaultp
+                = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::ASSOC_AT_DEFAULT};
+            atDefaultp->dtypeFrom(selp);
+            defaultp = newExistsTextp(
+                fl, new AstNeq{fl, atDefaultp, new AstConst{fl, AstConst::Null{}}});
+        } else if (existing) {
             VL_DO_DANGLING(pushDeletep(defaultp), defaultp);
             defaultp = new AstConst{fl, AstConst::String{}, "#b0"};
         }
@@ -4184,6 +4208,41 @@ private:
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         if (handlesp) editStateInRange(newp, handlesp, width, nullTextp);
+        return true;
+    }
+    // Whether nodep, a comparison with null of the object a random index selects from an array
+    // of class handles, is lowered to whether the index selects an object, from the table of
+    // which elements are objects (see editStateArraySel); an element out of range reads as null
+    // (IEEE 1800-2023 7.4.6)
+    bool editRandIndexNullCheck(AstNodeBiop* const nodep) {
+        if (!nodep->user1()) return false;
+        const AstConst* const rConstp = VN_CAST(nodep->rhsp(), Const);
+        const AstConst* const lConstp = VN_CAST(nodep->lhsp(), Const);
+        AstNodeExpr* const handlep = rConstp && rConstp->num().isNull()   ? nodep->lhsp()
+                                     : lConstp && lConstp->num().isNull() ? nodep->rhsp()
+                                                                          : nullptr;
+        if (!handlep || !VN_IS(handlep->dtypep()->skipRefp(), ClassRefDType)) return false;
+        // The element itself, of an array not reached through a class handle
+        AstNodeSel* const selp = VN_CAST(handlep, NodeSel);
+        if (!selp || !isRandIndex(selp->bitp())) return false;
+        if (AstNodeExpr* const handlesp = newHandlesNonNullp(selp->fromp())) {
+            VL_DO_DANGLING(pushDeletep(handlesp), handlesp);
+            return false;
+        }
+        FileLine* const fl = nodep->fileline();
+        AstSFormatF* const existsp
+            = newIndexedArrayp(handlep, selp, true, "", IndexedTable::EXISTS_OR_DEFAULT);
+        AstNodeExpr* const indexp = selIndexp(selp)->cloneTreePure(false);
+        // The offset into a fixed-size array is unsigned, even when computed as signed
+        AstNodeExpr* const smtIndexp = newSmtIndexp(
+            indexp, (VN_IS(selp, DynArraySel) || VN_IS(selp, QueueSel)) && indexp->isSigned(),
+            smtIndexWidth(selp));
+        AstSFormatF* const newp = new AstSFormatF{
+            fl, VN_IS(nodep, Eq) ? "(__Vbv (= #b0 (%s %s)))" : "(__Vbv (= #b1 (%s %s)))", false,
+            existsp};
+        newp->addExprsp(VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr));
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
         return true;
     }
     // Report a random index into a non-random array not read as an integral value
@@ -5813,6 +5872,7 @@ private:
     // equal: compare the elements one by one instead. They correspond by their offset from the
     // low bound, as in ArraySel.
     void handleEq(AstNodeBiop* const nodep) {
+        if (editRandIndexNullCheck(nodep)) return;
         if (editOneHotCount(nodep)) return;
         if (editFormat(nodep)) return;
         const AstUnpackArrayDType* const adtypep

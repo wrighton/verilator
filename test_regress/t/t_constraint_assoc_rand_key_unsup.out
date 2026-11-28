@@ -1,11 +1,5 @@
-%Error-UNSUPPORTED: t/t_constraint_assoc_rand_key_unsup.v:22:28: Unsupported: Randomized index into a non-random array selecting a non-integral value
-   22 |   constraint c_state {state[idx] != null;}
-      |                            ^
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_constraint_assoc_rand_key_unsup.v:23:26: Unsupported: Randomized key into an associative array of non-integral elements
-   23 |   constraint c_struct {sa[idx].a == 7;}
+%Error-UNSUPPORTED: t/t_constraint_assoc_rand_key_unsup.v:16:26: Unsupported: Randomized key into an associative array of non-integral elements
+   16 |   constraint c_struct {sa[idx].a == 7;}
       |                          ^
-%Error-UNSUPPORTED: t/t_constraint_assoc_rand_key_unsup.v:24:28: Unsupported: Randomized key into an associative array of non-integral elements
-   24 |   constraint c_object {objs[idx] != null;}
-      |                            ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error: Exiting due to

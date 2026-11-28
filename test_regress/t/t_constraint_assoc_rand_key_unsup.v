@@ -9,19 +9,11 @@ typedef struct {
   int b;
 } s_t;
 
-class Item;
-  rand int x;
-endclass
-
 class Cls;
   rand int idx;
-  Item state[int];
   rand s_t sa[int];
-  rand Item objs[int];
 
-  constraint c_state {state[idx] != null;}
   constraint c_struct {sa[idx].a == 7;}
-  constraint c_object {objs[idx] != null;}
 endclass
 
 module t;
