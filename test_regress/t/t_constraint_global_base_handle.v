@@ -81,6 +81,34 @@ endclass
 class dcnoc_seq_cfg extends sist_seq_cfg;
 endclass
 
+// A class randomized through a base class handle, while a derived class is
+// randomized directly
+class BhCoord;
+  rand bit [2:0] x;
+endclass
+
+class BhPath;
+  rand BhCoord a;
+  constraint c_fix {a.x == 3'd5;}
+  function new();
+    a = new;
+  endfunction
+endclass
+
+class BhBase;
+  rand int unsigned vc;
+endclass
+
+class BhCfg extends BhBase;
+  rand BhPath p;
+  function new();
+    p = new;
+  endfunction
+endclass
+
+class BhCfgDerived extends BhCfg;
+endclass
+
 module t;
   function automatic void check_path(sist_seq_cfg c);
     `checkd(c.m_path_cfg.m_initiator.m_coord.m_xcoord < 8, 1'b1);
@@ -98,6 +126,9 @@ module t;
     automatic sist_seq_cfg sc = new;
     automatic dcnoc_seq_cfg dc = new;
     automatic seq_cfg_base sb;
+    automatic BhCfg bc = new;
+    automatic BhBase bb = bc;
+    automatic BhCfgDerived bd = new;
     automatic int ok;
     automatic int changed = 0;
     automatic bit [7:0] prev;
@@ -121,6 +152,12 @@ module t;
       ok = dc.randomize();
       `checkd(ok, 1);
       check_path(dc);
+      ok = bd.randomize();
+      `checkd(ok, 1);
+      `checkd(bd.p.a.x, 5);
+      ok = bb.randomize();
+      `checkd(ok, 1);
+      `checkd(bc.p.a.x, 5);
     end
     `checkd(changed > 10, 1'b1);
     $write("*-* All Finished *-*\n");

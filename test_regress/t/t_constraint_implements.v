@@ -175,6 +175,24 @@ class unsat_holder_t;
   }
 endclass
 
+// Test: the object of a rand interface class handle keeps its values when the randomization
+// of a later member fails
+class unsat_member_t;
+  rand bit [6:0] q;
+  constraint c {
+    q == 1;
+    q == 2;
+  }
+endclass
+
+class late_holder_t;
+  rand getter_t h;
+  rand unsat_member_t bad;
+  function new();
+    bad = new;
+  endfunction
+endclass
+
 // Test: a rand interface class handle of a member object without constraints of its own
 class iface_member_t;
   rand getter_t g;
@@ -419,6 +437,16 @@ module t;
       randomize_result = uh.randomize() with {z > 0;};
       `checkd(randomize_result, 0);
       `checkd(ui.v, 100);
+    end
+    begin
+      automatic late_holder_t lh = new;
+      automatic impl_t li = new;
+      lh.h = li;
+      li.v = 7'd100;
+      randomize_result = lh.randomize();
+      `checkd(randomize_result, 0);
+      `checkd(li.v, 100);
+      `checkd(li.posts, 0);
     end
     g = i;
     `checkd(g.get(), int'(i.v));
