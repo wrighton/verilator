@@ -1647,13 +1647,14 @@ class WidthVisitor final : public VNVisitor {
                 }
                 // A constraint keeps the whole index into an array of integral elements, as there
                 // it reads zero out of range, and a random index into an array of class handles,
-                // which out of range selects no object
+                // which out of range selects no object, or of structs, whose element out of range
+                // reads the default
                 const AstNodeDType* elemDtp = nodep->dtypep()->skipRefp();
                 while (elemDtp->isNonPackedArray()) elemDtp = elemDtp->subDTypep()->skipRefp();
                 const bool wholeIndex
                     = m_constraintItem
                       && (elemDtp->isIntegralOrPacked()
-                          || (VN_IS(elemDtp, ClassRefDType)
+                          || ((VN_IS(elemDtp, ClassRefDType) || VN_IS(elemDtp, StructDType))
                               && nodep->bitp()->exists([](const AstNodeExpr* exprp) {
                                      // A member of the object randomized, in an inline
                                      // constraint, is selected from its lambda argument

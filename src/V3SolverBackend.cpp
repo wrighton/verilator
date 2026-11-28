@@ -117,7 +117,11 @@ AstNodeExpr* RandomizeUtil::randArrayIndexSelp(
         } else {
             return nullptr;
         }
-        if (indexp && fromp->user1() && isRandIndex(indexp)) return curp;
+        // A solved array, or a state array of class objects, whose members are then state
+        if (indexp && (fromp->user1() || VN_IS(curp->dtypep()->skipRefp(), ClassRefDType))
+            && isRandIndex(indexp)) {
+            return curp;
+        }
         curp = fromp;
     }
 }

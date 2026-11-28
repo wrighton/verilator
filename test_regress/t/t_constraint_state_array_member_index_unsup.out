@@ -1,0 +1,8 @@
+%Error-UNSUPPORTED: t/t_constraint_state_array_member_index_unsup.v:27:37: Unsupported: Randomization of an index to a non-random variable
+   27 |   constraint member_c {x inside {arr[idx].q};}
+      |                                     ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_state_array_member_index_unsup.v:30:37: Unsupported: Randomization of an index to a non-random variable
+   30 |   constraint index_c {y == fixed[arr[idx].a[1:0]].a;}
+      |                                     ^
+%Error: Exiting due to
