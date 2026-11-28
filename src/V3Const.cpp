@@ -2565,7 +2565,10 @@ class ConstVisitor final : public VNVisitor {
             const bool waits = VN_IS(nodep, Assign) && nodep->timingControlp();
             // Splitting copies the RHS once per part, so a large RHS would make the tree
             // grow with the product of the number of parts and the RHS size
-            const bool needTempPure = !nodep->rhsp()->isPure() || waits
+            // A stream sized at run time has no bits to select before it is packed into the
+            // target's width
+            const bool dynamicStream = VN_IS(nodep->rhsp()->dtypep(), StreamDType);
+            const bool needTempPure = !nodep->rhsp()->isPure() || waits || dynamicStream
                                       || nodep->rhsp()->isLargerThan(CONCAT_ASSIGN_MAX_RHS_NODES);
             if (m_warn && !VN_IS(nodep, AssignDly)
                 && !needTempPure) {  // Is same var on LHS and RHS?
@@ -2589,8 +2592,9 @@ class ConstVisitor final : public VNVisitor {
                 //                                ASSIGN(lc2,SEL(temp,{size2}))
 
                 AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
-                AstVar* const tempPurep = new AstVar{rhsp->fileline(), VVarType::BLOCKTEMP,
-                                                     m_concswapNames.get(rhsp), rhsp->dtypep()};
+                AstVar* const tempPurep
+                    = new AstVar{rhsp->fileline(), VVarType::BLOCKTEMP, m_concswapNames.get(rhsp),
+                                 dynamicStream ? nodep->lhsp()->dtypep() : rhsp->dtypep()};
                 // Static, as read right after written, also in a fork
                 tempPurep->lifetime(VLifetime::STATIC_EXPLICIT);
                 m_modp->addStmtsp(tempPurep);

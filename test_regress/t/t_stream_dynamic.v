@@ -256,11 +256,40 @@ module t;
     `checkp(a3, "'{'h21, 'h5a, 'h61}");
   endtask
 
+  // Dynamically sized operand into a concatenation of variables
+  task test5;
+    byte q8[$];
+    bit [7:0] a;
+    bit [15:0] b;
+    bit [3:0] c;
+    bit [3:0] d;
+
+    q8 = '{8'h12, 8'h34, 8'h56};
+    {a, b} = {>>{q8}};
+    `checkh(a, 8'h12);
+    `checkh(b, 16'h3456);
+    {a, b} = {<<8{q8}};
+    `checkh(a, 8'h56);
+    `checkh(b, 16'h3412);
+    {a, b} = {<<{q8}};
+    `checkh(a, 8'h6a);
+    `checkh(b, 16'h2c48);
+    // A shorter stream is zero-filled on the right
+    q8 = '{8'h9a};
+    {a, b} = {>>{q8}};
+    `checkh(a, 8'h9a);
+    `checkh(b, 16'h0);
+    {c, d} = {>>{q8}};
+    `checkh(c, 4'h9);
+    `checkh(d, 4'ha);
+  endtask
+
   initial begin
     test1();
     test2();
     test3();
     test4();
+    test5();
     $write("*-* All Finished *-*\n");
     $finish;
   end
