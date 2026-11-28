@@ -244,6 +244,40 @@ class OuterTree;
   endfunction
 endclass
 
+// A packed struct is copied, and assigned back after a failure
+class OuterPacked;
+  rand struct packed {
+    bit [3:0] hi;
+    bit [3:0] lo;
+  } ps;
+  rand Bad bad;
+  function new;
+    bad = new;
+  endfunction
+endclass
+
+// The objects of a rand array of handles hold a handle back to its object, which the copies of
+// randomize() do not keep alive once the array no longer holds them
+typedef class ArrHolder;
+
+class ArrItem;
+  rand bit [6:0] v;
+  ArrHolder back;
+endclass
+
+class ArrHolder;
+  rand ArrItem items[];
+  rand Inner inner;
+  function new;
+    inner = new;
+    items = new[2];
+    foreach (items[i]) begin
+      items[i] = new;
+      items[i].back = this;
+    end
+  endfunction
+endclass
+
 module t;
   initial begin
     automatic OuterPlain op = new;
@@ -264,6 +298,8 @@ module t;
     automatic WithBase wb = wd;
     automatic OuterStatic ost = new;
     automatic OuterTree otr = new;
+    automatic OuterPacked opk = new;
+    automatic ArrHolder ah = new;
     automatic int r;
 
     op.inner.p = 9;
@@ -398,6 +434,18 @@ module t;
     `checkd(otr.n.dv, 90);
     `checkd(otr.second.dv, 91);
     `checkd(otr.second.nv, 92);
+
+    opk.ps = 8'h5a;
+    r = opk.randomize();
+    `checkd(r, 0);
+    `checkd(opk.ps, 8'h5a);
+
+    // The array of handles is the only path to its objects, which hold a handle back
+    r = ah.randomize();
+    `checkd(r, 1);
+    `checkd(ah.inner.post_count, 1);
+    ah.items.delete();
+    ah = null;
 
     $write("*-* All Finished *-*\n");
     $finish;
