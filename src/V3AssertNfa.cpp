@@ -352,6 +352,9 @@ class SvaNfaBuilder final {
     // threads cannot tell the counts apart, and its failures are counted per tick
     bool m_rangeFallback = false;
     bool m_inRangeCandidate = false;  // Building the operand after a ranged cycle delay
+    // Body of the property, or consequent after an antecedent of a fixed length, so that each of
+    // its attempts starts on a tick of its own
+    const AstNodeExpr* m_attemptRootp = nullptr;
     bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
     // A cover only records matches, so a pending obligation at $finish is not a failure
     bool m_noEosFailure = false;
@@ -376,6 +379,10 @@ class SvaNfaBuilder final {
         SvaStateVertex* startp = nullptr;
         unsigned range = 0;
         int rhsLen = 0;
+        // For a consecutive repetition of a boolean, its minimum count and the boolean (not
+        // owned); see addRepetitionMonitor
+        unsigned repCount = 0;
+        AstNodeExpr* repExprp = nullptr;
     };
 
     void warnEndpointUnsupported(FileLine* flp, const string& what) const {
@@ -683,15 +690,22 @@ class SvaNfaBuilder final {
             // Launch a candidate at every eligible tick. Candidate-local misses are not
             // assertion rejects while a later position can still match.
             if (rangeRejectInfop) {
-                // Not for a consecutive repetition, whose candidates reject on their own
-                // misses, see m_candidateMissRejects
-                const int rhsLen = rhsExprp->exists([](const AstSConsRep*) { return true; })
-                                       ? -1
-                                       : fixedLength(rhsExprp);
-                if (rhsLen >= 0) {
-                    *rangeRejectInfop = {currentp, range, rhsLen};
+                AstSConsRep* const repp = VN_CAST(rhsExprp, SConsRep);
+                if (repp && monitorsRepetition(sexprp, repp)) {
+                    *rangeRejectInfop
+                        = {currentp, range, 0, static_cast<unsigned>(getConstUInt(repp->countp())),
+                           repp->exprp()};
                 } else {
-                    m_candidateMissRejects = true;
+                    // Not for another consecutive repetition, whose candidates reject on
+                    // their own misses, see m_candidateMissRejects
+                    const int rhsLen = rhsExprp->exists([](const AstSConsRep*) { return true; })
+                                           ? -1
+                                           : fixedLength(rhsExprp);
+                    if (rhsLen >= 0) {
+                        *rangeRejectInfop = {currentp, range, rhsLen};
+                    } else {
+                        m_candidateMissRejects = true;
+                    }
                 }
             }
             SvaStateVertex* const tailp = addDelayChain(currentp, range + 1U, flp, false);
@@ -712,9 +726,81 @@ class SvaNfaBuilder final {
         return true;
     }
 
+    // True if the repetition repp ending sexprp, after its ranged delay, is checked by
+    // addRepetitionMonitor: a repetition of a boolean of at least one iteration, in a sequence
+    // each attempt reaches on one tick
+    // Most checks of addRepetitionMonitor, each a state of its own; a longer repetition keeps
+    // the rejects of its candidates
+    static constexpr unsigned MAX_MONITOR_CHECKS = 32;
+    bool monitorsRepetition(const AstSExpr* sexprp, AstSConsRep* repp) const {
+        if (sexprp != m_attemptRootp) return false;
+        if (sexprp->preExprp() && fixedLength(sexprp->preExprp()) < 0) return false;
+        AstNodeExpr* const exprp = repp->exprp();
+        if (!isPlainBoolean(exprp) || !exprp->isPure()) return false;
+        if (exprp->exists([](const AstExprStmt*) { return true; })) return false;
+        const unsigned count = getConstUInt(repp->countp());
+        return count > 0 && count <= MAX_MONITOR_CHECKS;
+    }
+
+    // Fail an attempt of `##[m:n] x[*lo:hi]`, x a boolean, on the tick its last candidate,
+    // starting n ticks after it, misses x while no candidate of it has matched
+    // (IEEE 1800-2023 16.7, 16.9.2). A candidate alive on a tick from that start on has seen x
+    // since its own start, so the last candidate is alive too. A match of the repetition
+    // ending in [m + lo - 1, the tick] ends a shortest match from one of the starts of the
+    // attempt, so it is the attempt's own. The candidates themselves do not reject.
+    void addRepetitionMonitor(const RangeDelayRejectInfo& info, const BuildResult& result,
+                              FileLine* flp) {
+        // Ticks on which a match of the repetition ends
+        SvaStateVertex* const successNowp = scopedCreateVertex();
+        std::vector<SvaStateVertex*> sources = result.midSources;
+        sources.push_back(result.termVertexp);
+        for (SvaStateVertex* const srcp : sources) {
+            AstNodeExpr* const condp
+                = result.finalCondp ? sampled(result.finalCondp->cloneTreePure(false)) : nullptr;
+            guardedLink(srcp, successNowp, condp, flp);
+        }
+        const unsigned lo = info.repCount;
+        SvaStateVertex* checkp = addDelayChain(info.startp, info.range, flp);
+        // Active on a tick a match ended from m + lo - 1 ticks after the attempt to the tick.
+        // The window of a check is that of the check before, a tick later, and its own tick.
+        SvaStateVertex* matchedp = nullptr;
+        for (unsigned j = 0; j < lo; ++j) {
+            const int window = static_cast<int>(info.range + j) - static_cast<int>(lo) + 2;
+            if (window > 0) {
+                SvaStateVertex* const nextp = scopedCreateVertex();
+                guardedLink(successNowp, nextp, flp);
+                if (matchedp) {
+                    guardedLink(addDelayChain(matchedp, 1, flp), nextp, flp);
+                } else if (window > 1) {
+                    guardedLink(
+                        addDelayChain(successNowp, static_cast<unsigned>(window), flp, false),
+                        nextp, flp);
+                }
+                matchedp = nextp;
+            }
+            SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+            sinkVtxp->m_isRejectSink = true;
+            SvaTransEdge* const rejectp
+                = m_graph.addLink(checkp, sinkVtxp, sampled(info.repExprp->cloneTreePure(false)));
+            rejectp->m_rejectOnFail = true;
+            rejectp->m_condVtxp = matchedp;
+            if (j + 1 == lo) break;
+            SvaStateVertex* const heldp = scopedCreateVertex();
+            guardedLink(checkp, heldp, sampled(info.repExprp->cloneTreePure(false)), flp);
+            checkp = addDelayChain(heldp, 1, flp);
+        }
+    }
+
     void addFiniteRangeReject(const RangeDelayRejectInfo& info, const BuildResult& result,
                               FileLine* flp) {
         if (!info.startp) return;
+        if (info.repExprp) {
+            // Each attempt has a chain of its own, also after a repetition without a maximum
+            VL_RESTORER(m_inUnboundedScope);
+            m_inUnboundedScope = false;
+            addRepetitionMonitor(info, result, flp);
+            return;
+        }
 
         SvaStateVertex* const expiryVtxp
             = addDelayChain(info.startp, info.range + info.rhsLen, flp);
@@ -832,7 +918,16 @@ class SvaNfaBuilder final {
         if (exprp->isMultiCycleSva()) {
             VL_RESTORER(m_inRangeCandidate);
             if (delayp->isRangeDelay()) m_inRangeCandidate = true;
+            // After a fixed delay and prefix, each attempt reaches the RHS on one tick too
+            VL_RESTORER(m_attemptRootp);
+            if (sexprp == m_attemptRootp && !delayp->isRangeDelay() && !zeroMinp && !preZeroMinp
+                && (!sexprp->preExprp() || fixedLength(sexprp->preExprp()) >= 0)) {
+                m_attemptRootp = exprp;
+            }
+            // The candidates of a monitored repetition do not reject on their own
+            const bool savedCandidateMissRejects = m_candidateMissRejects;
             const BuildResult result = buildExpr(exprp, currentp, isTopLevelStep);
+            if (rangeRejectInfo.repExprp) m_candidateMissRejects = savedCandidateMissRejects;
             if (result.valid()) addFiniteRangeReject(rangeRejectInfo, result, flp);
             return result;
         }
@@ -2539,13 +2634,17 @@ public:
         m_inEmptyMatchConsequent = hasZeroMinRep(antExprp);
         m_wantBoolLeaf = !isFollowedBy && !m_inEmptyMatchConsequent;
         m_atPropEnd = isFollowedBy && atPropEnd;
+        VL_RESTORER(m_attemptRootp);
+        if (!isFollowedBy && fixedLength(antExprp) >= 0) m_attemptRootp = bodyExprp;
         return buildExpr(bodyExprp, bodyEntryp, /*isTopLevelStep=*/true);
     }
 
     BuildResult build(AstNodeExpr* exprp) {
         m_graph.m_startVertexp = scopedCreateVertex();
         VL_RESTORER(m_wantBoolLeaf);
+        VL_RESTORER(m_attemptRootp);
         m_wantBoolLeaf = true;
+        m_attemptRootp = exprp;
         return buildExpr(exprp, m_graph.m_startVertexp, /*isTopLevelStep=*/true);
     }
 };

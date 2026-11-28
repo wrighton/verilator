@@ -168,7 +168,7 @@ module t (
     ref_dis += int'(!sh[0] && !ah[0]) + int'(sh[1:0] == 0 && ah[1] && !bh[0])
         + int'(sh[2:0] == 0 && ah[2] && bh[1] && !ch[0]);
 
-  // A consecutive repetition after a range delay, whose candidates each reject a miss
+  // A consecutive repetition after a range delay, failing an attempt once
   int fail_candidates = 0, ref_candidates = 0;
   assert property (@(posedge clk) a |-> ##[0:1] c [* 1:2])
   else fail_candidates++;
@@ -192,9 +192,7 @@ module t (
       `checkd(fail_dis, ref_dis);
       `checkd(fail_impl_past, ref_impl_past);
       `checkd(ref_candidates, 32);
-      // Known limit: each candidate of an attempt rejects its own miss, once per tick, as
-      // before: 80 failures, where 32 attempts fail
-      `checkd(fail_candidates, 80);
+      `checkd(fail_candidates, ref_candidates);
       // The stimulus produces cycles in which two attempts fail
       if (ref_delay1_multi == 0) `stop;
       $write("*-* All Finished *-*\n");
