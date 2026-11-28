@@ -1641,7 +1641,11 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstBegin* const initp
                 = getInitp(varp, memberRefp || structSelOrCMeth || foreignStatic, classp);
             if (m_nestedAccessp) {
-                AstStmtExpr* const writeVarStmtp = m_nestedAccessp->makeWriteVarStmt(varp, m_genp);
+                // A member of an object a null handle on the path selects is not registered,
+                // as for a member of a null handle (see createSolverVarHandle)
+                AstNodeExpr* const nonNullp = newNonNullp(m_nestedAccessp->accessTree()->fromp());
+                AstNodeStmt* writeVarStmtp = m_nestedAccessp->makeWriteVarStmt(varp, m_genp);
+                if (nonNullp) writeVarStmtp = new AstIf{varp->fileline(), nonNullp, writeVarStmtp};
                 addRegistrationStmt(writeVarStmtp, initp);
                 if (isGlobalConstrained && memberRefp && randMode.usesMode) {
                     setRandMode(varp, memberRefp, smtName, randMode, initp);
@@ -3454,14 +3458,15 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstNodeDType* const elemDtp
                     = arrayDtp->subDTypep() ? arrayDtp->subDTypep()->skipRefp() : nullptr;
                 if (elemDtp && VN_IS(elemDtp, ClassRefDType)) {
-                    // An element by a constant index of a fixed-size array reached through member
-                    // objects is registered alone, by its path; by another index, as of a foreach,
-                    // the objects of the array are, as for a dynamic array
+                    // An element by a constant index or key of a fixed-size or associative array
+                    // reached through member objects is registered alone, by its path; by another,
+                    // as of a foreach, the objects of the array are, as for a dynamic array
                     // (createSolverArrayHandle)
                     const bool isSimple
                         = nodep->fromp() == rootNodep
                           && (VN_IS(arraySelp->fromp(), VarRef)
-                              || (VN_IS(arraySelp, ArraySel) && isMemberPath(arraySelp->fromp())
+                              || ((VN_IS(arraySelp, ArraySel) || VN_IS(arraySelp, AssocSel))
+                                  && isMemberPath(arraySelp->fromp())
                                   && arraySelp->bitp()->exists(
                                       [](const AstNodeVarRef*) { return true; })));
                     if (!isSimple && !m_nestedAccessp) {

@@ -763,12 +763,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             std::vector<AstVar*> newPath = pathToClass;
             newPath.push_back(memberVarp);
             if (!memberClassRefp) {
-                // Not an associative array of a member object, whose elements are registered by
-                // their path (see ConstraintExprVisitor::visit(AstMemberRef))
-                if (!isHandleArray(memberVarp)
-                    || VN_IS(memberVarp->dtypep()->skipRefp(), AssocArrayDType)) {
-                    return;
-                }
+                if (!isHandleArray(memberVarp)) return;
                 AstNodeExpr* const arrRefp = buildMemberRefChain(rootVarRefp, newPath);
                 cloneElementConstraints(arrRefp, clonePathPrefix(rootVarRefp, newPath),
                                         targetClassp);

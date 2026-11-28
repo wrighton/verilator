@@ -52,6 +52,36 @@ class Empty;
   constraint c_g {foreach (aa[k]) aa[k].v != 7'd16;}
 endclass
 
+// Reached through a member object, with a null entry
+class Mid;
+  rand E aa[int];
+endclass
+
+class Through;
+  rand Mid m;
+  constraint c_g {foreach (m.aa[k]) m.aa[k] != null -> m.aa[k].v != 7'd17;}
+  function new();
+    m = new;
+    m.aa[2] = new;
+    m.aa[4] = null;
+    m.aa[5] = new;
+  endfunction
+endclass
+
+// By constant keys, of which one null
+class ByKey;
+  rand Mid m;
+  constraint c_g {
+    m.aa[4] != null -> m.aa[4].v != 7'd18;
+    m.aa[2].v != 7'd19;
+  }
+  function new();
+    m = new;
+    m.aa[2] = new;
+    m.aa[4] = null;
+  endfunction
+endclass
+
 module t;
   task automatic check(E e);
     `checkd(e.v inside {[10 : 20]}, 1'b1);
@@ -63,6 +93,8 @@ module t;
     automatic ByInt bi = new;
     automatic ByString bs = new;
     automatic Empty em = new;
+    automatic Through th = new;
+    automatic ByKey bk = new;
     automatic int ok;
     repeat (20) begin
       ok = bi.randomize();
@@ -80,6 +112,16 @@ module t;
       ok = em.randomize();
       `checkd(ok, 1);
       `checkd(em.aa.size(), 0);
+      ok = th.randomize();
+      `checkd(ok, 1);
+      `checkd(th.m.aa[4], null);
+      check(th.m.aa[2]);
+      check(th.m.aa[5]);
+      `checkd(th.m.aa[2].v != 7'd17 && th.m.aa[5].v != 7'd17, 1'b1);
+      ok = bk.randomize();
+      `checkd(ok, 1);
+      check(bk.m.aa[2]);
+      `checkd(bk.m.aa[2].v != 7'd19, 1'b1);
     end
     $write("*-* All Finished *-*\n");
     $finish;
