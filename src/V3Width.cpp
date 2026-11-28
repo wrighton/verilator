@@ -10715,7 +10715,8 @@ class WidthVisitor final : public VNVisitor {
                 = (pinDirection == VDirection::OUTPUT || pinDirection == VDirection::INOUT)
                   && !isShort && !isPinLvalue(exprp);
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
-            if (AstNodeStream* const streamp = VN_CAST(nodep->exprp(), NodeStream)) {
+            AstNodeStream* const streamp = VN_CAST(nodep->exprp(), NodeStream);
+            if (streamp && !VN_IS(nodep->modVarp()->dtypep()->skipRefp(), UnpackArrayDType)) {
                 addPinStreamCheck(nodep, streamp);
             }
             // Outputs are continuous assignments; inouts are transistor connections (23.3.3).
@@ -10851,7 +10852,10 @@ class WidthVisitor final : public VNVisitor {
                 } else if (((exprArrayp && !modArrayp) || (!exprArrayp && modArrayp))
                            // A string literal input converts to an unpacked array of bytes below
                            && !(nodep->modVarp()->isInput()
-                                && unpackedBytesFromString(nodep->exprp(), modDTypep))) {
+                                && unpackedBytesFromString(nodep->exprp(), modDTypep))
+                           // A stream connects as the continuous assignment of its bits to or
+                           // from the port (IEEE 1800-2023 11.4.14, 23.3.3)
+                           && !VN_IS(nodep->exprp(), NodeStream)) {
                     nodep->v3error(
                         "Illegal "
                         << nodep->prettyOperatorName() << "," << " mismatch between port which is"
@@ -10865,8 +10869,12 @@ class WidthVisitor final : public VNVisitor {
                     UINFO(1, "    Related lo: " << modDTypep);
                     UINFO(1, "    Related hi: " << conDTypep);
                 }
-                iterateCheckAssign(nodep, "pin connection", nodep->exprp(), FINAL, subDTypep,
-                                   nodep->modVarp()->direction().pinAccess());
+                if (VN_IS(nodep->exprp(), NodeStream) && VN_IS(modDTypep, UnpackArrayDType)) {
+                    connectStreamPin(nodep, modDTypep);
+                } else {
+                    iterateCheckAssign(nodep, "pin connection", nodep->exprp(), FINAL, subDTypep,
+                                       nodep->modVarp()->direction().pinAccess());
+                }
             }
             // Interface array port: connect its elements
             if (nodep->modVarp()->isIfaceArraySplit()) expandIfaceArrayPin(nodep);
@@ -16882,6 +16890,22 @@ public:
         AstNodeExpr* const fromp = resultp->cloneTree(false);
         fromp->didWidth(true);
         exprStmtp->addStmtsp(new AstStreamCheck{flp, fromp, 0, minBits, maxBits, unitBits});
+    }
+    // Connect the stream of pin nodep to an unpacked array port of type portDTypep through a
+    // temporary of that type, assigned from or to the stream by the continuous assignment the
+    // connection is (IEEE 1800-2023 23.3.3), which is widthed and checked as any other
+    void connectStreamPin(AstPin* nodep, AstNodeDType* portDTypep) {
+        AstNodeExpr* const streamp = VN_AS(nodep->exprp()->unlinkFrBack(), NodeExpr);
+        FileLine* const flp = streamp->fileline();
+        AstVar* const varp = makeTempVarp(m_bitstreamTempNames.get(streamp), streamp, portDTypep);
+        const bool input = !nodep->modVarp()->direction().isWritable();
+        nodep->exprp(new AstVarRef{flp, varp, input ? VAccess::READ : VAccess::WRITE});
+        userIterateAndNext(nodep->exprp(), WidthVP{portDTypep, FINAL}.p());
+        AstAssignW* const assignp
+            = input ? new AstAssignW{flp, new AstVarRef{flp, varp, VAccess::WRITE}, streamp}
+                    : new AstAssignW{flp, streamp, new AstVarRef{flp, varp, VAccess::READ}};
+        // Widthed when its module statements reach it
+        m_modep->addStmtsp(new AstAlways{assignp});
     }
     // Check the stream of streaming concatenation streamp connected to port pinp at run time,
     // as for the continuous assignment the connection is (IEEE 1800-2023 23.3.3), by a process
