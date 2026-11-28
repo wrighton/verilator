@@ -65,6 +65,33 @@ class Many;
   constraint c_order {solve a, q before s;}
 endclass
 
+// The orderings of several member objects, solved together by the object holding them,
+// each spread as if solved alone
+class Flag;
+  rand bit [7:0] x;
+  rand bit y;
+  constraint c_order {
+    solve y before x;
+    y -> x == 0;
+  }
+endclass
+
+class Flags;
+  rand Flag a;
+  rand Flag b;
+  rand Flag c;
+  constraint c_x {
+    a.x != 8'd255;
+    b.x != 8'd255;
+    c.x != 8'd255;
+  }
+  function new();
+    a = new;
+    b = new;
+    c = new;
+  endfunction
+endclass
+
 module t;
   localparam int CALLS = 300;
 
@@ -86,6 +113,8 @@ module t;
     automatic int mc[] = new[8];
     automatic Few f = new;
     automatic Many m = new;
+    automatic Flags fl = new;
+    automatic int ys[3] = '{0, 0, 0};
     automatic int seen[4] = '{0, 0, 0, 0};
     automatic int ok;
     f.srandom(1);
@@ -116,6 +145,19 @@ module t;
       $write("%%Error: n %p u %p m %p\n", nc, uc, mc);
       `stop;
     end
+    fl.srandom(1);
+    repeat (200) begin
+      ok = fl.randomize();
+      `checkd(ok, 1);
+      if (fl.a.y) `checkd(fl.a.x, 0);
+      if (fl.b.y) `checkd(fl.b.x, 0);
+      if (fl.c.y) `checkd(fl.c.x, 0);
+      ys[0] += int'(fl.a.y);
+      ys[1] += int'(fl.b.y);
+      ys[2] += int'(fl.c.y);
+    end
+    // 100 each expected
+    foreach (ys[i]) `check_range(ys[i], 70, 130);
     if (!$test$plusargs("scalars")) repeat (10) begin
       ok = m.randomize();
       `checkd(ok, 1);
