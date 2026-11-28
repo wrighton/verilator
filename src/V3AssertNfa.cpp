@@ -3404,6 +3404,198 @@ public:
                    && !VN_IS(sexprp->exprp(), SConsRep) && fixedLength(sexprp->exprp()) < 0;
         });
     }
+    // The counts of the cycle delay of sexprp, or false if not a bounded cycle delay
+    static bool cycleDelayCounts(const AstSExpr* sexprp, unsigned& minCount, unsigned& maxCount) {
+        const AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
+        if (!delayp || !delayp->isCycleDelay() || delayp->isUnbounded()) return false;
+        minCount = getConstUInt(delayp->lhsp());
+        maxCount = delayp->isRangeDelay() ? getConstUInt(delayp->rhsp()) : minCount;
+        return true;
+    }
+    // A bounded consecutive repetition with an empty match
+    static AstSConsRep* emptyMatchRep(AstNodeExpr* nodep) {
+        AstSConsRep* const repp = VN_CAST(nodep, SConsRep);
+        return repp && !repp->unbounded() && getConstUInt(repp->countp()) == 0 ? repp : nullptr;
+    }
+    // True if sexprp is a bounded cycle delay next to a zero-minimum repetition
+    static bool isEmptyMatchNextToDelay(const AstSExpr* sexprp) {
+        unsigned minCount = 0;
+        unsigned maxCount = 0;
+        return cycleDelayCounts(sexprp, minCount, maxCount)
+               && ((sexprp->preExprp() && emptyMatchRep(sexprp->preExprp()))
+                   || emptyMatchRep(sexprp->exprp()));
+    }
+    // The cycle delays next to a zero-minimum repetition under nodep, outside an antecedent,
+    // whose lowering per attempt is unchanged, innermost first
+    static std::vector<AstSExpr*> emptyMatchDelays(AstNodeExpr* nodep) {
+        std::unordered_set<const AstSExpr*> antps;
+        nodep->foreach([&](const AstImplication* implp) {
+            implp->lhsp()->foreach([&](const AstSExpr* sexprp) { antps.insert(sexprp); });
+        });
+        std::vector<AstSExpr*> sexprps;
+        nodep->foreach([&](AstSExpr* sexprp) {
+            if (!antps.count(sexprp) && isEmptyMatchNextToDelay(sexprp)) {
+                sexprps.push_back(sexprp);
+            }
+        });
+        std::reverse(sexprps.begin(), sexprps.end());
+        return sexprps;
+    }
+    // True if a zero-minimum repetition is next to a bounded cycle delay outside an antecedent
+    static bool hasEmptyMatchNextToDelay(AstNodeExpr* nodep) {
+        return !emptyMatchDelays(nodep).empty();
+    }
+    // `prep ##[minCount:maxCount] exprp`, `1 ##...` without prep, prep or exprp for `##0`
+    static AstNodeExpr* newCycleDelayed(FileLine* flp, AstNodeExpr* prep, unsigned minCount,
+                                        unsigned maxCount, AstNodeExpr* exprp) {
+        if (!maxCount && prep && VN_IS(exprp, Const)) {
+            VL_DO_DANGLING(exprp->deleteTree(), exprp);
+            return prep;
+        }
+        if (!maxCount && !prep) return exprp;
+        AstDelay* const delayp = new AstDelay{flp, new AstConst{flp, minCount}, true};
+        if (maxCount != minCount) delayp->rhsp(new AstConst{flp, maxCount});
+        if (!prep) return new AstSExpr{flp, delayp, exprp};
+        return new AstSExpr{flp, prep, delayp, exprp};
+    }
+    // The repetition without its empty match, or nullptr if it only matches empty
+    static AstNodeExpr* newNonEmptyRep(AstSConsRep* repp) {
+        const unsigned maxCount = repp->maxCountp() ? getConstUInt(repp->maxCountp()) : 0;
+        if (!maxCount) return nullptr;
+        FileLine* const flp = repp->fileline();
+        AstNodeExpr* const bodyp = repp->exprp()->cloneTreePure(false);
+        if (maxCount == 1) { return new AstSConsRep{flp, bodyp, new AstConst{flp, 1U}}; }
+        return new AstSConsRep{flp, bodyp, new AstConst{flp, 1U}, new AstConst{flp, maxCount},
+                               false};
+    }
+    // The alternatives of sexprp, a cycle delay next to a zero-minimum repetition, for its
+    // empty and its nonempty matches (IEEE 1800-2023 16.9.2.1): `s ##n empty` is `s ##(n-1) 1`
+    // and `empty ##n s` is `##(n-1) s` for n >= 1, and neither matches for n == 0
+    static AstNodeExpr* newEmptyMatchAlternatives(AstSExpr* sexprp) {
+        FileLine* const flp = sexprp->fileline();
+        unsigned minCount = 0;
+        unsigned maxCount = 0;
+        cycleDelayCounts(sexprp, minCount, maxCount);
+        AstNodeExpr* const prep = sexprp->preExprp();
+        AstNodeExpr* const exprp = sexprp->exprp();
+        AstNodeExpr* nonEmptyp = nullptr;
+        AstNodeExpr* emptyp = nullptr;
+        const unsigned emptyMin = std::max(minCount, 1U) - 1;
+        if (AstSConsRep* const repp = prep ? emptyMatchRep(prep) : nullptr) {
+            if (AstNodeExpr* const restp = newNonEmptyRep(repp)) {
+                nonEmptyp
+                    = newCycleDelayed(flp, restp, minCount, maxCount, exprp->cloneTreePure(false));
+            }
+            if (maxCount) {
+                emptyp = newCycleDelayed(flp, nullptr, emptyMin, maxCount - 1,
+                                         exprp->cloneTreePure(false));
+            }
+        } else {
+            AstSConsRep* const exprRepp = emptyMatchRep(exprp);
+            AstNodeExpr* const leadp = prep ? prep->cloneTreePure(false) : nullptr;
+            if (AstNodeExpr* const restp = newNonEmptyRep(exprRepp)) {
+                nonEmptyp = newCycleDelayed(flp, prep ? prep->cloneTreePure(false) : nullptr,
+                                            minCount, maxCount, restp);
+            }
+            if (maxCount) {
+                emptyp = newCycleDelayed(
+                    flp, leadp ? leadp : new AstConst{flp, AstConst::BitTrue{}}, emptyMin,
+                    maxCount - 1, new AstConst{flp, AstConst::BitTrue{}});
+            } else if (leadp) {
+                VL_DO_DANGLING(leadp->deleteTree(), leadp);
+            }
+        }
+        if (!nonEmptyp) return emptyp;
+        if (!emptyp) return nonEmptyp;
+        return new AstSOr{flp, emptyp, nonEmptyp};
+    }
+    // The cycle delays on the two sides of the element repp of a sequence, if any
+    static void neighborDelays(const AstNode* repp, const AstDelay*& leftp,
+                               const AstDelay*& rightp) {
+        leftp = nullptr;
+        rightp = nullptr;
+        const AstNode* childp = repp;
+        const AstSExpr* sexprp = VN_CAST(repp->backp(), SExpr);
+        if (!sexprp) return;
+        if (sexprp->preExprp() == childp) {
+            rightp = VN_CAST(sexprp->delayp(), Delay);
+            // The element before it ends the operand left of the delay of an enclosing element
+            for (; sexprp; childp = sexprp, sexprp = VN_CAST(sexprp->backp(), SExpr)) {
+                if (sexprp->exprp() == childp) {
+                    leftp = VN_CAST(sexprp->delayp(), Delay);
+                    return;
+                }
+                if (sexprp->preExprp() == childp && childp != repp) return;
+            }
+            return;
+        }
+        leftp = VN_CAST(sexprp->delayp(), Delay);
+        // The element after it starts the operand right of the delay of an enclosing element
+        for (; sexprp; childp = sexprp, sexprp = VN_CAST(sexprp->backp(), SExpr)) {
+            if (sexprp->preExprp() == childp) {
+                rightp = VN_CAST(sexprp->delayp(), Delay);
+                return;
+            }
+        }
+    }
+    // True if an empty match of repp is between a `##0` and a cycle delay that may be longer, as
+    // `s ##1 x[*0:1] ##0 t`: `(s ##1 empty) ##0 t` is `s ##0 t`, but `s ##1 (empty ##0 t)` never
+    // matches, so the grouping decides the matches (IEEE 1800-2023 16.9.2.1)
+    static bool emptyMatchGroupingMatters(const AstSConsRep* repp) {
+        const AstDelay* leftp = nullptr;
+        const AstDelay* rightp = nullptr;
+        neighborDelays(repp, leftp, rightp);
+        if (!leftp || !rightp) return false;
+        const auto isZero = [](const AstDelay* delayp) {
+            return getConstUInt(delayp->lhsp()) == 0;  // `##0`, or `##[0:n]` as one of its counts
+        };
+        const auto mayBeLonger = [](const AstDelay* delayp) {
+            return delayp->isUnbounded()
+                   || (delayp->isRangeDelay() ? getConstUInt(delayp->rhsp())
+                                              : getConstUInt(delayp->lhsp()))
+                          > 0;
+        };
+        return (isZero(leftp) && mayBeLonger(rightp)) || (isZero(rightp) && mayBeLonger(leftp));
+    }
+    // Most cycle delays of one property whose empty matches are expanded; with more, a property
+    // is not lowered per attempt
+    static constexpr int MAX_EMPTY_MATCH_PASSES = 8;
+    // Expand each zero-minimum repetition next to a bounded cycle delay under nodep into the
+    // alternatives of its empty and nonempty matches, for the lowering per attempt; returns the
+    // new tree, or nullptr if one only matches empty where the empty match never matches
+    static AstNodeExpr* expandEmptyMatches(AstNodeExpr* nodep) {
+        if (nodep->exists([](const AstSConsRep* repp) {
+                return !repp->unbounded() && getConstUInt(repp->countp()) == 0
+                       && emptyMatchGroupingMatters(repp);
+            })) {
+            VL_DO_DANGLING(nodep->deleteTree(), nodep);
+            return nullptr;
+        }
+        // Each replacement is of one cycle delay, and may make new ones of its alternatives
+        for (int pass = 0; pass < MAX_EMPTY_MATCH_PASSES; ++pass) {
+            const std::vector<AstSExpr*> sexprps = emptyMatchDelays(nodep);
+            if (sexprps.empty()) break;
+            AstSExpr* const sexprp = sexprps.front();
+            AstNodeExpr* const newp = newEmptyMatchAlternatives(sexprp);
+            if (!newp) {
+                VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                return nullptr;
+            }
+            if (sexprp == nodep) {
+                VL_DO_DANGLING(sexprp->deleteTree(), sexprp);
+                nodep = newp;
+            } else {
+                sexprp->replaceWith(newp);
+                VL_DO_DANGLING(sexprp->deleteTree(), sexprp);
+            }
+        }
+        if (hasEmptyMatchNextToDelay(nodep)) {
+            VL_DO_DANGLING(nodep->deleteTree(), nodep);
+            return nullptr;
+        }
+        return nodep;
+    }
+
     static std::unique_ptr<SvaAttemptNode> buildAttemptTree(AstNodeExpr* nodep) {
         using Kind = SvaAttemptNode::Kind;
         std::unique_ptr<SvaAttemptNode> treep{new SvaAttemptNode};
@@ -9128,8 +9320,27 @@ class AssertNfaVisitor final : public VNVisitor {
         FileLine* const flp = assertp->fileline();
 
         bool attemptErrored = false;
-        if (const std::unique_ptr<SvaAttemptNode> treep
-            = attemptTree(assertp, propp->propp(), attemptErrored)) {
+        // The lowering per attempt takes the empty match of a repetition next to a cycle delay
+        // as an alternative of the sequence (IEEE 1800-2023 16.9.2.1)
+        AstNodeExpr* expandedp = nullptr;
+        if (SvaNfaBuilder::hasEmptyMatchNextToDelay(propp->propp())) {
+            expandedp = SvaNfaBuilder::expandEmptyMatches(propp->propp()->cloneTreePure(false));
+        }
+        std::unique_ptr<SvaAttemptNode> attemptTreep;
+        if (expandedp) {
+            attemptTreep = attemptTree(assertp, expandedp, attemptErrored);
+            if (attemptTreep) {
+                AstNodeExpr* const oldp = propp->propp();
+                oldp->replaceWith(expandedp);
+                VL_DO_DANGLING(pushDeletep(oldp), oldp);
+            } else {
+                VL_DO_DANGLING(expandedp->deleteTree(), expandedp);
+            }
+        }
+        if (!attemptTreep && !attemptErrored) {
+            attemptTreep = attemptTree(assertp, propp->propp(), attemptErrored);
+        }
+        if (const std::unique_ptr<SvaAttemptNode> treep = std::move(attemptTreep)) {
             const auto signals
                 = m_loweringp->lowerAttempts(assertp, *treep, senTreep, disableExprp);
             AstNodeExpr* failCountp = signals.threadFailCountp;

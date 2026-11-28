@@ -9,8 +9,12 @@ module t;
   bit a;
   bit b;
 
-  // The empty match would end at a range of ticks
-  assert property (@(posedge clk) a |-> a ##[1:2] b [* 0: 1]);
   // Zero-minimum repetitions on both sides of one delay
   assert property (@(posedge clk) a |-> a [* 0: 1] ##1 b [* 0: 1]);
+  // The empty match between a delay of zero and one of more cycles, whose grouping decides the
+  // matches, is not lowered per attempt
+  assert property (@(posedge clk) a |-> b ##[0:1] a [* 0: 2] ##0 b ##1 a);
+  assert property (@(posedge clk) a |-> b ##[1:2] a [* 0: 1] ##[0:1] b);
+  assert property (@(posedge clk) a |-> b ##[2:3] a [* 0: 1] ##[0:1] b);
+  assert property (@(posedge clk) a |-> b ##[1:2] a [* 0: 2] ##[0:1] b);
 endmodule
