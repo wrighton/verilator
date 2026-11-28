@@ -1587,6 +1587,75 @@ class ConstVisitor final : public VNVisitor {
         if (!AstSFormatArg::formatAttrDefauled(fargp, exprp->dtypep()).isString()) return nullptr;
         return exprp;
     }
+    // Scan the format text 'text': 'onLiteral(ch)' is called for each character outside a
+    // format code, and 'onCode(code, ch)' for each format code ('%', width or precision, then
+    // the conversion), 'ch' being the conversion in lower case
+    template <typename T_OnLiteral, typename T_OnCode>
+    static void scanFormat(const std::string& text, T_OnLiteral onLiteral, T_OnCode onCode) {
+        std::string code;
+        bool inPct = false;
+        for (const char ch : text) {
+            if (!inPct && ch == '%') {
+                inPct = true;
+                code = ch;
+            } else if (inPct && (std::isdigit(ch) || ch == '.' || ch == '-')) {
+                code += ch;
+            } else if (inPct) {
+                inPct = false;
+                code += ch;
+                onCode(code, static_cast<char>(std::tolower(ch)));
+            } else {
+                onLiteral(ch);
+            }
+        }
+    }
+    // Append the text of format 'fmtp' to 'text', and its arguments to 'args', splicing in
+    // each literal format that is the argument of a plain %s and can merge into 'topp'
+    void flattenFormatInto(AstSFormatF* topp, AstSFormatF* fmtp, std::string& text,
+                           std::vector<AstNodeExpr*>& args) {
+        std::vector<AstNodeExpr*> fmtArgs;
+        for (AstNodeExpr* const argp : fmtp->exprspList()) fmtArgs.push_back(argp);
+        for (AstNodeExpr* const argp : fmtArgs) argp->unlinkFrBack();
+        size_t argn = 0;
+        scanFormat(
+            fmtp->text(), [&](char ch) { text += ch; },
+            [&](const std::string& code, char ch) {
+                if (ch == '%' || ch == 'm' || ch == 'l' || argn == fmtArgs.size()) {
+                    text += code;
+                    return;
+                }
+                AstNodeExpr* argp = fmtArgs[argn++];
+                const AstSFormatArg* const fargp = VN_CAST(argp, SFormatArg);
+                AstNode* const exprp = fargp ? fargp->exprp() : argp;
+                if (code == "%s" && operandsMergeableFormats(topp, exprp)) {
+                    flattenFormatInto(topp, VN_AS(exprp, SFormatF), text, args);
+                    VL_DO_DANGLING(pushDeletep(argp), argp);
+                } else {
+                    text += code;
+                    args.push_back(argp);
+                }
+            });
+        for (; argn < fmtArgs.size(); ++argn) args.push_back(fmtArgs[argn]);
+    }
+    // Splice the literal formats nested as plain %s arguments of 'nodep' into it, in one pass
+    // over the whole nest, so folding a deep nest takes time and memory linear in its text
+    void flattenNestedFormats(AstSFormatF* nodep) {
+        if (nodep->exprFormat()) return;
+        bool nested = false;
+        for (AstNodeExpr* const argp : nodep->exprspList()) {
+            const AstSFormatArg* const fargp = VN_CAST(argp, SFormatArg);
+            if (operandsMergeableFormats(nodep, fargp ? fargp->exprp() : argp)) {
+                nested = true;
+                break;
+            }
+        }
+        if (!nested) return;
+        std::string text;
+        std::vector<AstNodeExpr*> args;
+        flattenFormatInto(nodep, nodep, text, args);
+        nodep->text(text);
+        for (AstNodeExpr* const argp : args) nodep->addExprsp(argp);
+    }
     std::string spliceString(AstSFormatF* nodep, AstNodeExpr* argp, AstNode* beforep) {
         // Format for a plain %s of the argument 'argp', or of a part of it: constants become
         // text, and formats and concatenations are spliced in, with the arguments they need moved
@@ -5343,6 +5412,7 @@ class ConstVisitor final : public VNVisitor {
         // Substitute constants into displays.  The main point of this is to
         // simplify assertion methodologies which call functions with display's.
         // This eliminates a pile of wide temps, and makes the C a whole lot more readable.
+        if (m_doNConst) flattenNestedFormats(nodep);
         iterateChildren(nodep);
         if (nodep->exprFormat()) {
             // Upconvert to text-based format?
@@ -5370,20 +5440,10 @@ class ConstVisitor final : public VNVisitor {
         if (m_doNConst && foldable) {
             UINFO(9, "  Display in  " << nodep->text());
             string newFormat;
-            string fmt;
-            bool inPct = false;
             AstNode* argp = nodep->exprsp();
-            const string text = nodep->text();
-            for (char ch : text) {
-                if (!inPct && ch == '%') {
-                    inPct = true;
-                    fmt = ch;
-                } else if (inPct && (std::isdigit(ch) || ch == '.' || ch == '-')) {
-                    fmt += ch;
-                } else if (inPct) {
-                    inPct = false;
-                    fmt += ch;
-                    ch = std::tolower(ch);
+            scanFormat(
+                nodep->text(), [&](char ch) { newFormat += ch; },
+                [&](string fmt, char ch) {
                     switch (ch) {
                     case '%': break;  // %% - still %%
                     case 'm': break;  // %m - still %m - auto insert "name"
@@ -5420,10 +5480,7 @@ class ConstVisitor final : public VNVisitor {
                         break;
                     }  // switch
                     newFormat += fmt;
-                } else {
-                    newFormat += ch;
-                }
-            }
+                });
             if (newFormat != nodep->text()) {
                 nodep->text(newFormat);
                 UINFO(9, "  Display out " << nodep);
