@@ -101,7 +101,7 @@ module t (
   assert property (@(posedge clk) disable iff (cyc > END) c or (a |-> always [0:2] b))
     ++passes[15];
   else ++fails[15];
-  // Known limit: 96 passes and 96 failures, where attempts pass 82 times and fail 119 times
+  // Attempts pass 82 times and fail 119 times
   assert property (@(posedge clk) disable iff (cyc > END) not ((a ##1 b) or (a ##[2:3] c)))
     ++passes[16];
   else ++fails[16];
@@ -185,8 +185,8 @@ module t (
       `checkd(fails[14], 4);
       `checkd(passes[15], 181);
       `checkd(fails[15], 20);
-      `checkd(passes[16], 96);
-      `checkd(fails[16], 96);
+      `checkd(passes[16], 82);
+      `checkd(fails[16], 119);
       `checkd(passes[17], 77);
       `checkd(fails[17], 124);
       `checkd(passes[18], 0);
