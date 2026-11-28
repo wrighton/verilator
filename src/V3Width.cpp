@@ -4755,8 +4755,11 @@ class WidthVisitor final : public VNVisitor {
             // Unsupported in parameters
             AstNodeExpr* const inewp = new AstCMethodHard{nodep->fileline(), itemp->unlinkFrBack(),
                                                           VCMethod::ARRAY_INSIDE, exprp};
-            if (!folded)
-                iterateCheckTyped(nodep, "inside value", exprp, itemDtp->subDTypep(), BOTH);
+            // A value truncated to the elements is checked by fitsp, so does not warn
+            if (!folded) {
+                iterateCheckTyped(nodep, "inside value", exprp, itemDtp->subDTypep(), BOTH,
+                                  !fitsp);
+            }
             inewp->dtypeSetBit();
             inewp->didWidth(true);
             // The method first, as it evaluates the value
@@ -10792,12 +10795,13 @@ class WidthVisitor final : public VNVisitor {
         iterateCheckTyped(parentp, side, underp, parentp->findStringDType(), stage);
     }
     void iterateCheckTyped(AstNode* parentp, const char* side, AstNode* underp,
-                           AstNodeDType* expDTypep, Stage stage) {
+                           AstNodeDType* expDTypep, Stage stage, bool warnOn = true) {
         if (stage & PRELIM) {
             underp = userIterateSubtreeReturnEdits(underp, WidthVP{expDTypep, PRELIM}.p());
         }
         if (stage & FINAL) {
-            underp = iterateCheck(parentp, side, underp, SELF, FINAL, expDTypep, EXTEND_EXP);
+            underp
+                = iterateCheck(parentp, side, underp, SELF, FINAL, expDTypep, EXTEND_EXP, warnOn);
         }
         (void)underp;  // cppcheck
     }

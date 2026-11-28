@@ -47,7 +47,6 @@ module t (
   initial begin
     key4 = 4'd9;
     skey4 = -4'sd1;
-    /* verilator lint_off WIDTHTRUNC */
     if (key4 inside {narrow}) $stop;
     key4 = 4'd2;
     if (!(key4 inside {narrow})) $stop;
@@ -60,7 +59,6 @@ module t (
     if (key40 inside {q}) $stop;
     key40 = 40'h00_ffff_ffff;
     if (!(key40 inside {q})) $stop;
-    /* verilator lint_on WIDTHTRUNC */
   end
 
 endmodule
