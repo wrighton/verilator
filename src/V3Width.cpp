@@ -6912,6 +6912,34 @@ class WidthVisitor final : public VNVisitor {
         }
         return nullptr;
     }
+    // Return the 'with' clause of an ordering method ('sort', 'rsort', 'min' or 'max'), whose
+    // key without a clause is the element. The runtime orders keys by their unsigned C values,
+    // so a signed integral key is compared with its sign bit inverted, which orders it by
+    // value (IEEE 1800-2023 7.12.1, 7.12.2).
+    AstWith* methodOrderWithClause(AstMethodCall* nodep, AstNodeDType* indexDtp,
+                                   AstNodeDType* valueDtp) {
+        const AstNodeDType* const elemDtp = valueDtp->skipRefp();
+        if (!nodep->withp() && elemDtp->isIntegralOrPacked() && elemDtp->isSigned()) {
+            FileLine* const flp = nodep->fileline();
+            nodep->withp(new AstWith{flp, new AstLambdaArgRef{flp, "__Vorder__DOT__index", true},
+                                     new AstLambdaArgRef{flp, "__Vorder", false},
+                                     new AstLambdaArgRef{flp, "__Vorder", false}});
+        }
+        AstWith* const withp = methodWithClause(nodep, false, true, nullptr, indexDtp, valueDtp);
+        if (!withp) return nullptr;
+        AstNodeExpr* const keyp = VN_AS(withp->exprp(), NodeExpr);
+        if (keyp->isSigned() && keyp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            FileLine* const flp = keyp->fileline();
+            V3Number signBit{keyp, keyp->width()};
+            signBit.setBit(keyp->width() - 1, 1);
+            AstXor* const xorp = new AstXor{flp, keyp->unlinkFrBack(), new AstConst{flp, signBit}};
+            xorp->dtypep(xorp->findBitOrLogicDType(
+                keyp->width(), keyp->width(), VSigning::UNSIGNED, keyp->dtypep()->isFourstate()));
+            withp->addExprp(xorp);
+            withp->dtypeFrom(xorp);
+        }
+        return withp;
+    }
     AstWith* methodReductionWithClause(AstMethodCall* nodep, AstNodeDType* elemDtp,
                                        AstNodeDType* indexDtp) {
         // IEEE 1800-2023 7.12.3: Without 'with', reduction requires integral elements.
@@ -7103,9 +7131,14 @@ class WidthVisitor final : public VNVisitor {
             newp->dtypeFrom(withp ? withp->dtypep() : adtypep->subDTypep());
         } else if (nodep->name() == "min" || nodep->name() == "max" || nodep->name() == "unique") {
             methodOkArguments(nodep, 0, 0);
+            AstWith* const withp = nodep->name() == "unique"
+                                       ? nullptr
+                                       : methodOrderWithClause(nodep, adtypep->findStringDType(),
+                                                               adtypep->subDTypep());
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
                                       VCMethod::arrayMethod(nodep->name())};
+            newp->withp(withp);
             newp->dtypep(queueDTypeIndexedBy(adtypep->subDTypep()));
         } else if (nodep->name() == "find" || nodep->name() == "find_first"
                    || nodep->name() == "find_last") {
@@ -7236,8 +7269,11 @@ class WidthVisitor final : public VNVisitor {
             newp->dtypeFrom(withp ? withp->dtypep() : adtypep->subDTypep());
         } else if (nodep->name() == "min" || nodep->name() == "max" || nodep->name() == "unique"
                    || nodep->name() == "unique_index") {
-            AstWith* const withp = methodWithClause(nodep, false, true, nullptr,
-                                                    adtypep->keyDTypep(), adtypep->subDTypep());
+            AstWith* const withp
+                = nodep->name() == "min" || nodep->name() == "max"
+                      ? methodOrderWithClause(nodep, adtypep->keyDTypep(), adtypep->subDTypep())
+                      : methodWithClause(nodep, false, true, nullptr, adtypep->keyDTypep(),
+                                         adtypep->subDTypep());
             methodOkArguments(nodep, 0, 0);
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
@@ -7338,8 +7374,7 @@ class WidthVisitor final : public VNVisitor {
             || nodep->name() == "rsort") {
             AstWith* withp = nullptr;
             if (nodep->name() == "sort" || nodep->name() == "rsort") {
-                withp = methodWithClause(nodep, false, true, nullptr, nodep->findIntDType(),
-                                         adtypep->subDTypep());
+                withp = methodOrderWithClause(nodep, nodep->findIntDType(), adtypep->subDTypep());
             }
             methodOkArguments(nodep, 0, 0);
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::WRITE);
@@ -7349,8 +7384,11 @@ class WidthVisitor final : public VNVisitor {
             newp->dtypeSetVoid();
         } else if (nodep->name() == "min" || nodep->name() == "max" || nodep->name() == "unique"
                    || nodep->name() == "unique_index") {
-            AstWith* const withp = methodWithClause(nodep, false, true, nullptr,
-                                                    nodep->findIntDType(), adtypep->subDTypep());
+            AstWith* const withp
+                = nodep->name() == "min" || nodep->name() == "max"
+                      ? methodOrderWithClause(nodep, nodep->findIntDType(), adtypep->subDTypep())
+                      : methodWithClause(nodep, false, true, nullptr, nodep->findIntDType(),
+                                         adtypep->subDTypep());
             methodOkArguments(nodep, 0, 0);
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
