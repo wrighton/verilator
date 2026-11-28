@@ -98,6 +98,41 @@ module wrap #(
   initial #1 `checkd(WW, M + 4);
 endmodule
 
+// A path through an instance left with its module's default parameters, read by a
+// generate condition
+module mid_d #(
+    parameter int M = 5
+);
+  leaf #(.P(M + 3)) z ();
+endmodule
+
+module wrap_d #(
+    parameter int Q = 4
+);
+  mid_d #(.M(Q + 1)) x ();
+  localparam int W = $bits(x.z.sig);
+  if (W > 10) begin : g_big
+    localparam int BIG = 1;
+  end
+  initial #1 `checkd(W, Q + 4);
+endmodule
+
+// The same, with the instance's parameter value read from a localparam
+module mid_dl #(
+    parameter int M = 5
+);
+  localparam int ML = M + 3;
+  leaf #(.P(ML)) z ();
+endmodule
+
+module wrap_dl #(
+    parameter int Q = 4
+);
+  mid_dl #(.M(Q + 1)) x ();
+  localparam int W = $bits(x.z.sig);
+  initial #1 `checkd(W, Q + 4);
+endmodule
+
 module t;
   localparam int MQ = 5;
 
@@ -152,6 +187,13 @@ module t;
   localparam int WXD = $bits(u_xd.sig);
   leaf_x #(.P(9)) u_xs ();
   localparam int WXS = $bits(u_xs.sig);
+
+  // Through instances left with their modules' default parameters
+  wrap_d u_wd0 ();
+  wrap_d #(.Q(1)) u_wd1 ();
+  wrap_d #(.Q(31)) u_wd31 ();
+  wrap_dl u_wdl0 ();
+  wrap_dl #(.Q(2)) u_wdl2 ();
 
   // Set by a defparam, here or in the module of an instance on the path
   leaf u_dpt ();
