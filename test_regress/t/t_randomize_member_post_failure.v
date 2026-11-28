@@ -278,6 +278,16 @@ class ArrHolder;
   endfunction
 endclass
 
+// An object and its shallow copy, both members
+class OuterCopy;
+  rand Inner a;
+  rand Inner b;
+  rand Bad bad;
+  function new;
+    bad = new;
+  endfunction
+endclass
+
 module t;
   initial begin
     automatic OuterPlain op = new;
@@ -300,6 +310,9 @@ module t;
     automatic OuterTree otr = new;
     automatic OuterPacked opk = new;
     automatic ArrHolder ah = new;
+    automatic OuterCopy oc = new;
+    automatic Inner src = new;
+    automatic Inner cp;
     automatic int r;
 
     op.inner.p = 9;
@@ -446,6 +459,25 @@ module t;
     `checkd(ah.inner.post_count, 1);
     ah.items.delete();
     ah = null;
+
+    // An object restored after a failed call, then shallow-copied: the original and the copy
+    // keep their own values when a call fails with both, or with the copy alone
+    oc.a = src;
+    r = oc.randomize();
+    `checkd(r, 0);
+    cp = new src;
+    oc.b = cp;
+    src.p = 3;
+    cp.p = 7;
+    r = oc.randomize();
+    `checkd(r, 0);
+    `checkd(src.p, 3);
+    `checkd(cp.p, 7);
+    ot.good = cp;
+    r = ot.randomize();
+    `checkd(r, 0);
+    `checkd(src.p, 3);
+    `checkd(cp.p, 7);
 
     $write("*-* All Finished *-*\n");
     $finish;

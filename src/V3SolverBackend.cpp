@@ -107,16 +107,21 @@ AstVar* RandModeVars::constraintModeVarp(AstClass* classp) {
 //######################################################################
 // V3SolverLowering
 
-// Builds the methods of classes copying the random variables of the object into variables of
-// it, and those of the objects of its rand class handles by their methods, and assigning them
-// back, or discarding the copies. As they are virtual, an object of a derived class copies its
-// own variables too, and the code grows with the number of classes, not with the number of paths
-// to the objects. A flag of the object, set by copying and cleared by assigning back or
-// discarding, makes each object copied once, also if reached again through a cycle of handles.
+// Builds the methods of classes copying the random variables of the object, and those of the
+// objects of its rand class handles by their methods, and assigning them back, or discarding the
+// copies. As they are virtual, an object of a derived class copies its own variables too, and the
+// code grows with the number of classes, not with the number of paths to the objects. A flag of
+// the object, set by copying and cleared by assigning back or discarding, makes each object
+// copied once, also if reached again through a cycle of handles. The copies of the variables a
+// class declares are held by an object of a class of their own, made the first time they are
+// copied and reused by later copies, so an object never copied takes no memory for them.
 class RandomSaves final {
     VMemberMap& m_memberMap;  // Members of the classes
+    V3UniqueNames& m_uniqueNames;  // Names of the copy objects
     const V3SolverLowering::DerivedClassMap& m_derived;  // Directly derived classes
     std::unordered_set<const AstClass*>& m_builtr;  // Classes with the methods
+    // Handles of the objects holding the copies, by the class declaring the variables
+    std::unordered_map<const AstClass*, AstVar*>& m_copyHandles;
 
     AstTask* getCreateTask(AstClass* classp, const char* name) {
         AstTask* taskp = VN_CAST(m_memberMap.findMember(classp, name), Task);
@@ -130,15 +135,107 @@ class RandomSaves final {
         m_memberMap.insert(classp, taskp);
         return taskp;
     }
-    // The variable of the object holding the copy of varp, declared by declClassp
-    AstVar* getCreateCopyVarp(AstClass* declClassp, AstVar* varp) {
-        const std::string name = "__Vsaved_" + varp->name();
-        AstVar* copyp = VN_CAST(m_memberMap.findMember(declClassp, name), Var);
-        if (copyp) return copyp;
-        copyp = new AstVar{varp->fileline(), VVarType::MEMBER, name, varp->dtypep()};
-        declClassp->addMembersp(copyp);
-        m_memberMap.insert(declClassp, copyp);
-        return copyp;
+    // The handle, member of declClassp, of the object holding the copies of the variables
+    // declClassp declares
+    AstVar* getCreateCopyHandlep(AstClass* declClassp) {
+        AstVar*& handlep = m_copyHandles[declClassp];
+        if (handlep) return handlep;
+        FileLine* const fl = declClassp->fileline();
+        const std::string name = m_uniqueNames.get("__VsavedRand");
+        AstClass* const classp = new AstClass{fl, name + "_t", declClassp->libname()};
+        AstFunc* const newp = new AstFunc{fl, "new"};
+        newp->isConstructor(true);
+        newp->classMethod(true);
+        classp->addMembersp(newp);
+        // Set while it holds the copies of an object, as a shallow copy of the object shares it
+        AstVar* const busyp
+            = new AstVar{fl, VVarType::MEMBER, BUSY_VAR_NAME, classp->findBitDType()};
+        classp->addMembersp(busyp);
+        m_memberMap.insert(classp, busyp);
+        declClassp->addNextHere(classp);
+        AstClassRefDType* const dtypep = new AstClassRefDType{fl, classp, nullptr};
+        v3Global.rootp()->typeTablep()->addTypesp(dtypep);
+        handlep = new AstVar{fl, VVarType::MEMBER, name, dtypep};
+        declClassp->addMembersp(handlep);
+        m_memberMap.insert(declClassp, handlep);
+        return handlep;
+    }
+    static AstClass* copyClassp(const AstVar* handlep) {
+        return VN_AS(handlep->dtypep(), ClassRefDType)->classp();
+    }
+    // The copy of varp, declared by declClassp, in the object holding the copies
+    AstMemberRef* newCopyRefp(AstClass* declClassp, AstVar* varp, VAccess access) {
+        FileLine* const fl = varp->fileline();
+        AstVar* const handlep = getCreateCopyHandlep(declClassp);
+        AstClass* const classp = copyClassp(handlep);
+        AstVar* copyp = VN_CAST(m_memberMap.findMember(classp, varp->name()), Var);
+        if (!copyp) {
+            copyp = new AstVar{fl, VVarType::MEMBER, varp->name(), varp->dtypep()};
+            classp->addMembersp(copyp);
+            m_memberMap.insert(classp, copyp);
+        }
+        AstMemberRef* const refp
+            = new AstMemberRef{fl, new AstVarRef{fl, declClassp, handlep, VAccess::READ}, copyp};
+        refp->access(access);
+        return refp;
+    }
+    // Make the object holding the copies of the variables declClassp declares, the first time
+    // they are copied; later copies reuse it
+    // Made unless one not holding the copies of another object exists
+    AstNodeStmt* newCopyObjectStmtp(AstClass* declClassp, AstVar* handlep) {
+        FileLine* const fl = declClassp->fileline();
+        AstNodeExpr* const nullp
+            = new AstEq{fl, new AstVarRef{fl, declClassp, handlep, VAccess::READ},
+                        new AstConst{fl, AstConst::Null{}}};
+        nullp->dtypeSetBit();
+        AstNodeExpr* const condp
+            = new AstLogOr{fl, nullp, newBusyRefp(declClassp, handlep, VAccess::READ)};
+        condp->dtypeSetBit();
+        AstNodeStmt* const stmtsp
+            = new AstIf{fl, condp,
+                        new AstAssign{fl, new AstVarRef{fl, declClassp, handlep, VAccess::WRITE},
+                                      newCopyObjectp(handlep)}};
+        stmtsp->addNext(newBusyAssignp(declClassp, handlep, true));
+        return stmtsp;
+    }
+    AstMemberRef* newBusyRefp(AstClass* declClassp, AstVar* handlep, VAccess access) {
+        FileLine* const fl = handlep->fileline();
+        AstVar* const busyp
+            = VN_AS(m_memberMap.findMember(copyClassp(handlep), BUSY_VAR_NAME), Var);
+        AstMemberRef* const refp
+            = new AstMemberRef{fl, new AstVarRef{fl, declClassp, handlep, VAccess::READ}, busyp};
+        refp->access(access);
+        return refp;
+    }
+    AstNodeStmt* newBusyAssignp(AstClass* declClassp, AstVar* handlep, bool busy) {
+        FileLine* const fl = handlep->fileline();
+        return new AstAssign{fl, newBusyRefp(declClassp, handlep, VAccess::WRITE),
+                             new AstConst{fl, AstConst::BitTrue{}, busy}};
+    }
+    AstNew* newCopyObjectp(AstVar* handlep) {
+        FileLine* const fl = handlep->fileline();
+        AstClass* const classp = copyClassp(handlep);
+        AstNew* const newp = new AstNew{fl};
+        newp->taskp(VN_AS(m_memberMap.findMember(classp, "new"), NodeFTask));
+        newp->dtypep(handlep->dtypep());
+        newp->classOrPackagep(classp);
+        return newp;
+    }
+    static bool hasCopiedVars(const AstClass* declClassp) {
+        for (const AstNode* memberp = declClassp->membersp(); memberp;
+             memberp = memberp->nextp()) {
+            if (isCopiedVar(memberp)) return true;
+        }
+        return false;
+    }
+    // A member variable copied, rather than the object of a handle
+    static bool isCopiedVar(const AstNode* memberp) {
+        const AstVar* const varp = VN_CAST(memberp, Var);
+        if (!varp || !varp->rand().isRandomizable()) return false;
+        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+        if (VN_IS(dtypep, ClassRefDType)) return false;
+        const AstUnpackArrayDType* const arrDTypep = VN_CAST(dtypep, UnpackArrayDType);
+        return !arrDTypep || !VN_IS(arrDTypep->subDTypep()->skipRefp(), ClassRefDType);
     }
     // The base-most class of classp, not an interface class it implements
     static AstClass* flagClassp(AstClass* classp) {
@@ -194,8 +291,15 @@ class RandomSaves final {
     }
     // Add the copies of the variables declClassp and its base classes declare
     void addClassVars(AstClass* declClassp, AstTask* savep, AstTask* restorep, AstTask* discardp) {
+        AstVar* const handlep
+            = hasCopiedVars(declClassp) ? getCreateCopyHandlep(declClassp) : nullptr;
+        if (handlep) savep->addStmtsp(newCopyObjectStmtp(declClassp, handlep));
         for (AstNode* const memberp : declClassp->memberspList()) {
             addMember(declClassp, memberp, savep, restorep, discardp);
+        }
+        if (handlep) {
+            restorep->addStmtsp(newBusyAssignp(declClassp, handlep, false));
+            discardp->addStmtsp(newBusyAssignp(declClassp, handlep, false));
         }
         // The base class, not an interface class it implements
         const AstClassExtends* const extendsp = declClassp->extendsp();
@@ -230,18 +334,17 @@ class RandomSaves final {
                         restorep, discardp);
         } else if (!holdsClassHandles(dtypep) || isClearable(dtypep)) {
             // A static variable is copied by each object, so whichever objects are null
-            AstVar* const copyp = getCreateCopyVarp(declClassp, varp);
-            savep->addStmtsp(new AstAssign{fl,
-                                           new AstVarRef{fl, declClassp, copyp, VAccess::WRITE},
+            savep->addStmtsp(new AstAssign{fl, newCopyRefp(declClassp, varp, VAccess::WRITE),
                                            new AstVarRef{fl, declClassp, varp, VAccess::READ}});
-            restorep->addStmtsp(
-                new AstAssign{fl, new AstVarRef{fl, declClassp, varp, VAccess::WRITE},
-                              new AstVarRef{fl, declClassp, copyp, VAccess::READ}});
+            restorep->addStmtsp(new AstAssign{fl,
+                                              new AstVarRef{fl, declClassp, varp, VAccess::WRITE},
+                                              newCopyRefp(declClassp, varp, VAccess::READ)});
             // A copy holding class handles is emptied when no longer needed, or it would keep
             // their objects alive, and through a cycle of handles back to the object, the object
             if (holdsClassHandles(dtypep)) {
                 for (AstTask* const taskp : {restorep, discardp})
-                    taskp->addStmtsp(newClearp(declClassp, copyp, dtypep));
+                    taskp->addStmtsp(
+                        newClearp(newCopyRefp(declClassp, varp, VAccess::WRITE), dtypep));
             }
         }
         // Other values holding class handles, as structs, are not copied, nor restored
@@ -263,14 +366,12 @@ class RandomSaves final {
         return VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, QueueDType)
                || VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, WildcardArrayDType);
     }
-    // Empty the copy copyp of a value of dtypep
-    static AstNodeStmt* newClearp(AstClass* declClassp, AstVar* copyp,
-                                  const AstNodeDType* dtypep) {
-        FileLine* const fl = copyp->fileline();
+    // Empty the copy copyRefp of a value of dtypep
+    static AstNodeStmt* newClearp(AstNodeExpr* copyRefp, const AstNodeDType* dtypep) {
+        FileLine* const fl = copyRefp->fileline();
         const bool assoc = VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, WildcardArrayDType);
-        AstCMethodHard* const clearp
-            = new AstCMethodHard{fl, new AstVarRef{fl, declClassp, copyp, VAccess::WRITE},
-                                 assoc ? VCMethod::ASSOC_CLEAR : VCMethod::DYN_CLEAR};
+        AstCMethodHard* const clearp = new AstCMethodHard{
+            fl, copyRefp, assoc ? VCMethod::ASSOC_CLEAR : VCMethod::DYN_CLEAR};
         clearp->dtypeSetVoid();
         return clearp->makeStmt();
     }
@@ -312,12 +413,17 @@ public:
     static constexpr const char* RESTORE_FUNC_NAME = "__VrestoreRand";
     static constexpr const char* DISCARD_FUNC_NAME = "__VdiscardRand";
     static constexpr const char* FLAG_VAR_NAME = "__VsavedRand";
+    static constexpr const char* BUSY_VAR_NAME = "__Vbusy";
 
-    RandomSaves(VMemberMap& memberMap, const V3SolverLowering::DerivedClassMap& derived,
-                std::unordered_set<const AstClass*>& builtr)
+    RandomSaves(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
+                const V3SolverLowering::DerivedClassMap& derived,
+                std::unordered_set<const AstClass*>& builtr,
+                std::unordered_map<const AstClass*, AstVar*>& copyHandles)
         : m_memberMap{memberMap}
+        , m_uniqueNames{uniqueNames}
         , m_derived{derived}
-        , m_builtr{builtr} {}
+        , m_builtr{builtr}
+        , m_copyHandles{copyHandles} {}
     // Build the methods of classp, once
     void build(AstClass* classp) {
         if (m_builtr.emplace(classp).second) buildMethods(classp);
@@ -338,7 +444,8 @@ AstNodeStmt* V3SolverLowering::addFailureRestore(AstFunc* funcp, AstClass* class
         m_derivedBuilt = true;
         v3Global.rootp()->foreach([&](AstClass* derivedp) { addDerivedClass(derivedp); });
     }
-    RandomSaves saves{m_memberMap, m_derivedClassps, m_savedClasses};
+    RandomSaves saves{m_memberMap, m_uniqueNames, m_derivedClassps, m_savedClasses,
+                      m_savedCopyHandles};
     saves.build(classp);
     // A randomize() of an object already copied by the call randomizing another one, as its
     // member, leaves its copies to that call

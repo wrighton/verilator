@@ -104,6 +104,8 @@ protected:
     DerivedClassMap m_derivedClassps;  // Directly derived classes, see addFailureRestore
     bool m_derivedBuilt = false;  // m_derivedClassps is built
     std::unordered_set<const AstClass*> m_savedClasses;  // Classes copying their variables
+    // Handles of the objects holding the copies of the variables of each class
+    std::unordered_map<const AstClass*, AstVar*> m_savedCopyHandles;
 
     // CONSTRUCTORS
     V3SolverLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
