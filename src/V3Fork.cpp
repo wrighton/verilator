@@ -284,6 +284,38 @@ public:
     explicit ForkWrittenVisitor(AstNetlist* nodep) { iterateConst(nodep); }
 };
 
+// A class handle or a virtual interface: writing through it writes the object or the interface
+// instance it designates, not the variable that holds it
+static bool isHandleValue(const AstNodeExpr* const nodep) {
+    if (nodep->isClassHandleValue()) return true;
+    const AstIfaceRefDType* const dtypep = VN_CAST(nodep->dtypep()->skipRefp(), IfaceRefDType);
+    return dtypep && dtypep->isVirtual();
+}
+// Whether the target of an NBA uses a variable of a function or task, so the NBA needs a process
+// of its own to keep the variable. A member of an object or interface instance that a handle
+// designates uses none, as the variable only holds the handle, unless the NBA has an
+// intra-assignment delay: its process then keeps the handle until the update.
+static bool nbaUsesLocal(const AstNodeExpr* const nodep, const bool delayed) {
+    if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+        return refp->varp()->isFuncLocal();
+    }
+    if (const AstMemberRef* const selp = VN_CAST(nodep, MemberRef)) {
+        return (delayed || !isHandleValue(selp->fromp())) && nbaUsesLocal(selp->fromp(), delayed);
+    }
+    if (const AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) {
+        return nbaUsesLocal(selp->fromp(), delayed);
+    }
+    if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+        return nbaUsesLocal(selp->fromp(), delayed);
+    }
+    if (const AstStructSel* const selp = VN_CAST(nodep, StructSel)) {
+        return nbaUsesLocal(selp->fromp(), delayed);
+    }
+    return nodep->exists([](const AstVarRef* const refp) {
+        return refp->access().isWriteOrRW() && refp->varp()->isFuncLocal();
+    });
+}
+
 //######################################################################
 // Dynamic scope visitor, creates classes and objects for dynamic scoping of variables and
 // replaces references to variables that need a dynamic scope with references to object's
@@ -582,10 +614,7 @@ class DynScopeVisitor final : public VNVisitor {
     }
     void visit(AstAssignDly* nodep) override {
         if (m_procp && !nodep->user2()  // Unhandled AssignDly in function/task
-            && nodep->lhsp()->exists(  // And writes to a local variable
-                [](AstVarRef* refp) {
-                    return refp->access().isWriteOrRW() && refp->varp()->isFuncLocal();
-                })) {
+            && nbaUsesLocal(nodep->lhsp(), nodep->timingControlp())) {
             nodep->user2(true);
             // Put it in a fork to prevent lifetime issues with the local
             FileLine* const flp = nodep->fileline();
@@ -647,7 +676,7 @@ public:
         V3Stats::addStat("Fork, variables in dynamic scopes", m_statVars);
         std::set<ForkDynScopeFrame*> frames;
         for (auto node_frame : m_frames) frames.insert(node_frame.second);
-        for (auto* framep : frames) delete framep;
+        for (const auto* framep : frames) delete framep;
     }
 };
 
@@ -1054,13 +1083,6 @@ class ForkVisitor final : public VNVisitor {
     }
     void visit(AstVar* nodep) override {
         if (m_inFork) m_forkLocalsp.insert(nodep);
-    }
-    // A class handle or a virtual interface: writing through it writes the object or the
-    // interface instance it designates, not the variable that holds it
-    static bool isHandleValue(const AstNodeExpr* const nodep) {
-        if (nodep->isClassHandleValue()) return true;
-        const AstIfaceRefDType* const dtypep = VN_CAST(nodep->dtypep()->skipRefp(), IfaceRefDType);
-        return dtypep && dtypep->isVirtual();
     }
     void visit(AstVarRef* nodep) override {
         if (!m_inFork) return;
