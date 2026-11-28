@@ -3,4 +3,8 @@
    10 |   localparam bq_t QP = bq_t'(16'h4142);
       |                            ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_cast_bitstream_queue_param_bad.v:13:28: Expecting expression to be constant, but can't convert a CVTPACKEDTOARRAY to constant.
+                                                  : ... note: In instance 't'
+   13 |   localparam bq_t SP = {>>{P}};
+      |                            ^
 %Error: Exiting due to

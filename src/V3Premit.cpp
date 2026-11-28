@@ -406,6 +406,14 @@ class PremitVisitor final : public VNVisitor {
         checkNode(nodep);
     }
     void visit(AstCvtPackedToArray* nodep) override {
+        // A right stream of a packed value is that value, as it does not reorder it, so needs no
+        // temporary of all its bits
+        if (AstStreamR* const streamp = VN_CAST(nodep->fromp(), StreamR)) {
+            if (streamp->lhsp()->dtypep()->skipRefp()->isIntegralOrPacked()) {
+                streamp->replaceWith(streamp->lhsp()->unlinkFrBack());
+                VL_DO_DANGLING(pushDeletep(streamp), streamp);
+            }
+        }
         iterateChildren(nodep);
         checkNode(nodep);
         if (!VN_IS(nodep->backp(), NodeAssign)) createTemp(nodep);
