@@ -698,12 +698,21 @@ class TristateVisitor final : public TristateBaseVisitor {
             AstNodeExpr* const enFromp = getEnExprBasedOnOriginalp(fromp);
             enSelp->fromp(enFromp);
             return enSelp;
-        } else {
-            nodep->v3warn(E_UNSUPPORTED,
-                          "Unsupported tristate construct: " << nodep->prettyTypeNameQ()
-                                                             << " in function " << __func__);
-            return nullptr;
+        } else if (AstExtendS* const extendp = VN_CAST(nodep, ExtendS)) {
+            // ExtendS copies the sign bit, so extend its enable likewise
+            AstNodeExpr* const lhsp = extendp->lhsp()->unlinkFrBack();
+            AstExtendS* const enExtendp = extendp->cloneTree(false);
+            extendp->lhsp(lhsp);
+            enExtendp->lhsp(getEnExprBasedOnOriginalp(lhsp));
+            return enExtendp;
+        } else if (!nodep->dtypep()->isFourstate()) {
+            // A two-state value, such as an element of an array of bit, is never z
+            return newAllZerosOrOnes(nodep, true);
         }
+        nodep->v3warn(E_UNSUPPORTED, "Unsupported tristate construct: " << nodep->prettyTypeNameQ()
+                                                                        << " in function "
+                                                                        << __func__);
+        return newAllZerosOrOnes(nodep, true);
     }
     AstVar* getCreateOutVarp(AstVar* invarp, bool isTop) {
         // Return the master __out for the specified input variable
