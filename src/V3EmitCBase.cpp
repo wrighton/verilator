@@ -76,6 +76,63 @@ std::string EmitCMemberGroups::namedPath(const size_t idx) const {
 //######################################################################
 // EmitCUtil implementation
 
+std::string EmitCUtil::unpackReverseCall(const AstNodeDType* dtypep) {
+    // C++ unpacked arrays hold each dimension in element order, lowest index first, but
+    // streaming (IEEE 1800-2023 11.4.14.1) and %p (21.2.1.6) are left to right, so every
+    // descending dimension must be reversed
+    std::string args;
+    size_t usedLength = 0;  // Length of args up to the last reversed dimension
+    while (const AstUnpackArrayDType* const adtypep
+           = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
+        if (!args.empty()) args += ", ";
+        const bool reverse = !adtypep->declRange().ascending();
+        args += reverse ? "1" : "0";
+        if (reverse) usedLength = args.size();
+        dtypep = adtypep->subDTypep();
+    }
+    if (!usedLength) return "";
+    return "VL_CVT_UNPACK_TO_UNPACK<" + args.substr(0, usedLength) + ">";
+}
+
+// Whether toStringCall() of dtypep is not empty, without building it, so in time linear in the
+// depth of the type for each call
+static bool needsToStringCall(const AstNodeDType* dtypep) {
+    dtypep = dtypep->skipRefp();
+    if (!dtypep->isNonPackedArray() && !VN_IS(dtypep, WildcardArrayDType)) return false;
+    bool descending = false;
+    while (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+        descending |= !adtypep->declRange().ascending();
+        dtypep = adtypep->subDTypep()->skipRefp();
+    }
+    if (descending) return true;
+    if (!dtypep->isNonPackedArray() && !VN_IS(dtypep, WildcardArrayDType)) return false;
+    return needsToStringCall(dtypep->subDTypep());
+}
+
+std::string EmitCUtil::toStringCall(const AstNodeDType* dtypep, const std::string& expr) {
+    // Reverse descending dimensions as unpackReverseCall, also in the elements of queues,
+    // dynamic and associative arrays, which the run-time to_string converts one by one
+    dtypep = dtypep->skipRefp();
+    if (!dtypep->isNonPackedArray() && !VN_IS(dtypep, WildcardArrayDType)) return "";
+    if (VN_IS(dtypep, UnpackArrayDType)) {
+        const AstNodeDType* leafp = dtypep;
+        while (const AstUnpackArrayDType* const adtypep = VN_CAST(leafp, UnpackArrayDType)) {
+            leafp = adtypep->subDTypep()->skipRefp();
+        }
+        if (!needsToStringCall(leafp)) {
+            const std::string reverseCall = unpackReverseCall(dtypep);
+            if (reverseCall.empty()) return "";
+            return "VL_TO_STRING(" + reverseCall + "(" + expr + "))";
+        }
+    }
+    if (!needsToStringCall(dtypep->subDTypep())) return "";
+    const std::string elemCall = toStringCall(dtypep->subDTypep(), "e");
+    const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType);
+    const bool reverse = adtypep && !adtypep->declRange().ascending();
+    return (reverse ? "VL_CVT_UNPACK_TO_UNPACK<1>(" + expr + ")" : expr)
+           + ".to_string([](const auto& e) { return " + elemCall + "; })";
+}
+
 string EmitCUtil::prefixNameProtect(const AstNode* nodep) VL_MT_STABLE {
     const string prefix = v3Global.opt.modPrefix() + "_" + VIdProtect::protect(nodep->name());
     // If all-uppercase prefix conflicts with a previous usage of the
