@@ -17300,6 +17300,12 @@ public:
                         rhsp->findBitOrLogicDType(rwidth, rwidth, VSigning::UNSIGNED,
                                                   rhsp->isFourstateOrNoDtype())};
                     nodep->rhsp(new AstSel{rhsp->fileline(), packedp, rwidth - lwidth, lwidth});
+                } else if (lwidth == 0 && rwidth != 0) {
+                    // A dynamically sized target takes all bits of the array
+                    nodep->rhsp(new AstCvtArrayToPacked{
+                        rhsp->fileline(), rhsp,
+                        rhsp->findBitOrLogicDType(rwidth, rwidth, VSigning::UNSIGNED,
+                                                  rhsp->isFourstateOrNoDtype())});
                 } else {
                     nodep->rhsp(
                         new AstCvtArrayToPacked{rhsp->fileline(), rhsp, streamp->dtypep()});
