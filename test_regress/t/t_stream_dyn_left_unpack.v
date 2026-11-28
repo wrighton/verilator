@@ -50,6 +50,53 @@ module t;
       {<<23{d23}} = w69;
       `checkp(d23, "'{'h543210, 'h7530ec, 'h3fb72, 'h2bcdef, 'hacf13, 'h7c048d}");
     end
+    // Also into a stream of whole elements of another width, either direction
+    begin
+      automatic byte fb4[4] = '{8'h12, 8'h34, 8'h56, 8'h78};
+      automatic byte fb4d[3:0] = '{8'h12, 8'h34, 8'h56, 8'h78};
+      automatic bit [6:0] f7[4] = '{7'h4d, 7'h77, 7'h21, 7'h6c};
+      automatic bit [15:0] h16[$];
+      automatic bit [15:0] hb16[$:3];
+      automatic bit [13:0] w14[];
+      {>>{h16}} = fb4;
+      `checkp(h16, "'{'h1234, 'h5678}");
+      {>>{h16}} = fb4d;
+      `checkp(h16, "'{'h1234, 'h5678}");
+      {>>{hb16}} = fb4;
+      `checkp(hb16, "'{'h1234, 'h5678}");
+      {<<16{h16}} = fb4;
+      `checkp(h16, "'{'h5678, 'h1234}");
+      {>>{w14}} = f7;
+      `checkp(w14, "'{'h26f7, 'h10ec}");
+    end
+    // Also of a multidimensional array, of any range directions, and into a bounded queue
+    begin
+      automatic byte sda[2:1][-4:-3] = '{'{8'h87, 8'h12}, '{8'h9a, 8'hcf}};
+      automatic byte sad[0:1][1:0] = '{'{8'h87, 8'h12}, '{8'h9a, 8'hcf}};
+      automatic byte sdd[1:0][1:0] = '{'{8'h87, 8'h12}, '{8'h9a, 8'hcf}};
+      automatic byte s3[1:0][0:1][1:0] = '{
+          '{'{8'h11, 8'h10}, '{8'h15, 8'h14}}, '{'{8'h01, 8'h00}, '{8'h05, 8'h04}}
+      };
+      automatic byte s4[4] = '{8'h87, 8'h12, 8'h9a, 8'hcf};
+      automatic bit [15:0] h16[$];
+      automatic bit [15:0] hb16[$:1];
+      automatic bit [31:0] w32[$];
+      automatic bit [3:0] n4[$];
+      {>>{h16}} = sda;
+      `checkp(h16, "'{'h8712, 'h9acf}");
+      {>>{h16}} = sad;
+      `checkp(h16, "'{'h8712, 'h9acf}");
+      {>>{h16}} = sdd;
+      `checkp(h16, "'{'h8712, 'h9acf}");
+      {>>{w32}} = s3;
+      `checkp(w32, "'{'h11101514, 'h1000504}");
+      {<<8{h16}} = sad;
+      `checkp(h16, "'{'hcf9a, 'h1287}");
+      {<<4{n4}} = sdd;
+      `checkp(n4, "'{'hf, 'hc, 'ha, 'h9, 'h2, 'h1, 'h7, 'h8}");
+      {<<5{hb16}} = s4;
+      `checkp(hb16, "'{'he754, 'ha790}");
+    end
     d4 = '{};
     {<<5{d4}} <= q7;
     #1;

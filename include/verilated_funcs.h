@@ -377,6 +377,64 @@ VL_CVT_UNPACK_TO_UNPACK(const VlUnpacked<T, N_Depth>& from) VL_MT_SAFE {
     return to;
 }
 
+// Swap the elements of two unpacked arrays, or two elements, one element at a time
+template <typename T>
+inline void _vl_unpacked_swap(T& a, T& b) VL_MT_SAFE {
+    const T tmp = a;
+    a = b;
+    b = tmp;
+}
+template <typename T, std::size_t N_Depth>
+inline void _vl_unpacked_swap(VlUnpacked<T, N_Depth>& a, VlUnpacked<T, N_Depth>& b) VL_MT_SAFE {
+    for (std::size_t i = 0; i < N_Depth; ++i) _vl_unpacked_swap(a[i], b[i]);
+}
+template <typename T>
+inline void _vl_reverse_unpacked(T&) VL_MT_SAFE {}
+template <int T_Reverse, int... T_Inner, typename T, std::size_t N_Depth>
+inline void _vl_reverse_unpacked(VlUnpacked<T, N_Depth>& a) VL_MT_SAFE {
+    if (T_Reverse) {
+        for (std::size_t i = 0; i < N_Depth / 2; ++i) _vl_unpacked_swap(a[i], a[N_Depth - 1 - i]);
+    }
+    for (std::size_t i = 0; i < N_Depth; ++i) _vl_reverse_unpacked<T_Inner...>(a[i]);
+}
+// Reverse in place each dimension of an unpacked array whose template argument is non-zero,
+// outermost dimension first, without a copy of the array, which may not fit on the stack
+template <int... T_Reverse, typename T, std::size_t N_Depth>
+inline void VL_REVERSE_UNPACKED(VlUnpacked<T, N_Depth>& a) VL_MT_SAFE {
+    _vl_reverse_unpacked<T_Reverse...>(a);
+}
+
+// View of an unpacked array whose dimensions with a non-zero template argument, outermost first,
+// are read in reverse, without a copy of the array
+template <typename T_Array, int... T_Reverse>
+struct VlUnpackedDirs final {
+    const T_Array& m_array;  // Array viewed
+};
+template <int... T_Reverse, typename T, std::size_t N_Depth>
+inline VlUnpackedDirs<VlUnpacked<T, N_Depth>, T_Reverse...>
+VL_UNPACKED_DIRS(const VlUnpacked<T, N_Depth>& from) VL_MT_SAFE {
+    return {from};
+}
+// Call 'func' on each element of an unpacked array, in element order, or as read by a view
+template <typename T, typename T_Func>
+inline void _vl_unpacked_visit(const T& leaf, T_Func& func) VL_MT_SAFE {
+    func(leaf);
+}
+template <typename T, std::size_t N_Depth, typename T_Func>
+inline void _vl_unpacked_visit(const VlUnpacked<T, N_Depth>& from, T_Func& func) VL_MT_SAFE {
+    for (std::size_t i = 0; i < N_Depth; ++i) _vl_unpacked_visit(from[i], func);
+}
+template <typename T, typename T_Func>
+inline void _vl_unpacked_visit_dirs(const T& from, T_Func& func) VL_MT_SAFE {
+    _vl_unpacked_visit(from, func);
+}
+template <int T_Reverse, int... T_Inner, typename T, std::size_t N_Depth, typename T_Func>
+inline void _vl_unpacked_visit_dirs(const VlUnpacked<T, N_Depth>& from, T_Func& func) VL_MT_SAFE {
+    for (std::size_t i = 0; i < N_Depth; ++i) {
+        _vl_unpacked_visit_dirs<T_Inner...>(from[T_Reverse ? N_Depth - 1 - i : i], func);
+    }
+}
+
 // Masked match functions
 inline IData VL_MATCHMASKED_I(int, IData lhs, WDataInP matchp) VL_PURE {
     size_t i = 0;
@@ -2336,6 +2394,88 @@ struct VlUnpackedElements<VlUnpacked<T, N>> final {
     static constexpr size_t count = N * VlUnpackedElements<T>::count;
 };
 
+// Pack the elements read by a view of an unpacked array, the first the most significant, each
+// below bit 'm_lsb', which is moved down past it
+struct VlPackLeafQ final {
+    QData& m_ret;  // Packed result
+    const int m_lbits;  // Bits per element
+    int m_lsb;  // Least significant bit of the last element packed
+    void operator()(QData leaf) VL_MT_SAFE {
+        m_lsb -= m_lbits;
+        m_ret |= leaf << m_lsb;
+    }
+};
+struct VlPackLeafW final {
+    const WDataOutP m_owp;  // Packed result
+    const int m_lbits;  // Bits per element
+    int m_lsb;  // Least significant bit of the last element packed
+    void operator()(CData leaf) VL_MT_SAFE { (*this)(static_cast<IData>(leaf)); }
+    void operator()(SData leaf) VL_MT_SAFE { (*this)(static_cast<IData>(leaf)); }
+    void operator()(IData leaf) VL_MT_SAFE {
+        m_lsb -= m_lbits;
+        _vl_insert_WI(m_owp, leaf, m_lsb + m_lbits - 1, m_lsb);
+    }
+    void operator()(QData leaf) VL_MT_SAFE {
+        m_lsb -= m_lbits;
+        _vl_insert_WQ(m_owp, leaf, m_lsb + m_lbits - 1, m_lsb);
+    }
+    template <std::size_t N_Words>
+    void operator()(const VlWide<N_Words>& leaf) VL_MT_SAFE {
+        m_lsb -= m_lbits;
+        _vl_insert_WW(m_owp, leaf, m_lsb + m_lbits - 1, m_lsb);
+    }
+};
+template <typename T_Array, int... T_Reverse>
+inline QData _vl_pack_dirs_q(int lbits,
+                             const VlUnpackedDirs<T_Array, T_Reverse...>& from) VL_MT_SAFE {
+    QData ret = 0;
+    VlPackLeafQ func{ret, lbits, static_cast<int>(VlUnpackedElements<T_Array>::count) * lbits};
+    _vl_unpacked_visit_dirs<T_Reverse...>(from.m_array, func);
+    return ret;
+}
+template <typename T_Array, int... T_Reverse>
+inline IData VL_PACK_I_UI(int /*obits*/, int lbits,
+                          const VlUnpackedDirs<T_Array, T_Reverse...>& from) VL_MT_SAFE {
+    return static_cast<IData>(_vl_pack_dirs_q(lbits, from));
+}
+template <typename T_Array, int... T_Reverse>
+inline QData VL_PACK_Q_UI(int /*obits*/, int lbits,
+                          const VlUnpackedDirs<T_Array, T_Reverse...>& from) VL_MT_SAFE {
+    return _vl_pack_dirs_q(lbits, from);
+}
+template <typename T_Array, int... T_Reverse>
+inline QData VL_PACK_Q_UQ(int /*obits*/, int lbits,
+                          const VlUnpackedDirs<T_Array, T_Reverse...>& from) VL_MT_SAFE {
+    return _vl_pack_dirs_q(lbits, from);
+}
+// As the arrays packed: right-justified elements of up to 64 bits, left-justified wider ones
+template <typename T_Array, int... T_Reverse>
+inline WDataOutP _vl_pack_dirs_w(int obits, int lbits, WDataOutP owp,
+                                 const VlUnpackedDirs<T_Array, T_Reverse...>& from,
+                                 bool left) VL_MT_SAFE {
+    VL_MEMSET_ZERO_W(owp, VL_WORDS_I(obits));
+    const int bits = static_cast<int>(VlUnpackedElements<T_Array>::count) * lbits;
+    if (VL_UNLIKELY(obits < bits)) return owp;  // As for an array
+    VlPackLeafW func{owp, lbits, left ? obits : bits};
+    _vl_unpacked_visit_dirs<T_Reverse...>(from.m_array, func);
+    return owp;
+}
+template <typename T_Array, int... T_Reverse>
+inline WDataOutP VL_PACK_W_UI(int obits, int lbits, WDataOutP owp,
+                              const VlUnpackedDirs<T_Array, T_Reverse...>& from) VL_MT_SAFE {
+    return _vl_pack_dirs_w(obits, lbits, owp, from, false);
+}
+template <typename T_Array, int... T_Reverse>
+inline WDataOutP VL_PACK_W_UQ(int obits, int lbits, WDataOutP owp,
+                              const VlUnpackedDirs<T_Array, T_Reverse...>& from) VL_MT_SAFE {
+    return _vl_pack_dirs_w(obits, lbits, owp, from, false);
+}
+template <typename T_Array, int... T_Reverse>
+inline WDataOutP VL_PACK_W_UW(int obits, int lbits, WDataOutP owp,
+                              const VlUnpackedDirs<T_Array, T_Reverse...>& from) VL_MT_SAFE {
+    return _vl_pack_dirs_w(obits, lbits, owp, from, true);
+}
+
 // Pack the elements of a multidimensional unpacked array of 'lbits'-bit elements in place, the
 // first the most significant, each below bit 'lsb', which is moved down past it
 inline void _vl_pack_leaves(QData& ret, int lbits, QData leaf, int& lsb) VL_MT_SAFE {
@@ -3300,22 +3440,77 @@ VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>
     q = dst;
 }
 
-// Overloads for VlUnpacked source -> VlQueue destination
-template <typename T, std::size_t N_Depth>
-inline void VL_COPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, uint32_t lbits,
-                      int srcElementBits, int dstElementBits) {
-    VlQueue<T> srcQ;
-    srcQ.renew(N_Depth);
-    for (size_t i = 0; i < N_Depth; ++i) srcQ.atWrite(i) = from[i];
+// Element type of a possibly multidimensional unpacked array
+template <typename T>
+struct VlUnpackedLeaf final {
+    using type = T;
+};
+template <typename T, std::size_t N>
+struct VlUnpackedLeaf<VlUnpacked<T, N>> final {
+    using type = typename VlUnpackedLeaf<T>::type;
+};
+// Append the elements of a possibly multidimensional unpacked array, in element order, to 'q'
+template <typename T_Leaf>
+inline void _vl_unpacked_append(VlQueue<T_Leaf>& q, const T_Leaf& from) {
+    q.push_back(from);
+}
+template <typename T_Leaf, typename T_Value, std::size_t N_Depth>
+inline void _vl_unpacked_append(VlQueue<T_Leaf>& q, const VlUnpacked<T_Value, N_Depth>& from) {
+    for (size_t i = 0; i < N_Depth; ++i) _vl_unpacked_append(q, from[i]);
+}
+
+// Append each element visited to a queue
+template <typename T_Leaf>
+struct VlQueueAppend final {
+    VlQueue<T_Leaf>& m_q;  // Queue appended to
+    void operator()(const T_Leaf& leaf) VL_MT_SAFE { m_q.push_back(leaf); }
+};
+template <typename T_Leaf, int T_Outer, int... T_Inner, typename T, std::size_t N_Depth>
+inline void _vl_unpacked_append_dirs(VlQueue<T_Leaf>& q, const VlUnpacked<T, N_Depth>& from,
+                                     bool reverse) VL_MT_SAFE {
+    VlQueueAppend<T_Leaf> func{q};
+    for (std::size_t i = 0; i < N_Depth; ++i) {
+        _vl_unpacked_visit_dirs<T_Inner...>(from[reverse ? N_Depth - 1 - i : i], func);
+    }
+}
+// Overloads for a view of a VlUnpacked source -> VlQueue destination; the outermost dimension is
+// read in element order, or reversed by VL_REVCOPY_Q
+template <typename T_Dst, std::size_t N_DstMaxSize, typename T, std::size_t N_Depth, int T_Outer,
+          int... T_Inner>
+inline void VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q,
+                      const VlUnpackedDirs<VlUnpacked<T, N_Depth>, T_Outer, T_Inner...>& from,
+                      uint32_t lbits, int srcElementBits, int dstElementBits) {
+    VlQueue<typename VlUnpackedLeaf<T>::type> srcQ;
+    _vl_unpacked_append_dirs<typename VlUnpackedLeaf<T>::type, T_Outer, T_Inner...>(
+        srcQ, from.m_array, false);
+    VL_COPY_Q(q, srcQ, lbits, srcElementBits, dstElementBits);
+}
+template <typename T_Dst, std::size_t N_DstMaxSize, typename T, std::size_t N_Depth, int T_Outer,
+          int... T_Inner>
+inline void VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q,
+                         const VlUnpackedDirs<VlUnpacked<T, N_Depth>, T_Outer, T_Inner...>& from,
+                         uint32_t lbits, int srcElementBits, int dstElementBits) {
+    VlQueue<typename VlUnpackedLeaf<T>::type> srcQ;
+    _vl_unpacked_append_dirs<typename VlUnpackedLeaf<T>::type, T_Outer, T_Inner...>(
+        srcQ, from.m_array, true);
     VL_COPY_Q(q, srcQ, lbits, srcElementBits, dstElementBits);
 }
 
-template <typename T, std::size_t N_Depth>
-inline void VL_REVCOPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, uint32_t lbits,
-                         int srcElementBits, int dstElementBits) {
-    VlQueue<T> srcQ;
-    srcQ.renew(N_Depth);
-    for (size_t i = 0; i < N_Depth; ++i) srcQ.atWrite(i) = from[N_Depth - 1 - i];
+// Overloads for VlUnpacked source -> VlQueue destination, of elements of any widths
+template <typename T_Dst, std::size_t N_DstMaxSize, typename T_Src, std::size_t N_Depth>
+inline void VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlUnpacked<T_Src, N_Depth>& from,
+                      uint32_t lbits, int srcElementBits, int dstElementBits) {
+    VlQueue<typename VlUnpackedLeaf<T_Src>::type> srcQ;
+    _vl_unpacked_append(srcQ, from);
+    VL_COPY_Q(q, srcQ, lbits, srcElementBits, dstElementBits);
+}
+
+template <typename T_Dst, std::size_t N_DstMaxSize, typename T_Src, std::size_t N_Depth>
+inline void VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlUnpacked<T_Src, N_Depth>& from,
+                         uint32_t lbits, int srcElementBits, int dstElementBits) {
+    // The elements of the outermost dimension reversed, as of a descending one
+    VlQueue<typename VlUnpackedLeaf<T_Src>::type> srcQ;
+    for (size_t i = N_Depth; i > 0; --i) _vl_unpacked_append(srcQ, from[i - 1]);
     VL_COPY_Q(q, srcQ, lbits, srcElementBits, dstElementBits);
 }
 
@@ -3471,6 +3666,72 @@ inline void VL_UNPACK_RW_W(int lbits, int rbits, VlQueue<VlWide<N_Words>>& q, WD
         VL_SEL_WWII(lbits, rbits, q.atWrite(i), rwp, rbits - (i + 1) * lbits, lbits);
         q.atWrite(i)[VL_WORDS_I(lbits) - 1] &= VL_MASK_E(lbits);  // Clean it
     }
+}
+
+// Unpack into a bounded queue: into an unbounded one, then assign, which discards elements beyond
+// the bound with a warning (IEEE 1800-2023 7.10.5)
+template <typename T, std::size_t N_MaxSize, typename T_From>
+inline typename std::enable_if<N_MaxSize != 0>::type
+VL_UNPACK_RI_I(int lbits, int rbits, VlQueue<T, N_MaxSize>& q, T_From from) {
+    VlQueue<T> unbounded;
+    VL_UNPACK_RI_I(lbits, rbits, unbounded, from);
+    q = unbounded;
+}
+template <typename T, std::size_t N_MaxSize, typename T_From>
+inline typename std::enable_if<N_MaxSize != 0>::type
+VL_UNPACK_RI_Q(int lbits, int rbits, VlQueue<T, N_MaxSize>& q, T_From from) {
+    VlQueue<T> unbounded;
+    VL_UNPACK_RI_Q(lbits, rbits, unbounded, from);
+    q = unbounded;
+}
+template <typename T, std::size_t N_MaxSize, typename T_From>
+inline typename std::enable_if<N_MaxSize != 0>::type
+VL_UNPACK_RI_W(int lbits, int rbits, VlQueue<T, N_MaxSize>& q, T_From from) {
+    VlQueue<T> unbounded;
+    VL_UNPACK_RI_W(lbits, rbits, unbounded, from);
+    q = unbounded;
+}
+template <typename T, std::size_t N_MaxSize, typename T_From>
+inline typename std::enable_if<N_MaxSize != 0>::type
+VL_UNPACK_RQ_I(int lbits, int rbits, VlQueue<T, N_MaxSize>& q, T_From from) {
+    VlQueue<T> unbounded;
+    VL_UNPACK_RQ_I(lbits, rbits, unbounded, from);
+    q = unbounded;
+}
+template <typename T, std::size_t N_MaxSize, typename T_From>
+inline typename std::enable_if<N_MaxSize != 0>::type
+VL_UNPACK_RQ_Q(int lbits, int rbits, VlQueue<T, N_MaxSize>& q, T_From from) {
+    VlQueue<T> unbounded;
+    VL_UNPACK_RQ_Q(lbits, rbits, unbounded, from);
+    q = unbounded;
+}
+template <typename T, std::size_t N_MaxSize, typename T_From>
+inline typename std::enable_if<N_MaxSize != 0>::type
+VL_UNPACK_RQ_W(int lbits, int rbits, VlQueue<T, N_MaxSize>& q, T_From from) {
+    VlQueue<T> unbounded;
+    VL_UNPACK_RQ_W(lbits, rbits, unbounded, from);
+    q = unbounded;
+}
+template <typename T, std::size_t N_MaxSize, typename T_From>
+inline typename std::enable_if<N_MaxSize != 0>::type
+VL_UNPACK_RW_I(int lbits, int rbits, VlQueue<T, N_MaxSize>& q, T_From from) {
+    VlQueue<T> unbounded;
+    VL_UNPACK_RW_I(lbits, rbits, unbounded, from);
+    q = unbounded;
+}
+template <typename T, std::size_t N_MaxSize, typename T_From>
+inline typename std::enable_if<N_MaxSize != 0>::type
+VL_UNPACK_RW_Q(int lbits, int rbits, VlQueue<T, N_MaxSize>& q, T_From from) {
+    VlQueue<T> unbounded;
+    VL_UNPACK_RW_Q(lbits, rbits, unbounded, from);
+    q = unbounded;
+}
+template <typename T, std::size_t N_MaxSize, typename T_From>
+inline typename std::enable_if<N_MaxSize != 0>::type
+VL_UNPACK_RW_W(int lbits, int rbits, VlQueue<T, N_MaxSize>& q, T_From from) {
+    VlQueue<T> unbounded;
+    VL_UNPACK_RW_W(lbits, rbits, unbounded, from);
+    q = unbounded;
 }
 
 template <std::size_t N_Depth>

@@ -86,7 +86,11 @@ public:
         return v3Global.opt.prefix();
     }
     // Return a call reversing the descending dimensions of an unpacked array, "" if none
-    static std::string unpackReverseCall(const AstNodeDType* dtypep);
+    // Calling 'func', of all dimensions or 'innerOnly' all but the outermost: by default a copy of
+    // the array reversed, VL_UNPACKED_DIRS for a view of it read reversed, VL_REVERSE_UNPACKED to
+    // reverse it in place
+    static std::string unpackReverseCall(const AstNodeDType* dtypep, bool innerOnly = false,
+                                         const std::string& func = "VL_CVT_UNPACK_TO_UNPACK");
     // Return a call converting 'expr' to a %p string, "" if VL_TO_STRING(expr) does
     static std::string toStringCall(const AstNodeDType* dtypep, const std::string& expr);
     // Split a pretty path below the model into the name it is below, as an index into the
