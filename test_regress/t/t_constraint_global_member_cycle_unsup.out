@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_constraint_global_member_cycle_unsup.v:12:13: Unsupported: random member variable with the type of the containing class
+                                                                    : ... note: In instance 't'
+   12 |   rand Self me;
+      |             ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

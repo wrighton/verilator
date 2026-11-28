@@ -33,6 +33,11 @@ class D extends A;
   constraint c_d {z == x + 1;}
 endclass
 
+class C;
+  rand A a;
+  constraint c_c {a.x > 1;}
+endclass
+
 module t;
   // The clones reach a few levels down the cycle, where a null handle is not supported
   task automatic build(A a, int depth);
@@ -51,12 +56,19 @@ module t;
 
   initial begin
     automatic A alone = new;
+    automatic C c = new;
     automatic int ok;
     build(alone, 4);
+    c.a = new;
+    build(c.a, 4);
     repeat (10) begin
       ok = alone.randomize();
       `checkd(ok, 1);
       check(alone);
+      ok = c.randomize();
+      `checkd(ok, 1);
+      check(c.a);
+      `checkd(c.a.x > 1, 1'b1);
     end
     $write("*-* All Finished *-*\n");
     $finish;

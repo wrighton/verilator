@@ -324,6 +324,17 @@ class RandomizeMarkVisitor final : public VNVisitor {
         ActiveSet visited;
         return !hierarchyReaches(m_constraintClassp, declClassp, visited);
     }
+    // Whether classp is aClassp, a class it extends, or a class extending it
+    static bool inheritanceRelated(const AstClass* aClassp, const AstClass* classp) {
+        return extendsClass(aClassp, classp) || extendsClass(classp, aClassp);
+    }
+    // Whether classp is baseClassp or extends it
+    static bool extendsClass(const AstClass* classp, const AstClass* const baseClassp) {
+        while (classp && classp != baseClassp) {
+            classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr;
+        }
+        return classp;
+    }
     void markMembers(const AstClass* nodep) {
         for (const AstClass* classp = nodep; classp;
              classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr) {
@@ -341,7 +352,13 @@ class RandomizeMarkVisitor final : public VNVisitor {
                     }
                     if (classRefp) {
                         AstClass* const rclassp = classRefp->classp();
-                        if (!rclassp->user1()) {
+                        // Also a class randomized alone elsewhere, before or after, with or
+                        // without arguments, but for a member of the class's own type or
+                        // of a class it extends or that extends it (an unsupported cycle)
+                        if (rclassp->user1() == NONE
+                            || ((rclassp->user1() == IS_RANDOMIZED
+                                 || rclassp->user1() == IS_RANDOMIZED_INLINE)
+                                && !inheritanceRelated(nodep, rclassp))) {
                             rclassp->user1(IS_RANDOMIZED_GLOBAL);
                             markGlobalConstrainedVars(rclassp);
                             markMembers(rclassp);
