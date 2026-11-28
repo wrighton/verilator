@@ -1887,31 +1887,24 @@ class SvaNfaBuilder final {
             combVtxp->m_isUnbounded = true;
         }
         // Wire terminal-boolean rejects to a dedicated sink so each side can fail
-        // the AND independently. Skip for liveness or single-cycle operands
-        // (single-cycle termVertexp == entryVtxp would fire every cycle).
-        if (!combVtxp->m_isUnbounded) {
-            bool needSink = false;
-            const bool lhsMultiCycle = (lhs.termVertexp != entryVtxp);
-            const bool rhsMultiCycle = (rhs.termVertexp != entryVtxp);
-            if (lhs.finalCondp && lhsMultiCycle && !lhs.termVertexp->m_isUnbounded) {
-                needSink = true;
+        // the AND independently. Skip single-cycle operands (single-cycle
+        // termVertexp == entryVtxp would fire every cycle) and unbounded ones.
+        const bool lhsMultiCycle = (lhs.termVertexp != entryVtxp);
+        const bool rhsMultiCycle = (rhs.termVertexp != entryVtxp);
+        const bool lhsRejects = lhs.finalCondp && lhsMultiCycle && !lhs.termVertexp->m_isUnbounded;
+        const bool rhsRejects = rhs.finalCondp && rhsMultiCycle && !rhs.termVertexp->m_isUnbounded;
+        if (lhsRejects || rhsRejects) {
+            SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+            sinkVtxp->m_isRejectSink = true;
+            if (lhsRejects) {
+                SvaTransEdge* const ep = m_graph.addLink(
+                    lhs.termVertexp, sinkVtxp, sampled(lhs.finalCondp->cloneTreePure(false)));
+                ep->m_rejectOnFail = true;
             }
-            if (rhs.finalCondp && rhsMultiCycle && !rhs.termVertexp->m_isUnbounded) {
-                needSink = true;
-            }
-            if (needSink) {
-                SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
-                sinkVtxp->m_isRejectSink = true;
-                if (lhs.finalCondp && lhsMultiCycle && !lhs.termVertexp->m_isUnbounded) {
-                    SvaTransEdge* const ep = m_graph.addLink(
-                        lhs.termVertexp, sinkVtxp, sampled(lhs.finalCondp->cloneTreePure(false)));
-                    ep->m_rejectOnFail = true;
-                }
-                if (rhs.finalCondp && rhsMultiCycle && !rhs.termVertexp->m_isUnbounded) {
-                    SvaTransEdge* const ep = m_graph.addLink(
-                        rhs.termVertexp, sinkVtxp, sampled(rhs.finalCondp->cloneTreePure(false)));
-                    ep->m_rejectOnFail = true;
-                }
+            if (rhsRejects) {
+                SvaTransEdge* const ep = m_graph.addLink(
+                    rhs.termVertexp, sinkVtxp, sampled(rhs.finalCondp->cloneTreePure(false)));
+                ep->m_rejectOnFail = true;
             }
         }
         freeUnlinkedCondp(lhs.finalCondp);
