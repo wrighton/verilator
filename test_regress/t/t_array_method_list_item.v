@@ -59,6 +59,16 @@ module t;
       a = '{1: 64'h1_0000_0003, 2: 64'h5};
       `checks($sformatf("%0h %0h %0h", a.sum(), a.xor(), a.or()), "100000008 100000006 100000007");
     end
+    begin
+      bit [64:0] a[int];
+      bit [94:0] b[int];
+      a = '{1: 65'h1_0000_0000_0000_0003, 2: 65'h5};
+      b = '{1: 95'h4000_0000_0000_0000_0000_0003, 2: 95'h5};
+      `checks($sformatf("%0h %0h %0h", a.sum(), a.xor(), a.or()),
+              "10000000000000008 10000000000000006 10000000000000007");
+      `checks($sformatf("%0h %0h %0h", b.sum(), b.xor(), b.or()),
+              "400000000000000000000008 400000000000000000000006 400000000000000000000007");
+    end
     // Negated membership matches the equivalent comparisons
     begin
       bit [6:0] q[$];
