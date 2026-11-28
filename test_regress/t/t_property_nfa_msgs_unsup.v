@@ -48,10 +48,10 @@ module t (
   // A multi-cycle property with no clocking event is left to later passes
   assert property (a [* 2]);
 
-  // An 'and' operand carrying mid-window sources defers to later passes
-  assert property (@(posedge clk) (1'b1 ##[1:2] b) and c);
-  assert property (@(posedge clk) c and (1'b1 ##[1:2] b));
-  assert property (@(posedge clk) (1'b1 ##[1:300] b) and c);
+  // An 'and' operand of a cover sequence carrying mid-window sources defers to later passes
+  cover sequence (@(posedge clk) (1'b1 ##[1:2] b) and (c ##1 d));
+  cover sequence (@(posedge clk) (c ##1 d) and (1'b1 ##[1:2] b));
+  assert property (@(posedge clk) (1'b1 ##[1:300] b) and (c ##1 d));
 
   // A boolean 'and' operand of a rejected cover-sequence 'or' is freed
   cover sequence (@(posedge clk) ((a and b) or(c ##1 d)));

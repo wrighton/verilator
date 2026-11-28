@@ -15,4 +15,7 @@ module t (
   // Unsupported: the same operand restriction applies to unbounded repetition
   assert property (@(posedge clk) (a ##1 b) [* 2:$] |-> a);
 
+  // Unsupported: iterations of an 'and' of variable length start on variable ticks
+  assert property (@(posedge clk) ((a [* 1:2]) and b) [* 2]);
+
 endmodule

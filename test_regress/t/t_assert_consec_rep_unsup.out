@@ -7,4 +7,8 @@
                                                        : ... note: In instance 't'
    16 |   assert property (@(posedge clk) (a ##1 b) [* 2:$] |-> a);
       |                                             ^~
+%Error-UNSUPPORTED: t/t_assert_consec_rep_unsup.v:19:55: Unsupported: multi-cycle sequence expression inside consecutive repetition (IEEE 1800-2023 16.9.2)
+                                                       : ... note: In instance 't'
+   19 |   assert property (@(posedge clk) ((a [* 1:2]) and b) [* 2]);
+      |                                                       ^~
 %Error: Exiting due to
