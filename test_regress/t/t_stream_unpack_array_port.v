@@ -29,6 +29,24 @@ module recv (
 );
 endmodule
 
+module send (
+    input bit [7:0] x,
+    output bit [7:0] oa[2]
+);
+  assign oa = '{x, ~x};
+endmodule
+
+module middle #(
+    parameter bit [7:0] D = 0
+) (
+    output bit [31:0] y
+);
+  send u[1:0] (
+      .x(D),
+      .oa({>>{y}})
+  );
+endmodule
+
 module t;
   byte q[$];
   bit [31:0] p32;
@@ -71,8 +89,55 @@ module t;
   byte mq[$];
   recv u_narrow (.ia({>>{x8}}));
   recv u_mixed (.ia({>>{8'h12, mq}}));
+  // A stream with the bits of all instances of an instance array, a slice to each, the leftmost
+  // instance the leftmost slice (IEEE 1800-2023 23.3.3.5)
+  bit [31:0] dist32;
+  bit [63:0] dist64;
+  recv u_dist[1:0] (.ia({>>{dist32}}));
+  recv u_dist2[3:2][1:0] (.ia({<<8{dist64}}));
+  // Also from output ports, and of a stream of an unpacked array
+  bit [31:0] odist32;
+  bit [63:0] odist64;
+  byte bsrc[4];
+  send u_odist[1:0] (
+      .x(8'h1d),
+      .oa({<<5{odist32}})
+  );
+  send u_odist2[1:0][1:0] (
+      .x(8'h39),
+      .oa({>>{odist64}})
+  );
+  recv u_bdist[1:0] (.ia({>>{bsrc}}));
+  // Also of a stream of several operands, and into an ascending range of instances, its left
+  // instance taking the left bits
+  bit [15:0] cat_hi;
+  bit [15:0] cat_lo;
+  bit [31:0] asc32;
+  recv u_cat[1:0] (.ia({>>{cat_hi, cat_lo}}));
+  // verilator lint_off ASCRANGE
+  recv u_asc[0:1] (.ia({>>{asc32}}));
+  // verilator lint_on ASCRANGE
+  // Each array of instances of generated or specialized code with its own target
+  bit [7:0] gdata[2];
+  for (genvar g = 0; g < 2; ++g) begin : G
+    bit [31:0] y;
+    send u[1:0] (
+        .x(gdata[g]),
+        .oa({>>{y}})
+    );
+  end
+  bit [31:0] my0, my1;
+  middle #(8'h12) u_mid0 (.y(my0));
+  middle #(8'hc3) u_mid1 (.y(my1));
 
   initial begin
+    bsrc = '{8'h84, 8'h12, 8'hb7, 8'h20};
+    gdata = '{8'h5a, 8'h09};
+    cat_hi = 16'h1234;
+    cat_lo = 16'h5678;
+    asc32 = 32'h9abcdef0;
+    dist32 = 32'h12345678;
+    dist64 = 64'h0123456789abcdef;
     x8 = 8'h9a;
     mq = '{8'h34};
     q = '{8'h11, 8'h22, 8'h33, 8'h44};
@@ -91,6 +156,24 @@ module t;
     `checkh(r16, 16'h0104);
     `checkh(od[1], 7'h12);
     `checkh(od[0], 7'h56);
+    `checkp(u_dist[1].ia, "'{'h12, 'h34}");
+    `checkp(u_dist[0].ia, "'{'h56, 'h78}");
+    `checkp(u_dist2[3][1].ia, "'{'hef, 'hcd}");
+    `checkp(u_dist2[3][0].ia, "'{'hab, 'h89}");
+    `checkp(u_dist2[2][1].ia, "'{'h67, 'h45}");
+    `checkp(u_dist2[2][0].ia, "'{'h23, 'h1}");
+    `checkh(odist32, 32'hb1b0c6e3);
+    `checkh(odist64, 64'h39c639c639c639c6);
+    `checkh(G[0].y, 32'h5aa55aa5);
+    `checkh(G[1].y, 32'h09f609f6);
+    `checkh(my0, 32'h12ed12ed);
+    `checkh(my1, 32'hc33cc33c);
+    `checkp(u_cat[1].ia, "'{'h12, 'h34}");
+    `checkp(u_cat[0].ia, "'{'h56, 'h78}");
+    `checkp(u_asc[0].ia, "'{'h9a, 'hbc}");
+    `checkp(u_asc[1].ia, "'{'hde, 'hf0}");
+    `checkp(u_bdist[1].ia, "'{'h84, 'h12}");
+    `checkp(u_bdist[0].ia, "'{'hb7, 'h20}");
     `checkp(u_narrow.ia, "'{'h9a, 'h0}");
     `checkp(u_mixed.ia, "'{'h12, 'h34}");
     qa = '{8'h55, 8'h66, 8'h77, 8'h88};
