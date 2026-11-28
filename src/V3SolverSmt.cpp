@@ -111,6 +111,33 @@ static AstNodeExpr* newHandlesActivep(AstNodeExpr* objp) {
     return condp;
 }
 
+// Whether the rand_mode() of variable varp of the object objp is on, as through a null objp;
+// nullptr if the variable uses no rand_mode()
+static AstNodeExpr* newMemberModeActivep(AstNodeExpr* objp, const AstVar* varp) {
+    const RandomizeMode mode = {.asUQuad = varp->user1()};
+    if (!varp->rand().isRandomizable() || !mode.usesMode || varp->lifetime().isStatic())
+        return nullptr;
+    FileLine* const fl = objp->fileline();
+    AstVar* const modeVarp = RandModeVars::randModeVarp(VN_AS(varp->user2p(), NodeModule));
+    AstMemberRef* const modesp = new AstMemberRef{fl, objp->cloneTree(false), modeVarp};
+    modesp->dtypep(modeVarp->dtypep());
+    AstDynArraySel* const atp = new AstDynArraySel{fl, modesp, new AstConst{fl, mode.index}};
+    atp->dtypeSetUInt32();
+    AstEq* const nullp = new AstEq{fl, objp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
+    nullp->dtypeSetBit();
+    AstLogOr* const orp = new AstLogOr{fl, nullp, atp};
+    orp->dtypeSetBit();
+    return orp;
+}
+
+// Both conditions, either of which may be nullptr for none
+static AstNodeExpr* newBothp(AstNodeExpr* ap, AstNodeExpr* bp) {
+    if (!ap || !bp) return ap ? ap : bp;
+    AstLogAnd* const andp = new AstLogAnd{ap->fileline(), ap, bp};
+    andp->dtypeSetBit();
+    return andp;
+}
+
 class SmtUtil final {
 public:
     // Walk up the extends chain from classp to find the nearest ancestor (starting
@@ -1139,6 +1166,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             = isUnpackedClassRefArray ? "%0x" : keyHexFormat(iterVarp->dtypep()->skipRefp());
         AstNodeStmt* enablesp = nullptr;  // While activep, written back
         AstNodeStmt* disablesp = nullptr;  // Otherwise not
+        AstNodeStmt* modeEnablesp = nullptr;  // The same for fields using rand_mode()
 
         for (const AstClass* cp = elemClassp; cp;
              cp = cp->extendsp() ? cp->extendsp()->classp() : nullptr) {
@@ -1171,15 +1199,29 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstSFormatF* const namep
                     = new AstSFormatF{fl, smtName + "." + idxFmt + "." + memberVarp->name(), false,
                                       new AstVarRef{fl, iterVarp, VAccess::READ}};
-                if (activep) {
+                // Of a field with rand_mode() off in its object, not written back either
+                AstNodeExpr* const elemp = newSel(fl, arrayRefp->cloneTree(false),
+                                                  new AstVarRef{fl, iterVarp, VAccess::READ});
+                AstNodeExpr* const modeActivep = newMemberModeActivep(elemp, memberVarp);
+                VL_DO_DANGLING(elemp->deleteTree(), elemp);
+                if (activep || modeActivep) {
                     AstCMethodHard* const enablep = new AstCMethodHard{
                         fl, writeVarp->fromp()->cloneTree(false),
                         VCMethod::RANDOMIZER_CLEAR_VAR_DISABLED, namep->cloneTree(false)};
                     enablep->dtypeSetVoid();
                     AstCMethodHard* const disablep = enablep->cloneTree(false);
                     disablep->method(VCMethod::RANDOMIZER_SET_VAR_DISABLED);
-                    enablesp = AstNode::addNext(enablesp, enablep->makeStmt());
-                    disablesp = AstNode::addNext(disablesp, disablep->makeStmt());
+                    if (modeActivep) {
+                        modeEnablesp = AstNode::addNext(
+                            modeEnablesp,
+                            new AstIf{fl,
+                                      newBothp(activep ? activep->cloneTree(false) : nullptr,
+                                               modeActivep),
+                                      enablep->makeStmt(), disablep->makeStmt()});
+                    } else {
+                        enablesp = AstNode::addNext(enablesp, enablep->makeStmt());
+                        disablesp = AstNode::addNext(disablesp, disablep->makeStmt());
+                    }
                 }
                 writeVarp->addPinsp(namep);
                 writeVarp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 0ULL});
@@ -1190,6 +1232,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (enablesp) {
             ifNonNullp->addThensp(new AstIf{fl, activep->cloneTree(false), enablesp, disablesp});
         }
+        if (modeEnablesp) ifNonNullp->addThensp(modeEnablesp);
     }
 
     void createSolverArrayHandle(AstVar* const varp, AstClassRefDType* elemClassRefDtp,
@@ -3292,9 +3335,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                     AstNodeExpr* const origp = nodep->cloneTree(false);
                     AstNodeExpr* const nonNullp = newNullCheckp(nodep->fromp());
                     AstMemberRef* const namep = nodep->cloneTree(false);
-                    // The fields of the objects of an inactive array are state variables
+                    // The fields of the objects of an inactive array are state variables, as are
+                    // those whose rand_mode() is off in their object
                     AstNodeExpr* const activep
-                        = isSimple ? newHandlesActivep(arraySelp->fromp()) : nullptr;
+                        = newBothp(isSimple ? newHandlesActivep(arraySelp->fromp()) : nullptr,
+                                   newMemberModeActivep(nodep->fromp(), nodep->varp()));
                     AstNodeExpr* const statep = activep ? nodep->cloneTree(false) : nullptr;
                     iterateChildren(nodep);
                     AstSFormatF* const newp = new AstSFormatF{fl, "%s." + nodep->name(), false,
@@ -3364,8 +3409,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                 m_structSel = true;
                 AstNodeExpr* const nonNullp = newNullCheckp(nodep->fromp());
                 AstMemberRef* const namep = nodep->cloneTree(false);
-                // The fields of the objects of an inactive array are state variables
-                AstNodeExpr* const activep = newHandlesActivep(selp->fromp());
+                // The fields of the objects of an inactive array are state variables, as are
+                // those whose rand_mode() is off in their object
+                AstNodeExpr* const activep
+                    = newBothp(newHandlesActivep(selp->fromp()),
+                               newMemberModeActivep(nodep->fromp(), nodep->varp()));
                 AstNodeExpr* const statep = activep ? nodep->cloneTree(false) : nullptr;
                 {
                     VL_RESTORER(m_deferRandModeHoist);
