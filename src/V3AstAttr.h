@@ -1095,6 +1095,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RNG_GET_RANDSTATE_ACCESSOR,         "__Vrng().get_randstate", PURE,   CLEAN,  false,      "") \
     macro(RNG_SET_RANDSTATE,                  "__Vm_rng.set_randstate", false,  CLEAN,  false,      "r") \
     macro(RNG_SET_RANDSTATE_ACCESSOR,         "__Vrng().set_randstate", false,  CLEAN,  false,      "r") \
+    macro(RNG_SRANDOM_ACCESSOR,               "__Vrng().srandom",       false,  CLEAN,  false,      "r") \
     macro(SCHED_ANY_TRIGGERED,                "anyTriggered",           false,  CLEAN,  false,      "r") \
     macro(SCHED_AWAITING_CURRENT_TIME,        "awaitingCurrentTime",    PURE,   CLEAN,  false,      "") \
     macro(SCHED_AWAITING_ZERO_DELAY,          "awaitingZeroDelay",      PURE,   CLEAN,  false,      "") \

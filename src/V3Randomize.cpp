@@ -742,6 +742,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 if (!classRefp || !classRefp->classp()) return;
                 AstClass* const memberClassp = classRefp->classp();
                 if (memberClassp->user1() != IS_RANDOMIZED_GLOBAL) return;
+                // The object of an interface class handle is of a class only known when
+                // randomized, so randomized by its own randomize()
+                if (memberClassp->isInterfaceClass()) return;
                 memberVarp->globalConstrained(true);
                 // Clone constraints from this IS_RANDOMIZED_GLOBAL member class
                 AstVarRef* rootVarRefp = new AstVarRef{nodep->fileline(), containingClassp,

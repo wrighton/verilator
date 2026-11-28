@@ -1865,6 +1865,16 @@ class ConstVisitor final : public VNVisitor {
         // Must not create an expression with unpacked array type
         if (VN_IS(thensp->rhsp()->dtypep()->skipRefp(), UnpackArrayDType)) return false;
         if (VN_IS(elsesp->rhsp()->dtypep()->skipRefp(), UnpackArrayDType)) return false;
+        // Nor a condition of class handles without a class both cast to that the target takes
+        // too, as of classes that only implement the same interface classes
+        if (thensp->rhsp()->isClassHandleValue() && elsesp->rhsp()->isClassHandleValue()) {
+            AstNodeDType* const commonp
+                = AstNode::getCommonClassTypep(thensp->rhsp(), elsesp->rhsp());
+            if (!commonp) return false;
+            const VCastable castable
+                = AstNode::computeCastable(thensp->lhsp()->dtypep(), commonp, nullptr);
+            if (!castable.isSameish() && !castable.isCompatible()) return false;
+        }
         if (m_underRecFunc) return false;  // This optimization may lead to infinite recursion
         if (m_doCpp) {  // Do not combine ifs cretaed by V3Premit
             if (VN_IS(thensp->lhsp(), VarRef) && thensp->lhsp()->isWide()) return false;

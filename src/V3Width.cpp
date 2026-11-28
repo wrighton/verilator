@@ -6204,6 +6204,20 @@ class WidthVisitor final : public VNVisitor {
             methodOkArguments(nodep, 1, 1);
             iterateCheckSigned32(nodep, "argument", methodArg(nodep, 0), BOTH);
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
+            if (first_classp->baseMostClassp()->isInterfaceClass()) {
+                // No srandom() of an interface class, which would be ambiguous with the
+                // object's own: seed the object's RNG through the accessor
+                markNeedRNG(first_classp);
+                v3Global.useRandomizeMethods(true);
+                AstCMethodHard* const newp = new AstCMethodHard{
+                    nodep->fileline(), nodep->fromp()->unlinkFrBack(),
+                    VCMethod::RNG_SRANDOM_ACCESSOR, methodArg(nodep, 0)->unlinkFrBack()};
+                newp->usePtr(true);
+                newp->dtypeSetVoid();
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                return;
+            }
             V3Randomize::newSRandomFunc(m_memberMap, first_classp);
         }
         UASSERT_OBJ(first_classp, nodep, "Unlinked");
