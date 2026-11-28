@@ -1,0 +1,27 @@
+%Error: t/t_defparam_array_bad.v:9:23: In defparam, instance a_arr[2] never declared
+    9 |   defparam a_arr[2].W = 3;   
+      |                       ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_array_bad.v:10:26: In defparam, instance a_arr[0][0] never declared
+   10 |   defparam a_arr[0][0].W = 3;   
+      |                          ^
+%Error: t/t_defparam_array_bad.v:11:45: In defparam, instance a_arr[64'hffffffffffffffff] never declared
+   11 |   defparam a_arr[64'hffff_ffff_ffff_ffff].W = 3;   
+      |                                             ^
+%Error: t/t_defparam_array_bad.v:12:37: In defparam, instance a_arr[-32'sh80000000] never declared
+   12 |   defparam a_arr[-32'sh8000_0000].W = 3;   
+      |                                     ^
+%Error: t/t_defparam_array_bad.v:13:46: In defparam, instance a_arr[64'sh8000000000000000] never declared
+   13 |   defparam a_arr[64'sh8000_0000_0000_0000].W = 3;   
+      |                                              ^
+%Error-UNSUPPORTED: t/t_defparam_array_bad.v:14:24: Unsupported: defparam path with arrayed instance
+   14 |   defparam a_arr[1.25].W = 3;   
+      |                        ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: t/t_defparam_array_bad.v:17:45: In defparam, instance a_par[64'hffffffffffffffff] never declared
+   17 |   defparam a_par[64'hffff_ffff_ffff_ffff].W = 3;   
+      |                                             ^
+%Error: t/t_defparam_array_bad.v:18:37: In defparam, instance a_par[-32'sh80000000] never declared
+   18 |   defparam a_par[-32'sh8000_0000].W = 3;   
+      |                                     ^
+%Error: Exiting due to

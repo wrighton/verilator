@@ -353,6 +353,20 @@ class ParamProcessor final {
     std::map<const AstNodeModule*, const AstPin*> m_nestedDefparamps;
     // "instance.parameter" path -> value of a defparam, see ParamVisitor::visit(AstDefParam)
     std::unordered_map<std::string, AstNodeExpr*> m_defparamValues;
+    // Defparams to an element of an instance array, by location in the order found, with
+    // their path, and those naming an instance (see reportUnmatchedDefparams); for a value from
+    // the defparam's instance, one per instance, by "instance.parameter" path
+    using ElementDefparam = std::pair<FileLine*, string>;
+    std::vector<ElementDefparam> m_elementDefparams;
+    std::set<ElementDefparam> m_elementDefparamsFound;
+    std::set<ElementDefparam> m_elementDefparamsMatched;
+    struct ElementValue final {
+        FileLine* m_flp;  // Location of the defparam
+        string m_path;  // "instance.parameter" path of the value
+        string m_writtenPath;  // Path to the instance as the defparam writes it
+    };
+    std::vector<ElementValue> m_elementValues;
+    std::unordered_set<string> m_elementValuesUsed;
     VNDeleter m_deleter;  // Used to delay deletion of nodes
     // Class default type paramater dependencies
     std::vector<std::pair<AstParamTypeDType*, int>> m_classTypeParams;
@@ -2466,6 +2480,34 @@ class ParamProcessor final {
     }
 
 public:
+    // Note defparam 'flp' if 'path' selects an element of an instance array
+    void elementDefparam(FileLine* flp, const string& path) {
+        if (path.find("__BRA__") == string::npos) return;
+        if (m_elementDefparamsFound.emplace(flp, path).second) {
+            m_elementDefparams.emplace_back(flp, path);
+        }
+    }
+    // Note defparam 'flp', written to 'writtenPath', registering a value at
+    // "instance.parameter" 'path', if it selects an element of an instance array
+    void elementDefparamValue(FileLine* flp, const string& path, const string& writtenPath) {
+        if (path.find("__BRA__") != string::npos) {
+            m_elementValues.push_back({flp, path, writtenPath});
+        }
+    }
+    // Report defparams to an element of an instance array naming no instance, now that the
+    // bounds of each array, possibly given by parameters, are known
+    void reportUnmatchedDefparams() {
+        for (const ElementDefparam& pair : m_elementDefparams) {
+            if (m_elementDefparamsMatched.count(pair)) continue;
+            pair.first->v3error("In defparam, instance " << AstNode::prettyName(pair.second)
+                                                         << " never declared");
+        }
+        for (const ElementValue& value : m_elementValues) {
+            if (m_elementValuesUsed.count(value.m_path)) continue;
+            value.m_flp->v3error("In defparam, instance "
+                                 << AstNode::prettyName(value.m_writtenPath) << " never declared");
+        }
+    }
     // A defparam, in this instance of its module, gives the parameter at 'path' this value
     void defparamValue(const string& path, AstNodeExpr* valuep) {
         m_deleter.pushDeletep(valuep);
@@ -2570,15 +2612,20 @@ public:
                     const auto it
                         = m_defparamValues.find(defparamPath(instanceName) + "." + pinp->name());
                     if (it != m_defparamValues.end()) {
+                        m_elementValuesUsed.emplace(it->first);
                         pinp->exprp(it->second->cloneTree(false));
                         continue;
                     }
                     // No value: the defparam sets another instance of this module, or is in a
                     // generate block not built. ParamVisitor::iterateDefParams registers values
                     // before specializing any instance they may set.
-                } else if (instanceName == pinp->paramPath()
-                           || VString::endsWith(instanceName, "." + pinp->paramPath())) {
-                    continue;
+                } else {
+                    elementDefparam(pinp->fileline(), pinp->paramPath());
+                    if (instanceName == pinp->paramPath()
+                        || VString::endsWith(instanceName, "." + pinp->paramPath())) {
+                        m_elementDefparamsMatched.emplace(pinp->fileline(), pinp->paramPath());
+                        continue;
+                    }
                 }
                 VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
             }
@@ -3923,6 +3970,9 @@ class ParamVisitor final : public VNVisitor {
         const AstVarXRef* const targetp = VN_AS(nodep->targetp(), VarXRef);
         const string instanceName
             = m_modp->someInstanceName() + m_generateHierName + "." + targetp->dotted();
+        m_processor.elementDefparamValue(nodep->fileline(),
+                                         defparamPath(instanceName) + "." + targetp->name(),
+                                         targetp->dotted());
         m_processor.defparamValue(defparamPath(instanceName) + "." + targetp->name(),
                                   nodep->rhsp()->unlinkFrBack());
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
@@ -4074,6 +4124,7 @@ public:
     explicit ParamTop(AstNetlist* netlistp) {
         // Relies on modules already being in top-down-order
         ParamVisitor paramVisitor{m_state /*ref*/, netlistp};
+        paramVisitor.processor().reportUnmatchedDefparams();
 
         // Mark classes which cannot be removed because they are still referenced
         const ClassRefUnlinkerVisitor classUnlinkerVisitor{netlistp};

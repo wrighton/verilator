@@ -2577,11 +2577,109 @@ class LinkDotParamVisitor final : public VNVisitor {
             pinImplicitExprRecurse(nodep->exprp());
         }
     }
+    // A name in the path of a defparam, with the indices of the element of an arrayed instance
+    // it selects
+    struct DefParamStep final {
+        string m_name;  // Name of the instance, generate block or parameter
+        std::vector<int64_t> m_indices;  // Index selected in each dimension, outermost first
+        string m_selects;  // The selects as written, for messages
+    };
+    // Append the names of defparam path 'nodep' to 'stepsr'; return false if it selects other
+    // than with an integer literal
+    static bool defParamSteps(const AstNode* nodep, std::vector<DefParamStep>& stepsr) {
+        if (const AstParseRef* const refp = VN_CAST(nodep, ParseRef)) {
+            stepsr.push_back({refp->name(), {}, ""});
+            return true;
+        }
+        if (const AstDot* const dotp = VN_CAST(nodep, Dot)) {
+            return defParamSteps(dotp->lhsp(), stepsr) && defParamSteps(dotp->rhsp(), stepsr);
+        }
+        if (const AstSelBit* const selp = VN_CAST(nodep, SelBit)) {
+            // A literal, or a negated literal, as not yet folded
+            const AstNegate* const negp = VN_CAST(selp->bitp(), Negate);
+            const AstConst* const constp = VN_CAST(negp ? negp->lhsp() : selp->bitp(), Const);
+            if (!constp || constp->num().isFourState() || constp->num().isOpaque()
+                || !defParamSteps(selp->fromp(), stepsr)) {
+                return false;
+            }
+            const int64_t index = literalIndex(constp->num(), negp);
+            stepsr.back().m_indices.push_back(index);
+            // An index no integer holds is given as written
+            const bool intIndex = index >= std::numeric_limits<int32_t>::min()
+                                  && index <= std::numeric_limits<int32_t>::max();
+            stepsr.back().m_selects
+                += "[" + (intIndex ? cvtToStr(index) : (negp ? "-" : "") + constp->num().ascii())
+                   + "]";
+            return true;
+        }
+        return false;
+    }
+    // Index literal 'num' selects, negated if 'negate'. A literal of 32 bits or fewer is a
+    // signed integer; one that no integer holds is given as the largest 64-bit value, which no
+    // instance array has.
+    static int64_t literalIndex(const V3Number& num, bool negate) {
+        int64_t index;
+        if (num.width() <= VL_IDATASIZE) {
+            index = num.toSInt();
+        } else {
+            const bool negative = num.isSigned() && num.isNegative();
+            for (int bit = VL_IDATASIZE - 1; bit < num.width(); ++bit) {
+                if (num.bitIs1(bit) != negative) return std::numeric_limits<int64_t>::max();
+            }
+            index = static_cast<int32_t>(num.edataWord(0));
+        }
+        return negate ? -index : index;
+    }
+    // Set 'valuer' to the value of 'nodep', a bound of an instance array, if it is a literal
+    // holding an integer; else, as for an expression V3Width has not folded yet, return false
+    static bool literalBound(const AstNode* nodep, int64_t& valuer) {
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        if (!constp || constp->num().isFourState() || constp->num().isOpaque()) return false;
+        valuer = literalIndex(constp->num(), false);
+        return valuer >= std::numeric_limits<int32_t>::min()
+               && valuer <= std::numeric_limits<int32_t>::max();
+    }
+    // Name of 'step', as V3Param names the element of an arrayed instance it selects
+    static string defParamStepName(const DefParamStep& step) {
+        string name = step.m_name;
+        for (const int64_t index : step.m_indices) {
+            name += "__BRA__" + AstNode::encodeNumber(index) + "__KET__";
+        }
+        return name;
+    }
+    // Whether arrayed instance 'cellp' may have an element at 'indices': false if it has
+    // another number of dimensions, or literal bounds without the index
+    static bool cellHasElement(const AstCell* cellp, const std::vector<int64_t>& indices) {
+        // An index no integer holds is in no array
+        for (const int64_t index : indices) {
+            if (index < std::numeric_limits<int32_t>::min()
+                || index > std::numeric_limits<int32_t>::max()) {
+                return false;
+            }
+        }
+        size_t dim = 0;
+        for (const AstRange* rangep = cellp->rangep(); rangep;
+             rangep = VN_AS(rangep->nextp(), Range), ++dim) {
+            if (dim >= indices.size()) return false;
+            int64_t left = 0;
+            int64_t right = 0;
+            if (!literalBound(rangep->leftp(), left) || !literalBound(rangep->rightp(), right)) {
+                continue;
+            }
+            if (indices[dim] < std::min(left, right) || indices[dim] > std::max(left, right)) {
+                return false;
+            }
+        }
+        return dim == indices.size();
+    }
+
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         iterateChildren(nodep);
         AstParseRef* const targetp = VN_CAST(nodep->targetp(), ParseRef);
         UASSERT_OBJ(targetp, nodep, "verilog.y made defparam without parseref");
-        if (nodep->pathp()->exists([](const AstNodePreSel*) { return true; })) {
+        // The path may select an element of an arrayed instance (IEEE 1800-2023 23.10.1)
+        std::vector<DefParamStep> steps;
+        if (!defParamSteps(nodep->pathp(), steps)) {
             nodep->targetp()->v3warn(E_UNSUPPORTED,
                                      "Unsupported: defparam path with arrayed instance");
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
@@ -2592,23 +2690,55 @@ class LinkDotParamVisitor final : public VNVisitor {
                                     << nodep->warnMore()
                                     << "... Suggest use instantiation with '#(."
                                     << AstNode::prettyName(name) << "(...etc...))'");
-        bool hasPartSelect = false;
-        const string path = extractDottedPath(nodep->pathp(), hasPartSelect);
-        UASSERT_OBJ(!hasPartSelect && !path.empty(), nodep, "Unexpected defparam path shape");
+        // The symbol table has an arrayed instance once, so is searched without the selects;
+        // V3Param matches 'path', the path with the names of the elements, to each instance
+        string lookupPath;
+        string path;
+        string prettyPath;
+        // The name of each selected element, by its arrayed instance
+        std::unordered_map<const AstNode*, string> elementNames;
         string baddot;
         VSymEnt* okSymp = nullptr;
         VSymEnt* const scopeSymp = m_statep->getNodeSym(nodep);
-        VSymEnt* const foundp
-            = m_statep->findDotted(nodep->fileline(), scopeSymp, path, baddot, okSymp, true);
+        VSymEnt* foundp = nullptr;
+        for (const DefParamStep& step : steps) {
+            lookupPath = VString::dot(lookupPath, ".", step.m_name);
+            path = VString::dot(path, ".", defParamStepName(step));
+            prettyPath
+                = VString::dot(prettyPath, ".", AstNode::prettyName(step.m_name) + step.m_selects);
+            if (step.m_indices.empty()) continue;
+            foundp = m_statep->findDotted(nodep->fileline(), scopeSymp, lookupPath, baddot, okSymp,
+                                          true);
+            const AstCell* const arrayp = foundp ? VN_CAST(foundp->nodep(), Cell) : nullptr;
+            if (!arrayp) {
+                nodep->targetp()->v3warn(E_UNSUPPORTED,
+                                         "Unsupported: defparam path with arrayed instance");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
+            }
+            // Bounds given by parameters are known once V3Param specializes the instances; it
+            // reports a defparam naming no element then
+            if (!cellHasElement(arrayp, step.m_indices)) {
+                nodep->v3error("In defparam, instance " << prettyPath << " never declared");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
+            }
+            elementNames.emplace(arrayp, defParamStepName(step));
+        }
+        foundp
+            = m_statep->findDotted(nodep->fileline(), scopeSymp, lookupPath, baddot, okSymp, true);
         AstCell* const cellp = foundp ? VN_AS(foundp->nodep(), Cell) : nullptr;
         if (!cellp) {
-            nodep->v3error("In defparam, instance " << path << " never declared");
+            nodep->v3error("In defparam, instance " << prettyPath << " never declared");
         } else {
             // Path from the defparam's scope, if the instance is under it
             string belowPath;
             const VSymEnt* symp = foundp;
             for (; symp && symp != scopeSymp; symp = symp->parentp()) {
-                belowPath = VString::dot(symp->nodep()->name(), ".", belowPath);
+                const auto it = elementNames.find(symp->nodep());
+                const string& stepName
+                    = it == elementNames.end() ? symp->nodep()->name() : it->second;
+                belowPath = VString::dot(stepName, ".", belowPath);
             }
             // If under it, V3Param passes the value down from each instance of this module, so
             // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1)
