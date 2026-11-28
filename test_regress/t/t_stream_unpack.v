@@ -403,6 +403,43 @@ module t;
         `checkh(dst4[3], 4'h1);
       end
 
+      // The value of an unpacked array parameter
+      begin
+        localparam bit [15:0] PP = 16'h1234;
+        localparam byte PU[2] = {>>{16'h5678}};
+        localparam byte PD[1:0] = {>>{PP}};
+        localparam byte PL[2] = {<<8{16'h9abc}};
+        localparam bit [3:0] PN[2][1:0] = {>>{16'hdef0}};
+        localparam bit [6:0] PO[2] = {<<7{14'h1a5b}};
+        `checkh(PU[0], 8'h56);
+        `checkh(PU[1], 8'h78);
+        `checkh(PD[1], 8'h12);
+        `checkh(PD[0], 8'h34);
+        `checkh(PL[0], 8'hbc);
+        `checkh(PL[1], 8'h9a);
+        `checkh(PN[0][1], 4'hd);
+        `checkh(PN[0][0], 4'he);
+        `checkh(PN[1][1], 4'hf);
+        `checkh(PN[1][0], 4'h0);
+        `checkh(PO[0], 7'h5b);
+        `checkh(PO[1], 7'h34);
+      end
+      // Of a stream wider than the parameter, as of the same stream at run time
+      begin
+        // verilator lint_off WIDTHTRUNC
+        localparam byte PW[2] = {>>{24'habcdef}};
+        automatic bit [23:0] pw_src;
+        automatic byte pw_run[2];
+`ifdef VERILATOR
+        pw_src = $c(24'habcdef);
+`else
+        pw_src = 24'habcdef;
+`endif
+        pw_run = {>>{pw_src}};
+        // verilator lint_on WIDTHTRUNC
+        if (PW != pw_run) `stop;
+      end
+
       // Descending inner dimensions, still streamed left to right
       begin
         automatic logic [1:0] arr_ad [2][1:0];

@@ -3866,6 +3866,54 @@ class ConstVisitor final : public VNVisitor {
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
+    // Whether an unpacked array of integral elements
+    static bool isIntegralUnpacked(const AstNodeDType* dtypep) {
+        while (const AstUnpackArrayDType* const adtypep
+               = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
+            dtypep = adtypep->subDTypep();
+        }
+        return dtypep->skipRefp()->isIntegralOrPacked();
+    }
+    // A constant of type dtypep, an integral type or an unpacked array of them, from the bits of
+    // num below and at 'msb', which is moved down past them, an array taking them left element
+    // first
+    static AstNodeExpr* newConstUnpacked(FileLine* flp, const V3Number& num, int& msb,
+                                         AstNodeDType* dtypep) {
+        const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep->skipRefp(), UnpackArrayDType);
+        if (!adtypep) {
+            const int width = dtypep->width();
+            V3Number value{flp, width, 0};
+            value.opSel(num, msb, msb - width + 1);
+            msb -= width;
+            AstConst* const constp = new AstConst{flp, value};
+            constp->dtypeFrom(dtypep);
+            return constp;
+        }
+        AstConsArray* const consp = new AstConsArray{flp, dtypep};
+        const uint32_t elements = adtypep->elementsConst();
+        for (uint32_t i = 0; i < elements; ++i) {
+            consp->valuep(adtypep->declRange().ascending() ? i : elements - 1 - i,
+                          newConstUnpacked(flp, num, msb, adtypep->subDTypep()));
+        }
+        return consp;
+    }
+    void visit(AstCvtPackedToArray* nodep) override {
+        iterateChildren(nodep);
+        // A constant unpacked into a fixed-size array is a constant array, as for a parameter; of
+        // a wider constant, of the bits the unpack at run time takes, its least significant
+        const AstConst* const constp = VN_CAST(nodep->fromp(), Const);
+        if (constp && VN_IS(nodep->dtypep()->skipRefp(), UnpackArrayDType)
+            && isIntegralUnpacked(nodep->dtypep())
+            && constp->width() >= nodep->dtypep()->skipRefp()->widthStream()) {
+            int msb = nodep->dtypep()->skipRefp()->widthStream() - 1;
+            nodep->replaceWith(
+                newConstUnpacked(nodep->fileline(), constp->num(), msb, nodep->dtypep()));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
+        // Otherwise not a constant, as by default
+        if (m_required) visit(static_cast<AstNode*>(nodep));
+    }
     void visit(AstCvtUnpackToUnpack* nodep) override {
         iterateChildren(nodep);
         AstConsArray* const fromp = VN_CAST(nodep->fromp(), ConsArray);

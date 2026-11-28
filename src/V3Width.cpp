@@ -392,6 +392,7 @@ class WidthVisitor final : public VNVisitor {
     // Stream checks to add to their assignments, see addStreamCheck
     std::vector<std::pair<AstNode*, AstStreamCheck*>> m_streamChecks;
     bool m_inDynamicStream = false;  // Widthing the lowering of a stream with dynamic operands
+    bool m_inValueStream = false;  // Lowering a stream as the value of a variable
     const AstEnumItem* m_enumItemp = nullptr;  // Current enum item
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstProperty* m_propertyp = nullptr;  // Current property
@@ -4702,7 +4703,32 @@ class WidthVisitor final : public VNVisitor {
                 = nodep->isIO() || nodep->lifetime().isStatic() ? m_ftaskp : nullptr;
             // AstPattern requires assignments to pass datatype on PRELIM
             userIterateAndNext(nodep->valuep(), WidthVP{nodep->dtypep(), PRELIM}.p());
-            iterateCheckAssign(nodep, "Initial value", nodep->valuep(), FINAL, nodep->dtypep());
+            if (VN_IS(nodep->valuep(), NodeStream)
+                && VN_IS(nodep->dtypep()->skipRefp(), UnpackArrayDType)) {
+                // A stream into an unpacked array, e.g. the value of a parameter (a Verilator
+                // extension, as a stream is not a constant expression, IEEE 1800-2023 A.8.4), is
+                // unpacked as by an assignment
+                FileLine* const flp = nodep->valuep()->fileline();
+                AstAssign* const assignp
+                    = new AstAssign{flp, new AstVarRef{flp, nodep, VAccess::WRITE},
+                                    VN_AS(nodep->valuep(), NodeExpr)->unlinkFrBack()};
+                assignp->dtypeFrom(nodep);
+                VL_RESTORER(m_inValueStream);
+                m_inValueStream = true;
+                streamAssignLower(assignp);
+                nodep->valuep(assignp->rhsp()->unlinkFrBack());
+                VL_DO_DANGLING(assignp->deleteTree(), assignp);
+                if (nodep->isParam() && VN_IS(nodep->valuep(), NodeStream)) {
+                    // Still a stream, of a dynamically sized operand
+                    nodep->valuep()->v3warn(E_UNSUPPORTED,
+                                            "Unsupported: Stream of a dynamically sized operand"
+                                            " as the value of unpacked array parameter "
+                                                << nodep->prettyNameQ() << ".");
+                }
+            } else {
+                iterateCheckAssign(nodep, "Initial value", nodep->valuep(), FINAL,
+                                   nodep->dtypep());
+            }
         }
         userIterateAndNext(nodep->delayp(), WidthVP{nodep->dtypep(), PRELIM}.p());
         UINFO(4, "varWidthed " << nodep);
@@ -12925,8 +12951,9 @@ public:
     // sized operand fromp if not null, else a stream of 'bits' bits
     void addStreamCheck(AstNodeAssign* nodep, AstNodeExpr* fromp, uint32_t bits, uint32_t minBits,
                         uint32_t maxBits, uint32_t unitBits) {
-        // The lowering of a stream with dynamic operands checks the stream it streams itself
-        if (m_inDynamicStream) return;
+        // The lowering of a stream with dynamic operands checks the stream it streams itself; the
+        // value of a variable, as of a parameter, is not checked at run time
+        if (m_inDynamicStream || m_inValueStream) return;
         // A procedural assignment is checked by a statement before it, a continuous one by a
         // process beside its own
         AstNode* anchorp = nullptr;
@@ -12944,8 +12971,9 @@ public:
     void addFilledStreamCheck(FileLine* flp, AstNodeExpr* sourcep, uint32_t minBits,
                               uint32_t maxBits, uint32_t unitBits) {
         AstExprStmt* const exprStmtp = VN_CAST(sourcep, ExprStmt);
-        // The lowering of a stream with dynamic operands checks the stream it streams itself
-        if (!exprStmtp || m_inDynamicStream) return;
+        // The lowering of a stream with dynamic operands checks the stream it streams itself; the
+        // value of a variable is not checked at run time
+        if (!exprStmtp || m_inDynamicStream || m_inValueStream) return;
         AstNodeExpr* const resultp = exprStmtp->resultp();
         if (!checkedStreamOperand(resultp)) return;
         AstNodeExpr* const fromp = resultp->cloneTree(false);

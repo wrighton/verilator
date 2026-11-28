@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_stream_param_dyn_unsup.v:9:29: Unsupported: Stream of a dynamically sized operand as the value of unpacked array parameter 'DST'.
+                                                     : ... note: In instance 't'
+    9 |   localparam byte DST[2] = {>>{SRC}};
+      |                             ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
