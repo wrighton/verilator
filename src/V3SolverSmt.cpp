@@ -2021,6 +2021,12 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (editFormat(nodep)) return;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp());
     }
+    void visit(AstEq* nodep) override {
+        if (!lowerRandIndexNullCheck(nodep)) visit(static_cast<AstNodeBiop*>(nodep));
+    }
+    void visit(AstNeq* nodep) override {
+        if (!lowerRandIndexNullCheck(nodep)) visit(static_cast<AstNodeBiop*>(nodep));
+    }
     void visit(AstNodeUniop* nodep) override {
         if (editFormat(nodep)) return;
         editSMT(nodep, nodep->lhsp());
@@ -3096,6 +3102,96 @@ class ConstraintExprVisitor final : public VNVisitor {
                 selWidth,
                 std::max(indexp->width(), selWidth)};
     }
+    // Text of whether the random index of sel selects an object, which is not null: false out of
+    // range, and of a missing key
+    // With 'keyedDefault', a key an associative array does not hold selects its default element,
+    // as a read of the element does, which may be an object
+    AstSFormatF* newObjIndexExistsp(const ObjIndexSel& sel, const bool keyedDefault = false) {
+        FileLine* const fl = sel.flp;
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
+        AstVar* const indexTextVarp = newObjIndexTextp(sel, blockp);
+        if (sel.assoc && keyedDefault) return newKeyedExistsp(sel, blockp, indexTextVarp);
+        AstVar* const keysVarp = sel.assoc ? newTextQueueVarp(fl, blockp, "__Vkeys") : nullptr;
+        AstVar* const leavesVarp = sel.assoc ? nullptr : newTextQueueVarp(fl, blockp, "__Vleaves");
+        const ObjIndexIter iter = makeObjIndexLoop(sel);
+        VL_DO_DANGLING(pushDeletep(iter.elemSelp), iter.elemSelp);
+        if (keysVarp) {
+            iter.ifp->addThensp(newTextPushp(fl, keysVarp, iter.keyp, sel.descending));
+        } else {
+            VL_DO_DANGLING(iter.keyp->deleteTree(), iter.keyp);
+            iter.ifp->addThensp(newTextPushp(
+                fl, leavesVarp, new AstConst{fl, AstConst::String{}, "true"}, sel.descending));
+            iter.ifp->addElsesp(newTextPushp(
+                fl, leavesVarp, new AstConst{fl, AstConst::String{}, "false"}, sel.descending));
+        }
+        blockp->addStmtsp(iter.loopp);
+        AstNodeExpr* const callp
+            = newObjIndexSelectp(sel, keysVarp, leavesVarp, indexTextVarp,
+                                 new AstConst{fl, AstConst::String{}, "false"});
+        return new AstSFormatF{fl, "%s", false, new AstExprStmt{fl, blockp, callp}};
+    }
+    // Text of whether the key of sel selects an object from an associative array: of a key it
+    // holds, whether its element is not null, else whether its default element is not null
+    AstSFormatF* newKeyedExistsp(const ObjIndexSel& sel, AstBegin* const blockp,
+                                 AstVar* const indexTextVarp) {
+        FileLine* const fl = sel.flp;
+        AstVar* const keysVarp = newTextQueueVarp(fl, blockp, "__Vkeys");
+        AstVar* const leavesVarp = newTextQueueVarp(fl, blockp, "__Vleaves");
+        const ObjIndexIter iter = makeObjIndexLoop(sel);
+        VL_DO_DANGLING(pushDeletep(iter.elemSelp), iter.elemSelp);
+        iter.ifp->addThensp(
+            newTextPushp(fl, keysVarp, iter.keyp->cloneTree(false), sel.descending));
+        iter.ifp->addThensp(newTextPushp(
+            fl, leavesVarp, new AstConst{fl, AstConst::String{}, "true"}, sel.descending));
+        iter.ifp->addElsesp(newTextPushp(fl, keysVarp, iter.keyp, sel.descending));
+        iter.ifp->addElsesp(newTextPushp(
+            fl, leavesVarp, new AstConst{fl, AstConst::String{}, "false"}, sel.descending));
+        blockp->addStmtsp(iter.loopp);
+        AstCMethodHard* const defaultp
+            = new AstCMethodHard{fl, sel.arrayp->cloneTreePure(false), VCMethod::ASSOC_AT_DEFAULT};
+        defaultp->dtypeFrom(sel.arrayp->dtypep()->skipRefp()->subDTypep());
+        AstCond* const defaultTextp
+            = new AstCond{fl, new AstNeq{fl, defaultp, new AstConst{fl, AstConst::Null{}}},
+                          new AstConst{fl, AstConst::String{}, "true"},
+                          new AstConst{fl, AstConst::String{}, "false"}};
+        defaultTextp->dtypeSetString();
+        // The select by key assumes the key exists
+        AstSFormatF* const textp
+            = new AstSFormatF{fl, "(ite %s %s %s)", false,
+                              newObjIndexSelectp(sel, keysVarp, nullptr, indexTextVarp,
+                                                 new AstConst{fl, AstConst::String{}, "false"})};
+        textp->addExprsp(newObjIndexSelectp(sel, keysVarp, leavesVarp, indexTextVarp,
+                                            new AstConst{fl, AstConst::String{}, "false"}));
+        textp->addExprsp(defaultTextp);
+        return new AstSFormatF{fl, "%s", false, new AstExprStmt{fl, blockp, textp}};
+    }
+    // Whether nodep, a comparison with null of the object at a random index of an array of
+    // class objects, is lowered to whether the index selects an object (IEEE 1800-2023 7.4.6:
+    // an element out of range reads as null)
+    bool lowerRandIndexNullCheck(AstNodeBiop* const nodep) {
+        if (!nodep->user1()) return false;
+        const AstConst* const rConstp = VN_CAST(nodep->rhsp(), Const);
+        const AstConst* const lConstp = VN_CAST(nodep->lhsp(), Const);
+        AstNodeExpr* const handlep = rConstp && rConstp->num().isNull()   ? nodep->lhsp()
+                                     : lConstp && lConstp->num().isNull() ? nodep->rhsp()
+                                                                          : nullptr;
+        AstNodeSel* const selp = handlep ? elementSelp(handlep) : nullptr;
+        // Only a select by a random index from an array of class handles, whose index does not
+        // itself select by a random index: such an index is read as before
+        if (!selp || !VN_IS(selp->dtypep()->skipRefp(), ClassRefDType)
+            || !VN_IS(selp->fromp(), VarRef) || !isRandIndex(selp->bitp())
+            || selp->bitp()->exists(
+                [](const AstNodeSel* innerp) { return isRandIndex(innerp->bitp()); })) {
+            return false;
+        }
+        AstSFormatF* const newp = new AstSFormatF{
+            nodep->fileline(), VN_IS(nodep, Eq) ? "(__Vbv (not %s))" : "(__Vbv %s)", false,
+            newObjIndexExistsp(newObjIndexSel(nodep->fileline(), selp, true), true)};
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        return true;
+    }
     // Whether nodep is lowered: a read of an array not randomized is not, but read as before,
     // where it is reported as unsupported for a rand array. Its comparison requires k to select
     // an object if 'validate'.
@@ -3192,32 +3288,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             return true;
         }
         // The validity, in a block of its own, for the comparison
-        AstBegin* const validBlockp
-            = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
-        AstVar* const validIndexTextVarp = newObjIndexTextp(sel, validBlockp);
-        AstVar* const validKeysVarp
-            = sel.assoc ? newTextQueueVarp(fl, validBlockp, "__Vkeys") : nullptr;
-        AstVar* const validLeavesVarp
-            = sel.assoc ? nullptr : newTextQueueVarp(fl, validBlockp, "__Vleaves");
-        const ObjIndexIter valid = makeObjIndexLoop(sel);
-        VL_DO_DANGLING(pushDeletep(valid.elemSelp), valid.elemSelp);
-        if (validKeysVarp) {
-            valid.ifp->addThensp(newTextPushp(fl, validKeysVarp, valid.keyp, sel.descending));
-        } else {
-            VL_DO_DANGLING(valid.keyp->deleteTree(), valid.keyp);
-            valid.ifp->addThensp(newTextPushp(fl, validLeavesVarp,
-                                              new AstConst{fl, AstConst::String{}, "true"},
-                                              sel.descending));
-            valid.ifp->addElsesp(newTextPushp(fl, validLeavesVarp,
-                                              new AstConst{fl, AstConst::String{}, "false"},
-                                              sel.descending));
-        }
-        validBlockp->addStmtsp(valid.loopp);
-        AstNodeExpr* const validCallp
-            = newObjIndexSelectp(sel, validKeysVarp, validLeavesVarp, validIndexTextVarp,
-                                 new AstConst{fl, AstConst::String{}, "false"});
-        AstSFormatF* const validp
-            = new AstSFormatF{fl, "%s", false, new AstExprStmt{fl, validBlockp, validCallp}};
+        AstSFormatF* const validp = newObjIndexExistsp(sel);
         if (m_objIndexValidp) {
             AstSFormatF* const bothp = new AstSFormatF{fl, "(and %s %s)", false, m_objIndexValidp};
             bothp->addExprsp(validp);

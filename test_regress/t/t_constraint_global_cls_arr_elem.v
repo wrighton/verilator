@@ -178,6 +178,7 @@ class RandIndexed;
   rand Pair ps[$];
   rand int k;
   constraint c_k {
+    ps.size() == 4;
     k >= 0;
     k < ps.size();
     ps[k] != null;
@@ -402,12 +403,17 @@ module t;
   task automatic test_rand_indexed;
     RandIndexed r = new;
     Pair p;
+    int randomize_result;
     for (int i = 0; i < 4; ++i) begin
       p = null;
       if (i % 2 != 0) p = new;
       r.ps.push_back(p);
     end
-    repeat (40) if (r.randomize() == 1) `checkd(r.ps[r.k] != null, 1'b1);
+    repeat (40) begin
+      randomize_result = r.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(r.ps[r.k] != null, 1'b1);
+    end
   endtask
 
   task automatic test_mixed_items;
