@@ -3254,6 +3254,20 @@ public:
         }
         return treep;
     }
+    // True if a property has a ranged delay of a multi-cycle sequence of variable length, other
+    // than a repetition, outside an antecedent. The NFA lowering rejects each candidate of the
+    // range, a thread of the sequence started on one tick of it, rather than an attempt once no
+    // candidate can match.
+    static bool hasRangeOfVarLenSeq(AstNodeExpr* nodep) {
+        if (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            return hasRangeOfVarLenSeq(implp->rhsp());
+        }
+        return nodep->exists([](AstSExpr* sexprp) {
+            const AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
+            return delayp && delayp->isRangeDelay() && sexprp->exprp()->isMultiCycleSva()
+                   && !VN_IS(sexprp->exprp(), SConsRep) && fixedLength(sexprp->exprp()) < 0;
+        });
+    }
     static std::unique_ptr<SvaAttemptNode> buildAttemptTree(AstNodeExpr* nodep) {
         using Kind = SvaAttemptNode::Kind;
         std::unique_ptr<SvaAttemptNode> treep{new SvaAttemptNode};
@@ -8730,7 +8744,8 @@ class AssertNfaVisitor final : public VNVisitor {
         findAttemptKinds(*treep, implications, other);
         // An implication split by the lengths of its antecedent has a pass of each attempt
         const bool lengthsSplit = treep->lengthsJoin || treep->antSeqp;
-        if (!hasVarLenAnd(*treep) && (cover || !implications || (!other && implications < 2))
+        if (!hasVarLenAnd(*treep) && !SvaNfaBuilder::hasRangeOfVarLenSeq(bodyp)
+            && (cover || !implications || (!other && implications < 2))
             && (cover || (!isVarLenSequence(*treep) && !lengthsSplit))) {
             return nullptr;
         }
