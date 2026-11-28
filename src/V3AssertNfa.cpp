@@ -4635,14 +4635,12 @@ class AssertNfaVisitor final : public VNVisitor {
         // (IEEE 1800-2023 16.14.1). An implication with an 'and' combining its operands'
         // matches is not, as each operand of an attempt fails in its own thread, nor one whose
         // consequent has a range delay whose candidates each reject, or a throughout after a
-        // range delay, whose guard fails each candidate of an attempt, nor one in a class,
-        // whose replay would run outside the class.
+        // range delay, whose guard fails each candidate of an attempt.
         const bool replayFails
             = assertAssertp && !negated
               && !(parts.hasImplication
                    && (builder.hasAndLatch() || builder.candidateMissRejects()
-                       || builder.rangeFallback() || builder.hasThroughoutAfterRange()
-                       || VN_IS(m_modp, Class)));
+                       || builder.rangeFallback() || builder.hasThroughoutAfterRange()));
         const bool replaySuccesses = assertAssertp && negated;
         const bool countPasses = needMatch && negated && !parts.hasImplication;
         // Counting threads counts the failed attempts when each attempt has one thread

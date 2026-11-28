@@ -1,0 +1,15 @@
+[35] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[105] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[175] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[175] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[245] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[245] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[315] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[385] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[455] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[455] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[525] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[525] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+[595] %Error: t_assert_class_task_implication.v:50: Assertion failed in t.i.Checker: 'assert' failed.
+pass2=46 fail2=13 fail3=19 sub fail2=15
+*-* All Finished *-*
