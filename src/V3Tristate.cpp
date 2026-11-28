@@ -467,6 +467,8 @@ class TristateVisitor final : public TristateBaseVisitor {
                                   // cell's module did not recognise as tristate
         bool elemZ = false;  // An element or member procedurally written with z, stored as x
         AstVar* renVarp = nullptr;  // Input __ren: enable of the net an input port connects to
+        bool caseEnBeforeGraph = false;  // A comparison requested an enable before graphing
+        bool hierCaseEn = false;  // A hierarchical case comparison needs the resolved enable
     };
 
     VNUser3Allocator<AstVar, AuxAstVar> m_varAux;
@@ -875,7 +877,17 @@ class TristateVisitor final : public TristateBaseVisitor {
             }
             return newReadEnp(varrefp, newEnVarRefp(varrefp));
         } else if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
-            AstVar* const enVarp = getCreateEnVarp(xrefp->varp(), false);
+            AstVar* const varp = xrefp->varp();
+            // Match the local two-state value for non-tristate variables. A read
+            // can reach a module whose graph has not yet established the variable's state.
+            if (!varp->isNet() && !varp->isIO()) {
+                if (!(varp->user2() & U2_GRAPHING)) {
+                    m_varAux(varp).caseEnBeforeGraph = true;
+                } else if (!isTristateVar(varp) && !m_tgraph.isTristate(varp)) {
+                    return newAllZerosOrOnes(xrefp, true);
+                }
+            }
+            AstVar* const enVarp = getCreateEnVarp(varp, false);
             return newReadEnp(xrefp, newVarXRef(xrefp->fileline(), enVarp, xrefp->dotted(),
                                                 VAccess::READ, xrefp->inlinedDots()));
         } else if (AstConst* const constp = VN_CAST(nodep, Const)) {
@@ -1727,8 +1739,8 @@ class TristateVisitor final : public TristateBaseVisitor {
                 if (!m_varAux(invarp).bitPulls.empty()) {
                     UINFO(9, "propagate per-bit pulls to " << outvarp);
                 }
-            } else if (invarp->user1p()) {
-                envarp = VN_AS(invarp->user1p(), Var);  // From CASEEQ, foo === 1'bz
+            } else if (invarp->user1p() || m_varAux(invarp).hierCaseEn) {
+                envarp = getCreateEnVarp(invarp, false);
             }
         }
 
@@ -3484,6 +3496,14 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (m_tgraph.isTristate(nodep)) {
                 // nodep->isPulldown() || nodep->isPullup() handled in TristateGraphVisitor
                 m_tgraph.didProcess(nodep);
+            } else if (m_varAux(nodep).caseEnBeforeGraph) {
+                // A forward enable request for an always-driven variable has no graph driver.
+                FileLine* const flp = nodep->fileline();
+                AstVar* const enVarp = VN_AS(nodep->user1p(), Var);
+                AstAssign* const assignp
+                    = new AstAssign{flp, new AstVarRef{flp, enVarp, VAccess::WRITE},
+                                    newAllZerosOrOnes(nodep, true)};
+                m_modp->addStmtsp(new AstAlways{flp, VAlwaysKwd::CONT_ASSIGN, nullptr, assignp});
             }
         }
     }
@@ -3682,6 +3702,28 @@ public:
     // CONSTRUCTORS
     explicit TristateVisitor(AstNetlist* netlistp) {
         m_tgraph.clearAndCheck();
+        // Resolve an enable in the variable's own module even when its first observer is
+        // a case comparison in a module processed later. Do not make ordinary variables
+        // tristate merely because they are compared with Z.
+        netlistp->foreach([this](AstNodeBiop* const cmpp) {
+            if (!VN_IS(cmpp, EqCase) && !VN_IS(cmpp, NeqCase)) return;
+            const AstConst* const constp = VN_CAST(cmpp->lhsp(), Const);
+            if (!constp || !constp->num().hasZ()) return;
+            AstNodeExpr* basep = cmpp->rhsp();
+            while (true) {
+                if (AstSel* const selp = VN_CAST(basep, Sel)) {
+                    basep = selp->fromp();
+                } else if (AstExtend* const extendp = VN_CAST(basep, Extend)) {
+                    basep = extendp->lhsp();
+                } else {
+                    break;
+                }
+            }
+            if (const AstVarXRef* const refp = VN_CAST(basep, VarXRef)) {
+                AstVar* const varp = refp->varp();
+                if (!varp->isNet() && !varp->isIO()) m_varAux(varp).hierCaseEn = true;
+            }
+        });
         // Modules under an instance are processed before it, so first find the inputs its
         // connections make tristate
         netlistp->foreach([&](const AstPin* pinp) {
