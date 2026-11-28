@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_constraint_dist_range_unsup.v:10:27: Unsupported: dist range bound wider than 64 bits.
+                                                           : ... note: In instance 't'
+   10 |   constraint c_z {z dist {[lo : 20] :/ 1};}
+      |                           ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_dist_range_unsup.v:15:27: Unsupported: dist range size wider than 64 bits.
+                                                           : ... note: In instance 't'
+   15 |   constraint c_w {w dist {[65'd0 : 65'h10000000000000000] :/ 1};}
+      |                           ^
+%Error: Exiting due to
