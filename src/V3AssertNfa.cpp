@@ -853,12 +853,33 @@ class SvaNfaBuilder final {
         rejectp->m_condVtxp = expiryMatchp;
     }
 
+    // Fold `g throughout x` or `g throughout x[*m:n]`, g and x plain booleans, after the ranged
+    // delay of sexprp into `x && g` or `(x && g)[*m:n]`, which match on the same ticks
+    // (IEEE 1800-2023 16.9.9). The guard then fails an attempt only when all its candidates
+    // fail, as for a repetition (see monitorsRepetition), not once for each candidate.
+    static void foldRangeThroughout(AstSExpr* sexprp) {
+        AstSThroughout* const throughp = VN_CAST(sexprp->exprp(), SThroughout);
+        if (!throughp || !isPlainBoolean(throughp->lhsp())) return;
+        AstSConsRep* const repp = VN_CAST(throughp->rhsp(), SConsRep);
+        AstNodeExpr* const boolp = repp ? repp->exprp() : throughp->rhsp();
+        if (!isPlainBoolean(boolp)) return;
+        FileLine* const flp = throughp->fileline();
+        AstLogAnd* const andp = new AstLogAnd{flp, boolp->cloneTreePure(false),
+                                              throughp->lhsp()->cloneTreePure(false)};
+        andp->dtypeSetBit();
+        boolp->replaceWith(andp);
+        VL_DO_DANGLING(boolp->deleteTree(), boolp);
+        throughp->replaceWith(throughp->rhsp()->unlinkFrBack());
+        VL_DO_DANGLING(throughp->deleteTree(), throughp);
+    }
+
     BuildResult buildSExpr(AstSExpr* sexprp, SvaStateVertex* entryVtxp,
                            bool isTopLevelStep = false) {
         AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
         if (!delayp || !delayp->isCycleDelay()) return BuildResult::fail();
 
         FileLine* const flp = sexprp->fileline();
+        if (delayp->isRangeDelay()) foldRangeThroughout(sexprp);
         AstNodeExpr* const exprp = sexprp->exprp();
 
         // An empty match of a zero-minimum repetition next to the delay takes a cycle off the
