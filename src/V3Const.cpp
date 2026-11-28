@@ -2145,7 +2145,14 @@ class ConstVisitor final : public VNVisitor {
             return false;
         if (nodep->width() != lhsp->width()) return false;
         if (nodep->width() != lhsp->lhsp()->width()) return false;
-        return true;
+        // An amount not below the width shifts all bits out by itself, and may be too wide for
+        // an integer; such a shift of an operand that is not pure is left to do so
+        return shiftBelowWidth(nodep) && shiftBelowWidth(lhsp);
+    }
+    // Whether the constant amount of 'shiftp' is below its width
+    static bool shiftBelowWidth(const AstNodeBiop* shiftp) {
+        const V3Number& num = VN_AS(shiftp->rhsp(), Const)->num();
+        return num.fitsInUInt() && num.toUInt() < static_cast<uint32_t>(shiftp->width());
     }
     bool operandWordOOB(const AstWordSel* nodep) {
         // V3Expand may make a arraysel that exceeds the bounds of the array
