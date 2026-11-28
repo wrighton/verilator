@@ -698,6 +698,7 @@ static VlSolverSession s_solverSession;
 std::atomic<uint64_t> VlRandomizeCall::s_calls{0};
 thread_local uint32_t VlRandomizeCall::s_depth = 0;
 thread_local uint64_t VlRandomizeCall::s_stamp = 0;
+thread_local bool VlRandomizeCall::s_memberCall = false;
 
 // One solver transaction; the caller holds the session mutex
 class VlSolverTxn final {

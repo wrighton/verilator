@@ -420,9 +420,8 @@ module t;
       `checkd(randomize_result, 1);
       `checkd(sb.pre_count, 5);
       `checkd(sb.post_count, 5);
-      // An object reached through two handles from an object outside the cycle, here sb
-      // through so.b and through sa.b1/b2, still runs its callbacks per handle, as without a
-      // cycle: a known limit
+      // An object reached through a handle from an object outside the cycle and through the
+      // cycle, here sb through so.b and through sa.b1/b2, also runs its callbacks once
       begin
         automatic ShOuter so = new;
         sa.other = null;
@@ -430,8 +429,8 @@ module t;
         so.b = sb;
         randomize_result = so.randomize();
         `checkd(randomize_result, 1);
-        `checkd(sb.pre_count, 7);
-        `checkd(sb.post_count, 7);
+        `checkd(sb.pre_count, 6);
+        `checkd(sb.post_count, 6);
       end
       sb.a = null;
     end

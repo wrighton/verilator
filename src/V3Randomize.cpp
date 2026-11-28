@@ -1471,6 +1471,7 @@ class RandomizeVisitor final : public VNVisitor {
     V3UniqueNames m_inlineUniqueNames;  // For generating unique function names
     std::map<const AstClass*, std::vector<AstClass*>>
         m_classFamilies;  // Base-most class -> classes derived from it, and itself
+    std::set<const AstClass*> m_randTargets;  // Base-most classes of objects of rand handles
     V3UniqueNames m_randArrayUniqueNames{"__Vrandarr"};  // Random array loop indices
     V3UniqueNames m_modeUniqueNames{"__Vmode"};  // For generating unique rand/constraint
                                                  // mode state var names
@@ -2028,16 +2029,16 @@ class RandomizeVisitor final : public VNVisitor {
             AstAssign* const assignp = new AstAssign{
                 fl, new AstVarRef{fl, outputVarp, VAccess::WRITE},
                 new AstAnd{fl, new AstVarRef{fl, outputVarp, VAccess::READ}, callp}};
-            AstNodeExpr* condp
-                = new AstNeq{fl, exprp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
-            // An object of a cycle through arrays of rand handles is randomized once per call
-            if (AstVar* const stampVarp = getRandStampVarIfCycle(classRefDtp->classp())) {
-                condp = new AstLogAnd{
-                    fl, condp,
-                    newNotRandomizedp(fl,
-                                      new AstMemberRef{fl, exprp->cloneTree(false), stampVarp})};
-            }
-            return new AstIf{fl, condp, assignp};
+            // An object is randomized once per call, however many handles lead to it. Nested ifs,
+            // as a short-circuit condition's out of range element reads are not guarded alike
+            AstVar* const stampVarp = getCreateRandStampVar(classRefDtp->classp());
+            AstIf* const ifNotRandomizedp = new AstIf{
+                fl,
+                newNotRandomizedp(fl, new AstMemberRef{fl, exprp->cloneTree(false), stampVarp}),
+                AstNode::addNext(newMemberCallp(fl), assignp)};
+            return new AstIf{
+                fl, new AstNeq{fl, exprp->cloneTree(false), new AstConst{fl, AstConst::Null{}}},
+                ifNotRandomizedp};
         } else if (AstDynArrayDType* const dynarrayDtp = VN_CAST(memberDtp, DynArrayDType)) {
             return createArrayForeachLoop(fl, dynarrayDtp, exprp, outputVarp);
         } else if (AstQueueDType* const queueDtp = VN_CAST(memberDtp, QueueDType)) {
@@ -2247,13 +2248,23 @@ class RandomizeVisitor final : public VNVisitor {
 
             AstNodeStmt* stmtsp = nullptr;
 
-            // 1. Call member.pre/post_randomize() if exists in hierarchy
+            // 1. Call member.pre/post_randomize() if exists in hierarchy, once per outermost
+            // call, however many handles lead to the object
             if (AstTask* const userFuncp = findPrePostTask(memberClassp, cbName)) {
                 AstMethodCall* const callp = new AstMethodCall{
                     fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::WRITE}, cbName};
                 callp->taskp(userFuncp);
                 callp->dtypeSetVoid();
-                stmtsp = AstNode::addNext(stmtsp, callp->makeStmt());
+                const string which = cbName == "pre_randomize" ? "pre" : "post";
+                AstVar* const cbStampVarp = getCreateCallbackStampVar(memberClassp, which);
+                AstMemberRef* const cbStampp = new AstMemberRef{
+                    fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ}, cbStampVarp};
+                AstMemberRef* const cbStampWritep = cbStampp->cloneTree(false);
+                cbStampWritep->access(VAccess::WRITE);
+                stmtsp = AstNode::addNext(
+                    stmtsp, new AstIf{fl, newNotRandomizedp(fl, cbStampp),
+                                      AstNode::addNext(newSetStampp(fl, cbStampWritep),
+                                                       callp->makeStmt())});
             }
 
             // 2. Call member.__VrandCb_pre/post() for deeper recursion
@@ -2421,21 +2432,23 @@ class RandomizeVisitor final : public VNVisitor {
         return varp->rand().isRandomizable() && classRefp
                && reachesByRandHandle(classRefp->classp(), classp, visited);
     }
-    // The stamp of the objects of classp if on a cycle of rand handles
-    AstVar* getRandStampVarIfCycle(AstClass* classp) {
-        const bool inCycle = classp->existsMember([&](const AstClass*, const AstVar* varp) {
-            const AstClassRefDType* const classRefp = randHandleDTypep(varp);
-            std::set<const AstClass*> visited;
-            return classRefp && reachesByRandHandle(classRefp->classp(), classp, visited);
-        });
-        return inCycle ? getCreateRandStampVar(classp) : nullptr;
+    // The stamp of the objects of classp if objects of rand handles
+    AstVar* getRandStampVarIfTarget(AstClass* classp) {
+        return m_randTargets.count(classp->baseMostClassp()) ? getCreateRandStampVar(classp)
+                                                             : nullptr;
     }
     // Get or create the stamp of the outermost randomize() call that randomized an object of
     // classp
-    AstVar* getCreateRandStampVar(AstClass* classp) {
+    AstVar* getCreateRandStampVar(AstClass* classp) { return getCreateStampVar(classp, "rand"); }
+    // Get or create the stamp of the outermost randomize() call that called the callback
+    // `which` ("pre", "post") of an object of classp
+    AstVar* getCreateCallbackStampVar(AstClass* classp, const string& which) {
+        return getCreateStampVar(classp, which);
+    }
+    AstVar* getCreateStampVar(AstClass* classp, const string& what) {
         // In the base-most class, so the same stamp for every class of the object
         classp = classp->baseMostClassp();
-        static constexpr const char* const name = "__VrandStamp";
+        const string name = "__V" + what + "Stamp";
         if (AstVar* const varp = VN_CAST(m_memberMap.findMember(classp, name), Var)) return varp;
         AstVar* const varp
             = new AstVar{classp->fileline(), VVarType::MEMBER, name, classp->findUInt64DType()};
@@ -2462,9 +2475,9 @@ class RandomizeVisitor final : public VNVisitor {
         return classp->existsMember(
             [&](const AstClass*, const AstVar* varp) { return randHandleDTypep(varp); });
     }
-    // Statements beginning randomize() funcp of an object of classp, an object of a cycle of
-    // rand handles taking the stamp of the outermost call, its previous stamp kept in
-    // prevVarpr, and ending it
+    // Statements beginning randomize() funcp of an object of classp, an object of rand handles
+    // taking the stamp of the outermost call, its previous stamp kept in prevVarpr, and ending
+    // it
     AstNodeStmt* newRandCallEnterp(FileLine* fl, AstClass* classp, AstVar* stampVarp,
                                    AstFunc* funcp, AstVar*& prevVarpr) {
         prevVarpr = nullptr;
@@ -2483,12 +2496,46 @@ class RandomizeVisitor final : public VNVisitor {
     }
     // Statement giving this object the stamp of the outermost call
     static AstNodeStmt* newSetRandStampp(FileLine* fl, AstVar* stampVarp) {
+        return newSetStampp(fl, new AstVarRef{fl, VN_AS(stampVarp->user2p(), NodeModule),
+                                              stampVarp, VAccess::WRITE});
+    }
+    // Statement setting stamp lhsp to the stamp of the outermost call
+    static AstNodeStmt* newSetStampp(FileLine* fl, AstNodeExpr* lhsp) {
         AstCExpr* const callStampp = new AstCExpr{fl, "VlRandomizeCall::stamp()", 64};
         callStampp->dtypeSetUInt64();
-        return new AstAssign{
-            fl,
-            new AstVarRef{fl, VN_AS(stampVarp->user2p(), NodeModule), stampVarp, VAccess::WRITE},
-            callStampp};
+        return new AstAssign{fl, lhsp, callStampp};
+    }
+    // Statement telling the randomize() it precedes that an object holding the object calls it
+    static AstNodeStmt* newMemberCallp(FileLine* fl) {
+        return new AstCStmt{fl, "VlRandomizeCall::memberCall();"};
+    }
+    // Local of randomize() funcp, whether an object holding the object called it
+    AstVar* newMemberCallVarp(FileLine* fl, AstFunc* funcp) {
+        AstVar* const varp = new AstVar{fl, VVarType::BLOCKTEMP,
+                                        m_uniqueNames.get("__VmemberCall"), funcp->findBitDType()};
+        varp->funcLocal(true);
+        varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        funcp->addDeclsp(varp);
+        AstCExpr* const takep = new AstCExpr{fl, "VlRandomizeCall::takeMemberCall()", 1};
+        takep->dtypeSetBit();
+        funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, takep});
+        return varp;
+    }
+    // Callback callp (which: "pre", "post") of this object, of classp if an object of rand
+    // handles, taking the stamp of the outermost call: if called by an object holding it
+    // (memberCallVarp), only if not yet called in that call
+    AstNodeStmt* newCallbackOncep(FileLine* fl, AstClass* classp, AstVar* memberCallVarp,
+                                  const string& which, AstNodeStmt* callp) {
+        if (!callp || !classp) return callp;
+        AstVar* const stampVarp = getCreateCallbackStampVar(classp, which);
+        AstNodeModule* const stampModp = VN_AS(stampVarp->user2p(), NodeModule);
+        AstNodeStmt* const stmtsp = AstNode::addNext(
+            newSetStampp(fl, new AstVarRef{fl, stampModp, stampVarp, VAccess::WRITE}), callp);
+        if (!memberCallVarp) return stmtsp;
+        AstNodeExpr* const condp = new AstLogOr{
+            fl, new AstLogNot{fl, new AstVarRef{fl, memberCallVarp, VAccess::READ}},
+            newNotRandomizedp(fl, new AstVarRef{fl, stampModp, stampVarp, VAccess::READ})};
+        return new AstIf{fl, condp, stmtsp};
     }
     // A failed call restores the stamp the object had, so it is not taken as randomized by the
     // outermost call: an object holding it randomizes it again, and fails too (18.6.3)
@@ -2513,9 +2560,9 @@ class RandomizeVisitor final : public VNVisitor {
         AstVarRef* const basicFvarRefp = new AstVarRef{fl, basicFvarp, VAccess::WRITE};
         AstConst* const beginBasicValp = new AstConst{fl, AstConst::WidthedValue{}, 32, 1};
         basicRandomizep->addStmtsp(new AstAssign{fl, basicFvarRefp, beginBasicValp});
-        // An object of a cycle randomized with the global constraints of an object holding it is
-        // not randomized again in the call, by its own randomize()
-        if (AstVar* const stampVarp = getRandStampVarIfCycle(nodep))
+        // An object randomized with the global constraints of an object holding it is not
+        // randomized again in the call, by its own randomize() or through another handle
+        if (AstVar* const stampVarp = getRandStampVarIfTarget(nodep))
             basicRandomizep->addStmtsp(newSetRandStampp(fl, stampVarp));
         AstNodeFTask* const newp = VN_AS(m_memberMap.findMember(nodep, "new"), NodeFTask);
         UASSERT_OBJ(newp, nodep, "No new() in class");
@@ -2563,19 +2610,17 @@ class RandomizeVisitor final : public VNVisitor {
                 callp->dtypeFrom(memberFuncp);
                 AstVarRef* const basicFvarRefReadp = basicFvarRefp->cloneTree(false);
                 basicFvarRefReadp->access(VAccess::READ);
-                AstNodeExpr* condp
-                    = new AstNeq{fl, new AstVarRef{fl, classp, memberVarp, VAccess::READ},
-                                 new AstConst{fl, AstConst::Null{}}};
-                // Each object of a cycle is randomized once per call
-                if (inCycle) {
-                    condp = new AstLogAnd{
-                        fl, condp,
-                        newNotRandomizedp(fl, newRandStampSelp(fl, classp, memberVarp))};
-                }
-                AstIf* const assignIfNotNullp
-                    = new AstIf{fl, condp,
-                                new AstAssign{fl, basicFvarRefp->cloneTree(false),
-                                              new AstAnd{fl, basicFvarRefReadp, callp}}};
+                // Each object is randomized once per call, however many handles lead to it
+                AstNodeExpr* const condp = new AstLogAnd{
+                    fl,
+                    new AstNeq{fl, new AstVarRef{fl, classp, memberVarp, VAccess::READ},
+                               new AstConst{fl, AstConst::Null{}}},
+                    newNotRandomizedp(fl, newRandStampSelp(fl, classp, memberVarp))};
+                AstNodeStmt* const assignp = new AstAssign{
+                    fl, basicFvarRefp->cloneTree(false), new AstAnd{fl, basicFvarRefReadp, callp}};
+                AstIf* const assignIfNotNullp = new AstIf{
+                    fl, condp,
+                    basicOnly ? assignp : AstNode::addNext(newMemberCallp(fl), assignp)};
                 basicRandomizep->addStmtsp(wrapIfRandMode(nodep, memberVarp, assignIfNotNullp));
             } else {
                 AstVar* const randcVarp = newRandcVarsp(memberVarp, nodep);
@@ -2855,14 +2900,19 @@ class RandomizeVisitor final : public VNVisitor {
         AstFunc* const randomizep = V3Randomize::newRandomizeFunc(m_memberMap, nodep);
         AstVar* const fvarp = randomizep->fvarp();
         AstVar* const randModeVarp = RandModeVars::randModeVarp(nodep);
-        // An object of a cycle of rand handles takes the stamp of the outermost call, so it is
-        // not randomized again in that call, through the cycle or through another handle
-        AstVar* const stampVarp = getRandStampVarIfCycle(nodep);
+        // An object of rand handles takes the stamp of the outermost call, so it is not
+        // randomized again in that call, through another handle
+        AstVar* const stampVarp = getRandStampVarIfTarget(nodep);
         AstVar* prevStampVarp = nullptr;
         if (AstNodeStmt* const enterp
             = newRandCallEnterp(fl, nodep, stampVarp, randomizep, prevStampVarp))
             randomizep->addStmtsp(enterp);
-        addPrePostCall(nodep, randomizep, "pre_randomize");
+        // Its callbacks are called once per outermost call, also when an object holding it
+        // calls them; unless this randomize() is called directly
+        AstVar* const memberCallVarp = stampVarp ? newMemberCallVarp(fl, randomizep) : nullptr;
+        AstClass* const onceClassp = stampVarp ? nodep : nullptr;
+        randomizep->addStmtsp(newCallbackOncep(fl, onceClassp, memberCallVarp, "pre",
+                                               newPrePostCall(nodep, "pre_randomize")));
 
         // Call nested pre_randomize on rand class-type members (IEEE 18.4.1)
         if (classHasRandClassMembers(nodep)) {
@@ -2907,7 +2957,9 @@ class RandomizeVisitor final : public VNVisitor {
             populateNestedCallbackTask(postTaskp, nodep, "post_randomize");
             postp = (new AstTaskRef{fl, postTaskp})->makeStmt();
         }
-        postp = AstNode::addNextNull(postp, newPrePostCall(nodep, "post_randomize"));
+        postp = AstNode::addNextNull(postp,
+                                     newCallbackOncep(fl, onceClassp, memberCallVarp, "post",
+                                                      newPrePostCall(nodep, "post_randomize")));
         addPostRandomizeStmts(randomizep, postp);
         if (AstNodeStmt* const exitp
             = newRandCallExitp(fl, nodep, stampVarp, randomizep, prevStampVarp))
@@ -3199,8 +3251,8 @@ class RandomizeVisitor final : public VNVisitor {
 
         AstFunc* const randomizeFuncp = V3Randomize::newRandomizeFunc(
             m_memberMap, classp, m_inlineUniqueNames.get(nodep), false);
-        // As for randomize()
-        AstVar* const stampVarp = getRandStampVarIfCycle(classp);
+        // As for randomize(), always called directly
+        AstVar* const stampVarp = getRandStampVarIfTarget(classp);
         AstVar* prevStampVarp = nullptr;
         if (AstNodeStmt* const enterp = newRandCallEnterp(nodep->fileline(), classp, stampVarp,
                                                           randomizeFuncp, prevStampVarp))
@@ -3212,11 +3264,10 @@ class RandomizeVisitor final : public VNVisitor {
         const std::pair<bool, bool> prePostWrap = classp->isExtended()
                                                       ? buildPrePostVirtualWrappers(classp)
                                                       : std::pair<bool, bool>{false, false};
-        if (prePostWrap.first) {
-            addVirtualPrePostCall(randomizeFuncp, classp, "pre_randomize");
-        } else {
-            addPrePostCall(classp, randomizeFuncp, "pre_randomize");
-        }
+        randomizeFuncp->addStmtsp(
+            newCallbackOncep(nodep->fileline(), stampVarp ? classp : nullptr, nullptr, "pre",
+                             prePostWrap.first ? newVirtualPrePostCall(classp, "pre_randomize")
+                                               : newPrePostCall(classp, "pre_randomize")));
 
         // Call nested pre_randomize on rand class-type members (IEEE 18.4.1)
         if (classHasRandClassMembers(classp)) {
@@ -3253,9 +3304,11 @@ class RandomizeVisitor final : public VNVisitor {
             }
             postp = (new AstTaskRef{nodep->fileline(), postTaskp})->makeStmt();
         }
-        postp = AstNode::addNextNull(postp, prePostWrap.second
-                                                ? newVirtualPrePostCall(classp, "post_randomize")
-                                                : newPrePostCall(classp, "post_randomize"));
+        postp = AstNode::addNextNull(
+            postp,
+            newCallbackOncep(nodep->fileline(), stampVarp ? classp : nullptr, nullptr, "post",
+                             prePostWrap.second ? newVirtualPrePostCall(classp, "post_randomize")
+                                                : newPrePostCall(classp, "post_randomize")));
         addPostRandomizeStmts(randomizeFuncp, postp);
         if (AstNodeStmt* const exitp = newRandCallExitp(nodep->fileline(), classp, stampVarp,
                                                         randomizeFuncp, prevStampVarp))
@@ -3295,6 +3348,10 @@ public:
                                                            cloneObjps, deleter())} {
         nodep->foreach([&](AstClass* const classp) {
             m_classFamilies[classp->baseMostClassp()].push_back(classp);
+        });
+        nodep->foreach([&](const AstVar* const varp) {
+            if (const AstClassRefDType* const classRefp = randHandleDTypep(varp))
+                m_randTargets.insert(classRefp->classp()->baseMostClassp());
         });
         createRandomizeClassVars(nodep);
         // Flag local constraint leaves as solver-owned so __VBasicRand skips them.

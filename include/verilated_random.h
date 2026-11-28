@@ -262,6 +262,7 @@ class VlRandomizeCall final {
     // Stamp of this thread's outermost call, unique over threads, so another thread's call
     // does not take an object as randomized
     static thread_local uint64_t s_stamp;
+    static thread_local bool s_memberCall;  // The next call is by an object holding the object
 
 public:
     static void enter() VL_MT_SAFE {
@@ -269,6 +270,12 @@ public:
     }
     static void exit() VL_MT_SAFE { --s_depth; }
     static uint64_t stamp() VL_MT_SAFE { return s_stamp; }
+    static void memberCall() VL_MT_SAFE { s_memberCall = true; }
+    static bool takeMemberCall() VL_MT_SAFE {
+        const bool taken = s_memberCall;
+        s_memberCall = false;
+        return taken;
+    }
 };
 
 //=============================================================================
