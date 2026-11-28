@@ -3420,24 +3420,29 @@ class LinkDotParamVisitor final : public VNVisitor {
                            "A.9.3)");
             return "";
         }
-        const AstParseRef* const refp = VN_CAST(selp->fromp(), ParseRef);
-        const AstConst* const constp = VN_CAST(selp->bitp(), Const);
-        if (!refp || !constp || constp->num().isFourState() || constp->num().isOpaque()
-            || constp->num().isNull()) {
+        // The base may select too, for an element of a multidimensional instance array; the
+        // index may be a negated literal, as not yet folded
+        const AstNodeExpr* const basep = selp->fromp();
+        const AstNegate* const negp = VN_CAST(selp->bitp(), Negate);
+        const AstConst* const constp = VN_CAST(negp ? negp->lhsp() : selp->bitp(), Const);
+        if (!(VN_IS(basep, ParseRef) || VN_IS(basep, SelBit)) || !constp
+            || constp->num().isFourState() || constp->num().isOpaque() || constp->num().isNull()) {
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported: defparam with instance select other than one integer"
                           " literal");
             return "";
         }
         int32_t value;
-        if (!genvarValue(constp->num(), value)) {
+        if (!genvarValue(constp->num(), value)
+            || (negp && value == std::numeric_limits<int32_t>::min())) {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: defparam with instance select "
-                                             << constp->num().ascii()
+                                             << (negp ? "-" : "") << constp->num().ascii()
                                              << ", outside the 32-bit integer range of a genvar");
             return "";
         }
-        lookupPathr = refp->name();
-        return refp->name() + "[" + cvtToStr(value) + "]";
+        const string base = defParamPath(selp->fromp(), lookupPathr);
+        if (base.empty()) return "";
+        return base + "[" + cvtToStr(negp ? -value : value) + "]";
     }
     // Set valuer to the genvar value a generate loop select selects: a genvar is a 32-bit integer
     // (IEEE 1800-2023 27.4), so a select of no more bits converts to one, and a wider select's
@@ -3455,17 +3460,18 @@ class LinkDotParamVisitor final : public VNVisitor {
         valuer = static_cast<int32_t>(num.edataWord(0));
         return true;
     }
-    // A defparam path with the generate loop iterations it selects named as once built
+    // A defparam path with the generate loop iterations and instance array elements it selects
+    // named as once built
     static string iterationPath(const string& path) {
         string result;
         for (const string& name : VString::split(path, '.')) {
-            const size_t braPos = name.find('[');
-            result = VString::dot(result, ".",
-                                  braPos == string::npos ? name
-                                                         : name.substr(0, braPos) + "__BRA__"
-                                                               + AstNode::encodeNumber(std::stoll(
-                                                                   name.substr(braPos + 1)))
-                                                               + "__KET__");
+            size_t braPos = name.find('[');
+            string built = name.substr(0, braPos);
+            for (; braPos != string::npos; braPos = name.find('[', braPos + 1)) {
+                built += "__BRA__" + AstNode::encodeNumber(std::stoll(name.substr(braPos + 1)))
+                         + "__KET__";
+            }
+            result = VString::dot(result, ".", built);
         }
         return result;
     }
@@ -3485,13 +3491,16 @@ class LinkDotParamVisitor final : public VNVisitor {
             return true;
         }
         const AstCell* const cellp = VN_CAST(scopep, Cell);
+        if (cellp && cellp->rangep() && VN_IS(nodep, SelBit)) {
+            // An element of an arrayed instance (IEEE 1800-2023 23.10.1); V3Param matches the
+            // indices to each element, and reports a defparam that names none
+            return true;
+        }
         if (loop && VN_IS(nodep, SelBit)) {
             // Other iterations' copies of the defparam would change a parameter outside them
             nodep->v3error("In defparam in generate loop "
                            << scopep->prettyNameQ()
                            << ", select of that loop (IEEE 1800-2023 23.10.1)");
-        } else if (cellp && cellp->rangep()) {
-            nodep->v3warn(E_UNSUPPORTED, "Unsupported: defparam with arrayed instance");
         } else if (loop) {
             nodep->v3error("In defparam, generate loop " << scopep->prettyNameQ()
                                                          << " without a select");
@@ -3989,11 +3998,18 @@ class LinkDotParamVisitor final : public VNVisitor {
                     }
                 }
                 // Path to the instance from that scope: the last components of the path, which,
-                // unlike symbols, have generate loop indices
+                // unlike symbols, have generate loop indices, and name an element of an arrayed
+                // instance as V3Param does
                 string belowPath;
                 if (below) {
-                    for (auto it = cellNames.cend() - belowDepth; it != cellNames.cend(); ++it) {
-                        belowPath = VString::dot(belowPath, ".", *it);
+                    const VSymEnt* compSymp = cellSymp;
+                    for (auto it = cellNames.cend(); it != cellNames.cend() - belowDepth;
+                         compSymp = compSymp->parentp()) {
+                        --it;
+                        const AstCell* const compCellp = VN_CAST(compSymp->nodep(), Cell);
+                        belowPath = VString::dot(
+                            compCellp && compCellp->rangep() ? iterationPath(*it) : *it, ".",
+                            belowPath);
                     }
                 }
                 // Path of a named block, task or function in the instance; in the pin's name,

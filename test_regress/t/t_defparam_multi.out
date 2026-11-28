@@ -1,14 +1,12 @@
-%Error-UNSUPPORTED: t/t_defparam_multi.v:15:16: Unsupported: defparam with arrayed instance
-   15 |   defparam u_m3[0].PAR3 = 100;
-      |                ^
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_defparam_multi.v:16:16: Unsupported: defparam with arrayed instance
-   16 |   defparam u_m3[1].PAR3 = 200;
-      |                ^
 %Error-UNSUPPORTED: t/t_defparam_multi.v:24:19: Unsupported: defparam with instance select other than one integer literal
    24 |       defparam blk[i].u_m3.PAR3 = i;
       |                   ^
-%Error-UNSUPPORTED: t/t_defparam_multi.v:76:31: Unsupported: defparam value using 'CLS_PARAM' of a module, for an instance not under the defparam
-   76 |   defparam t.u_up.PAR3 = Cls::CLS_PARAM;
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: t/t_defparam_multi.v:28:16: In defparam, instance select is not a bit select (IEEE 1800-2023 A.9.3)
+   28 |   defparam u_m3[1:0].PAR3 = 3;
+      |                ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error-UNSUPPORTED: t/t_defparam_multi.v:78:31: Unsupported: defparam value using 'CLS_PARAM' of a module, for an instance not under the defparam
+   78 |   defparam t.u_up.PAR3 = Cls::CLS_PARAM;
       |                               ^~~~~~~~~
 %Error: Exiting due to

@@ -24,6 +24,8 @@ module t;
       defparam blk[i].u_m3.PAR3 = i;
     end
   endgenerate
+  defparam blk[2].u_m3.PAR3 = 2;
+  defparam u_m3[1:0].PAR3 = 3;
 
   m3 u_up ();
   m6 #(.M6_PARAM(7)) m6 ();

@@ -1,0 +1,8 @@
+%Error: t/t_defparam_array_bad.v:9:23: In defparam, the path names no instance
+    9 |   defparam a_arr[2].W = 3;   
+      |                       ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_array_bad.v:10:26: In defparam, the path names no instance
+   10 |   defparam a_arr[0][0].W = 3;   
+      |                          ^
+%Error: Exiting due to
