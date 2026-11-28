@@ -85,7 +85,9 @@ module t (
     if (cyc == 8) begin
       `checkd(temporal_small_fail, 1);
       `checkd(temporal_ring_fail, 1);
-      `checkd(boolean_ant_fail, 1);
+      // The attempts of ticks 1 and 2 both see b on tick 3, so each fails there and runs the
+      // action (IEEE 1800-2023 16.14.1)
+      `checkd(boolean_ant_fail, 2);
       `checkd(impossible_pass, 0);
       `checkd(impossible_fail, 0);
       $write("*-* All Finished *-*\n");

@@ -30,11 +30,11 @@ module t (
   wire e = (crc[29] & crc[33]) && live;
   int passes[NPROP];
   int fails[NPROP];
-  // Known limit: 181 passes and no failure, where attempts pass 195 times and fail 6 times
+  // Attempts pass 195 times and fail 6 times
   assert property (@(posedge clk) disable iff (cyc > END) a |-> (##[1:2] b) or (##3 c))
     ++passes[0];
   else ++fails[0];
-  // Known limit: 204 passes and no failure, where attempts pass 187 times and fail 14 times
+  // Attempts pass 187 times and fail 14 times
   assert property (@(posedge clk) disable iff (cyc > END) a |-> (b [*1:2]) or (c ##1 a))
     ++passes[1];
   else ++fails[1];
@@ -93,7 +93,7 @@ module t (
   assert property (@(posedge clk) disable iff (cyc > END) (always [0:$] a) or b)
     ++passes[13];
   else ++fails[13];
-  // Known limit: 126 passes and no failure, where attempts pass 197 times and fail 4 times
+  // Attempts pass 197 times and fail 4 times
   assert property (@(posedge clk) disable iff (cyc > END) b or (a |-> ##[1:2] c))
     ++passes[14];
   else ++fails[14];
@@ -153,10 +153,10 @@ module t (
     cyc <= cyc + 1;
     crc <= {crc[62:0], crc[63] ^ crc[2] ^ crc[0]};
     if (cyc == END + 2) begin
-      `checkd(passes[0], 181);
-      `checkd(fails[0], 0);
-      `checkd(passes[1], 204);
-      `checkd(fails[1], 0);
+      `checkd(passes[0], 195);
+      `checkd(fails[0], 6);
+      `checkd(passes[1], 187);
+      `checkd(fails[1], 14);
       `checkd(passes[2], 200);
       `checkd(fails[2], 1);
       `checkd(passes[3], 173);
@@ -181,8 +181,8 @@ module t (
       `checkd(fails[12], 15);
       `checkd(passes[13], 201);
       `checkd(fails[13], 0);
-      `checkd(passes[14], 126);
-      `checkd(fails[14], 0);
+      `checkd(passes[14], 197);
+      `checkd(fails[14], 4);
       `checkd(passes[15], 181);
       `checkd(fails[15], 20);
       `checkd(passes[16], 96);

@@ -242,8 +242,7 @@ module t (
       `checkd(count_fail15_ref, 7);
       `checkd(count_fail16, 6);
       `checkd(count_fail16_ref, 6);
-      // Known limit: 49, where the attempts fail on 64 ticks, as the reference shows
-      `checkd(count_fail17, 49);
+      `checkd(count_fail17, 64);
       `checkd(count_fail17_ref, 64);
       `checkd(count_fail18, 51);
       `checkd(count_fail18_ref, 51);
