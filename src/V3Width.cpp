@@ -12995,9 +12995,20 @@ public:
                 UASSERT_OBJ(queueElementSize <= lwidth, nodep, "LHS < RHS");
             }
             if (fixedTarget && !asQueue) {
-                streamp->unlinkFrBack();
-                nodep->rhsp(
-                    new AstCvtPackedToArray{streamp->fileline(), streamp, lhsDTypeSkippedRefp});
+                FileLine* const flp = streamp->fileline();
+                AstNodeExpr* srcp = streamp->unlinkFrBack();
+                if (!lowerAsFixedAggregate(lhsDTypeSkippedRefp)
+                    && !VN_IS(srcp->dtypep(), StreamDType) && lwidth > srcp->width()) {
+                    // A stream narrower than a fixed-size target is left-justified, zero-filled
+                    // on the right (IEEE 1800-2023 11.4.14). Finish the stream now, as the
+                    // concatenation would reject it as its operand when iterated.
+                    userIterate(srcp, WidthVP{SELF, FINAL, STREAM_USE_ASSIGN}.p());
+                    srcp = new AstConcat{
+                        flp, srcp,
+                        new AstConst{flp, AstConst::WidthedValue{}, lwidth - srcp->width(), 0}};
+                    srcp->didWidth(true);
+                }
+                nodep->rhsp(new AstCvtPackedToArray{flp, srcp, lhsDTypeSkippedRefp});
             }
         }
         if (AstNodeStream* const streamp = VN_CAST(nodep->lhsp(), NodeStream)) {
