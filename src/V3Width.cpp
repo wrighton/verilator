@@ -13038,6 +13038,15 @@ public:
                 AstNodeExpr* const streamExprp = nodep->lhsp()->unlinkFrBack();
                 AstNodeExpr* const dstp = streamp->lhsp()->unlinkFrBack();
                 AstNodeExpr* srcp = nodep->rhsp()->unlinkFrBack();
+                // The leftmost bits of a dynamically sized source (IEEE 1800-2023 11.4.14.3)
+                const AstNodeDType* const srcDTypep = srcp->dtypep()->skipRefp();
+                if (VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType)) {
+                    srcp = new AstCvtArrayToPacked{
+                        srcp->fileline(), srcp,
+                        srcp->findBitOrLogicDType(lwidth, lwidth, VSigning::UNSIGNED,
+                                                  srcDTypep->subDTypep()->isFourstate())};
+                    srcp->didWidth(true);
+                }
                 if (VN_IS(streamp, StreamL)) {
                     // The bits needed are consumed from the left of the source, and then
                     // reordered (IEEE 1800-2023 11.4.14.3)
