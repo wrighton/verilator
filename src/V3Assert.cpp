@@ -177,6 +177,45 @@ bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
     });
 }
 
+static string assertDisplayMessage(const AstNode* nodep, const string& prefix,
+                                   const string& message, VDisplayType severity) {
+    if (severity == VDisplayType::DT_ERROR || severity == VDisplayType::DT_FATAL) {
+        return ("[%0t] "s + prefix + ": " + nodep->fileline()->filebasename() + ":"
+                + cvtToStr(nodep->fileline()->lineno()) + ": Assertion failed in %m"
+                + ((message != "") ? ": " : "") + message + "\n");
+    }
+    return ("[%0t] "s + prefix + ": " + nodep->fileline()->filebasename() + ":"
+            + cvtToStr(nodep->fileline()->lineno()) + ": %m" + ((message != "") ? ": " : "")
+            + message + "\n");
+}
+
+// Convert an assertion display to the standard format
+static void replaceAssertDisplay(AstDisplay* nodep, const string& prefix,
+                                 const AstNodeModule* modp) {
+    nodep->fmtp()->text(
+        assertDisplayMessage(nodep, prefix, nodep->fmtp()->text(), nodep->displayType()));
+    nodep->displayType(VDisplayType::DT_WRITE);
+    // cppcheck-suppress nullPointer
+    AstNodeExpr* const timenewp = new AstTime{nodep->fileline(), modp->timeunit()};
+    nodep->fmtp()->prependExprsp(timenewp);
+    if (!nodep->fmtp()->scopeNamep() && nodep->fmtp()->formatScopeTracking()) {
+        nodep->fmtp()->scopeNamep(new AstScopeName{nodep->fileline(), true});
+    }
+}
+
+AstNodeStmt* V3AssertCommon::newFireAssertUnchecked(const AstNode* nodep,
+                                                    const AstNodeModule* modp,
+                                                    const string& message, AstNodeExpr* exprsp) {
+    AstDisplay* const dispp
+        = new AstDisplay{nodep->fileline(), VDisplayType::DT_ERROR, message, nullptr, nullptr};
+    dispp->fmtp()->timeunit(modp->timeunit());
+    AstNodeStmt* const bodysp = dispp;
+    replaceAssertDisplay(dispp, "%%Error", modp);  // Convert to standard DISPLAY format
+    if (exprsp) dispp->fmtp()->exprsp()->addNext(exprsp);
+    if (v3Global.opt.stopFail()) bodysp->addNext(new AstStop{nodep->fileline(), false});
+    return bodysp;
+}
+
 void V3AssertCommon::reducePlainAlways(AstPropSpec* specp) {
     // Equivalent when the property is attempted at every tick (IEEE 1800-2023 16.12.11).
     // Unlike under always, p may then contain property operators.
@@ -491,27 +530,8 @@ class AssertVisitor final : public VNVisitor {
             fl, AstCExpr::Pure{},
             V3AssertCommon::assertCtlGetCall("ASSERT_CTL_FAIL_ON", type, directiveType), 1};
     }
-    string assertDisplayMessage(const AstNode* nodep, const string& prefix, const string& message,
-                                VDisplayType severity) {
-        if (severity == VDisplayType::DT_ERROR || severity == VDisplayType::DT_FATAL) {
-            return ("[%0t] "s + prefix + ": " + nodep->fileline()->filebasename() + ":"
-                    + cvtToStr(nodep->fileline()->lineno()) + ": Assertion failed in %m"
-                    + ((message != "") ? ": " : "") + message + "\n");
-        }
-        return ("[%0t] "s + prefix + ": " + nodep->fileline()->filebasename() + ":"
-                + cvtToStr(nodep->fileline()->lineno()) + ": %m" + ((message != "") ? ": " : "")
-                + message + "\n");
-    }
     void replaceDisplay(AstDisplay* nodep, const string& prefix) {
-        nodep->fmtp()->text(
-            assertDisplayMessage(nodep, prefix, nodep->fmtp()->text(), nodep->displayType()));
-        nodep->displayType(VDisplayType::DT_WRITE);
-        // cppcheck-suppress nullPointer
-        AstNodeExpr* const timenewp = new AstTime{nodep->fileline(), m_modp->timeunit()};
-        nodep->fmtp()->prependExprsp(timenewp);
-        if (!nodep->fmtp()->scopeNamep() && nodep->fmtp()->formatScopeTracking()) {
-            nodep->fmtp()->scopeNamep(new AstScopeName{nodep->fileline(), true});
-        }
+        replaceAssertDisplay(nodep, prefix, m_modp);
     }
     AstSampled* newSampledExpr(AstNodeExpr* nodep) {
         return new AstSampled{nodep->fileline(), nodep, nodep->dtypep(), true};
@@ -711,14 +731,7 @@ class AssertVisitor final : public VNVisitor {
     AstNodeStmt* newFireAssertUnchecked(const AstNodeStmt* nodep, const string& message,
                                         AstNodeExpr* exprsp = nullptr) {
         // Like newFireAssert() but omits the asserts-on check
-        AstDisplay* const dispp
-            = new AstDisplay{nodep->fileline(), VDisplayType::DT_ERROR, message, nullptr, nullptr};
-        dispp->fmtp()->timeunit(m_modp->timeunit());
-        AstNodeStmt* const bodysp = dispp;
-        replaceDisplay(dispp, "%%Error");  // Convert to standard DISPLAY format
-        if (exprsp) dispp->fmtp()->exprsp()->addNext(exprsp);
-        if (v3Global.opt.stopFail()) bodysp->addNext(new AstStop{nodep->fileline(), false});
-        return bodysp;
+        return V3AssertCommon::newFireAssertUnchecked(nodep, m_modp, message, exprsp);
     }
 
     AstNodeStmt* newFireAssert(const AstNodeStmt* nodep, VAssertDirectiveType directiveType,

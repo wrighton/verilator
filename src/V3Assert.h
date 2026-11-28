@@ -40,6 +40,11 @@ public:
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
     // Reduce a whole property 'always p' to p, removing the pass statements of its assertion
     static void reducePlainAlways(AstPropSpec* specp) VL_MT_DISABLED;
+    // The statements reporting a failure of the assertion nodep in module modp, with no check
+    // of the assertion control
+    static AstNodeStmt* newFireAssertUnchecked(const AstNode* nodep, const AstNodeModule* modp,
+                                               const string& message,
+                                               AstNodeExpr* exprsp = nullptr) VL_MT_DISABLED;
 };
 
 class V3Assert final {

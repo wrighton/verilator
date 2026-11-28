@@ -1639,6 +1639,14 @@ class SvaNfaBuilder final {
     }
 
 public:
+    // The boolean leaf checks of a fixed-length sequence by clock offset, and its length, if it is
+    // a fixed-length sequence of boolean leaves
+    static bool fixedChecks(AstNodeExpr* nodep, std::map<int, std::vector<AstNodeExpr*>>& out,
+                            int& length) {
+        if (!flattenFixedSeq(nodep, 0, out)) return false;
+        length = fixedLength(nodep);
+        return length >= 0;
+    }
     // Free a dropped sub-result condition that is not linked into the AST
     // (abort folds synthesize unparented finalCondp trees).
     static void freeUnlinkedCondp(AstNodeExpr* condp) {
@@ -2952,6 +2960,7 @@ class AssertNfaVisitor final : public VNVisitor {
     AstSenTree* m_sampledValueClockp = nullptr;  // Inherited clock during scoped attachment
     V3UniqueNames m_propTempNames{"__VnfaSampled"};  // Hoisted $sampled(propp) temps
     V3UniqueNames m_failCountNames{"__VnfaRemainingFailCount"};  // Fail replay counter names
+    V3UniqueNames m_alwaysNames{"__VnfaAlways"};  // Whole property always attempt state names
 
     template <typename T_Node>
     void visitSampledValue(T_Node* const nodep) {
@@ -3353,11 +3362,264 @@ class AssertNfaVisitor final : public VNVisitor {
         return propp;
     }
 
+    // Most operands and clock offsets of p in a whole property 'always p' whose attempts are
+    // counted
+    static constexpr size_t MAX_ALWAYS_OPERANDS = 4;
+    static constexpr int MAX_ALWAYS_OFFSETS = 32;
+    // An operand of p in a whole property 'always p' whose attempts are counted
+    struct AlwaysOperand final {
+        std::map<int, std::vector<AstNodeExpr*>> checks;  // Boolean leaves by clock offset
+        int length = 0;  // Clock offset of its last tick
+    };
+    // The operands of p, a sequence 'or' of fixed-length sequences of boolean leaves within the
+    // limits, or false
+    static bool alwaysOperands(AstNodeExpr* bodyp, std::vector<AlwaysOperand>& operands) {
+        if (bodyp->exists([](const AstExprStmt*) { return true; })) return false;
+        std::vector<AstNodeExpr*> todo{bodyp};
+        while (!todo.empty()) {
+            AstNodeExpr* const nodep = todo.back();
+            todo.pop_back();
+            if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
+                todo.push_back(orp->rhsp());
+                todo.push_back(orp->lhsp());
+                continue;
+            }
+            if (operands.size() == MAX_ALWAYS_OPERANDS) return false;
+            operands.emplace_back();
+            AlwaysOperand& operand = operands.back();
+            if (!SvaNfaBuilder::fixedChecks(nodep, operand.checks, operand.length)) return false;
+            if (operand.length >= MAX_ALWAYS_OFFSETS) return false;
+        }
+        return true;
+    }
+    // The sampled checks of an operand as a vector, bit d for clock offset d
+    static AstNodeExpr* newAlwaysChecksp(FileLine* flp, const AlwaysOperand& operand, int width) {
+        AstNodeExpr* checkp = nullptr;
+        for (int d = 0; d < width; ++d) {
+            AstNodeExpr* bitp = nullptr;
+            const auto it = operand.checks.find(d);
+            if (it != operand.checks.end()) {
+                for (AstNodeExpr* const leafp : it->second) {
+                    AstNodeExpr* const leafCondp = sampled(leafp->cloneTreePure(false));
+                    bitp = bitp ? new AstLogAnd{flp, bitp, leafCondp} : leafCondp;
+                    bitp->dtypeSetBit();
+                }  // LCOV_EXCL_LINE -- closing a loop body, instrumented in debug only
+            }
+            if (!bitp) bitp = new AstConst{flp, AstConst::BitTrue{}};
+            if (checkp) {
+                checkp = new AstConcat{flp, bitp, checkp};
+                checkp->dtypeSetLogicSized(d + 1, VSigning::UNSIGNED);
+            } else {
+                checkp = bitp;
+            }
+        }  // LCOV_EXCL_LINE -- closing a loop body, instrumented in debug only
+        return checkp;
+    }
+    // Lower an assertion of a whole property 'always p', with p a sequence 'or' of fixed-length
+    // sequences of boolean leaves, as one attempt starting on every tick and failing on the first
+    // tick where an evaluation of p started on or after its start fails (IEEE 1800-2023
+    // 16.12.11). An evaluation of p started d ticks ago fails when none of its operands still
+    // matching holds; those started on earlier ticks, which had to hold too, end there. So on such
+    // a tick the attempts started no later than the latest evaluation failing fail, each running
+    // the fail statements (16.14.1). Bit d of a vector per operand keeps whether it still matches
+    // in the evaluation started d ticks ago, and bit d of another whether the attempt started d
+    // ticks ago is pending, with a count of the earlier ones, so the logic grows with the operands
+    // and the leaves, not the offsets. False for another p.
+    bool lowerAlwaysAttempts(AstAssert* assertp, const PropertyParts& parts, AstNodeExpr* bodyp,
+                             AstSenTree* senTreep, AstNodeExpr* disableExprp) {
+        if (!assertp || assertp->passsp()) return false;
+        std::vector<AlwaysOperand> operands;
+        if (!alwaysOperands(bodyp, operands)) return false;
+        int width = 0;  // Bit d for offset d
+        for (const AlwaysOperand& operand : operands) width = std::max(width, operand.length + 1);
+        FileLine* const flp = assertp->fileline();
+        // The default fail statements run for each failing attempt too
+        if (!assertp->failsp()) {
+            assertp->addFailsp(
+                V3AssertCommon::newFireAssertUnchecked(assertp, m_modp, "'assert' failed."));
+        }
+
+        AstNodeDType* const vecDTypep = m_modp->findBitDType(width, width, VSigning::UNSIGNED);
+        AstNodeDType* const u32DTypep = m_modp->findBasicDType(VBasicDTypeKwd::UINT32);
+        const string baseName = m_alwaysNames.get("");
+        const auto newVarp = [&](const string& suffix, AstNodeDType* dtypep) {
+            AstVar* const varp = new AstVar{flp, VVarType::MODULETEMP, baseName + suffix, dtypep};
+            varp->lifetime(VLifetime::STATIC_EXPLICIT);
+            m_modp->addStmtsp(varp);
+            return varp;
+        };
+        const auto readp = [&](AstVar* varp) -> AstNodeExpr* {
+            return new AstVarRef{flp, varp, VAccess::READ};
+        };
+        const auto vecp = [&](uint32_t value) -> AstNodeExpr* {
+            return new AstConst{flp, AstConst::WidthedValue{}, width, value};
+        };
+        const auto u32Constp = [&](uint32_t value) -> AstNodeExpr* {
+            return new AstConst{flp, AstConst::WidthedValue{}, 32, value};
+        };
+        const auto vandp = [&](AstNodeExpr* lhsp, AstNodeExpr* rhsp) -> AstNodeExpr* {
+            AstNodeExpr* const newp = new AstAnd{flp, lhsp, rhsp};
+            newp->dtypeFrom(vecDTypep);
+            return newp;
+        };
+        const auto vorp = [&](AstNodeExpr* lhsp, AstNodeExpr* rhsp) -> AstNodeExpr* {
+            if (!lhsp) return rhsp;
+            AstNodeExpr* const newp = new AstOr{flp, lhsp, rhsp};
+            newp->dtypeFrom(vecDTypep);
+            return newp;
+        };
+        const auto vnotp = [&](AstNodeExpr* exprp) -> AstNodeExpr* {
+            AstNodeExpr* const newp = new AstNot{flp, exprp};
+            newp->dtypeFrom(vecDTypep);
+            return newp;
+        };
+        const auto shiftLp = [&](AstNodeExpr* exprp, uint32_t amount) -> AstNodeExpr* {
+            return new AstShiftL{flp, exprp, u32Constp(amount), width};
+        };
+        const auto anyp = [&](AstNodeExpr* exprp) -> AstNodeExpr* {
+            AstNodeExpr* const newp = new AstNeq{flp, exprp, vecp(0)};
+            newp->dtypeSetBit();
+            return newp;
+        };
+        const auto condp
+            = [&](AstNodeExpr* testp, AstNodeExpr* thenp, AstNodeExpr* elsep) -> AstNodeExpr* {
+            AstNodeExpr* const newp = new AstCond{flp, testp, thenp, elsep};
+            newp->dtypeFrom(thenp);
+            return newp;
+        };
+        const auto addp = [&](AstNodeExpr* lhsp, AstNodeExpr* rhsp) -> AstNodeExpr* {
+            AstNodeExpr* const newp = new AstAdd{flp, lhsp, rhsp};
+            newp->dtypeFrom(u32DTypep);
+            return newp;
+        };
+        AstNodeStmt* combsp = nullptr;
+        const auto addComb = [&](AstVar* varp, AstNodeExpr* valuep) {
+            combsp = AstNode::addNext(
+                combsp, new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE}, valuep});
+        };
+        // The disable condition as a signal, so a rise between ticks clears the attempts too
+        AstVar* disableVarp = nullptr;
+        if (disableExprp && !VN_IS(disableExprp, Const)) {
+            disableVarp = newVarp("__disable", m_modp->findBitDType());
+            // V3Width made it a single bit
+            AstNodeExpr* const disableCondp = disableExprp->cloneTreePure(false);
+            AstAssign* const assignp = new AstAssign{
+                flp, new AstVarRef{flp, disableVarp, VAccess::WRITE}, disableCondp};
+            m_modp->addStmtsp(newAssertAlways(flp, VAlwaysKwd::ALWAYS_COMB, nullptr, assignp));
+        }
+        const auto disablep = [&]() -> AstNodeExpr* {
+            return disableVarp ? readp(disableVarp) : disableExprp->cloneTreePure(false);
+        };
+
+        // State, bit 0 unused: the operands still matching in the evaluation started d ticks ago,
+        // whether the attempt started d ticks ago is pending, and the pending attempts started
+        // 'width' or more ticks ago
+        std::vector<AstVar*> liveps;
+        for (size_t i = 0; i < operands.size(); ++i) {
+            liveps.push_back(newVarp("__live" + cvtToStr(i), vecDTypep));
+        }
+        AstVar* const pendingp = newVarp("__pending", vecDTypep);
+        AstVar* const olderp = newVarp("__older", u32DTypep);
+
+        // This tick: the operands holding, and the offsets where an evaluation matches or fails,
+        // the evaluation started on this tick having all operands
+        std::vector<AstVar*> holdps;
+        AstNodeExpr* anyLivep = nullptr;
+        AstNodeExpr* anyHoldp = nullptr;
+        AstNodeExpr* matchp = nullptr;
+        for (size_t i = 0; i < operands.size(); ++i) {
+            const int length = operands[i].length;
+            const uint32_t validBits = length == 31 ? 0xffffffffU : ((1U << (length + 1)) - 1);
+            AstNodeExpr* const livep = vandp(vorp(readp(liveps[i]), vecp(1)), vecp(validBits));
+            AstNodeExpr* const checkp = newAlwaysChecksp(flp, operands[i], width);
+            checkp->dtypeFrom(vecDTypep);
+            holdps.push_back(newVarp("__hold" + cvtToStr(i), vecDTypep));
+            anyLivep = vorp(anyLivep, livep->cloneTreePure(false));
+            addComb(holdps[i], vandp(livep, checkp));
+            anyHoldp = vorp(anyHoldp, readp(holdps[i]));
+            matchp = vorp(matchp, vandp(readp(holdps[i]), vecp(1U << length)));
+        }
+        AstVar* const matchVarp = newVarp("__match", vecDTypep);
+        addComb(matchVarp, matchp);
+        AstVar* const failp = newVarp("__fail", vecDTypep);
+        addComb(failp, vandp(anyLivep, vnotp(anyHoldp)));
+        // Bit d: an evaluation fails at offset d or lower
+        AstVar* const failedp = newVarp("__failed", vecDTypep);
+        addComb(failedp, readp(failp));
+        for (uint32_t amount = 1; amount < static_cast<uint32_t>(width); amount *= 2) {
+            addComb(failedp, vorp(readp(failedp), shiftLp(readp(failedp), amount)));
+        }
+        // The failed attempts: the pending attempts started no later than the latest evaluation
+        // failing, so those started d ticks ago if an evaluation fails at offset d or lower
+        AstNodeExpr* const startedp = vorp(readp(pendingp), vecp(1));
+        AstNodeExpr* const killedp = new AstCountOnes{flp, vandp(startedp, readp(failedp))};
+        AstNodeExpr* countp
+            = addp(condp(anyp(readp(failp)), readp(olderp), u32Constp(0)), killedp);
+        // None on a tick the disable condition disables the attempts
+        if (disableExprp) { countp = condp(disablep(), u32Constp(0), countp); }
+        AstVar* const countVarp = newVarp("__fails", u32DTypep);
+        addComb(countVarp, countp);
+        // The attempts not failing
+        AstVar* const survivep = newVarp("__survive", vecDTypep);
+        addComb(survivep, vandp(vorp(readp(pendingp), vecp(1)), vnotp(readp(failedp))));
+        m_modp->addStmtsp(newAssertAlways(flp, VAlwaysKwd::ALWAYS_COMB, nullptr, combsp));
+
+        // Next tick: the evaluation started d ticks ago moves to offset d + 1, with the operands
+        // that held and have not ended, unless it matched, and the attempts not failed move on
+        AstNodeStmt* updatesp = nullptr;
+        const auto addUpdate = [&](AstVar* varp, AstNodeExpr* valuep) {
+            updatesp = AstNode::addNext(
+                updatesp, new AstAssignDly{flp, new AstVarRef{flp, varp, VAccess::WRITE}, valuep});
+        };
+        for (size_t i = 0; i < operands.size(); ++i) {
+            const uint32_t endBit = 1U << operands[i].length;
+            addUpdate(
+                liveps[i],
+                shiftLp(vandp(readp(holdps[i]), vnotp(vorp(readp(matchVarp), vecp(endBit)))), 1));
+        }
+        addUpdate(pendingp, shiftLp(readp(survivep), 1));
+        AstNodeExpr* const lastp = new AstSel{flp, readp(survivep), width - 1, 1};
+        AstNodeExpr* const lastU32p = new AstExtend{flp, lastp, 32};
+        lastU32p->dtypeFrom(u32DTypep);
+        addUpdate(olderp, addp(condp(anyp(readp(failp)), u32Constp(0), readp(olderp)), lastU32p));
+        // A disable condition clears the attempts, also when it holds between ticks
+        // (IEEE 1800-2023 16.12)
+        const auto clearsp = [&]() {
+            AstNodeStmt* stmtsp
+                = new AstAssignDly{flp, new AstVarRef{flp, olderp, VAccess::WRITE}, u32Constp(0)};
+            stmtsp->addNext(
+                new AstAssignDly{flp, new AstVarRef{flp, pendingp, VAccess::WRITE}, vecp(0)});
+            for (AstVar* const varp : liveps) {
+                stmtsp->addNext(
+                    new AstAssignDly{flp, new AstVarRef{flp, varp, VAccess::WRITE}, vecp(0)});
+            }  // LCOV_EXCL_LINE -- closing a loop body, instrumented in debug only
+            return stmtsp;
+        };
+        if (disableExprp) { updatesp = new AstIf{flp, disablep(), clearsp(), updatesp}; }
+        m_modp->addStmtsp(
+            newAssertAlways(flp, VAlwaysKwd::ALWAYS, senTreep->cloneTree(false), updatesp));
+        if (disableVarp) {
+            m_modp->addStmtsp(
+                newAssertAlways(flp, VAlwaysKwd::ALWAYS,
+                                new AstSenTree{flp, new AstSenItem{flp, VEdgeType::ET_POSEDGE,
+                                                                   readp(disableVarp)}},
+                                clearsp()));
+        }
+
+        AstNodeExpr* const outputp = new AstEq{flp, readp(countVarp), u32Constp(0)};
+        outputp->dtypeSetBit();
+        finishDirective(assertp, parts, senTreep, outputp, nullptr, nullptr, readp(countVarp));
+        return true;
+    }
+
     void processAssertion(AstNodeCoverOrAssert* assertp) {
         if (assertp->immediate()) return;
         // V3Assert counts the attempts of a whole property 'always p' only with p of one tick;
-        // other p are lowered here or in V3AssertPre, each failure of p failing once
+        // other p are lowered here or in V3AssertPre, each failure of p failing once unless
+        // lowerAlwaysAttempts counts the attempts
+        bool wholeAlways = false;
         if (AstPropSpec* const specp = VN_CAST(assertp->propp(), PropSpec)) {
+            wholeAlways = specp->wholeAlways() && hasMultiCycleExpr(specp);
             if (hasMultiCycleExpr(specp)) specp->wholeAlways(false);
         }
 
@@ -3432,6 +3694,12 @@ class AssertNfaVisitor final : public VNVisitor {
             if (AstAssert* const ap = VN_CAST(assertp, Assert)) {
                 iterateAndNextNull(ap->failsp());
             }
+        }
+        if (wholeAlways && !negated && !parts.hasImplication
+            && lowerAlwaysAttempts(VN_CAST(assertp, Assert), parts, seqBodyp, senTreep,
+                                   disableExprp)) {
+            VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
+            return;
         }
 
         FileLine* const flp = assertp->fileline();

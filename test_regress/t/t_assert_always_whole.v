@@ -13,8 +13,9 @@
 // not known before the end of simulation, so its pass statements never run (IEEE 1800-2023
 // 16.12.11, 16.14.1). An attempt starts on every tick and fails on the first tick where p fails,
 // so for a boolean p the attempts started since the previous failure fail there, checked against
-// a model of the attempts. The failures of a sequence p are those of p. Nor does an attempt of an
-// implication into an unbounded always pass unless vacuously, nor one of 'always [m:$] p'.
+// a model of the attempts, and for a sequence p all 100 attempts fail (see also
+// t_assert_always_attempts). Nor does an attempt of an implication into an unbounded always pass
+// unless vacuously, nor one of 'always [m:$] p'.
 module t (
     input clk
 );
@@ -83,7 +84,8 @@ module t (
       `checkd(passes[6], 21);
       `checkd(passes[7], 0);
       `checkd(fails[0], exp_fails);
-      `checkd(fails[1], ref_fails[1]);
+      `checkd(fails[1], 100);
+      `checkd(ref_fails[1], 41);
       `checkd(fails[2], exp_fails);
       `checkd(fails[3], exp_fails);
       `checkd(fails[4], exp_fails_dis);

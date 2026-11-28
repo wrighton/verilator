@@ -23,13 +23,19 @@ module t;
   localparam int END = 120;
   logic dis = 0;
   logic quiet = 0;  // A term of the disable condition that never holds
-  int fails[2];
+  int fails[4];
   // 68 failures, as attempts fail
   assert property (@(posedge clk) disable iff (dis) always a)
   else ++fails[0];
+  // 22 failures, as attempts fail
+  assert property (@(posedge clk) disable iff (dis) always ((a ##1 b) or (c ##2 d)))
+  else ++fails[1];
   // The same, with a sampled value in the disable condition
   assert property (@(posedge clk) disable iff (dis || $sampled(quiet)) always a)
-  else ++fails[1];
+  else ++fails[2];
+  assert property (@(posedge clk) disable iff (dis || $sampled(quiet))
+                   always ((a ##1 b) or (c ##2 d)))
+  else ++fails[3];
 
   always @(posedge clk) begin
     cyc <= cyc + 1;
@@ -52,7 +58,9 @@ module t;
     #5 clk = 1;
     #5;
     `checkd(fails[0], 68);
-    `checkd(fails[1], 68);
+    `checkd(fails[1], 22);
+    `checkd(fails[2], 68);
+    `checkd(fails[3], 22);
     $write("*-* All Finished *-*\n");
     $finish;
   end
