@@ -8484,11 +8484,16 @@ class AssertNfaVisitor final : public VNVisitor {
                                              parts.triggerExprp, flp);
     }
 
-    // Run stmtp once per count above one on each tick; the assertion runs it the first time
-    static AstAssign* newAccumulatep(FileLine* flp, AstVar* varp, AstNodeExpr* termp) {
-        return new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE},
-                             new AstAdd{flp, new AstVarRef{flp, varp, VAccess::READ}, termp}};
+    // The sum of the terms from lo to hi, a balanced tree of additions
+    static AstNodeExpr* newSump(FileLine* flp, const std::vector<AstNodeExpr*>& termps, size_t lo,
+                                size_t hi) {
+        if (hi - lo == 1) return termps[lo];
+        const size_t mid = lo + (hi - lo) / 2;
+        return new AstAdd{flp, newSump(flp, termps, lo, mid), newSump(flp, termps, mid, hi)};
     }
+    // Most terms of a count summed in one statement
+    static constexpr size_t MAX_SUM_TERMS = 32;
+    // Run stmtp once per count above one on each tick; the assertion runs it the first time
     void addActionReplay(AstSenTree* const senTreep, AstNodeExpr* countp, AstNodeStmt* stmtp) {
         FileLine* const flp = stmtp->fileline();
         // Each run is of another attempt, so one that suspends does not hold back the others
@@ -8515,10 +8520,28 @@ class AssertNfaVisitor final : public VNVisitor {
             countp = addp->lhsp()->unlinkFrBack();
             VL_DO_DANGLING(addp->deleteTree(), addp);
         }
-        AstNodeStmt* replayStmtsp
-            = new AstAssign{flp, new AstVarRef{flp, remainingCountVarp, VAccess::WRITE}, countp};
-        for (auto it = termps.rbegin(); it != termps.rend(); ++it)
-            replayStmtsp->addNext(newAccumulatep(flp, remainingCountVarp, *it));
+        termps.push_back(countp);
+        std::reverse(termps.begin(), termps.end());
+        // Each statement adds a chunk of the terms to the sum so far, held by a variable of its
+        // own, so that a chunk of no threads does not assign a variable to itself
+        AstNodeStmt* replayStmtsp = nullptr;
+        AstVar* sumVarp = nullptr;
+        for (size_t lo = 0; lo < termps.size(); lo += MAX_SUM_TERMS) {
+            const size_t hi = std::min(lo + MAX_SUM_TERMS, termps.size());
+            AstNodeExpr* sump = newSump(flp, termps, lo, hi);
+            if (sumVarp) sump = new AstAdd{flp, new AstVarRef{flp, sumVarp, VAccess::READ}, sump};
+            if (hi < termps.size()) {
+                sumVarp = new AstVar{flp, VVarType::MODULETEMP, m_failCountNames.get(""),
+                                     remainingCountVarp->dtypep()};
+                sumVarp->lifetime(VLifetime::STATIC_EXPLICIT);
+                m_modp->addStmtsp(sumVarp);
+            } else {
+                sumVarp = remainingCountVarp;
+            }
+            replayStmtsp = AstNode::addNextNull<AstNodeStmt>(
+                replayStmtsp,
+                new AstAssign{flp, new AstVarRef{flp, sumVarp, VAccess::WRITE}, sump});
+        }
         if (gatep) {
             replayStmtsp = new AstIf{
                 flp, gatep, replayStmtsp,
