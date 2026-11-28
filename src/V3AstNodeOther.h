@@ -3078,6 +3078,11 @@ class AstConstraintExpr final : public AstNodeConstraintItem {
     // @astgen op1 := exprp : AstNodeExpr
     bool m_isDisableSoft = false;  // Disable soft constraint expression
     bool m_isSoft = false;  // Soft constraint expression
+    // Soft pick of a dist, below every other soft constraint. Set and read only within the
+    // solver lowering of V3Randomize, so no dump ever sees it.
+    // dist-ast-dump-suppress  // Never reaches a dump
+    bool m_isDistPick = false;
+
 public:
     AstConstraintExpr(FileLine* fl, AstNodeExpr* exprp)
         : ASTGEN_SUPER_ConstraintExpr(fl) {
@@ -3090,6 +3095,8 @@ public:
     void isDisableSoft(bool flag) { m_isDisableSoft = flag; }
     bool isSoft() const { return m_isSoft; }
     void isSoft(bool flag) { m_isSoft = flag; }
+    bool isDistPick() const { return m_isDistPick; }
+    void isDistPick(bool flag) { m_isDistPick = flag; }
 };
 class AstConstraintForeach final : public AstNodeConstraintItem {
     // Constraint foreach item

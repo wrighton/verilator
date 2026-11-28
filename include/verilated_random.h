@@ -263,7 +263,8 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<size_t> m_constraintVarEnds;
     std::vector<std::string>
         m_constraints_line;  // fileline content of the constraint for unsat constraints
-    std::vector<std::string> m_softConstraints;  // Soft constraints
+    std::vector<std::string> m_softConstraints;  // Soft constraints, lowest priority first
+    size_t m_distSoftCount = 0;  // Leading m_softConstraints of dist picks
     std::map<std::string, std::shared_ptr<const VlRandomVar>> m_vars;  // Solver-dependent
     // Scratch buffer for randomConstraint(), reused across calls
     std::vector<const VlRandomVar*> m_randomConstraintVars;
@@ -951,6 +952,10 @@ public:
     // clearConstraints(), so they must live that long (the generated code passes literals)
     void hard(std::string constraint, std::initializer_list<const char*> varNames = {},
               const char* filename = "", uint32_t linenum = 0, const char* source = "");
+    // A soft constraint picking a value of a dist, of lower priority than every other: a
+    // dist's weights constrain nothing (IEEE 1800-2023 18.5.13)
+    void softDist(std::string constraint, const char* filename = "", uint32_t linenum = 0,
+                  const char* source = "");
     void soft(std::string constraint, const char* filename = "", uint32_t linenum = 0,
               const char* source = "");
     // name is kept without copying until clearConstraints(), like hard()'s varNames, so it

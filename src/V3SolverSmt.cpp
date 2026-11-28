@@ -2560,8 +2560,11 @@ class ConstraintExprVisitor final : public VNVisitor {
             return;
         }
         // Emit as soft or hard constraint per IEEE 1800-2023 18.5.13
-        const VCMethod method
-            = nodep->isSoft() ? VCMethod::RANDOMIZER_SOFT : VCMethod::RANDOMIZER_HARD;
+        // A dist's weights constrain nothing, so its picks yield to every other soft constraint
+        // (IEEE 1800-2023 18.5.13)
+        const VCMethod method = !nodep->isSoft()      ? VCMethod::RANDOMIZER_HARD
+                                : nodep->isDistPick() ? VCMethod::RANDOMIZER_SOFT_DIST
+                                                      : VCMethod::RANDOMIZER_SOFT;
         AstCMethodHard* const callp = new AstCMethodHard{
             nodep->fileline(),
             new AstVarRef{nodep->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
@@ -3653,17 +3656,61 @@ class SolverSmtLowering final : public V3SolverLowering {
         return new AstConstraintIf{fl, gatep, chainp, buildFrozenMembership(distp, buckets)};
     }
 
+    // Bounds lo and hi of constant range '[lop : hip]' of up to 64 bits, as 64-bit values of
+    // their comparison with the dist expression, narrowed to the values the expression can take,
+    // so a value picked between them can be taken. Unchanged if none can.
+    static void clipDistRange(const AstNodeExpr* exprp, const AstConst* lop, const AstConst* hip,
+                              uint64_t& lor, uint64_t& hir) {
+        // The values of an expression extended to the bounds are those of its operand
+        const AstNodeExpr* valuesp = exprp;
+        bool signedValues = exprp->isSigned();
+        if (const AstExtend* const extendp = VN_CAST(exprp, Extend)) {
+            valuesp = extendp->lhsp();
+            signedValues = false;
+        } else if (const AstExtendS* const extendp = VN_CAST(exprp, ExtendS)) {
+            valuesp = extendp->lhsp();
+            signedValues = true;
+        }
+        const int width = valuesp->width();
+        // A 64-bit expression takes every value of its comparison
+        if (width == VL_QUADSIZE) return;
+        if (signedValues && exprp->isSigned() && lop->isSigned() && hip->isSigned()) {
+            const int64_t half = int64_t{1} << (width - 1);
+            const int64_t lo = std::max(lop->num().toSQuad(), -half);
+            const int64_t hi = std::min(hip->num().toSQuad(), half - 1);
+            if (lo > hi) return;
+            lor = static_cast<uint64_t>(lo);
+            hir = static_cast<uint64_t>(hi);
+        } else if (!signedValues) {
+            // Of an unsigned comparison: a sign-extended expression's values are not one range
+            const uint64_t hi = std::min<uint64_t>(hir, VL_MASK_Q(width));
+            if (lor > hi) return;
+            hir = hi;
+        }
+    }
+
     AstNodeExpr* newUniformRangePick(AstDist* distp, const AstInsideRange* irp) {
         FileLine* const fl = distp->fileline();
         AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
         distExprCopyp->user1(true);
         const int distWidth = distp->exprp()->width();
-        const AstConst* const lopCp = VN_CAST(irp->lhsp(), Const);
-        const AstConst* const hipCp = VN_CAST(irp->rhsp(), Const);
+        // Constant bounds may still be expressions, as a negated literal
+        AstNodeExpr* const loFoldp = V3Const::constifyEdit(irp->lhsp()->cloneTreePure(false));
+        AstNodeExpr* const hiFoldp = V3Const::constifyEdit(irp->rhsp()->cloneTreePure(false));
+        const AstConst* const lopCp = VN_CAST(loFoldp, Const);
+        const AstConst* const hipCp = VN_CAST(hiFoldp, Const);
         AstNodeExpr* rangeSzp;
-        if (lopCp && hipCp) {
-            const uint64_t rsz = hipCp->toUQuad() - lopCp->toUQuad() + 1;
-            rangeSzp = new AstConst{fl, AstConst::Unsized64{}, rsz};
+        AstNodeExpr* lop = nullptr;
+        if (lopCp && hipCp && lopCp->width() <= VL_QUADSIZE && hipCp->width() <= VL_QUADSIZE) {
+            uint64_t lo = lopCp->isSigned() ? static_cast<uint64_t>(lopCp->num().toSQuad())
+                                            : lopCp->toUQuad();
+            uint64_t hi = hipCp->isSigned() ? static_cast<uint64_t>(hipCp->num().toSQuad())
+                                            : hipCp->toUQuad();
+            clipDistRange(distp->exprp(), lopCp, hipCp, lo, hi);
+            V3Number loNum{lopCp->num()};
+            loNum.setQuad(lo);
+            lop = new AstConst{fl, loNum};
+            rangeSzp = new AstConst{fl, AstConst::Unsized64{}, hi - lo + 1};
         } else {
             const bool isSigned = irp->lhsp()->isSigned();
             AstNodeExpr* const lo64p
@@ -3683,23 +3730,30 @@ class SolverSmtLowering final : public V3SolverLowering {
         rand64p->dtypeSetUInt64();
         AstNodeExpr* const offsetp
             = new AstCCast{fl, new AstModDiv{fl, rand64p, rangeSzp}, distWidth};
-        AstNodeExpr* const valuep = new AstAdd{fl, irp->lhsp()->cloneTreePure(false), offsetp};
+        VL_DO_DANGLING(pushDeletep(loFoldp), loFoldp);
+        VL_DO_DANGLING(pushDeletep(hiFoldp), hiFoldp);
+        if (!lop) lop = irp->lhsp()->cloneTreePure(false);
+        AstNodeExpr* const valuep = new AstAdd{fl, lop, offsetp};
         AstNodeExpr* const eqp = new AstEq{fl, distExprCopyp, valuep};
         eqp->user1(true);
         return eqp;
     }
 
-    // Soft weighted bucket chain: select a bucket by bucketVar against cumulative weights.
+    // Soft weighted bucket chain: select a bucket by bucketVar against cumulative weights. A
+    // range bucket gives a value picked in the range, or with 'pick' false the whole range.
     AstConstraintExpr* buildWeightedBucketChain(AstDist* distp,
                                                 const std::vector<DistBucket>& buckets,
                                                 AstVar* bucketVarp,
-                                                const std::vector<AstNodeExpr*>& cumSums) {
+                                                const std::vector<AstNodeExpr*>& cumSums,
+                                                bool pick) {
         FileLine* const fl = distp->fileline();
         AstNodeExpr* chainp = nullptr;
         for (int i = static_cast<int>(buckets.size()) - 1; i >= 0; --i) {
             AstNodeExpr* constraintExprp;
             const AstInsideRange* const irp = VN_CAST(buckets[i].rangep, InsideRange);
-            if (irp && (distBoundRefsRandVar(irp->lhsp()) || distBoundRefsRandVar(irp->rhsp()))) {
+            if (irp
+                && (!pick || distBoundRefsRandVar(irp->lhsp())
+                    || distBoundRefsRandVar(irp->rhsp()))) {
                 constraintExprp = newDistRangeMembership(distp, irp);
             } else if (irp) {
                 constraintExprp = newUniformRangePick(distp, irp);
@@ -3722,6 +3776,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
         AstConstraintExpr* const chainExprp = new AstConstraintExpr{fl, chainp};
         chainExprp->isSoft(true);
+        chainExprp->isDistPick(true);
         return chainExprp;
     }
 
@@ -3858,14 +3913,41 @@ class SolverSmtLowering final : public V3SolverLowering {
                 cumSums.push_back(runningSump->cloneTreePure(true));
             }
 
+            // IEEE 1800-2023 18.5.3 weighs a range by all its values, also those that other
+            // constraints exclude, so a picked value they exclude must not lose its range's
+            // weight: the whole selected range is a soft constraint of lower priority. It is
+            // only needed among several items, one of them a range, while the value is drawn.
+            AstNodeConstraintItem* rangeChainp = nullptr;
+            if (buckets.size() > 1
+                && std::any_of(buckets.begin(), buckets.end(), [](const DistBucket& bucket) {
+                       return VN_IS(bucket.rangep, InsideRange);
+                   })) {
+                std::vector<AstNodeExpr*> rangeCumSums(cumSums.size());
+                std::transform(cumSums.begin(), cumSums.end(), rangeCumSums.begin(),
+                               [](AstNodeExpr* sump) { return sump->cloneTreePure(false); });
+                rangeChainp
+                    = buildWeightedBucketChain(distp, buckets, bucketVarp, rangeCumSums, false);
+                pushDeletep(rangeCumSums.back());
+                // Gated as a soft implication, which stays soft whatever holds it
+                AstNodeExpr* gatep = newDistGate(distp->exprp(), randModeVarp, fl);
+                if (gatep->width() > 1) gatep = new AstRedOr{fl, gatep};
+                AstConstraintExpr* const rangeExprp = VN_AS(rangeChainp, ConstraintExpr);
+                AstNodeExpr* const impliedp
+                    = new AstLogIf{fl, gatep, rangeExprp->exprp()->unlinkFrBack()};
+                impliedp->dtypeSetBit();
+                impliedp->user1(true);
+                rangeExprp->exprp(impliedp);
+            }
             AstNodeConstraintItem* chainp
-                = buildWeightedBucketChain(distp, buckets, bucketVarp, cumSums);
+                = buildWeightedBucketChain(distp, buckets, bucketVarp, cumSums, true);
 
             chainp = gateFrozenDist(chainp, distp, buckets, randModeVarp);
 
             constrExprp->replaceWith(chainp);
             VL_DO_DANGLING(pushDeletep(constrExprp), constrExprp);
-            // Hard membership precedes the soft bucket chain in the constraint list.
+            // Hard membership precedes the soft bucket chains in the constraint list, and the
+            // range chain the picked chain, which has the higher priority (18.5.13.1)
+            if (rangeChainp) chainp->addHereThisAsNext(rangeChainp);
             chainp->addHereThisAsNext(membershipp);
 
             // Clean up nodes used only as clone templates (never inserted into tree)

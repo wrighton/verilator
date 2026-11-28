@@ -1795,11 +1795,20 @@ void VlRandomizer::soft(std::string constraint, const char* /*filename*/, uint32
     m_softConstraints.emplace_back(std::move(constraint));
 }
 
+void VlRandomizer::softDist(std::string constraint, const char* /*filename*/, uint32_t /*linenum*/,
+                            const char* /*source*/) {
+    // After the earlier dist picks, before every other soft constraint
+    m_softConstraints.insert(m_softConstraints.begin() + m_distSoftCount, std::move(constraint));
+    ++m_distSoftCount;
+}
+
 void VlRandomizer::disable_soft(const std::string& varName) {
     // IEEE 1800-2023 18.5.13: Remove all soft constraints referencing the variable
+    const auto refers = [&](const std::string& c) { return c.find(varName) != std::string::npos; };
+    m_distSoftCount -= static_cast<size_t>(std::count_if(
+        m_softConstraints.begin(), m_softConstraints.begin() + m_distSoftCount, refers));
     m_softConstraints.erase(
-        std::remove_if(m_softConstraints.begin(), m_softConstraints.end(),
-                       [&](const std::string& c) { return c.find(varName) != std::string::npos; }),
+        std::remove_if(m_softConstraints.begin(), m_softConstraints.end(), refers),
         m_softConstraints.end());
 }
 
@@ -1810,6 +1819,7 @@ void VlRandomizer::clearConstraints() {
     m_constraints_line.clear();
     m_solveBefore.clear();
     m_softConstraints.clear();
+    m_distSoftCount = 0;
     m_uniqueArrays.clear();  // Re-registered by constraint setup
     // Keep m_vars for class member randomization
 }
