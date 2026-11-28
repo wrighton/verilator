@@ -26,6 +26,12 @@ module t;
     if (p[2*N*1025-1025] !== 1'b1 || p[1024] !== 1'b1) $stop;
     {>>{q}} = d;
     if (q.size() != N || q[0] !== (2050'h1 << 1025) || q[N-1] !== (2050'h1 << 1024)) $stop;
+    // Unpacked from a packed value as wide
+    p[2*N*1025-1025] = 1'b0;
+    p[2*N*1025-1] = 1'b1;
+    d = {>>{p}};
+    if (d[0][N-1][1024] !== 1'b1 || d[1][0][1024] !== 1'b1 || d[0][N-1][0] !== 1'b0
+        || d[0][0][0] !== 1'b0) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
   end
