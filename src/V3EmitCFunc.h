@@ -544,6 +544,11 @@ public:
     }
 
     void visit(AstCvtArrayToArray* nodep) override {
+        // A descending fixed-size target takes the first element at its highest index
+        const std::string reverseCall = VN_IS(nodep->dtypep()->skipRefp(), UnpackArrayDType)
+                                            ? EmitCUtil::unpackReverseCall(nodep->dtypep())
+                                            : "";
+        if (!reverseCall.empty()) puts(reverseCall + "(");
         // The result type, as its elements and bound may differ from the source's
         puts(nodep->reverse() ? "VL_REVCLONE_Q<" : "VL_CLONE_Q<");
         puts(nodep->dtypep()->cType("", false, false));
@@ -556,6 +561,7 @@ public:
         puts(", ");
         puts(cvtToStr(nodep->dstElementBits()));
         puts(")");
+        if (!reverseCall.empty()) puts(")");
     }
 
     void visit(AstCvtArrayToPacked* nodep) override {
