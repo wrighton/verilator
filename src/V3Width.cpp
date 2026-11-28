@@ -9922,10 +9922,17 @@ class WidthVisitor final : public VNVisitor {
                                "(IEEE 1800-2023 6.14)");
             }
             nodep->dtypeFrom(nodep->lhsp());
+            // The source of a stream target of no fixed size is self-determined, as it gives the
+            // stream all its bits (IEEE 1800-2023 11.4.14.3)
+            const bool selfSource = VN_IS(nodep->dtypep()->skipRefp(), StreamDType);
             //
             // AstPattern needs to know the proposed data type of the lhs, so pass on the prelim
             // UINFOTREE(1, nodep, "", "assrhs");
-            userIterateAndNext(nodep->rhsp(), WidthVP{nodep->dtypep(), PRELIM}.p());
+            if (selfSource) {
+                userIterateAndNext(nodep->rhsp(), WidthVP{SELF, PRELIM}.p());
+            } else {
+                userIterateAndNext(nodep->rhsp(), WidthVP{nodep->dtypep(), PRELIM}.p());
+            }
             //
             if (const AstNodeStream* const streamp = VN_CAST(nodep->lhsp(), NodeStream)) {
                 if (VN_IS(streamp->lhsp()->dtypep(), StreamDType)) {
@@ -9973,7 +9980,8 @@ class WidthVisitor final : public VNVisitor {
                 }
             }
 
-            iterateCheckAssign(nodep, "Assign RHS", nodep->rhsp(), FINAL, lhsDTypep);
+            iterateCheckAssign(nodep, "Assign RHS", nodep->rhsp(), FINAL,
+                               selfSource ? nodep->rhsp()->dtypep() : lhsDTypep);
             // UINFOTREE(1, nodep, "", "AssignOut");
         }
         if (VN_IS(m_procedurep, InitialStatic)) {
