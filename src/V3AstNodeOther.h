@@ -1385,6 +1385,7 @@ class AstDefParam final : public AstNode {
     // @astgen op1 := rhsp : AstNodeExpr
     // @astgen op2 := pathp : Optional[AstNodeExpr] // Null after V3LinkDot
     // @astgen op3 := targetp : AstNodeExpr // After V3LinkDot, AstVarXRef from this scope
+    bool m_fromModule = false;  // After V3LinkDot, targetp is from the module, not this scope
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, AstNodeExpr* targetp, AstNodeExpr* rhsp)
         : ASTGEN_SUPER_DefParam(fl) {
@@ -1393,7 +1394,13 @@ public:
         this->targetp(targetp);
     }
     ASTGEN_MEMBERS_AstDefParam;
-    bool sameNode(const AstNode*) const override { return true; }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+    bool sameNode(const AstNode* samep) const override {
+        return m_fromModule == VN_DBG_AS(samep, DefParam)->m_fromModule;
+    }
+    bool fromModule() const { return m_fromModule; }
+    void fromModule(bool flag) { m_fromModule = flag; }
 };
 class AstDefaultClocking final : public AstNode {
     std::string m_name;  // Clocking block name

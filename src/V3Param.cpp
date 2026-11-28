@@ -4013,8 +4013,9 @@ class ParamVisitor final : public VNVisitor {
         // above expanded, so nodeDeparam can give the value (IEEE 1800-2023 23.10.1)
         checkParamNotHierRecurse(nodep->rhsp());
         const AstVarXRef* const targetp = VN_AS(nodep->targetp(), VarXRef);
-        const string instanceName
-            = m_modp->someInstanceName() + m_generateHierName + "." + targetp->dotted();
+        const string instanceName = m_modp->someInstanceName()
+                                    + (nodep->fromModule() ? "" : m_generateHierName) + "."
+                                    + targetp->dotted();
         m_processor.elementDefparamValue(nodep->fileline(),
                                          defparamPath(instanceName) + "." + targetp->name(),
                                          targetp->dotted());

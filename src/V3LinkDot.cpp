@@ -2746,18 +2746,29 @@ class LinkDotParamVisitor final : public VNVisitor {
         if (!cellp) {
             nodep->v3error("In defparam, instance " << prettyPath << " never declared");
         } else {
-            // Path from the defparam's scope, if the instance is under it
+            // Path from 'topSymp' to the instance into 'belowPath', if the instance is under it
             string belowPath;
-            const VSymEnt* symp = foundp;
-            for (; symp && symp != scopeSymp; symp = symp->parentp()) {
-                const auto it = elementNames.find(symp->nodep());
-                const string& stepName
-                    = it == elementNames.end() ? symp->nodep()->name() : it->second;
-                belowPath = VString::dot(stepName, ".", belowPath);
+            const auto pathFrom = [&](const VSymEnt* topSymp) {
+                belowPath.clear();
+                const VSymEnt* symp = foundp;
+                for (; symp && symp != topSymp; symp = symp->parentp()) {
+                    const auto it = elementNames.find(symp->nodep());
+                    const string& stepName
+                        = it == elementNames.end() ? symp->nodep()->name() : it->second;
+                    belowPath = VString::dot(stepName, ".", belowPath);
+                }
+                return symp != nullptr;
+            };
+            // If under the defparam's scope, V3Param passes the value down from each instance of
+            // this module, so it uses the parameters of the module declaring it (IEEE 1800-2023
+            // 23.10.1). So also from a generate block, which may not be built, to an instance
+            // elsewhere in the module, from the module.
+            bool below = pathFrom(scopeSymp);
+            if (!below && inGenerate(scopeSymp)) {
+                below = pathFrom(m_statep->getNodeSym(m_modp));
+                nodep->fromModule(below);
             }
-            // If under it, V3Param passes the value down from each instance of this module, so
-            // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1)
-            AstNodeExpr* const exprp = symp ? nullptr : nodep->rhsp()->unlinkFrBack();
+            AstNodeExpr* const exprp = below ? nullptr : nodep->rhsp()->unlinkFrBack();
             UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
                                       << "  <= " << exprp);
             // Don't need to check the name of the defparam exists.  V3Param does.
@@ -2772,6 +2783,7 @@ class LinkDotParamVisitor final : public VNVisitor {
             // replaced: others may be in generate blocks not built.
             const auto pair = m_defParamPins[cellp].emplace(path + "." + name,
                                                             DefParamPin{pinp, scopeSymp, nullptr});
+            bool kept = true;  // Whether this pin is the instance's for the parameter and path
             if (!pair.second) {
                 DefParamPin& prev = pair.first->second;
                 if (prev.m_scopeSymp == scopeSymp && !inGenerate(scopeSymp)) {
@@ -2779,11 +2791,17 @@ class LinkDotParamVisitor final : public VNVisitor {
                     if (prev.m_keptp) {
                         VL_DO_DANGLING(pushDeletep(prev.m_keptp->unlinkFrBack()), prev.m_keptp);
                     }
+                    prev = DefParamPin{pinp, scopeSymp, nullptr};
+                } else if (!exprp && !prev.m_pinp->exprp()) {
+                    // V3Param gives the value of the last one built in the source text
+                    VL_DO_DANGLING(pushDeletep(pinp->unlinkFrBack()), pinp);
+                    kept = false;
+                } else {
+                    prev = DefParamPin{pinp, scopeSymp, nullptr};
                 }
-                prev = DefParamPin{pinp, scopeSymp, nullptr};
             }
             if (!exprp) {
-                pair.first->second.m_keptp = nodep;
+                if (kept) pair.first->second.m_keptp = nodep;
                 pushDeletep(nodep->pathp()->unlinkFrBack());
                 targetp->replaceWith(
                     new AstVarXRef{targetp->fileline(), name, belowPath, VAccess::WRITE});
