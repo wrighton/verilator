@@ -131,11 +131,242 @@ public:
 };
 
 //######################################################################
+// Which values each item of a case statement matches
+
+// Xs in case or casez are impossible due to two state simulations.
+// Returns true if the item is never possible
+static bool neverItem(const AstCase* casep, const AstNodeExpr* itemExprp) {
+    const AstConst* const constp = VN_CAST(itemExprp, Const);
+    if (!constp) return false;
+    if (casep->casex() || casep->caseInside()) return false;
+    if (casep->casez()) return constp->num().isAnyX();
+    return constp->num().isFourState();
+}
+
+// Returns the matching mask and bits for a case item constant condition
+// TODO: with 'neverItem' checked, this is alway the same for all types of cases
+//       4-state will have to fix this up
+static std::pair<V3Number, V3Number> matchPattern(const AstCase* /*casep*/,
+                                                  const AstConst* condp) {
+    // As one to encourage NRVO/move
+    std::pair<V3Number, V3Number> pairMaskBits{
+        std::piecewise_construct,  //
+        std::forward_as_tuple(condp->fileline(), condp->width(), 0),
+        std::forward_as_tuple(condp->fileline(), condp->width(), 0)};
+    pairMaskBits.first.opBitsNonXZ(condp->num());
+    pairMaskBits.second.opBitsOne(condp->num());
+    return pairMaskBits;
+}
+
+class CaseDetails final {
+public:
+    // Maximum width for detailed analysis
+    constexpr static int MAX_WIDTH = 16;
+
+    // TYPES
+    // Record for each case value
+    struct CaseRecord final {
+        AstCaseItem* itemp;  // Case item that covers value
+        AstConst* constp;  // Expression within 'itemp' that covers value (nullptr for default)
+        AstNodeStmt* stmtsp;  // Statements of 'itemp' (might be nullptr if case is empty)
+    };
+
+    // STATE
+    bool exhaustive = false;  // Proven exhaustive
+    bool exhaustiveOverEnumOnly = false;  // Exhaustive over enum values only
+    bool noOverlaps = false;  // Proven no overlaps between cases
+    // Map from value (index) to the CaseRecord that covers this value
+    std::array<CaseRecord, 1U << MAX_WIDTH> records;
+
+private:
+    // METHODS
+    // Determine whether we should check case items are complete
+    // Returns enum's dtype if should check, nullptr if shouldn't
+    static const AstEnumDType* getEnumCompletionCheckDType(const AstCase* const nodep) {
+        if (!nodep->uniquePragma() && !nodep->unique0Pragma()) return nullptr;
+        const AstEnumDType* const enumDtp
+            = VN_CAST(nodep->exprp()->dtypep()->skipRefToEnump(), EnumDType);
+        if (!enumDtp) return nullptr;  // Case isn't enum
+        const AstBasicDType* const basicp = enumDtp->subDTypep()->basicp();
+        if (!basicp) return nullptr;  // Not simple type (perhaps IEEE illegal)
+        return enumDtp;
+    }
+
+    // Check and warn if case items are not complete over the given enum type.
+    // Returns true iff the case items cover all enum values/patterns.
+    bool checkExhaustiveEnum(const AstCase* const nodep, const AstEnumDType* const enump) {
+        const uint32_t numCases = 1UL << nodep->exprp()->width();
+        bool fullyCovered = true;
+        string missingItems;
+        for (AstEnumItem* const eip : enump->originalOrThisDTypep()->itemspList()) {
+            const auto& match = matchPattern(nodep, VN_AS(eip->valuep(), Const));
+            const uint32_t mask = match.first.toUInt();
+            const uint32_t bits = match.second.toUInt();
+
+            // Check all cases to see if they cover this enum value/pattern
+            for (uint32_t i = 0; i < numCases; ++i) {
+                if ((i & mask) != bits) continue;  // This case is not for this enum value
+                if (records[i].itemp) continue;  // Covered case
+                if (!missingItems.empty()) missingItems += ", ";
+                missingItems += eip->prettyNameQ();
+                fullyCovered = false;
+                break;
+            }
+        }
+        if (!missingItems.empty() && !nodep->unique0Pragma()) {
+            nodep->v3warn(CASEINCOMPLETE, "Enum item(s) not covered by case: " << missingItems);
+        }
+        return fullyCovered;  // enum is fully covered
+    }
+
+    // Check and warn if case items are not complete over all possible values.
+    // Returns true iff the case items cover all values of the case expression.
+    bool checkExhaustivePacked(AstCase* nodep) {
+        const uint32_t numCases = 1UL << nodep->exprp()->width();
+        for (uint32_t i = 0; i < numCases; ++i) {
+            if (records[i].itemp) continue;  // Covered case
+            if (!nodep->unique0Pragma()) {
+                nodep->v3warn(CASEINCOMPLETE,
+                              "Case values incompletely covered (example pattern 0x" << std::hex
+                                                                                     << i << ")");
+            }
+            // TODO: warn for more than one uncovered case, not just the first
+            return false;
+        }
+
+        // It's an exhaustive case statement
+        return true;
+    }
+
+public:
+    // Analyze each value in the case statement, and issue warnings
+    void analyze(AstCase* nodep) {
+        const uint32_t numValues = 1UL << nodep->exprp()->width();
+        // Clear case records
+        for (uint32_t i = 0; i < numValues; ++i) {
+            records[i].itemp = nullptr;
+            records[i].constp = nullptr;
+            records[i].stmtsp = nullptr;
+        }
+        // Now pick up the values for each assignment
+        // We can cheat and use uint32_t's because we only support narrow case's
+        bool reportedOverlap = false;
+        bool hasDefault = false;
+        noOverlaps = true;
+        for (AstCaseItem* itemp = nodep->itemsp(); itemp;
+             itemp = VN_AS(itemp->nextp(), CaseItem)) {
+
+            // Default case
+            if (itemp->isDefault()) {
+                // Default was moved to be the last item by V3LinkDot. Fill remaining cases
+                for (uint32_t i = 0; i < numValues; ++i) {
+                    CaseRecord& caseRecord = records[i];
+                    if (!caseRecord.itemp) {
+                        caseRecord.itemp = itemp;
+                        caseRecord.stmtsp = itemp->stmtsp();
+                    }
+                }
+                hasDefault = true;
+                continue;
+            }
+
+            for (AstConst* iconstp = VN_AS(itemp->condsp(), Const); iconstp;
+                 iconstp = VN_AS(iconstp->nextp(), Const)) {
+                // Some items can never match due to 2-state simulation
+                if (neverItem(nodep, iconstp)) continue;
+
+                const auto& match = matchPattern(nodep, iconstp);
+                const uint32_t mask = match.first.toUInt();
+                const uint32_t bits = match.second.toUInt();
+
+                bool foundNewCase = false;
+                const AstConst* firstOverlapConstp = nullptr;
+                uint32_t firstOverlapValue = 0;
+                for (uint32_t i = 0; i < numValues; ++i) {
+                    if ((i & mask) != bits) continue;
+
+                    CaseRecord& caseRecord = records[i];
+
+                    // If this is the first case that covers this value, record it
+                    if (!caseRecord.itemp) {
+                        caseRecord.itemp = itemp;
+                        caseRecord.constp = iconstp;
+                        caseRecord.stmtsp = itemp->stmtsp();
+                        foundNewCase = true;
+                        continue;
+                    }
+
+                    // There is an overlap. If it's within the same CaseItem, it is legal
+                    if (caseRecord.itemp == itemp) continue;
+
+                    // Otherwise record the first overlapping case
+                    if (!firstOverlapConstp) {
+                        firstOverlapConstp = caseRecord.constp;
+                        firstOverlapValue = i;
+                        noOverlaps = false;
+                    }
+                }
+
+                // Only report first overlap
+                if (reportedOverlap || !firstOverlapConstp) continue;
+
+                // Report first overlap
+                if (nodep->priorityPragma()) {
+                    // If this is a priority case, we only want to complain if every possible
+                    // value for this item is already hit by some other item. This is true if
+                    // 'foundNewCase' is false. 'firstOverlapConstp' is null when the only
+                    // covering item is this item itself, which is legal overlap within one
+                    // item.
+                    if (!foundNewCase) {
+                        iconstp->v3warn(CASEOVERLAP,
+                                        "Case item ignored: every matching value is covered "
+                                        "by an earlier condition\n"
+                                            << iconstp->warnContextPrimary() << '\n'
+                                            << firstOverlapConstp->warnOther()
+                                            << "... Location of previous condition\n"
+                                            << firstOverlapConstp->warnContextPrimary());
+                        reportedOverlap = true;
+                    }
+                } else {
+                    // If this case statement doesn't have the priority keyword,
+                    // we want to warn on any overlap.
+                    std::ostringstream examplePattern;
+                    if (iconstp->num().isAnyXZ()) {
+                        examplePattern << " (example pattern 0x" << std::hex << firstOverlapValue
+                                       << ")";
+                    }
+                    iconstp->v3warn(CASEOVERLAP,
+                                    "Case conditions overlap"
+                                        << examplePattern.str() << "\n"
+                                        << iconstp->warnContextPrimary() << '\n'
+                                        << firstOverlapConstp->warnOther()
+                                        << "... Location of overlapping condition\n"
+                                        << firstOverlapConstp->warnContextSecondary());
+                    reportedOverlap = true;
+                }
+            }
+        }
+
+        // If there was no default, check exhaustiveness
+        exhaustiveOverEnumOnly = false;
+        exhaustive = hasDefault;
+        if (!hasDefault) {
+            if (const AstEnumDType* const enump = getEnumCompletionCheckDType(nodep)) {
+                // Only checks enum values are covered, not all bit patterns of the case expression
+                const bool exhaustiveOverEnum = checkExhaustiveEnum(nodep, enump);
+                exhaustiveOverEnumOnly = exhaustiveOverEnum;
+                exhaustive = exhaustiveOverEnum;
+            } else {
+                exhaustive = checkExhaustivePacked(nodep);
+            }
+        }
+    }
+};
+
+//######################################################################
 // Case state, as a visitor of each AstNode
 
 class CaseVisitor final : public VNVisitor {
-    // Maximum width for detailed analysis
-    constexpr static int CASE_DETAILS_MAX_WIDTH = 16;
     // Levels of priority to be ORed together in top IF tree
     constexpr static int CASE_ENCODER_GROUP_DEPTH = 8;
     // Maximum size for tiny lookup tables - materialized in code
@@ -146,13 +377,6 @@ class CaseVisitor final : public VNVisitor {
     constexpr static size_t CASE_TABLE_MIN_BRANCHES = 3;
 
     // TYPES
-    // Record for each case value
-    struct CaseRecord final {
-        AstCaseItem* itemp;  // Case item that covers value
-        AstConst* constp;  // Expression within 'itemp' that covers value (nullptr for default)
-        AstNodeStmt* stmtsp;  // Statements of 'itemp' (might be nullptr if case is empty)
-    };
-
     // Record for each LHS of a decoder pattern
     struct LhsRecord final {
         AstNodeExpr* lhsp = nullptr;  // LHS of the assignment
@@ -203,40 +427,9 @@ class CaseVisitor final : public VNVisitor {
     size_t m_caseDecoderEntryWidth = 0;  // Width of each entry in the decoder table
     size_t m_caseTableWidth = 0;  // Total width of the case table - 0 means can't optimize
     bool m_caseDetailsValid = false;  // Indicates m_caseDetails is valid
-    struct final {
-        bool exhaustive = false;  // Proven exhaustive
-        bool exhaustiveOverEnumOnly = false;  // Exhaustive over enum values only
-        bool noOverlaps = false;  // Proven no overlaps between cases
-        // Map from value (index) to the CaseRecord that covers this value
-        std::array<CaseRecord, 1U << CASE_DETAILS_MAX_WIDTH> records;
-    } m_caseDetails;
+    CaseDetails m_caseDetails;  // Values the items match, if m_caseDetailsValid
 
     // METHODS
-
-    // Xs in case or casez are impossible due to two state simulations.
-    // Returns true if the item is never possible
-    static bool neverItem(const AstCase* casep, const AstNodeExpr* itemExprp) {
-        const AstConst* const constp = VN_CAST(itemExprp, Const);
-        if (!constp) return false;
-        if (casep->casex() || casep->caseInside()) return false;
-        if (casep->casez()) return constp->num().isAnyX();
-        return constp->num().isFourState();
-    }
-
-    // Returns the matching mask and bits for a case item constant condition
-    // TODO: with 'neverItem' checked, this is alway the same for all types of cases
-    //       4-state will have to fix this up
-    static std::pair<V3Number, V3Number> matchPattern(const AstCase* /*casep*/,
-                                                      const AstConst* condp) {
-        // As one to encourage NRVO/move
-        std::pair<V3Number, V3Number> pairMaskBits{
-            std::piecewise_construct,  //
-            std::forward_as_tuple(condp->fileline(), condp->width(), 0),
-            std::forward_as_tuple(condp->fileline(), condp->width(), 0)};
-        pairMaskBits.first.opBitsNonXZ(condp->num());
-        pairMaskBits.second.opBitsOne(condp->num());
-        return pairMaskBits;
-    }
 
     // If the given statement is an assignment that fits the decoder pattern,
     // return it, otherwise return nullptr
@@ -280,190 +473,6 @@ class CaseVisitor final : public VNVisitor {
             lhsRecord.nCaseAssignDlys += VN_IS(assp, AssignDly);
         }
         return true;
-    }
-
-    // Determine whether we should check case items are complete
-    // Returns enum's dtype if should check, nullptr if shouldn't
-    static const AstEnumDType* getEnumCompletionCheckDType(const AstCase* const nodep) {
-        if (!nodep->uniquePragma() && !nodep->unique0Pragma()) return nullptr;
-        const AstEnumDType* const enumDtp
-            = VN_CAST(nodep->exprp()->dtypep()->skipRefToEnump(), EnumDType);
-        if (!enumDtp) return nullptr;  // Case isn't enum
-        const AstBasicDType* const basicp = enumDtp->subDTypep()->basicp();
-        if (!basicp) return nullptr;  // Not simple type (perhaps IEEE illegal)
-        return enumDtp;
-    }
-
-    // Check and warn if case items are not complete over the given enum type.
-    // Returns true iff the case items cover all enum values/patterns.
-    bool checkExhaustiveEnum(const AstCase* const nodep, const AstEnumDType* const enump) {
-        const uint32_t numCases = 1UL << nodep->exprp()->width();
-        bool fullyCovered = true;
-        string missingItems;
-        for (AstEnumItem* const eip : enump->originalOrThisDTypep()->itemspList()) {
-            const auto& match = matchPattern(nodep, VN_AS(eip->valuep(), Const));
-            const uint32_t mask = match.first.toUInt();
-            const uint32_t bits = match.second.toUInt();
-
-            // Check all cases to see if they cover this enum value/pattern
-            for (uint32_t i = 0; i < numCases; ++i) {
-                if ((i & mask) != bits) continue;  // This case is not for this enum value
-                if (m_caseDetails.records[i].itemp) continue;  // Covered case
-                if (!missingItems.empty()) missingItems += ", ";
-                missingItems += eip->prettyNameQ();
-                fullyCovered = false;
-                break;
-            }
-        }
-        if (!missingItems.empty() && !nodep->unique0Pragma()) {
-            nodep->v3warn(CASEINCOMPLETE, "Enum item(s) not covered by case: " << missingItems);
-        }
-        return fullyCovered;  // enum is fully covered
-    }
-
-    // Check and warn if case items are not complete over all possible values.
-    // Returns true iff the case items cover all values of the case expression.
-    bool checkExhaustivePacked(AstCase* nodep) {
-        const uint32_t numCases = 1UL << nodep->exprp()->width();
-        for (uint32_t i = 0; i < numCases; ++i) {
-            if (m_caseDetails.records[i].itemp) continue;  // Covered case
-            if (!nodep->unique0Pragma()) {
-                nodep->v3warn(CASEINCOMPLETE,
-                              "Case values incompletely covered (example pattern 0x" << std::hex
-                                                                                     << i << ")");
-            }
-            // TODO: warn for more than one uncovered case, not just the first
-            return false;
-        }
-
-        // It's an exhaustive case statement
-        return true;
-    }
-
-    // Analyze each value in the case statement. Updates 'm_caseDetails' and issues warnings.
-    void analyzeCaseDetails(AstCase* nodep) {
-        const uint32_t numValues = 1UL << nodep->exprp()->width();
-        // Clear case records
-        for (uint32_t i = 0; i < numValues; ++i) {
-            m_caseDetails.records[i].itemp = nullptr;
-            m_caseDetails.records[i].constp = nullptr;
-            m_caseDetails.records[i].stmtsp = nullptr;
-        }
-        // Now pick up the values for each assignment
-        // We can cheat and use uint32_t's because we only support narrow case's
-        bool reportedOverlap = false;
-        bool hasDefault = false;
-        m_caseDetails.noOverlaps = true;
-        for (AstCaseItem* itemp = nodep->itemsp(); itemp;
-             itemp = VN_AS(itemp->nextp(), CaseItem)) {
-
-            // Default case
-            if (itemp->isDefault()) {
-                // Default was moved to be the last item by V3LinkDot. Fill remaining cases
-                for (uint32_t i = 0; i < numValues; ++i) {
-                    CaseRecord& caseRecord = m_caseDetails.records[i];
-                    if (!caseRecord.itemp) {
-                        caseRecord.itemp = itemp;
-                        caseRecord.stmtsp = itemp->stmtsp();
-                    }
-                }
-                hasDefault = true;
-                continue;
-            }
-
-            for (AstConst* iconstp = VN_AS(itemp->condsp(), Const); iconstp;
-                 iconstp = VN_AS(iconstp->nextp(), Const)) {
-                // Some items can never match due to 2-state simulation
-                if (neverItem(nodep, iconstp)) continue;
-
-                const auto& match = matchPattern(nodep, iconstp);
-                const uint32_t mask = match.first.toUInt();
-                const uint32_t bits = match.second.toUInt();
-
-                bool foundNewCase = false;
-                const AstConst* firstOverlapConstp = nullptr;
-                uint32_t firstOverlapValue = 0;
-                for (uint32_t i = 0; i < numValues; ++i) {
-                    if ((i & mask) != bits) continue;
-
-                    CaseRecord& caseRecord = m_caseDetails.records[i];
-
-                    // If this is the first case that covers this value, record it
-                    if (!caseRecord.itemp) {
-                        caseRecord.itemp = itemp;
-                        caseRecord.constp = iconstp;
-                        caseRecord.stmtsp = itemp->stmtsp();
-                        foundNewCase = true;
-                        continue;
-                    }
-
-                    // There is an overlap. If it's within the same CaseItem, it is legal
-                    if (caseRecord.itemp == itemp) continue;
-
-                    // Otherwise record the first overlapping case
-                    if (!firstOverlapConstp) {
-                        firstOverlapConstp = caseRecord.constp;
-                        firstOverlapValue = i;
-                        m_caseDetails.noOverlaps = false;
-                    }
-                }
-
-                // Only report first overlap
-                if (reportedOverlap || !firstOverlapConstp) continue;
-
-                // Report first overlap
-                if (nodep->priorityPragma()) {
-                    // If this is a priority case, we only want to complain if every possible
-                    // value for this item is already hit by some other item. This is true if
-                    // 'foundNewCase' is false. 'firstOverlapConstp' is null when the only
-                    // covering item is this item itself, which is legal overlap within one
-                    // item.
-                    if (!foundNewCase) {
-                        iconstp->v3warn(CASEOVERLAP,
-                                        "Case item ignored: every matching value is covered "
-                                        "by an earlier condition\n"
-                                            << iconstp->warnContextPrimary() << '\n'
-                                            << firstOverlapConstp->warnOther()
-                                            << "... Location of previous condition\n"
-                                            << firstOverlapConstp->warnContextPrimary());
-                        reportedOverlap = true;
-                    }
-                } else {
-                    // If this case statement doesn't have the priority keyword,
-                    // we want to warn on any overlap.
-                    std::ostringstream examplePattern;
-                    if (iconstp->num().isAnyXZ()) {
-                        examplePattern << " (example pattern 0x" << std::hex << firstOverlapValue
-                                       << ")";
-                    }
-                    iconstp->v3warn(CASEOVERLAP,
-                                    "Case conditions overlap"
-                                        << examplePattern.str() << "\n"
-                                        << iconstp->warnContextPrimary() << '\n'
-                                        << firstOverlapConstp->warnOther()
-                                        << "... Location of overlapping condition\n"
-                                        << firstOverlapConstp->warnContextSecondary());
-                    reportedOverlap = true;
-                }
-            }
-        }
-
-        // If there was no default, check exhaustiveness
-        m_caseDetails.exhaustiveOverEnumOnly = false;
-        m_caseDetails.exhaustive = hasDefault;
-        if (!hasDefault) {
-            if (const AstEnumDType* const enump = getEnumCompletionCheckDType(nodep)) {
-                // Only checks enum values are covered, not all bit patterns of the case expression
-                const bool exhaustiveOverEnum = checkExhaustiveEnum(nodep, enump);
-                m_caseDetails.exhaustiveOverEnumOnly = exhaustiveOverEnum;
-                m_caseDetails.exhaustive = exhaustiveOverEnum;
-            } else {
-                m_caseDetails.exhaustive = checkExhaustivePacked(nodep);
-            }
-        }
-
-        // Records now valid
-        m_caseDetailsValid = true;
     }
 
     void analyzeDecoderPattern(AstCase* nodep) {
@@ -630,7 +639,10 @@ class CaseVisitor final : public VNVisitor {
         if (m_caseOpaque) return;
 
         // If small enough, analyse details
-        if (caseExprp->width() <= CASE_DETAILS_MAX_WIDTH) analyzeCaseDetails(nodep);
+        if (caseExprp->width() <= CaseDetails::MAX_WIDTH) {
+            m_caseDetails.analyze(nodep);
+            m_caseDetailsValid = true;
+        }
 
         // Check if it actually fits a full decoder pattern
         if (canBeDecoder) analyzeDecoderPattern(nodep);
