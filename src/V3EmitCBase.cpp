@@ -98,6 +98,21 @@ std::string EmitCUtil::unpackReverseCall(const AstNodeDType* dtypep, bool innerO
     return func + "<" + args.substr(0, usedLength) + ">";
 }
 
+// Whether toStringCall() of dtypep is not empty, without building it, so in time linear in the
+// depth of the type for each call
+static bool needsToStringCall(const AstNodeDType* dtypep) {
+    dtypep = dtypep->skipRefp();
+    if (!dtypep->isNonPackedArray() && !VN_IS(dtypep, WildcardArrayDType)) return false;
+    bool descending = false;
+    while (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+        descending |= !adtypep->declRange().ascending();
+        dtypep = adtypep->subDTypep()->skipRefp();
+    }
+    if (descending) return true;
+    if (!dtypep->isNonPackedArray() && !VN_IS(dtypep, WildcardArrayDType)) return false;
+    return needsToStringCall(dtypep->subDTypep());
+}
+
 std::string EmitCUtil::toStringCall(const AstNodeDType* dtypep, const std::string& expr) {
     // Reverse descending dimensions as unpackReverseCall, also in the elements of queues,
     // dynamic and associative arrays, which the run-time to_string converts one by one
@@ -108,14 +123,14 @@ std::string EmitCUtil::toStringCall(const AstNodeDType* dtypep, const std::strin
         while (const AstUnpackArrayDType* const adtypep = VN_CAST(leafp, UnpackArrayDType)) {
             leafp = adtypep->subDTypep()->skipRefp();
         }
-        if (toStringCall(leafp, "e").empty()) {
+        if (!needsToStringCall(leafp)) {
             const std::string reverseCall = unpackReverseCall(dtypep);
             if (reverseCall.empty()) return "";
             return "VL_TO_STRING(" + reverseCall + "(" + expr + "))";
         }
     }
+    if (!needsToStringCall(dtypep->subDTypep())) return "";
     const std::string elemCall = toStringCall(dtypep->subDTypep(), "e");
-    if (elemCall.empty()) return "";
     const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType);
     const bool reverse = adtypep && !adtypep->declRange().ascending();
     return (reverse ? "VL_CVT_UNPACK_TO_UNPACK<1>(" + expr + ")" : expr)
