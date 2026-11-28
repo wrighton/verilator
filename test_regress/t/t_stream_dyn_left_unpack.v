@@ -34,6 +34,22 @@ module t;
     `checkp(dd4, "'{'h9, 'hd, 'h8, 'h3, 'h9, 'hf, 'h3}");
     {<<5{d4b}} = q7;
     `checkp(d4b, "'{'h9, 'hd, 'h8, 'h3, 'h9, 'hf, 'h3}");
+    // A fixed-size array source, of either range direction, streamed left to right
+    begin
+      automatic bit [6:0] f7[4] = '{7'h4d, 7'h77, 7'h21, 7'h6c};
+      automatic bit [6:0] f7d[3:0] = '{7'h4d, 7'h77, 7'h21, 7'h6c};
+      automatic byte fb[3] = '{8'h12, 8'h34, 8'h56};
+      automatic logic [68:0] w69[2] = '{69'h1f_0123_4567_89ab_cdef, 69'h00_fedc_ba98_7654_3210};
+      automatic bit [22:0] d23[$];
+      {<<5{d4}} = f7;
+      `checkp(d4, "'{'h9, 'hd, 'h8, 'h3, 'h9, 'hf, 'h3}");
+      {<<5{d4}} = f7d;
+      `checkp(d4, "'{'h9, 'hd, 'h8, 'h3, 'h9, 'hf, 'h3}");
+      {<<4{d8}} = fb;
+      `checkp(d8, "'{'h65, 'h43, 'h21}");
+      {<<23{d23}} = w69;
+      `checkp(d23, "'{'h543210, 'h7530ec, 'h3fb72, 'h2bcdef, 'hacf13, 'h7c048d}");
+    end
     d4 = '{};
     {<<5{d4}} <= q7;
     #1;
