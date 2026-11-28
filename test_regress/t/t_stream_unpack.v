@@ -483,6 +483,21 @@ module t;
         `checkh(packed_33, 33'h1_2345_6789);
       end
 
+      // Nested array of 40-bit elements of at most 64 bits in all, unpacked and packed
+      begin
+        automatic logic [39:0] arr2d_40 [1][1];
+        automatic logic [19:0] arr3d_20 [1:0][1][1];
+        automatic logic [39:0] packed_40;
+
+        arr2d_40 = {>>{40'h12_3456_789a}};
+        `checkh(arr2d_40[0][0], 40'h12_3456_789a);
+        arr3d_20 = {>>{40'h12_3456_789a}};
+        `checkh(arr3d_20[1][0][0], 20'h12345);
+        `checkh(arr3d_20[0][0][0], 20'h6789a);
+        packed_40 = {>>{arr3d_20}};
+        `checkh(packed_40, 40'h12_3456_789a);
+      end
+
       // 3D Array with a descending outer dimension, 7-bit elements, 84 bits
       begin
         automatic logic [6:0] arr3d_7 [2:0][2][2];
