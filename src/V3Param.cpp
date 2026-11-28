@@ -975,6 +975,20 @@ class ParamProcessor final {
         }
         return result;
     }
+    // Name of an element of an arrayed instance selected as 'name', e.g. u[1], as given to the
+    // element, e.g. u__BRA__1__KET__; or 'name' if it does not select by numbers
+    static string elementName(const string& name) {
+        size_t braPos = name.find('[');
+        string result = name.substr(0, braPos);
+        for (; braPos != string::npos; braPos = name.find('[', braPos + 1)) {
+            const char* const startp = name.c_str() + braPos + 1;
+            char* endp = nullptr;
+            const long long index = std::strtoll(startp, &endp, 10);
+            if (endp == startp || *endp != ']') return name;
+            result += "__BRA__" + AstNode::encodeNumber(index) + "__KET__";
+        }
+        return result;
+    }
     // Return if a defparam path, from the module it starts in, names the instance
     bool defParamNames(const string& path, const string& instanceName) const {
         // After the module come the generate blocks the defparam is in, without loop indices,
@@ -988,7 +1002,12 @@ class ParamProcessor final {
             const size_t dotPos = scope.rfind('.');
             if (dotPos == string::npos) return false;
             const string name = scope.substr(dotPos + 1);
-            if (*it != (it->find('[') == string::npos ? withoutIndices(name) : name)) return false;
+            // A generate loop iteration is named with its index, an element of an arrayed
+            // instance with encoded indices
+            if (it->find('[') == string::npos ? *it != withoutIndices(name)
+                                              : (*it != name && elementName(*it) != name)) {
+                return false;
+            }
             scope.erase(dotPos);
         }
         // Instances above are deparameterized first; the top's name is its module's
