@@ -43,10 +43,32 @@ module t;
   for (genvar i = 0; i < 2; ++i) begin : g
     sub #(.DIV(1 + 2 * i)) u ();
     int nevent = 0;
-    int nevent_exp = 0;
     assert property (@(posedge clk) disable iff (cyc < 2) u.x[0] |-> s_eventually u.x[1])
       nevent++;
-    always @(posedge clk) if (cyc >= 2 && !u.x[0]) nevent_exp++;  // Vacuous passes
+    // An attempt passes vacuously, or on the first tick its s_eventually holds
+    bit started[$], ah[$], bh[$];
+    always @(posedge clk) begin
+      started.push_back(cyc >= 2);
+      ah.push_back(u.x[0]);
+      bh.push_back(u.x[1]);
+    end
+    function automatic int expPasses();
+      int count = 0;
+      for (int s = 0; s < ah.size(); ++s) begin
+        if (!started[s]) continue;
+        if (!ah[s]) begin
+          ++count;
+          continue;
+        end
+        for (int e = s; e < bh.size(); ++e) begin
+          if (bh[e]) begin
+            ++count;
+            break;
+          end
+        end
+      end
+      return count;
+    endfunction
     class Outer;
       class Inner;
         function int get();
@@ -62,9 +84,8 @@ module t;
 
   initial begin
     #200;
-    // Only vacuous passes are counted before the end of simulation
-    `checkd(g[0].nevent, g[0].nevent_exp);
-    `checkd(g[1].nevent, g[1].nevent_exp);
+    `checkd(g[0].nevent, g[0].expPasses());
+    `checkd(g[1].nevent, g[1].expPasses());
     `checkd(g[0].inner.get(), 19);
     `checkd(g[1].inner.get(), 6);
     `checkd(ma.g[0].c.get(), 19);

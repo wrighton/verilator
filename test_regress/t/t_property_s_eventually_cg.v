@@ -37,7 +37,8 @@ module t;
 
 `ifndef T_NO_S_EVENTUALLY
   int passed = 0;
-  // The attempt pending at $finish fails (IEEE 1800-2023 16.12.13)
+  // The attempt pending at $finish fails (IEEE 1800-2023 16.12.13); one with cyc[0] false
+  // passes vacuously
   assert property (@(negedge clk) cyc[0] |-> s_eventually !cyc[0]) ++passed;
   else;
 `endif
@@ -52,7 +53,7 @@ module t;
     ++cyc;
     if (cyc == 10) begin
 `ifndef T_NO_S_EVENTUALLY
-      `checkd(passed, 4);
+      `checkd(passed, 8);
 `endif
       `checkd(disabled, 1);
       $write("*-* All Finished *-*\n");

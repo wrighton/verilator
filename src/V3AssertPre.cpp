@@ -1749,12 +1749,26 @@ private:
                 pastp->sentreep(newSenTree(nodep));
                 condp = pastp;
             }
-            // Wrap existing PExpr body: if (antecedent) { <original body> } else { /* vacuous pass
-            // */ }
+            // Wrap existing PExpr body: if (antecedent) { <original body> } else { vacuous pass },
+            // a cover counting no vacuous success
             AstBegin* const bodyp = pexprp->bodyp();
             AstIf* const guardp = new AstIf{flp, condp};
             if (AstNodeStmt* const stmtsp = bodyp->stmtsp()) {
                 guardp->addThensp(stmtsp->unlinkFrBackWithNext());
+            }
+            if (!m_underCover) {
+                AstNodeStmt* vacuousp = new AstPExprClause{flp, true, true};
+                if (!nodep->isOverlapped()) {
+                    // The antecedent of the attempt of the tick before is false; there is none
+                    // before the first tick
+                    AstPast* const startedp
+                        = new AstPast{flp, new AstConst{flp, AstConst::BitTrue{}}, nullptr,
+                                      nullptr, /* propertyTiming */ true};
+                    startedp->dtypeSetBit();
+                    startedp->sentreep(newSenTree(nodep));
+                    vacuousp = new AstIf{flp, startedp, vacuousp};
+                }
+                guardp->addElsesp(vacuousp);
             }
             bodyp->addStmtsp(guardp);
             nodep->replaceWith(pexprp);
