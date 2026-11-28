@@ -10435,7 +10435,9 @@ class WidthVisitor final : public VNVisitor {
         if (extendRule == EXTEND_OFF) return;
         AstConst* const constp = VN_CAST(nodep, Const);
         const int expWidth = expDTypep->width();
-        if (constp && !constp->num().isNegative()) {
+        // A constant whose top bit is X or Z extends that bit when signed (IEEE 1800-2023 11.8.4)
+        if (constp && !constp->num().isNegative()
+            && !(constp->num().isFourState() && constp->num().bitIsXZ(constp->width() - 1))) {
             // Save later constant propagation work, just right-size it.
             V3Number num{nodep, expWidth, constp->num()};
             num.isSigned(false);
