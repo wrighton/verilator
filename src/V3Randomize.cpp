@@ -198,6 +198,34 @@ static bool anyOpRandDependent(const AstNode* nodep) {
            || (nodep->op4p() && nodep->op4p()->user1());
 }
 
+// Whether a variable holds class handles, alone or in an array
+static bool isHandleVar(const AstVar* varp) {
+    const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+    while (VN_IS(dtypep, NodeArrayDType) || VN_IS(dtypep, DynArrayDType)
+           || VN_IS(dtypep, QueueDType) || VN_IS(dtypep, AssocArrayDType)) {
+        dtypep = dtypep->subDTypep()->skipRefp();
+    }
+    return VN_IS(dtypep, ClassRefDType);
+}
+
+// As randomize() does not assign class handles, a comparison of handles reads state, unless
+// it reads another random value, as a random index selecting a handle; a member of the
+// object randomized may be read through it after the capture of randomize() with
+static bool isStateHandleCompare(const AstNodeBiop* nodep) {
+    if (!VN_IS(nodep->lhsp()->dtypep()->skipRefp(), ClassRefDType)
+        && !VN_IS(nodep->rhsp()->dtypep()->skipRefp(), ClassRefDType)) {
+        return false;
+    }
+    return !nodep->exists([](const AstNodeExpr* const exprp) {
+        const AstNodeVarRef* const varRefp = VN_CAST(exprp, NodeVarRef);
+        const AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef);
+        const AstVar* const varp = varRefp      ? varRefp->varp()
+                                   : memberRefp ? memberRefp->varp()
+                                                : nullptr;
+        return varp && varp->rand().isRandomizable() && !isHandleVar(varp);
+    });
+}
+
 // For a static member of a class that is neither a base nor a derived class of classp,
 // return that class, else nullptr
 static const AstClass* foreignStaticClassp(const AstClass* classp, const AstVar* varp) {
@@ -1134,26 +1162,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
     }
     void visit(AstEq* nodep) override { visitCompare(nodep); }
     void visit(AstNeq* nodep) override { visitCompare(nodep); }
-    // Whether a variable holds class handles, alone or in an array
-    static bool isHandleVar(const AstVar* varp) {
-        const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
-        while (VN_IS(dtypep, NodeArrayDType) || VN_IS(dtypep, DynArrayDType)
-               || VN_IS(dtypep, QueueDType) || VN_IS(dtypep, AssocArrayDType)) {
-            dtypep = dtypep->subDTypep()->skipRefp();
-        }
-        return VN_IS(dtypep, ClassRefDType);
-    }
-    // As randomize() does not assign class handles, a comparison of handles reads state,
-    // unless it reads another random value, as a random index selecting a handle
     void visitCompare(AstNodeBiop* nodep) {
         visit(static_cast<AstNodeExpr*>(nodep));
-        if ((VN_IS(nodep->lhsp()->dtypep()->skipRefp(), ClassRefDType)
-             || VN_IS(nodep->rhsp()->dtypep()->skipRefp(), ClassRefDType))
-            && !nodep->exists([](const AstNodeVarRef* refp) {
-                   return refp->varp()->rand().isRandomizable() && !isHandleVar(refp->varp());
-               })) {
-            nodep->user1(false);
-        }
+        if (isStateHandleCompare(nodep)) nodep->user1(false);
     }
     void visit(AstArg* nodep) override {
         iterateChildrenConst(nodep);
@@ -1444,6 +1455,13 @@ class CaptureVisitor final : public VNVisitor {
         // Recompute random-dependence, as capturing may have changed the children's marking
         nodep->user1(anyOpRandDependent(nodep));
     }
+    // A comparison of handles stays state, as when marked (see RandomizeMarkVisitor)
+    void visitCompare(AstNodeBiop* nodep) {
+        visit(static_cast<AstNodeExpr*>(nodep));
+        if (isStateHandleCompare(nodep)) nodep->user1(false);
+    }
+    void visit(AstEq* nodep) override { visitCompare(nodep); }
+    void visit(AstNeq* nodep) override { visitCompare(nodep); }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:
