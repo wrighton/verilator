@@ -76,6 +76,25 @@ class SizedHolder;
   constraint c_z {z < 5;}
 endclass
 
+// Elements of fixed arrays of the object, read by the holder under its guard
+class Arrays;
+  rand bit [7:0] arr[2];
+  rand bit [7:0] m2[2][3];
+  rand bit k;
+endclass
+
+class ArraysHolder;
+  rand Arrays a;
+  rand bit [7:0] z;
+  constraint c_a {
+    if (a != null) {
+      a.arr[a.k] > 8'd3;
+      a.m2[1][2] == 8'd9;
+    }
+    z < 5;
+  }
+endclass
+
 // A soft constraint under a condition of the object
 class SoftIf;
   rand bit [7:0] x;
@@ -132,6 +151,16 @@ module t;
       `checkd(randomize_result, 1);
       `checkd(lh.b.a[0], 23);
       `checkd(lh.b.a[1], 23);
+    end
+    begin
+      automatic ArraysHolder ah = new;
+      randomize_result = ah.randomize();
+      `checkd(randomize_result, 1);
+      ah.a = new;
+      randomize_result = ah.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(ah.a.arr[ah.a.k] > 8'd3, 1'b1);
+      `checkd(ah.a.m2[1][2], 9);
     end
     begin
       automatic SizedHolder zh = new;

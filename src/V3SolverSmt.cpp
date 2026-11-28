@@ -2734,6 +2734,15 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         // Keep a pre-edit clone for the rand_mode hoist below, of a non-random index
         AstNodeExpr* const origp = indexIsRand ? nullptr : nodep->cloneTree(false);
+        // An element of an array of a member object reached through a null handle is not
+        // read, see newNullCheckedReadp
+        AstNodeExpr* rootp = nodep->fromp();
+        while (const AstArraySel* const selp = VN_CAST(rootp, ArraySel)) rootp = selp->fromp();
+        AstMemberRef* const arrRefp
+            = m_structSel || m_nestedAccessp || !nodep->dtypep()->skipRefp()->isIntegralOrPacked()
+                  ? nullptr
+                  : VN_CAST(rootp, MemberRef);
+        AstMemberRef* const arrNamep = arrRefp ? arrRefp->cloneTree(false) : nullptr;
         const bool indexSigned = nodep->bitp()->isSigned();
         AstNodeExpr* indexp = nodep->bitp()->unlinkFrBack(&handle);
         if (guarded && indexIsRand) {
@@ -2774,6 +2783,14 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
             if (m_selGuardsp == &guards) editSelGuards(newp, guards, elemWidth);
         }
+        if (arrNamep && newp) {
+            if (AstNodeExpr* const nonNullp = newHandlesNonNullp(arrNamep)) {
+                VNRelinker relinker;
+                newp->unlinkFrBack(&relinker);
+                relinker.relink(newNullCheckedReadp(arrNamep, nonNullp, newp, elemWidth));
+            }
+        }
+        if (arrNamep) VL_DO_DANGLING(arrNamep->deleteTree(), arrNamep);
         if (origp && (!newp || !hoistRandModeOverSelectAndMember(newp, origp))) {
             VL_DO_DANGLING(origp->deleteTree(), origp);
         }
@@ -2894,13 +2911,14 @@ class ConstraintExprVisitor final : public VNVisitor {
     // null unless nonNullp: recorded, as an evaluation error that fails randomize() if a
     // constraint has the read (IEEE 1800-2023 18.5.12)
     AstNodeExpr* newNullCheckedReadp(AstMemberRef* nodep, AstNodeExpr* nonNullp,
-                                     AstNodeExpr* textp) {
+                                     AstNodeExpr* textp, int width = 0) {
         // An object handle is read by the read of its member, which checks it, and an array
-        // of a null object reads as empty
-        if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked()) {
+        // of a null object reads as empty, unless an element of it, of width
+        if (!width && !nodep->dtypep()->skipRefp()->isIntegralOrPacked()) {
             if (nonNullp) VL_DO_DANGLING(nonNullp->deleteTree(), nonNullp);
             return textp;
         }
+        if (!width) width = nodep->width();
         if (!nonNullp) return textp;
         FileLine* const fl = nodep->fileline();
         std::string fmt;
@@ -2924,7 +2942,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (AstNodeExpr* const guardsp = newStateGuardsHoldp(fl)) {
             nullTextp = new AstCond{
                 fl, guardsp, readp,
-                getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0})};
+                getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, width, 0})};
         }
         AstCond* const condp = new AstCond{fl, nonNullp, textp, nullTextp};
         condp->user1(true);  // Mark as formatted
