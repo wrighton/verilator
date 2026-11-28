@@ -3507,8 +3507,10 @@ class ConstVisitor final : public VNVisitor {
                     dstElementBits = elemDtp->width();
                 }
                 nodep->lhsp(dstp);
+                // The inverse of the stream's packing (IEEE 1800-2023 11.4.14.3)
                 nodep->rhsp(new AstCvtArrayToArray{srcp->fileline(), srcp, dstDTypep, true,
-                                                   blockSize, dstElementBits, srcElementBits});
+                                                   blockSize, dstElementBits, srcElementBits,
+                                                   true});
                 nodep->dtypep(dstDTypep);
                 VL_DO_DANGLING(pushDeletep(streamp), streamp);
                 return true;
