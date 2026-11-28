@@ -16,6 +16,6 @@ test.compile(verilator_flags2=["--binary", "--stats"])
 test.execute()
 
 if test.vlt_all:
-    test.file_grep(test.stats, r'Fork, variables in dynamic scopes\s+(\d+)', 24)
+    test.file_grep(test.stats, r'Fork, variables in dynamic scopes\s+(\d+)', 20)
 
 test.passes()

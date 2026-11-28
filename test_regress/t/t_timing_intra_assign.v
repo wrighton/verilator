@@ -14,6 +14,11 @@ interface tgt_if;
   int x, y, z, w;
 endinterface
 
+interface reb_if;
+  int x, y, z, w;
+  int a[2];
+endinterface
+
 module t;
   logic [3:0] val[3];
   wire [3:0] #5 net[2];
@@ -190,6 +195,172 @@ module t;
     tgt_h.next = tgt_os[3];
     tgt_ar[1] = tgt_os[3];
     tgt_rv = tgt_rifs[1];
+  end
+
+  // Likewise through a handle of a task that the task then assigns another handle: of a class or
+  // a virtual interface, an argument, a local, a 'ref' argument, a class property or an element of
+  // an array argument, with or without a delay, and with or without a timing control after the
+  // NBA. The index of the target, the variables of the module it reads, the handle of a member
+  // object it goes through and its value are those when the NBA statement runs.
+  class Inner;
+    int n;
+  endclass
+  class Box;
+    int n;
+    int a[2];
+    Inner inner;
+  endclass
+  int reb_k = 0;
+  int reb_v = 21;
+  class Rebind;
+    virtual reb_if vif;
+    static task cls(Box b, Box other, bit delayed);
+      if (delayed) b.n <= #1 7;
+      else b.n <= 6;
+      b = other;
+      #2;
+    endtask
+    static task arg(virtual reb_if v, virtual reb_if other, bit delayed);
+      if (delayed) v.x <= #1 11;
+      else v.x <= 10;
+      v = other;
+      #2;
+    endtask
+    static task local_handle(virtual reb_if other);
+      virtual reb_if v;
+      v = other;
+      v.y <= 12;
+    endtask
+    static task ref_handle(ref virtual reb_if v);
+      v.z <= 13;
+      #1;
+    endtask
+    task prop_handle();
+      vif.w <= 14;
+      #1;
+    endtask
+    static task index_cls(Box b, Box other);
+      automatic int k = 0;
+      automatic int x = 15;
+      b.a[k] <= #1 x;
+      k = 1;
+      x = 99;
+      b = other;
+      #2;
+    endtask
+    static task index_vif(virtual reb_if v, virtual reb_if other);
+      automatic int k = 0;
+      v.a[k] <= #1 16;
+      k = 1;
+      v = other;
+      #2;
+    endtask
+    static task index_array(Box bs[2]);
+      automatic int k = 0;
+      bs[k].n <= #1 17;
+      k = 1;
+      #2;
+    endtask
+    static task module_vars(Box b);
+      b.a[reb_k] <= reb_v;
+      reb_k = 1;
+      reb_v = 99;
+      #1;
+    endtask
+    static task member_handle(Box b, Inner other);
+      b.inner.n <= 18;
+      b.inner = other;
+      #1;
+    endtask
+  endclass
+  task automatic mod_cls(Box b, Box other);
+    automatic int k = 0;
+    automatic int x = 22;
+    b.n <= #1 23;
+    b.a[k] <= #1 x;
+    k = 1;
+    x = 99;
+    b = other;
+    #2;
+  endtask
+  task automatic mod_vif(virtual reb_if v, virtual reb_if other);
+    automatic int k = 1;
+    v.w <= #1 24;
+    v.a[k] <= #1 25;
+    k = 0;
+    v = other;
+    #2;
+  endtask
+  reb_if reb_ifs[2] ();
+  reb_if mod_ifs[2] ();
+  initial begin
+    automatic Box boxes[2];
+    automatic Box idx[2];
+    automatic Box arr[2];
+    automatic Inner inners[2];
+    automatic Box mods[2];
+    automatic Rebind reb = new;
+    automatic virtual reb_if h = reb_ifs[1];
+    automatic string str;
+    foreach (boxes[i]) boxes[i] = new;
+    foreach (idx[i]) idx[i] = new;
+    foreach (arr[i]) arr[i] = new;
+    foreach (inners[i]) inners[i] = new;
+    foreach (mods[i]) mods[i] = new;
+    Rebind::cls(boxes[0], boxes[1], 0);
+    Rebind::cls(boxes[1], boxes[0], 1);
+    Rebind::arg(reb_ifs[0], reb_ifs[1], 0);
+    Rebind::arg(reb_ifs[1], reb_ifs[0], 1);
+    Rebind::local_handle(reb_ifs[0]);
+    Rebind::ref_handle(h);
+    reb.vif = reb_ifs[0];
+    reb.prop_handle();
+    Rebind::index_cls(idx[0], idx[1]);
+    Rebind::index_vif(reb_ifs[0], reb_ifs[1]);
+    Rebind::index_array(arr);
+    Rebind::module_vars(boxes[0]);
+    boxes[0].inner = inners[0];
+    Rebind::member_handle(boxes[0], inners[1]);
+    mod_cls(mods[0], mods[1]);
+    mod_vif(mod_ifs[0], mod_ifs[1]);
+    #2;
+    `checkd(boxes[0].n, 6)
+    `checkd(boxes[1].n, 7)
+    str = $sformatf("%0d %0d %0d %0d", reb_ifs[0].x, reb_ifs[0].y, reb_ifs[0].z, reb_ifs[0].w);
+    `checks(str, "10 12 0 14")
+    str = $sformatf("%0d %0d %0d %0d", reb_ifs[1].x, reb_ifs[1].y, reb_ifs[1].z, reb_ifs[1].w);
+    `checks(str, "11 0 13 0")
+    str = $sformatf("%0d %0d %0d %0d", idx[0].a[0], idx[0].a[1], idx[1].a[0], idx[1].a[1]);
+    `checks(str, "15 0 0 0")
+    str = $sformatf("%0d %0d %0d %0d", reb_ifs[0].a[0], reb_ifs[0].a[1], reb_ifs[1].a[0],
+                    reb_ifs[1].a[1]);
+    `checks(str, "16 0 0 0")
+    str = $sformatf("%0d %0d", arr[0].n, arr[1].n);
+    `checks(str, "17 0")
+    str = $sformatf("%0d %0d", boxes[0].a[0], boxes[0].a[1]);
+    `checks(str, "21 0")
+    str = $sformatf("%0d %0d", inners[0].n, inners[1].n);
+    `checks(str, "18 0")
+    str = $sformatf(
+        "%0d %0d %0d %0d %0d %0d",
+        mods[0].n,
+        mods[0].a[0],
+        mods[0].a[1],
+        mods[1].n,
+        mods[1].a[0],
+        mods[1].a[1]
+    );
+    `checks(str, "23 22 0 0 0 0")
+    str = $sformatf(
+        "%0d %0d %0d %0d %0d %0d",
+        mod_ifs[0].w,
+        mod_ifs[0].a[0],
+        mod_ifs[0].a[1],
+        mod_ifs[1].w,
+        mod_ifs[1].a[0],
+        mod_ifs[1].a[1]
+    );
+    `checks(str, "24 0 25 0 0 0")
   end
 
   initial begin
