@@ -97,11 +97,12 @@ module t (
   assert property (@(posedge clk) sync_accept_on (abort_now) s_always[2: 2] 1'b1)
   else $display("EOS_ABORT_RING_BAD");
 
-  // A kill on the finish edge suppresses stale pending states.
+  // A kill before the finish edge ends the attempts in flight, but not the attempt of that edge,
+  // which starts after it and so is pending at the end (IEEE 1800-2023 20.11).
   assume property (@(posedge clk) s_always[1: 3] 1'b1)
-  else $display("EOS_KILL_BAD");
+  else $display("EOS_KILL");
   assume property (@(posedge clk) s_always[2: 2] 1'b1)
-  else $display("EOS_KILL_RING_BAD");
+  else $display("EOS_KILL_RING");
 
   // A pending strong cover obligation is not an EOS failure.
   cover property (@(posedge clk) s_always[1: 3] 1'b1);
@@ -135,15 +136,17 @@ module t (
   always @(negedge clk) begin
     disable_mid = cyc == 8;
     if (cyc == 9) abort_now = 1;
-    if (cyc == 10) disable_now = 1;
+    if (cyc == 10) begin
+      disable_now = 1;
+      // Kill assumptions only, then verify the standard $assertkill/$asserton flow.
+      $assertcontrol(5, 1, 4);
+      $assertcontrol(3, 1, 4);
+    end
   end
 
   always @(posedge clk) begin
     cyc <= cyc + 1;
     if (cyc == 10) begin
-      // Kill assumptions only, then verify the standard $assertkill/$asserton flow.
-      $assertcontrol(5, 1, 4);
-      $assertcontrol(3, 1, 4);
       $display("*-* All Finished *-*");
       $finish;
     end
