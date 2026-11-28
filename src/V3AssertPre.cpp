@@ -1605,6 +1605,19 @@ private:
         iterate(nodep->propp());
         iterateNull(nodep->matchCountp());
     }
+    void visit(AstSExpr* nodep) override {
+        // V3AssertNfa lowers the sequences of a clocked assertion, and this pass the ones it
+        // leaves as a whole; one left otherwise, e.g. as an operand of another property
+        // operator, is not
+        if (!m_pexprp && (m_senip || m_seniAlwaysp)) {
+            nodep->delayp()->v3warn(E_UNSUPPORTED, "Unsupported: cycle delay in a sequence in"
+                                                   " this concurrent assertion context.");
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
+        iterateChildren(nodep);
+    }
     void visit(AstPExpr* nodep) override {
         // V3AssertNfa handles multi-cycle property expressions before this pass,
         // so the following unsupported paths are defensive and typically unreached.
