@@ -332,6 +332,32 @@ module t;
       // verilator lint_on WIDTHTRUNC
     end
 
+    // Descending sorts of a fixed-size array of values wider than 64 bits
+    begin
+      bit [69:0] w[3];
+      w = '{70'h5, 70'h20_0000_0000_0000_0003, 70'h7};
+      w.rsort;
+      `checkh(w[0], 70'h20_0000_0000_0000_0003);
+      `checkh(w[1], 70'h7);
+      `checkh(w[2], 70'h5);
+      w.rsort with (~item);
+      `checkh(w[0], 70'h5);
+      `checkh(w[1], 70'h7);
+      `checkh(w[2], 70'h20_0000_0000_0000_0003);
+    end
+    begin
+      bit signed [64:0] sw[3];
+      sw = '{65'sd5, -65'sd3, 65'sd7};
+      sw.rsort;
+      `checkh(sw[0], 65'sd7);
+      `checkh(sw[1], 65'sd5);
+      `checkh(sw[2], -65'sd3);
+      sw.rsort with (-item);
+      `checkh(sw[0], -65'sd3);
+      `checkh(sw[1], 65'sd5);
+      `checkh(sw[2], 65'sd7);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end

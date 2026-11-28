@@ -2765,17 +2765,18 @@ public:
                   });
     }
     // std::rbegin/std::rend not available until C++14
+    // Descending order compares with < and the operands swapped, as wide values have no >
     void rsort() {
-        std::sort(std::begin(m_storage), std::end(m_storage), std::greater<T_Value>());
+        std::sort(std::begin(m_storage), std::end(m_storage),
+                  [](const T_Value& a, const T_Value& b) { return b < a; });
     }
     template <typename T_Func>
     void rsort(T_Func with_func) {
         // with_func returns arbitrary type to use for the sort comparison
-        // std::rbegin/std::rend not available until C++14, so using > below
         std::sort(std::begin(m_storage), std::end(m_storage),
                   [=](const T_Value& a, const T_Value& b) {
                       // index number is meaningless with sort, as it changes
-                      return with_func(0, a) > with_func(0, b);
+                      return with_func(0, b) < with_func(0, a);
                   });
     }
     void reverse() { std::reverse(std::begin(m_storage), std::end(m_storage)); }
