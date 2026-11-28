@@ -204,6 +204,35 @@ class MixedHolder;
   constraint c_g {foreach (ms[i]) ms[i].v != 7'd3;}
 endclass
 
+// Below an if, an implication or a foreach whose condition or header reads no such member, only
+// the items on one are ignored
+class NestedItems;
+  rand bit [6:0] v;
+  rand bit [6:0] w;
+  rand bit [6:0] arr[2];
+  constraint ec {
+    if (v > 7'd2) {
+      w != 7'd3;
+      arr[1] == 7'd1;
+    }
+    v < 7'd10 -> {
+      w < 7'd50;
+      arr[0] == 7'd2;
+    }
+    if (v == 7'd99) {arr[0] == 7'd1;}
+    else {
+      w > 7'd4;
+    }
+    foreach (arr[i]) arr[i] < 7'd100;
+    if (arr[0] > 7'd5) {w == 7'd7;}
+  }
+endclass
+
+class NestedHolder;
+  rand NestedItems ns[];
+  constraint c_g {foreach (ns[i]) ns[i].v inside {[3 : 9]};}
+endclass
+
 module t;
   task automatic check_items(Item items[$], int above, int below);
     foreach (items[i]) begin
@@ -428,8 +457,21 @@ module t;
     end
   endtask
 
+  task automatic test_nested_items;
+    NestedHolder h = new;
+    int randomize_result;
+    h.ns = new[3];
+    foreach (h.ns[i]) h.ns[i] = new;
+    repeat (20) begin
+      randomize_result = h.randomize();
+      `checkd(randomize_result, 1);
+      foreach (h.ns[i]) `checkd(h.ns[i].w != 7'd3 && h.ns[i].w < 7'd50 && h.ns[i].w > 7'd4, 1'b1);
+    end
+  endtask
+
   initial begin
     test_mixed_items();
+    test_nested_items();
     test_guarded();
     test_rand_indexed();
     test_per_object();

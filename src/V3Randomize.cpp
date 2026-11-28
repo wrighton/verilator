@@ -591,6 +591,44 @@ class RandomizeMarkVisitor final : public VNVisitor {
         const AstVarRef* const pathRefp = VN_CAST(pathp, VarRef);
         return varRefp && pathRefp && varRefp->varp() == pathRefp->varp();
     }
+    // Whether nodep reads a rand field that is an array or object, which is not a solver
+    // variable of the elements of a rand handle array (see createWriteVarForClassFields)
+    static bool readsNonSolverField(const AstNode* const nodep) {
+        return nodep->exists([](const AstVarRef* const refp) {
+            const AstVar* const varp = refp->varp();
+            const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+            return varp->isClassMember() && varp->rand().isRandomizable()
+                   && (VN_IS(dtypep, ClassRefDType) || dtypep->isNonPackedArray());
+        });
+    }
+    // Whether clonep, the clone of constraint item origp, is dropped as it reads such a field,
+    // which stays ignored. Of an if or a foreach that does not in its condition or header,
+    // only the items that do are dropped, and their other items are solved.
+    static bool isDroppedItem(const AstNode* const origp, AstNode* const clonep) {
+        if (const AstConstraintIf* const ifp = VN_CAST(origp, ConstraintIf)) {
+            if (readsNonSolverField(ifp->condp())) return true;
+            AstConstraintIf* const cloneIfp = VN_AS(clonep, ConstraintIf);
+            dropNonSolverItems(ifp->thensp(), cloneIfp->thensp());
+            dropNonSolverItems(ifp->elsesp(), cloneIfp->elsesp());
+            return !cloneIfp->thensp() && !cloneIfp->elsesp();
+        }
+        if (const AstConstraintForeach* const foreachp = VN_CAST(origp, ConstraintForeach)) {
+            if (readsNonSolverField(foreachp->headerp())) return true;
+            AstConstraintForeach* const cloneForeachp = VN_AS(clonep, ConstraintForeach);
+            dropNonSolverItems(foreachp->bodyp(), cloneForeachp->bodyp());
+            return !cloneForeachp->bodyp();
+        }
+        return readsNonSolverField(origp);
+    }
+    // Drop such items of the clones clonesp of the items origsp, in the same order
+    static void dropNonSolverItems(const AstNode* origp, AstNode* clonep) {
+        for (AstNode* nextp; clonep; clonep = nextp, origp = origp->nextp()) {
+            nextp = clonep->nextp();
+            if (isDroppedItem(origp, clonep)) {
+                VL_DO_DANGLING(clonep->unlinkFrBack()->deleteTree(), clonep);
+            }
+        }
+    }
 
     // Clone the constraints of the objects in rand handle array arrRefp into targetClassp
     void cloneElementConstraints(AstNodeExpr* arrRefp, const std::string& prefix,
@@ -647,18 +685,6 @@ class RandomizeMarkVisitor final : public VNVisitor {
             return;
         }
         FileLine* const fl = arrVarp->fileline();
-        // Rand fields that are arrays or objects are not solver variables of the elements (see
-        // createWriteVarForClassFields), so the items of a constraint on them stay ignored, and
-        // its other items are solved. This includes the constraints the element class has cloned
-        // from its own rand objects.
-        const auto isIgnoredItem = [](const AstNode* const itemp) {
-            return itemp->exists([](const AstVarRef* const refp) {
-                const AstVar* const varp = refp->varp();
-                const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
-                return varp->isClassMember() && varp->rand().isRandomizable()
-                       && (VN_IS(dtypep, ClassRefDType) || dtypep->isNonPackedArray());
-            });
-        };
         const auto cloneConstraint = [&](AstConstraint* const constrp) {
             if (!constrp->itemsp()) return;
             AstVar* const idxVarp
@@ -672,14 +698,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             elemp->dtypep(elemRefDtp);
             AstConstraint* const cloneConstrp
                 = cloneObjectConstraint(constrp, elemp, prefix, targetClassp);
-            // The cloned items are in the order of the original ones
-            const AstNode* origItemp = constrp->itemsp();
-            for (AstNode *itemp = cloneConstrp ? cloneConstrp->itemsp() : nullptr, *nextp; itemp;
-                 itemp = nextp, origItemp = origItemp->nextp()) {
-                nextp = itemp->nextp();
-                if (isIgnoredItem(origItemp))
-                    VL_DO_DANGLING(itemp->unlinkFrBack()->deleteTree(), itemp);
-            }
+            if (cloneConstrp) dropNonSolverItems(constrp->itemsp(), cloneConstrp->itemsp());
             if (!cloneConstrp || !cloneConstrp->itemsp()) {
                 if (cloneConstrp) VL_DO_DANGLING(cloneConstrp->deleteTree(), cloneConstrp);
                 VL_DO_DANGLING(elemp->deleteTree(), elemp);
