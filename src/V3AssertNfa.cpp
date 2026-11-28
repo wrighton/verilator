@@ -350,6 +350,8 @@ class SvaNfaBuilder final {
     // (IEEE 1800-2023 16.12.14 outer-wraps-inner).
     std::vector<AstNodeExpr*> m_outerAbortStack;
     bool m_inUnboundedScope = false;  // Sticky: nodes created after inherit liveness
+    // The whole sequence of the attempts, as `f[*m:$] ##1 g`, lowered by buildUnboundedRepTail
+    const AstSExpr* m_repTailRootp = nullptr;
     bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
     // A cover only records matches, so a pending obligation at $finish is not a failure
     bool m_noEosFailure = false;
@@ -710,6 +712,7 @@ class SvaNfaBuilder final {
         // Handle LHS (preExpr)
         SvaStateVertex* currentp = entryVtxp;
         if (AstNodeExpr* const preExprp = sexprp->preExprp()) {
+            if (sexprp == m_repTailRootp) return buildUnboundedRepTail(sexprp, entryVtxp);
             VL_RESTORER(m_inSequencePrefix);
             m_inSequencePrefix = true;
             const BuildResult pre = buildExpr(preExprp, currentp, isTopLevelStep);
@@ -1285,6 +1288,33 @@ class SvaNfaBuilder final {
         return result;
     }
 
+    // Build the whole sequence of a property's attempts `f[*m:$] ##1 g` as the property
+    // `f[*m] ##1 (f until g)`: from the end of f[*m], each tick matches on g, continues while f
+    // holds, and fails otherwise, which no later match can undo (IEEE 1800-2023 16.9.2,
+    // 16.12.13). Likewise `f[*m:$] ##0 g` is `f[*m-1] ##1 (f until_with (f && g))`.
+    BuildResult buildUnboundedRepTail(AstSExpr* sexprp, SvaStateVertex* entryVtxp) {
+        FileLine* const flp = sexprp->fileline();
+        const AstSConsRep* const repp = VN_AS(sexprp->preExprp(), SConsRep);
+        const bool fused = getConstUInt(VN_AS(sexprp->delayp(), Delay)->lhsp()) == 0;
+        AstNodeExpr* const fp = repp->exprp();
+        AstNodeExpr* const gp = sexprp->exprp();
+        AstNodeExpr* const endp
+            = fused ? new AstLogAnd{flp, fp->cloneTreePure(false), gp->cloneTreePure(false)}
+                    : gp->cloneTreePure(false);
+        endp->dtypeSetBit();
+        AstNodeExpr* treep
+            = new AstUntil{flp, fp->cloneTreePure(false), endp, /*strong=*/false, fused};
+        treep->dtypeSetBit();
+        const unsigned prefixN = getConstUInt(repp->countp()) - (fused ? 1 : 0);
+        if (prefixN) {
+            treep = new AstSExpr{
+                flp, new AstSConsRep{flp, fp->cloneTreePure(false), new AstConst{flp, prefixN}},
+                new AstDelay{flp, new AstConst{flp, 1U}, /*isCycle=*/true}, treep};
+            treep->dtypeSetBit();
+        }
+        return buildFromLoweringTree(treep, entryVtxp, /*isTopLevelStep=*/true);
+    }
+
     // Empty common-length intersection -- unequal fixed lengths, or disjoint
     // ranged lengths. IEEE 1800-2023 16.9.6 requires both operands to match
     // over a window of the same length, so with no common length the intersect
@@ -1622,6 +1652,26 @@ public:
         , m_noEosFailure{noEosFailure}
         , m_isCoverSeq{isCoverSeq}
         , m_isSeqEvent{isSeqEvent} {}
+
+    void repTailRoot(const AstSExpr* sexprp) { m_repTailRootp = sexprp; }
+    // True if sexprp is `f[*m:$] ##1 g` or `f[*m:$] ##0 g`, f and g booleans, m >= 1
+    static bool isUnboundedRepTail(const AstSExpr* sexprp) {
+        const AstSConsRep* const repp = VN_CAST(sexprp->preExprp(), SConsRep);
+        const AstDelay* const delayp = VN_AS(sexprp->delayp(), Delay);
+        return repp && repp->unbounded() && getConstUInt(repp->countp()) >= 1
+               && !repp->exprp()->isMultiCycleSva() && !delayp->isRangeDelay()
+               && getConstUInt(delayp->lhsp()) <= 1 && !sexprp->exprp()->isMultiCycleSva();
+    }
+    // The sequence of an assertion's attempts, the consequent of any implications other than
+    // followed-by, if it is one buildUnboundedRepTail lowers, or nullptr
+    static const AstSExpr* repTailRoot(const AstNodeExpr* nodep) {
+        while (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            if (implp->isFollowedBy()) return nullptr;
+            nodep = implp->rhsp();
+        }
+        const AstSExpr* const sexprp = VN_CAST(nodep, SExpr);
+        return sexprp && isUnboundedRepTail(sexprp) ? sexprp : nullptr;
+    }
 
     // Reset scope between antecedent and consequent: liveness must not leak.
     // m_outerAbortStack survives: an abort wrapping the implication covers the
@@ -3349,6 +3399,7 @@ class AssertNfaVisitor final : public VNVisitor {
         SvaGraph graph;
         SvaNfaBuilder builder{graph,      m_modp,     m_propTempNames,
                               isCoverSeq, isSeqEvent, coverp != nullptr};
+        if (!negated && !coverp) builder.repTailRoot(SvaNfaBuilder::repTailRoot(seqBodyp));
 
         const BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
         if (result.valid()) wireMatchAndMidSources(graph, result, flp);
