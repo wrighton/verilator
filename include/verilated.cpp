@@ -4865,11 +4865,7 @@ void VerilatedEvalLoop::evalImpl() {
         m_model.evalSample();
         // Initial blocks
         m_model.evalInitial();
-        // The 'Settle' region, iterated until it converges
-        uint32_t stlIterCount = 0;
-        do {
-            checkConvergence(++stlIterCount, "Settle", &VerilatedModel::dumpTriggersStl);
-        } while (m_model.evalStl(stlIterCount == 1));
+        settle();
         m_model.m_didInit = true;
     } else {
         // Sampled values are collected before anything can read them

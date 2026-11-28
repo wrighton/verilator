@@ -1,0 +1,15 @@
+%Error-UNSUPPORTED: t/t_func_upward_wrapper_unsup.v:41:27: Unsupported: Upwards reference to parameter 'P' with a different data type in each instance
+                                                         : ... note: In instance 't.wb.m.l'
+                                                         : ... Suggest declaring the parameter with an explicit data type
+   41 |     sized = int'(wide_mid.P);   
+      |                           ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_func_upward_wrapper_unsup.v:42:20: Unsupported: Upwards reference to task/function 'read' using default argument values that differ in each instance
+                                                         : ... note: In instance 't.wb.m.l'
+   42 |     got = wide_mid.read();   
+      |                    ^~~~
+%Error-UNSUPPORTED: t/t_func_upward_wrapper_unsup.v:19:21: Unsupported: Upwards reference to task/function 'read' using default argument values that differ in each instance
+                                                         : ... note: In instance 't.b.m.l'
+   19 |   initial got = mid.read();   
+      |                     ^~~~
+%Error: Exiting due to

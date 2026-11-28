@@ -6941,24 +6941,11 @@ sequence_declarationBodyExpr<nodeExprp>:  // IEEE: part of sequence_declaration
         ;
 
 property_spec<propSpecp>:               // IEEE: property_spec
-        //UNSUP: This rule has been super-specialized to what is supported now
-        //UNSUP remove below
-                '@' '(' event_expression ')' yDISABLE yIFF '(' expr ')' property_exprSpec
-                        { $$ = $10; $$->fileline($1); $$->addSensesp($3); $$->disablep($8); }
-        |       '@' '(' event_expression ')' property_exprSpec
-                        { $$ = $5; $$->fileline($1); $$->addSensesp($3); }
-        |       '@' senitemVar property_exprSpec
-                        { $$ = $3; $$->fileline($1); $$->addSensesp($2); }
-        |       '@' senitemVar yDISABLE yIFF '(' expr ')' property_exprSpec
-                        { $$ = $8; $$->fileline($1); $$->addSensesp($2); $$->disablep($6); }
-        |       yDISABLE yIFF '(' expr ')' '@' '(' event_expression ')' property_exprSpec
-                        { $$ = $10; $$->fileline($1); $$->addSensesp($8); $$->disablep($4); }
-        |       yDISABLE yIFF '(' expr ')' '@' senitemVar property_exprSpec
-                        { $$ = $8; $$->fileline($1); $$->addSensesp($7); $$->disablep($4); }
-        //UNSUP remove above
-        |       yDISABLE yIFF '(' expr ')' property_exprSpec
-                        { $$ = $6; $$->fileline($4->fileline()); $$->disablep($4); }
-        |       property_exprSpec                       { $$ = $1; }
+        //                      // A clocking_event before a plain property_expr parses via pexpr
+                property_exprSpec                       { $$ = $1; }
+        |       clocking_eventE yDISABLE yIFF '(' expr ')' property_exprSpec
+                        { $$ = $7; $$->fileline($1 ? $<fl>1 : $5->fileline());
+                          $$->addSensesp($1); $$->disablep($5); }
         ;
 
 property_exprSpec<propSpecp>:  // A property expression plus explicit weak/strong strength
@@ -7045,11 +7032,6 @@ pexpr<nodeExprp>:  // IEEE: property_expr  (The name pexpr is important as regex
         //                      // Instead we use pexpr to prevent conflicts
         |       ~o~pexpr yP_ORMINUSGT pexpr             { $$ = new AstImplication{$2, $1, $3, true}; }
         |       ~o~pexpr yP_OREQGT pexpr                { $$ = new AstImplication{$2, $1, $3, false}; }
-        //                      // IEEE: clocking_event property_expr, as a consequent (16.13.1)
-        |       ~o~pexpr yP_ORMINUSGT clocking_event pexpr
-                        { $$ = new AstImplication{$2, $1, new AstSClocked{$<fl>3, $3, $4}, true}; }
-        |       ~o~pexpr yP_OREQGT clocking_event pexpr
-                        { $$ = new AstImplication{$2, $1, new AstSClocked{$<fl>3, $3, $4}, false}; }
         //
         //                      // IEEE-2009: property_statement
         //                      // IEEE-2012: yIF and yCASE
@@ -7138,9 +7120,6 @@ sexpr<nodeExprp>:  // ==IEEE: sequence_expr  (The name sexpr is important as reg
                         { $$ = new AstSExpr{$<fl>1, $1, $2}; }
         |       ~p~sexpr cycle_delay_range sexpr %prec prPOUNDPOUND_MULTI
                         { $$ = new AstSExpr{$<fl>2, $1, $2, $3}; }
-        //                      // IEEE: clocking_event sequence_expr, after a delay (16.13.1)
-        |       ~p~sexpr cycle_delay_range clocking_event sexpr %prec prPOUNDPOUND_MULTI
-                        { $$ = new AstSExpr{$<fl>2, $1, $2, new AstSClocked{$<fl>3, $3, $4}}; }
         //
         //                      // IEEE: expression_or_dist [ boolean_abbrev ]
         //                      // Note expression_or_dist includes "expr"!
@@ -7188,11 +7167,6 @@ sexpr<nodeExprp>:  // ==IEEE: sequence_expr  (The name sexpr is important as reg
         //                      // '(' sequence_expr {',' sequence_match_item } ')' [ boolean_abbrev ]
         //                      // "'(' sexpr ')' boolean_abbrev" matches "[sexpr:'(' expr ')'] boolean_abbrev" so we can drop it
         |       '(' ~p~sexpr ')'                        { $$ = $2; }
-        //                      // IEEE: '(' sequence_expr ')' with sequence_expr ::= clocking_event sequence_expr
-        //                      // and through the pexpr copy, the same for property_expr
-        //                      // Clocking event as supported by property_spec
-        |       '(' '@' '(' event_expression ')' ~p~sexpr ')'   { $$ = new AstSClocked{$<fl>2, $4, $6}; }
-        |       '(' '@' senitemVar ~p~sexpr ')'         { $$ = new AstSClocked{$<fl>2, $3, $4}; }
         |       '(' ~p~sexpr ',' sequence_match_itemList ')'
                         { AstExprStmt* const newp = new AstExprStmt{$3, $4, $2};
                           newp->matchItems(true);

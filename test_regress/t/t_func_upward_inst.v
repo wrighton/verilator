@@ -4,12 +4,39 @@
 // SPDX-FileCopyrightText: 2026 Michael Wrighton
 // SPDX-License-Identifier: CC0-1.0
 
+// Upwards references (IEEE 1800-2023 23.8) resolve from each instance, so read the
+// declarations of the instance above each
+
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t;
   mid #(.W(3)) m3 ();
   mid #(.W(5)) m5 ();
   mid #(.W(7)) m7 ();
   parent_a pa ();
   parent_b pb ();
+
+  initial begin
+    #1;
+    `checkd(m3.l.ret, 7);
+    `checkd(m5.l.ret, 31);
+    `checkd(m7.l.ret, 127);
+    `checkd(m3.l.arg, 1);
+    `checkd(m5.l.arg, 1);
+    `checkd(m7.l.arg, 1);
+    `checkd(m3.l.def, 3);
+    `checkd(m5.l.def, 5);
+    `checkd(m7.l.def, 7);
+    `checkd(pa.c.named, 210);
+    `checkd(pb.c.named, 210);
+    `checkd(pa.c.def, 1);
+    `checkd(pb.c.def, 2);
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
 endmodule
 
 module mid #(

@@ -311,6 +311,22 @@ static AstNodeExpr* sampled(AstNodeExpr* exprp) {
     return new AstSampled{exprp->fileline(), exprp, exprp->dtypep(), true};
 }
 
+// $sampled clone of condp, nullptr if condp is nullptr
+static AstNodeExpr* sampledClone(AstNodeExpr* condp) {
+    return condp ? sampled(condp->cloneTreePure(false)) : nullptr;
+}
+
+// AND of $sampled clones of condps[startIdx..], nullptr if there are none
+static AstNodeExpr* sampledConjunction(FileLine* flp, const std::vector<AstNodeExpr*>& condps,
+                                       size_t startIdx = 0) {
+    AstNodeExpr* resultp = nullptr;
+    for (size_t i = startIdx; i < condps.size(); ++i) {
+        AstNodeExpr* const sp = sampledClone(condps[i]);
+        resultp = resultp ? new AstLogAnd{flp, resultp, sp} : sp;
+    }
+    return resultp;
+}
+
 static VAssertCtlQuery assertPassOnQuery(bool vacuous) {
     return vacuous ? VAssertCtlQuery::PASS_VACUOUS : VAssertCtlQuery::PASS_NONVACUOUS;
 }
@@ -1340,8 +1356,7 @@ class SvaNfaBuilder final {
             SvaStateVertex* const sinkp = m_graph.createStateVertex();
             sinkp->m_isRejectSink = true;
             const auto addCheck = [&](SvaStateVertex* fromp) {
-                SvaTransEdge* const rejEdgep
-                    = guardedLink(fromp, sinkp, sampled(propp->cloneTreePure(false)), flp);
+                SvaTransEdge* const rejEdgep = guardedLink(fromp, sinkp, sampledClone(propp), flp);
                 rejEdgep->m_rejectOnFail = true;
             };
             SvaStateVertex* const holdp = scopedCreateVertex();
@@ -1464,7 +1479,7 @@ class SvaNfaBuilder final {
     // (a leaf can be e.g. 'not (x |-> y)')
     static bool isPlainBoolean(const AstNodeExpr* condp) {
         return !condp->exists([](const AstNodeExpr* np) {
-            return np->isMultiCycleSva() || VN_IS(np, Implication) || VN_IS(np, SEventually);
+            return np->isMultiCycleSva() || VN_IS(np, Implication) || VN_IS(np, Eventually);
         });
     }
     // Whether an implication decides its vacuous pass on its first tick, with a boolean
@@ -1742,7 +1757,7 @@ class SvaNfaBuilder final {
         return nodep->exists([](const AstNodeExpr* const np) {
             const AstLogNot* const notp = VN_CAST(np, LogNot);
             return VN_IS(np, Implication) || VN_IS(np, Until) || VN_IS(np, PropAlways)
-                   || VN_IS(np, SEventually) || VN_IS(np, AbortOn)
+                   || VN_IS(np, Eventually) || VN_IS(np, AbortOn)
                    || (notp && hasMultiCycleExpr(notp->lhsp()));
         });
     }
@@ -1791,7 +1806,7 @@ class SvaNfaBuilder final {
     // an implication other than followed-by, or s_eventually, which is not a top-level step there
     static bool reportsOwnNegated(const AstNodeExpr* nodep) {
         const AstImplication* const implp = VN_CAST(nodep, Implication);
-        return (implp && !implp->isFollowedBy()) || VN_IS(nodep, SEventually);
+        return (implp && !implp->isFollowedBy()) || VN_IS(nodep, Eventually);
     }
     // Whether `lhsp or rhsp` is a sequence 'or' of mergeable operands, some multi-cycle, with
     // more operands than buildFixedSeqOrProp tracks
@@ -1878,6 +1893,9 @@ class SvaNfaBuilder final {
                                        " lengths in a negated property (IEEE 1800-2023 16.12.3)");
             return BuildResult::failWithError();
         }
+        // A disjunction operand of a body disjunction is a body leaf too, e.g. x || y || z
+        VL_RESTORER(m_wantBoolLeaf);
+        m_wantBoolLeaf = wantBoolLeaf;
         const BuildResult lhs = buildExpr(lhsp, entryVtxp);
         const BuildResult rhs = buildExpr(rhsp, entryVtxp);
         if (!lhs.valid() || !rhs.valid()) {  // LCOV_EXCL_START -- sub-build fail bail
@@ -1940,12 +1958,7 @@ class SvaNfaBuilder final {
                 std::vector<SvaStateVertex*> endps = opp->midSources;
                 endps.push_back(opp->termVertexp);
                 for (SvaStateVertex* const endp : endps) {
-                    if (opp->finalCondp) {
-                        guardedLink(endp, mergeVtxp,
-                                    sampled(opp->finalCondp->cloneTreePure(false)), flp);
-                    } else {
-                        guardedLink(endp, mergeVtxp, flp);
-                    }
+                    guardedLink(endp, mergeVtxp, sampledClone(opp->finalCondp), flp);
                 }
             }
         }
@@ -2062,13 +2075,13 @@ class SvaNfaBuilder final {
             SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
             sinkVtxp->m_isRejectSink = true;
             if (lhsRejects) {
-                SvaTransEdge* const ep = m_graph.addLink(
-                    lhs.termVertexp, sinkVtxp, sampled(lhs.finalCondp->cloneTreePure(false)));
+                SvaTransEdge* const ep
+                    = m_graph.addLink(lhs.termVertexp, sinkVtxp, sampledClone(lhs.finalCondp));
                 ep->m_rejectOnFail = true;
             }
             if (rhsRejects) {
-                SvaTransEdge* const ep = m_graph.addLink(
-                    rhs.termVertexp, sinkVtxp, sampled(rhs.finalCondp->cloneTreePure(false)));
+                SvaTransEdge* const ep
+                    = m_graph.addLink(rhs.termVertexp, sinkVtxp, sampledClone(rhs.finalCondp));
                 ep->m_rejectOnFail = true;
             }
         }
@@ -2936,14 +2949,14 @@ private:
     }
 
     // s_eventually p per IEEE 1800-2023 16.12.13, built as the equivalent `1 s_until p`
-    BuildResult buildSEventually(AstSEventually* nodep, SvaStateVertex* entryVtxp,
+    BuildResult buildSEventually(AstEventually* nodep, SvaStateVertex* entryVtxp,
                                  bool isTopLevelStep) {
         // s_eventually s_eventually p is s_eventually p
         AstNodeExpr* exprp = nodep->exprp();
-        while (AstSEventually* const innerp = VN_CAST(exprp, SEventually)) exprp = innerp->exprp();
+        while (AstEventually* const innerp = VN_CAST(exprp, Eventually)) exprp = innerp->exprp();
         if (exprp->exists([](const AstNodeExpr* np) {
                 return VN_IS(np, Until) || VN_IS(np, AbortOn) || VN_IS(np, PropAlways)
-                       || VN_IS(np, SEventually) || VN_IS(np, Implication);
+                       || VN_IS(np, Eventually) || VN_IS(np, Implication);
             })) {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: property operand of 's_eventually'");
             return BuildResult::failWithError();
@@ -3917,7 +3930,7 @@ public:
         if (AstUntil* const untilp = VN_CAST(nodep, Until)) {
             return buildUntil(untilp, entryVtxp, isTopLevelStep);
         }
-        if (AstSEventually* const evp = VN_CAST(nodep, SEventually)) {
+        if (AstEventually* const evp = VN_CAST(nodep, Eventually)) {
             return buildSEventually(evp, entryVtxp, isTopLevelStep);
         }
         // A 'not' of a multi-cycle operand is no boolean leaf; at the top it is unwrapped
@@ -3990,11 +4003,14 @@ public:
         // Use raw createStateVertex() so trigVtxp starts without liveness --
         // reaching the antecedent terminal is a definitive event.
         SvaStateVertex* const trigVtxp = m_graph.createStateVertex();
-        AstNodeExpr* antMatchp = nullptr;
-        if (antResult.finalCondp) {
-            antMatchp = sampled(antResult.finalCondp->cloneTreePure(false));
-            // The first eligible tick of a range delay is a separate source; as at the
-            // terminal, a throughout guard dropped on that tick prevents the match
+        AstNodeExpr* antMatchp = sampledClone(antResult.finalCondp);
+        // finalCondp is cloned into the Sampled nodes; if the original is
+        // not parented anywhere in the AST anymore it must be freed here
+        // or ASan flags it as a leak (e.g. t_sequence_bool_ops).
+        freeUnlinkedCondp(antResult.finalCondp);
+        // The first eligible tick of a range delay is a separate source; as at the
+        // terminal, a throughout guard dropped on that tick prevents the match
+        if (antMatchp) {
             for (SvaStateVertex* const midp : antResult.midSources) {
                 AstNodeExpr* midMatchp = antMatchp->cloneTreePure(false);
                 for (AstNodeExpr* const condp : midp->m_throughoutConds) {
@@ -4002,12 +4018,6 @@ public:
                         = new AstLogAnd{flp, midMatchp, sampled(condp->cloneTreePure(false))};
                 }
                 m_graph.addLink(midp, trigVtxp, midMatchp);
-            }
-            // finalCondp is cloned into the Sampled nodes; if the original is
-            // not parented anywhere in the AST anymore it must be freed here
-            // or ASan flags it as a leak (e.g. t_sequence_bool_ops).
-            if (!antResult.finalCondp->backp()) {
-                VL_DO_DANGLING(antResult.finalCondp->deleteTree(), antResult.finalCondp);
             }
         }
         // Antecedent vertices do not reject on a dropped throughout guard, so a guard
@@ -6229,17 +6239,14 @@ public:
             }
             // Negated assert/assume: output = !match, where a vacuous success is a match.
             AstNodeExpr* matchp = terminalActivep;
-            if (matchCondp) {
-                AstNodeExpr* const sampledCondp = sampled(matchCondp->cloneTreePure(false));
-                matchp = new AstLogAnd{flp, matchp, sampledCondp};
-            }
+            if (matchCondp) matchp = new AstLogAnd{flp, matchp, sampledClone(matchCondp)};
             if (sigs.vacuousp) matchp = new AstLogOr{flp, matchp, sigs.vacuousp};
             if (outMatchpp) {
                 // Without a final condition, reaching a terminal is a match, not a rejection
                 AstNodeExpr* notPMatchp = nullptr;
                 if (matchCondp && rejectBasep) {
                     notPMatchp = new AstLogAnd{flp, rejectBasep->cloneTreePure(false),
-                                               new AstLogNot{flp, sampledCondp}};
+                                               new AstLogNot{flp, sampledClone(matchCondp)}};
                 }
                 if (throughoutRejectp)
                     notPMatchp = orExprs(flp, notPMatchp, throughoutRejectp->cloneTreePure(false));
@@ -7993,7 +8000,7 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
                 return VN_AS(sexprp->delayp(), Delay)->isRangeDelay();
             }
             return exprp->isMultiCycleSva() || VN_IS(exprp, Implication) || VN_IS(exprp, SConsRep)
-                   || VN_IS(exprp, SEventually) || VN_IS(exprp, SClocked);
+                   || VN_IS(exprp, Eventually) || VN_IS(exprp, SClocked);
         };
         m_parallel
             = (antecedentp && antecedentp->exists(parallelFunc)) || bodyp->exists(parallelFunc);
@@ -8459,16 +8466,6 @@ class AssertNfaVisitor final : public VNVisitor {
                 replaceBodyOnBuildError(specp->fileline(), specp, true);
                 return true;
             }
-            for (const AstSenItem* sp = clockedp->sensesp(); sp;
-                 sp = VN_CAST(sp->nextp(), SenItem)) {
-                if (!sp->edgeType().anEdge()) {
-                    clockedp->v3warn(E_UNSUPPORTED,
-                                     "Unsupported: non-edge clocking event on a sequence; "
-                                     "use an edge such as @(posedge clk)");
-                    replaceBodyOnBuildError(specp->fileline(), specp, true);
-                    return true;
-                }
-            }
             specp->addSensesp(clockedp->sensesp()->unlinkFrBackWithNext());
             unwrapClockedSeq(clockedp);
         }
@@ -8887,7 +8884,7 @@ class AssertNfaVisitor final : public VNVisitor {
         // A side effect is left where V3AssertPre evaluates it once. An s_eventually waits for
         // its operand.
         if (!nodep->isPure() || hasMultiCycleExpr(nodep) || nodep->exists([](const AstNode* np) {
-                return VN_IS(np, Implication) || VN_IS(np, SEventually);
+                return VN_IS(np, Implication) || VN_IS(np, Eventually);
             })) {
             return false;
         }
@@ -8939,6 +8936,14 @@ class AssertNfaVisitor final : public VNVisitor {
             return nullptr;
         }
         if (AstPropSpec* const specp = VN_CAST(assertp->propp(), PropSpec)) {
+            // Blackbox only the ranged eventually, leaving surrounding sequences to the NFA.
+            specp->propp()->foreach([this](AstEventually* ep) {
+                if (!ep->loBoundp()) return;
+                ep->v3warn(E_UNSUPPORTED,
+                           "Unsupported: " << ep->verilogKwd() << "[] (in property expression)");
+                ep->replaceWith(new AstConst{ep->fileline(), AstConst::BitTrue{}});
+                VL_DO_DANGLING(pushDeletep(ep), ep);
+            });
             // Leave a chain of property instances with a goto or nonconsecutive repetition to
             // V3AssertPre: the NFA lowering reports one fail for attempts failing in the same
             // cycle, but each attempt fails (IEEE 1800-2023 16.14.1). V3AssertPre keeps no
@@ -9112,7 +9117,7 @@ class AssertNfaVisitor final : public VNVisitor {
     // with one (see oneThreadPerAttempt), or an until or s_eventually of booleans, waiting in
     // one state until it resolves
     static bool oneThreadPerConsequent(const AstNodeExpr* nodep) {
-        while (const AstSEventually* const evp = VN_CAST(nodep, SEventually)) nodep = evp->exprp();
+        while (const AstEventually* const evp = VN_CAST(nodep, Eventually)) nodep = evp->exprp();
         if (const AstUntil* const untilp = VN_CAST(nodep, Until)) {
             return oneThreadPerAttempt(untilp->lhsp(), false)
                    && oneThreadPerAttempt(untilp->rhsp(), false);
@@ -9349,7 +9354,7 @@ class AssertNfaVisitor final : public VNVisitor {
         // Inherit module defaults (IEEE 14.12, 16.15) when assertion has none. A clock inferred
         // from the always procedure takes precedence over default clocking (IEEE 1800-2023 16.16).
         if (!propp->sensesp() && m_defaultClockingp && !m_alwaysClockp) {
-            propp->sensesp(m_defaultClockingp->sentreep()->sensesp()->cloneTree(true));
+            propp->addSensesp(m_defaultClockingp->sentreep()->sensesp()->cloneTree(true));
         }
         if (!propp->disablep() && m_defaultDisablep && !isSeqEvent) {
             propp->disablep(m_defaultDisablep->condp()->cloneTreePure(true));
@@ -9546,7 +9551,7 @@ class AssertNfaVisitor final : public VNVisitor {
         const bool failActions
             = assertAssertp
               && (assertAssertp->failsp() || !propp->propp()->exists([](AstNodeExpr* np) {
-                     return !np->isPure() || VN_IS(np, SEventually);
+                     return !np->isPure() || VN_IS(np, Eventually);
                  }));
         const bool replayFails = failActions && !negated;
         const bool replayPasses

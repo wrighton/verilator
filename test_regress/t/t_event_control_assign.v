@@ -45,6 +45,27 @@ module t;
       `checkd(queue_events[0][1] == queue_events[1][1], 0);
     endtask
 
+    // New elements appended while a reference to an element is live are distinct too
+    event pinned_queue[$][2];
+
+    task append_while_referenced(ref event pinned, input event source);
+      pinned_queue[pinned_queue.size()][0] = source;
+      pinned_queue[pinned_queue.size()][0] = source;
+      ->pinned;
+    endtask
+
+    task check_queue_referenced();
+      event source;
+      pinned_queue[0][0] = source;
+      append_while_referenced(pinned_queue[0][0], source);
+      `checkd(pinned_queue.size(), 3);
+      `checkd(source.triggered, 1);
+      `checkd(pinned_queue[1][1] == pinned_queue[2][1], 0);
+      ->pinned_queue[1][1];
+      `checkd(pinned_queue[1][1].triggered, 1);
+      `checkd(pinned_queue[2][1].triggered, 0);
+    endtask
+
     task check_associative_array();
       event events[int][2];
       events[0][0] = evt1;
@@ -90,6 +111,7 @@ module t;
     foo1 = new;
     foo1.check_dynamic_array();
     foo1.check_queue();
+    foo1.check_queue_referenced();
     foo1.check_associative_array();
 
     evt_recv_cnt = 0;

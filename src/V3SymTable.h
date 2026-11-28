@@ -224,7 +224,7 @@ public:
         IdNameMap& nameMap = namesWritable().m_idName;
         if (name.empty()) {
             insertAt(nameMap.end(), name, entp);
-            return;
+            return nullptr;
         }
         const auto it = nameMap.lower_bound(name);
         if (it != nameMap.end() && it->first == name) {
@@ -233,10 +233,9 @@ public:
             VSymEnt* const replacedp = it->second;
             it->second = entp;  // Replace
             noteWildSourceEdit();
-        } else {
-            insertAt(it, name, entp);
+            return replacedp;
         }
-        insert(name, entp);
+        insertAt(it, name, entp);
         return nullptr;
     }
     VSymEnt* findIdFlat(const string& name) {
@@ -263,14 +262,6 @@ public:
         // Then import it from a wildcard imported package
         return importWildCandidate(name);
     }
-    VSymEnt* findIdFlatOrShadowed(const string& name) {
-        // Find identifier without looking upward, also in the same-named entries of earlier
-        // generate alternatives, as V3Param has yet to choose between them (IEEE 1800-2023 27.5)
-        for (VSymEnt* symp = this; symp; symp = symp->m_shadowedp) {
-            if (VSymEnt* const foundp = symp->findIdFlat(name)) return foundp;
-        }
-        return nullptr;
-    }
     // Whether name is, or on lookup would be, imported here through a wildcard import
     bool wildImportable(const string& name) {
         const IdNameMap& nameMapr = idNameMap();
@@ -278,6 +269,15 @@ public:
         if (it != nameMapr.end()) return it->second->m_wildImported;
         if (ifaceImportSource(name)) return false;  // Imported from an interface first
         return wildImportSourcep(name);
+    }
+    VSymEnt* findIdFlatOrShadowed(const string& name) {
+        // Find identifier without looking upward, also in the same-named entries of earlier
+        // generate alternatives, as V3Param has yet to choose between them (IEEE 1800-2023 27.5).
+        // A scoped name, so it does not mark the entry referenced
+        for (VSymEnt* symp = this; symp; symp = symp->m_shadowedp) {
+            if (VSymEnt* const foundp = symp->findIdFlatNoRef(name)) return foundp;
+        }
+        return nullptr;
     }
     static bool checkSimilarname(const AstNode* nodep) {
         // Only declarations that can contribute a name to the netlist handed

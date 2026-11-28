@@ -11,6 +11,10 @@
                                                          : ... note: In instance 't'
    37 |   assert property (@(posedge clk) eventually[1: 2] delayed);
       |                                   ^~~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_eventually_unsup.v:19:5: Unsupported: property operand of 's_eventually'
+                                                        : ... note: In instance 't'
+   19 |     s_eventually always[2: 5] clk;
+      |     ^~~~~~~~~~~~
 %Error-UNSUPPORTED: t/t_property_eventually_unsup.v:15:5: Unsupported: eventually[] (in property expression)
                                                         : ... note: In instance 't'
    15 |     eventually[2: 5] clk;
@@ -47,10 +51,6 @@
                                                          : ... note: In instance 't'
    40 |   assert property (@(negedge clk) s_eventually ##1 1);
       |                                   ^~~~~~~~~~~~
-%Error-UNSUPPORTED: t/t_property_eventually_unsup.v:19:5: Unsupported: property/sequence operator inside s_eventually
-                                                        : ... note: In instance 't'
-   19 |     s_eventually always[2: 5] clk;
-      |     ^~~~~~~~~~~~
 %Error-UNSUPPORTED: t/t_property_eventually_unsup.v:42:35: Unsupported: cycle delay in s_eventually
                                                          : ... note: In instance 't'
    42 |   assert property (@(posedge clk) s_eventually (not (clk ##1 clk)));

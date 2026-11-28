@@ -1189,10 +1189,10 @@ AstNode* V3AssertCommon::checkSvaUnboundedActuals(
     AstNode* nodep, const std::unordered_map<const AstVar*, AstNodeExpr*>& portMap,
     AstNode* instp) {
     // A formal argument with a '$' actual argument may only be referenced as the maximum of a
-    // cycle_delay_const_range_expression, of a cycle delay, an always, or a repetition, or as the
-    // actual argument of a nested instance, which is checked when that is substituted (IEEE
-    // 1800-2023 16.8). Run before the substitution, so that a '$' written in the body is not
-    // mistaken for one from an actual argument.
+    // cycle_delay_const_range_expression, of a cycle delay, an always, an eventually, or a
+    // repetition, or as the actual argument of a nested instance, which is checked when that is
+    // substituted (IEEE 1800-2023 16.8). Run before the substitution, so that a '$' written in
+    // the body is not mistaken for one from an actual argument.
     const bool anyUnbounded = std::any_of(portMap.begin(), portMap.end(), [](const auto& it) {
         return VN_IS(it.second, Unbounded);
     });
@@ -1202,6 +1202,7 @@ AstNode* V3AssertCommon::checkSvaUnboundedActuals(
         if (delayp->rhsp()) legalps.insert(delayp->rhsp());
     });
     nodep->foreach([&](const AstPropAlways* alwaysp) { legalps.insert(alwaysp->hiBoundp()); });
+    nodep->foreach([&](const AstEventually* evp) { legalps.insert(evp->hiBoundp()); });
     nodep->foreach([&](const AstSConsRep* repp) { legalps.insert(repp->maxCountp()); });
     // Unlike a literal '$', which they do not support either
     std::unordered_set<const AstNode*> unsupps;

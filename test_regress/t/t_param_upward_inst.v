@@ -4,6 +4,14 @@
 // SPDX-FileCopyrightText: 2026 Michael Wrighton
 // SPDX-License-Identifier: CC0-1.0
 
+// Upwards references (IEEE 1800-2023 23.8) resolve from each instance, so read the
+// declarations of the instance above each
+
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t;
   mid #(.LSB(0), .UNTYPED(8'd3)) m0 ();
   mid #(.LSB(1), .UNTYPED(16'd5)) m1 ();
@@ -12,6 +20,29 @@ module t;
   same #(.W(16), .UNTYPED(16'd3)) s16 ();
   zero_ext #(.W(4)) z4 ();
   zero_ext #(.W(8)) z8 ();
+
+  initial begin
+    #1;
+    `checkd(m0.l.ranged, 1);
+    `checkd(m1.l.ranged, 1);
+    `checkd(m2.l.ranged, 1);
+    `checkd(m0.l.sized, 3);
+    `checkd(m1.l.sized, 5);
+    `checkd(m2.l.sized, 7);
+    `checkd(m0.l.enumed, 1);
+    `checkd(m1.l.enumed, 2);
+    `checkd(m2.l.enumed, 3);
+    `checkd(s8.r.typed_cat, 32'h103);
+    `checkd(s16.r.typed_cat, 32'h10003);
+    `checkd(s8.r.untyped_cat, 32'h103);
+    `checkd(s16.r.untyped_cat, 32'h10003);
+    `checkd(z4.r.unsigned_add, 15);
+    `checkd(z8.r.unsigned_add, 255);
+    `checkd(z4.r.unsigned_cast, 15);
+    `checkd(z8.r.unsigned_cast, 255);
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
 endmodule
 
 module mid #(
@@ -68,7 +99,9 @@ module zero_ext_reader;
   int unsigned_add;
   int unsigned_cast;
   initial begin
+    // verilator lint_off WIDTHEXPAND
     unsigned_add = zero_ext.NEGATIVE + 32'd0;
+    // verilator lint_on WIDTHEXPAND
     unsigned_cast = 32'(unsigned'(zero_ext.NEGATIVE));
   end
 endmodule

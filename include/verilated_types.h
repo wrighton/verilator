@@ -771,6 +771,13 @@ public:
     VL_ATTR_ALWINLINE void clearFired() override { (*this)->m_state &= ~static_cast<QData>(1); }
 };
 
+// Type trait: whether T is an event, or an unpacked array of events
+template <typename T_Element>
+struct VlIsEvent final : std::is_base_of<VlEventBase, T_Element> {};
+template <typename T_Element, std::size_t N_Depth>
+struct VlIsEvent<VlUnpacked<T_Element, N_Depth>> final
+    : std::integral_constant<bool, VlIsEvent<T_Element>::value> {};
+
 inline VlProcess::~VlProcess() {
     if (m_parentp) m_parentp->detach(this);
     if (t_currentp == this) currentp(m_parentp.get());
@@ -1376,11 +1383,20 @@ private:
         }
         q.applyBound();
     }
+    // Resize the storage. A new element holding an event has its own, not a copy of the
+    // default's, which would share its state.
+    void resizeStorage(size_t size) {
+        if (VlIsEvent<T_Value>::value) {
+            m_deque.resize(size);
+        } else {
+            m_deque.resize(size, atDefault());
+        }
+    }
     // Resize, removing elements from the back as pop_back does
     static void refResize(VlQueue& q, size_t size) {
         while (q.m_refs.hasPins() && size < q.constSize()) refPop(q, false);
         if (size > q.constSize()) q.guardEnd(false, size - q.constSize());
-        q.m_deque.resize(size, q.atDefault());
+        q.resizeStorage(size);
     }
     // Discard elements beyond the bound, with the warning IEEE 1800-2023 7.10.5 requires
     void applyBound() {
@@ -1520,8 +1536,16 @@ public:
         }
     }
 
-    bool operator==(const VlQueue& rhs) const { return m_deque == rhs.m_deque; }
-    bool operator!=(const VlQueue& rhs) const { return m_deque != rhs.m_deque; }
+    template <typename T_Rhs, size_t N_RhsMaxSize>
+    bool operator==(const VlQueue<T_Rhs, N_RhsMaxSize>& rhs) const {
+        return std::equal(m_deque.begin(), m_deque.end(),
+                          rhs.privateDeque().begin(),  // lintok-begin-on-ref
+                          rhs.privateDeque().end());  // lintok-begin-on-ref
+    }
+    template <typename T_Rhs, size_t N_RhsMaxSize>
+    bool operator!=(const VlQueue<T_Rhs, N_RhsMaxSize>& rhs) const {
+        return !(*this == rhs);
+    }
     // Lexicographic, a strict weak ordering consistent with operator==
     bool operator<(const VlQueue& rhs) const { return m_deque < rhs.m_deque; }
 
@@ -1585,7 +1609,7 @@ public:
 
     void resize(size_t size) {
         if (VL_UNLIKELY(m_refs.any())) return refResizing(size);
-        m_deque.resize(size, atDefault());
+        resizeStorage(size);
     }
     // Assign the elements of a range, as DPI does from a C layout copy
     template <typename T_Iterator>
@@ -2158,6 +2182,7 @@ private:
     // MEMBERS
     Map m_map;  // State of the assoc array
     T_Value m_defaultValue;  // Default value
+    bool m_hasExplicitDefault = false;  // m_defaultValue is given by the user, e.g. '{default: x}
     mutable VlRefList m_refs;  // Elements passed by reference
 
     // METHODS
@@ -2212,12 +2237,22 @@ public:
     explicit VlAssocArray(const T_Value& defaultValue,
                           std::initializer_list<std::pair<const T_Key, T_Value>> init)
         : m_map{init}
-        , m_defaultValue{defaultValue} {}
+        , m_defaultValue{defaultValue}
+        , m_hasExplicitDefault{true} {}
+    template <typename, typename, typename>
+    friend class VlAssocArray;
+    // Construct from an array with differently ordered keys, e.g. of the other signedness
+    template <typename T_OtherKeyLess>
+    VlAssocArray(const VlAssocArray<T_Key, T_Value, T_OtherKeyLess>& other)
+        : m_map{other.begin(), other.end()}
+        , m_defaultValue{other.m_defaultValue}
+        , m_hasExplicitDefault{other.m_hasExplicitDefault} {}
     ~VlAssocArray() { outdateRefs(false); }
     VlAssocArray(const VlAssocArray&) = default;
     // Elements passed by reference stay in the outdated storage of the source
     VlAssocArray(VlAssocArray&& rhs) noexcept
-        : m_defaultValue{rhs.m_defaultValue} {
+        : m_defaultValue{rhs.m_defaultValue}
+        , m_hasExplicitDefault{rhs.m_hasExplicitDefault} {
         rhs.outdateRefs(true);
         m_map = std::move(rhs.m_map);
     }
@@ -2226,6 +2261,7 @@ public:
             outdateRefs(false);
             m_map = rhs.m_map;
             m_defaultValue = rhs.m_defaultValue;
+            m_hasExplicitDefault = rhs.m_hasExplicitDefault;
         }
         return *this;
     }
@@ -2235,8 +2271,13 @@ public:
             rhs.outdateRefs(true);
             m_map = std::move(rhs.m_map);
             m_defaultValue = rhs.m_defaultValue;
+            m_hasExplicitDefault = rhs.m_hasExplicitDefault;
         }
         return *this;
+    }
+    // Insert entries as the constructor does, e.g. for a long constant in parts
+    void addItems(std::initializer_list<std::pair<const T_Key, T_Value>> init) {
+        m_map.insert(init);
     }
     bool operator==(const VlAssocArray& rhs) const { return m_map == rhs.m_map; }
     bool operator!=(const VlAssocArray& rhs) const { return m_map != rhs.m_map; }
@@ -3049,8 +3090,9 @@ std::string VL_TO_STRING(const VlUnpacked<T_Value, N_Depth>& obj) {
 template <typename T_Value, std::size_t N_Depth>
 struct VlContainsCustomStruct<VlUnpacked<T_Value, N_Depth>> : VlContainsCustomStruct<T_Value> {};
 
-template <typename T_Key, typename T_Value>
-const typename VlAssocArray<T_Key, T_Value>::RefOps VlAssocArray<T_Key, T_Value>::s_refOps
+template <typename T_Key, typename T_Value, typename T_KeyLess>
+const typename VlAssocArray<T_Key, T_Value, T_KeyLess>::RefOps
+    VlAssocArray<T_Key, T_Value, T_KeyLess>::s_refOps
     = {&refOutdate, &refErase};
 
 template <typename T_Value, size_t N_MaxSize>
@@ -3536,17 +3578,20 @@ inline T VL_NULL_CHECK(T t, const char* filename, int linenum) {
 template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(const VlQueue<VlClassRef<T_Subclass>>& that)
-    : m_deque{that.m_deque.begin(), that.m_deque.end(), VlRefAlloc<T_Value>{&m_refs}}
-    , m_defaultValue{that.m_defaultValue} {
+    : m_deque{that.privateDeque().begin(),  // lintok-begin-on-ref
+              that.privateDeque().end(),  // lintok-begin-on-ref
+              VlRefAlloc<T_Value>{&m_refs}}
+    , m_defaultValue{that.atDefault()} {
     applyBound();
 }
 
 template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(VlQueue<VlClassRef<T_Subclass>>&& that)
-    : m_deque{std::make_move_iterator(that.m_deque.begin()),
-              std::make_move_iterator(that.m_deque.end()), VlRefAlloc<T_Value>{&m_refs}}
-    , m_defaultValue{std::move(that.m_defaultValue)} {
+    : m_deque{std::make_move_iterator(that.privateDeque().begin()),  // lintok-begin-on-ref
+              std::make_move_iterator(that.privateDeque().end()),  // lintok-begin-on-ref
+              VlRefAlloc<T_Value>{&m_refs}}
+    , m_defaultValue{std::move(that.atDefault())} {
     applyBound();
 }
 

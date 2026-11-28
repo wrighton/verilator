@@ -39,10 +39,10 @@
                                                 : ... note: In instance 't'
    42 |   assert property (@(posedge clk) p_strong(3, 2));
       |                                               ^
-%Error: t/t_property_eventually_elab_bad.v:44:26: s_eventually range low bound must be integral (IEEE 1800-2023 16.12.13)
+%Error: t/t_property_eventually_elab_bad.v:45:48: s_eventually range low bound must be integral (IEEE 1800-2023 16.12.13)
                                                 : ... note: In instance 't'
-   44 |   localparam UNBOUNDED = $;
-      |                          ^
+   45 |   assert property (@(posedge clk) s_eventually[UNBOUNDED:3] clk);
+      |                                                ^~~~~~~~~
 %Error: t/t_property_eventually_elab_bad.v:47:26: eventually range high bound must be integral (IEEE 1800-2023 16.12.13)
                                                 : ... note: In instance 't'
    47 |   localparam int HI[2] = '{1, 2};

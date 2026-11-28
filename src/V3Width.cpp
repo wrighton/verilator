@@ -2559,6 +2559,18 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstEventually* nodep) override {
         // IEEE 1800-2023 16.12.13
+        // IEEE 1800-2023 A.2.10: a property operator is not a sequence operand, but the
+        // parser accepts a property expression for some sequence operands
+        if (m_underSExpr) {
+            nodep->v3error("Unexpected '" << nodep->verilogKwd()
+                                          << "' in sequence expression context"
+                                             " (IEEE 1800-2023 16.12.13)");
+            AstConst* const newp = new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}};
+            newp->dtypeSetBit();
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         assertAtExpr(nodep);
         if (!m_vup->prelim()) return;
 
@@ -2762,29 +2774,6 @@ class WidthVisitor final : public VNVisitor {
                 nodep->dtypeSetInt();  // IEEE 1800-2023 20.14.1
             }
             if (nodep->seedp()) iterateCheckSigned32(nodep, "seed", nodep->seedp(), BOTH);
-        }
-    }
-    void visit(AstSEventually* nodep) override {
-        // IEEE 1800-2023 A.2.10: a property operator is not a sequence operand, but the
-        // parser accepts a property expression for some sequence operands
-        if (m_underSExpr) {
-            nodep->v3error("Unexpected 's_eventually' in sequence expression context"
-                           " (IEEE 1800-2023 16.12.13)");
-            AstConst* const newp = new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}};
-            newp->dtypeSetBit();
-            nodep->replaceWith(newp);
-            VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return;
-        }
-        if (v3Global.opt.timing().isSetFalse() || !v3Global.opt.timing().isSetTrue()) {
-            nodep->v3warn(E_NOTIMING, "s_eventually requires --timing");
-            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::WidthedValue{}, 1, 0});
-            VL_DO_DANGLING(nodep->deleteTree(), nodep);
-            return;
-        }
-        if (m_vup->prelim()) {
-            iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
-            nodep->dtypeSetBit();
         }
     }
     void visit(AstSGotoRep* nodep) override {
@@ -12227,7 +12216,7 @@ class WidthVisitor final : public VNVisitor {
               || VN_IS(nodep, Until) || VN_IS(nodep, SExpr) || VN_IS(nodep, SAnd)
               || VN_IS(nodep, SOr) || VN_IS(nodep, SIntersect) || VN_IS(nodep, SThroughout)
               || VN_IS(nodep, SWithin) || VN_IS(nodep, SConsRep) || VN_IS(nodep, SGotoRep)
-              || VN_IS(nodep, SNonConsRep) || VN_IS(nodep, SEventually) || VN_IS(nodep, PropAlways)
+              || VN_IS(nodep, SNonConsRep) || VN_IS(nodep, Eventually) || VN_IS(nodep, PropAlways)
               || VN_IS(nodep, AbortOn) || VN_IS(nodep, SClocked) || VN_IS(nodep, SStrength)
               || VN_IS(nodep, ExprStmt) || VN_IS(nodep, LogNot) || VN_IS(nodep, LogOr)
               || VN_IS(nodep, LogEq);

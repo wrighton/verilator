@@ -1113,7 +1113,7 @@ private:
     static bool isProperty(const AstNode* const nodep) {
         return nodep->exists([](const AstNodeExpr* const np) {
             return VN_IS(np, Implication) || VN_IS(np, Until) || VN_IS(np, PropAlways)
-                   || VN_IS(np, SEventually) || VN_IS(np, AbortOn);
+                   || VN_IS(np, Eventually) || VN_IS(np, AbortOn);
         });
     }
     void visit(AstSAnd* nodep) override {
@@ -1290,11 +1290,20 @@ private:
                          new AstVarRef{flp, countp, VAccess::READ}};
     }
 
-    void visit(AstSEventually* nodep) override {
+    void visit(AstEventually* nodep) override {
+        if (nodep->exprp()->isMultiCycleSva()) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: property/sequence operator inside "
+                                             << nodep->verilogKwd());
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitTrue{}});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
+        UASSERT_OBJ(!nodep->loBoundp(), nodep,
+                    "Ranged eventually should be removed by V3AssertNfa");
         // Tracking of active attempts uses std::process
         if (!v3Global.rootp()->stdPackageProcessp()) {
-            nodep->v3warn(E_UNSUPPORTED,
-                          "Unsupported: s_eventually without the std package (--no-std)");
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: " << nodep->verilogKwd()
+                                                         << " without the std package (--no-std)");
             nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
