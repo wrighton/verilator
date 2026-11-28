@@ -61,12 +61,12 @@ module t (
       a |-> ##[1:2] (##1 ((b ##1 c) or (c ##1 b))))
     ++passes[6];
   else ++fails[6];
-  // Known limit: 80 passes and 32 failures, where attempts pass 80 times and fail 121 times
+  // Attempts pass 80 times and fail 121 times
   assert property (@(posedge clk) disable iff (cyc > END)
       ((a ##1 b) or (b ##1 a)) within (c ##3 c))
     ++passes[7];
   else ++fails[7];
-  // Known limit: 42 passes and 62 failures, where attempts pass 42 times and fail 159 times
+  // Attempts pass 42 times and fail 159 times
   assert property (@(posedge clk) disable iff (cyc > END)
       ((a ##1 b) within (c ##3 c)) and (b ##4 c))
     ++passes[8];
@@ -76,7 +76,7 @@ module t (
       a |-> ##[1:2] ((a ##1 b) within (c ##3 c)))
     ++passes[9];
   else ++fails[9];
-  // Known limit: 26 passes and 48 failures, where attempts pass 26 times and fail 175 times
+  // Attempts pass 26 times and fail 175 times
   assert property (@(posedge clk) disable iff (cyc > END)
       (a ##1 b ##1 a ##1 b ##1 a ##1 b ##1 a ##1 b ##1 a) within (c ##20 c))
     ++passes[10];
@@ -168,13 +168,13 @@ module t (
       `checkd(passes[6], 189);
       `checkd(fails[6], 15);
       `checkd(passes[7], 80);
-      `checkd(fails[7], 32);
+      `checkd(fails[7], 121);
       `checkd(passes[8], 42);
-      `checkd(fails[8], 62);
+      `checkd(fails[8], 159);
       `checkd(passes[9], 141);
       `checkd(fails[9], 45);
       `checkd(passes[10], 26);
-      `checkd(fails[10], 48);
+      `checkd(fails[10], 175);
       `checkd(passes[11], 194);
       `checkd(fails[11], 7);
       `checkd(passes[12], 186);
