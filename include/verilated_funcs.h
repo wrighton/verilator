@@ -3293,6 +3293,18 @@ inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_S
     for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
 }
 
+// Warn if a stream of 'elems' elements of 'elemBits' bits is narrower than 'minBits', wider than
+// 'maxBits' or not a whole number of 'unitBits' bits, each if nonzero, as its streaming
+// assignment requires (IEEE 1800-2023 11.4.14)
+inline void VL_STREAM_CHECK(size_t elems, int elemBits, uint64_t minBits, uint64_t maxBits,
+                            uint64_t unitBits, const char* filename, int linenum) VL_MT_SAFE {
+    const uint64_t bits = static_cast<uint64_t>(elems) * elemBits;
+    if (VL_UNLIKELY(bits < minBits || (maxBits && bits > maxBits)
+                    || (unitBits && bits % unitBits))) {
+        Verilated::streamSizeWarning(filename, linenum, bits, minBits, maxBits, unitBits);
+    }
+}
+
 //======================================================================
 // Expressions needing insert/select
 

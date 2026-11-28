@@ -491,6 +491,8 @@ module t (/*AUTOARG*/
     sel_idx <= cyc[3:0];
     queue_of_t.push_back(1);
     if (q[$] != q[$ - 1]) $write("");  // AstQueueSel from the back
+    i = {>>{q}};  // AstStreamCheck of a queue streamed into a fixed-size target
+    {>>{q}} = 40'h0;  // AstStreamCheck of a source that is not a whole number of elements
 
     $display("%g", $log10(r));
     $display("%g", $ln(r));

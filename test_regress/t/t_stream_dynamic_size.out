@@ -1,0 +1,14 @@
+%Warning: t/t_stream_dynamic_size.v:55: Stream of 40 bits is wider than its fixed-size target of 32 bits (IEEE 1800-2023 11.4.14).
+%Warning: t/t_stream_dynamic_size.v:56: Stream of 40 bits is wider than its fixed-size target of 32 bits (IEEE 1800-2023 11.4.14).
+%Warning: t/t_stream_dynamic_size.v:57: Stream of 40 bits is wider than its fixed-size target of 32 bits (IEEE 1800-2023 11.4.14).
+%Warning: t/t_stream_dynamic_size.v:59: Stream of 24 bits is wider than its fixed-size target of 16 bits (IEEE 1800-2023 11.4.14).
+%Warning: t/t_stream_dynamic_size.v:61: Stream of 64 bits is wider than its fixed-size target of 32 bits (IEEE 1800-2023 11.4.14).
+%Warning: t/t_stream_dynamic_size.v:63: Stream of 300 bits is wider than its fixed-size target of 200 bits (IEEE 1800-2023 11.4.14).
+%Warning: t/t_stream_dynamic_size.v:75: Stream target requires 32 bits, but the source provides only 16 bits (IEEE 1800-2023 11.4.14.3).
+%Warning: t/t_stream_dynamic_size.v:77: Stream target requires 16 bits, but the source provides only 8 bits (IEEE 1800-2023 11.4.14.3).
+%Warning: t/t_stream_dynamic_size.v:78: Stream target requires 16 bits, but the source provides only 8 bits (IEEE 1800-2023 11.4.14.3).
+%Warning: t/t_stream_dynamic_size.v:80: Stream target requires 48 bits, but the source provides only 40 bits (IEEE 1800-2023 11.4.14.3).
+%Warning: t/t_stream_dynamic_size.v:90: Stream target of 8-bit elements requires a whole number of elements, but the source provides 12 bits (IEEE 1800-2023 6.24.3, 11.4.14.4).
+%Warning: t/t_stream_dynamic_size.v:91: Stream target of 8-bit elements requires a whole number of elements, but the source provides 12 bits (IEEE 1800-2023 6.24.3, 11.4.14.4).
+%Warning: t/t_stream_dynamic_size.v:92: Stream target of 8-bit elements requires a whole number of elements, but the source provides 12 bits (IEEE 1800-2023 6.24.3, 11.4.14.4).
+*-* All Finished *-*
