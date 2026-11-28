@@ -5169,13 +5169,23 @@ class ParamVisitor final : public VNVisitor {
     // Specialize the instances on the path of type query operand 'xrefp', a plain instance in
     // each module from this one down, and link it to their declaration. If the module reached
     // is not a specialization, the query reads a copy of the declaration's data type instead.
+    // Whether widthing a copy of 'nodep' could still resolve a data type, or constify a parameter
+    // value, that it reads in place
+    static bool widthsInPlace(const AstNode* nodep) {
+        return nodep->exists([](const AstNode* np) {
+            if (VN_IS(np, RefDType) || VN_IS(np, NodeFTaskRef) || VN_IS(np, VarXRef)) return true;
+            const AstVarRef* const refp = VN_CAST(np, VarRef);
+            return refp && (!refp->varp() || !VN_IS(refp->varp()->valuep(), Const));
+        });
+    }
     bool specializeTypeQueryRef(AstVarXRef* xrefp) {
         // A generate block may hold an instance of the same name
         if (!m_generateHierName.empty()) return false;
         AstNodeModule* modp = m_modp;
         for (const string& name : VString::split(xrefp->dotted(), '.')) {
-            // Below a module not specialized, the instances are shared with its other copies
-            if (modp != m_modp && modp->name() == modp->origName()) return false;
+            // Below a module not specialized, its instances are shared with the specializations
+            // still to be copied from it
+            const bool shared = modp != m_modp && modp->name() == modp->origName();
             const ModuleItems& items = moduleItems(modp);
             const auto it = items.m_cells.find(name);
             if (it == items.m_cells.end()) return false;
@@ -5190,11 +5200,24 @@ class ParamVisitor final : public VNVisitor {
                     if (!pinp->paramPath().empty()) return false;
                 }
             }
-            // On an error, the instance keeps the module it is specialized from
-            if (cellp->paramsp()) {
+            if (!cellp->paramsp()) {
+                modp = cellp->modp();
+            } else if (!shared) {
+                // On an error, the instance keeps the module it is specialized from
                 m_processor.nodeDeparam(cellp, cellp->modp(), modp, modp->someInstanceName());
+                modp = cellp->modp();
+            } else {
+                // So specialize a copy of a shared instance, if that constifies no parameter
+                // value of the shared module
+                for (const AstPin* const pinp : cellp->paramspList()) {
+                    if (widthsInPlace(pinp)) return false;
+                }
+                AstCell* const copyp = cellp->cloneTree(false);
+                cellp->addNextHere(copyp);
+                m_processor.nodeDeparam(copyp, copyp->modp(), modp, modp->someInstanceName());
+                modp = copyp->modp();
+                VL_DO_DANGLING(pushDeletep(copyp->unlinkFrBack()), copyp);
             }
-            modp = cellp->modp();
         }
         const VarsByName& vars = moduleItems(modp).m_vars;
         const auto varIt = vars.find(xrefp->name());
@@ -5208,15 +5231,8 @@ class ParamVisitor final : public VNVisitor {
             xrefp->varp(varp);
             return true;
         }
-        // Widthing the copy would still resolve a data type it refers to, or constify a
-        // parameter value it reads, in place
-        if (!dtypep || dtypep->exists([](const AstNode* nodep) {
-                if (VN_IS(nodep, RefDType) || VN_IS(nodep, NodeFTaskRef)) return true;
-                const AstVarRef* const refp = VN_CAST(nodep, VarRef);
-                return refp && (!refp->varp() || !VN_IS(refp->varp()->valuep(), Const));
-            })) {
-            return false;
-        }
+        // The query reads a copy of the data type, if widthing that changes nothing in place
+        if (!dtypep || widthsInPlace(dtypep)) return false;
         xrefp->replaceWith(dtypep->cloneTree(false));
         VL_DO_DANGLING(pushDeletep(xrefp), xrefp);
         return true;
