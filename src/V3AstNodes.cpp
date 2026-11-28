@@ -1768,12 +1768,14 @@ void AstCvtArrayToArray::dump(std::ostream& str) const {
     str << " blockSize=" << blockSize();
     str << " dstElementBits=" << dstElementBits();
     str << " srcElementBits=" << srcElementBits();
+    if (unpack()) str << " [UNPACK]";
 }
 void AstCvtArrayToArray::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, reverse);
     dumpJsonNumFunc(str, blockSize);
     dumpJsonNumFunc(str, dstElementBits);
     dumpJsonNumFunc(str, srcElementBits);
+    dumpJsonBoolFuncIf(str, unpack);
     dumpJsonGen(str);
 }
 void AstCvtArrayToPacked::dump(std::ostream& str) const {

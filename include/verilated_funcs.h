@@ -2979,9 +2979,9 @@ inline T_Ret VL_CLONE_Q(const T_From& from, uint32_t lbits, int srcElementBits,
 // As VL_CLONE_Q, reversed
 template <typename T_Ret, typename T_From>
 inline T_Ret VL_REVCLONE_Q(const T_From& from, uint32_t lbits, int srcElementBits,
-                           int dstElementBits) {
+                           int dstElementBits, bool fromLeft = false) {
     T_Ret ret;
-    VL_REVCOPY_Q(ret, from, lbits, srcElementBits, dstElementBits);
+    VL_REVCOPY_Q(ret, from, lbits, srcElementBits, dstElementBits, fromLeft);
     return ret;
 }
 
@@ -3085,10 +3085,12 @@ inline void _vl_q_copy_range(VlQueue<T_Dst>& q, int dstElementBits, const VlQueu
 }
 // Copy the stream of the elements of 'from' into new elements of 'q' (IEEE 1800-2023 11.4.14):
 // with 'lbits' zero, as is; else reversed in blocks of 'lbits' bits from the right, the last
-// block short. A last element not filled has zeros on the right.
+// block short, as a pack does (11.4.14.2), or, if 'fromLeft', in blocks from the left, the
+// short block the rightmost of 'from', as the unpack inverting it does (11.4.14.3). A last
+// element not filled has zeros on the right.
 template <typename T_Dst, typename T_Src>
 inline void _vl_copy_q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t lbits,
-                       int srcElementBits, int dstElementBits) VL_MT_SAFE {
+                       int srcElementBits, int dstElementBits, bool fromLeft = false) VL_MT_SAFE {
     const size_t srcTotalBits = static_cast<size_t>(from.size()) * srcElementBits;
     const size_t dstSize = (srcTotalBits + dstElementBits - 1) / dstElementBits;
     q.renew(dstSize);
@@ -3104,14 +3106,21 @@ inline void _vl_copy_q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t l
             }
             return;
         }
-        for (size_t end = srcTotalBits; end > 0;) {
-            const size_t start = end > blockBits ? end - blockBits : 0;
+        if (srcTotalBits == 0) return;
+        // Blocks from the right end at the end of the stream; from the left, the last starts at a
+        // multiple of the block size
+        size_t start = fromLeft ? (srcTotalBits - 1) / blockBits * blockBits
+                                : (srcTotalBits > blockBits ? srcTotalBits - blockBits : 0);
+        size_t end = srcTotalBits;
+        while (true) {
             const auto endIt = from.begin() + static_cast<std::ptrdiff_t>(end);
             for (auto it = from.begin() + static_cast<std::ptrdiff_t>(start); it != endIt; ++it) {
                 _vl_q_elem_or_bits(q.atWrite(static_cast<int32_t>(outPos++)), 0, 1,
                                    _vl_q_elem_bits(*it, 0, 1));
             }
+            if (start == 0) break;
             end = start;
+            start = start > blockBits ? start - blockBits : 0;
         }
     } else if (lbits == 0 || lbits >= srcTotalBits) {
         // One block, as wide as the stream or wider: nothing to reorder
@@ -3127,12 +3136,16 @@ inline void _vl_copy_q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t l
             outPos += n;
         }
     } else {
+        // As for one bit an element above
         size_t outPos = 0;
-        for (size_t end = srcTotalBits; end > 0;) {
-            const size_t start = end > lbits ? end - lbits : 0;
+        size_t start = fromLeft ? (srcTotalBits - 1) / lbits * lbits : srcTotalBits - lbits;
+        size_t end = srcTotalBits;
+        while (true) {
             _vl_q_copy_range(q, dstElementBits, from, srcElementBits, start, end, outPos);
             outPos += end - start;
+            if (start == 0) break;
             end = start;
+            start = start > lbits ? start - lbits : 0;
         }
     }
 }
@@ -3165,12 +3178,12 @@ VL_COPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t /*lbits*/, int
 // including queues with different element types.
 template <typename T_Dst, typename T_Src>
 inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t lbits,
-                         int srcElementBits, int dstElementBits) {
+                         int srcElementBits, int dstElementBits, bool fromLeft = false) {
     if (VL_UNLIKELY(static_cast<const void*>(&q) == static_cast<const void*>(&from))) {
         const VlQueue<T_Src> srcCopy = from;
-        _vl_copy_q(q, srcCopy, lbits, srcElementBits, dstElementBits);
+        _vl_copy_q(q, srcCopy, lbits, srcElementBits, dstElementBits, fromLeft);
     } else {
-        _vl_copy_q(q, from, lbits, srcElementBits, dstElementBits);
+        _vl_copy_q(q, from, lbits, srcElementBits, dstElementBits, fromLeft);
     }
 }
 
@@ -3192,12 +3205,12 @@ VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& f
 template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
 inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
 VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
-             uint32_t lbits, int srcElementBits, int dstElementBits) {
+             uint32_t lbits, int srcElementBits, int dstElementBits, bool fromLeft = false) {
     // As VL_COPY_Q above
     VlQueue<T_Src> src;
     src = from;
     VlQueue<T_Dst> dst;
-    VL_REVCOPY_Q(dst, src, lbits, srcElementBits, dstElementBits);
+    VL_REVCOPY_Q(dst, src, lbits, srcElementBits, dstElementBits, fromLeft);
     q = dst;
 }
 
@@ -3252,9 +3265,10 @@ inline void VL_COPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcM
 
 template <typename T_Dst, std::size_t N_Depth, typename T_Src, std::size_t N_SrcMaxSize>
 inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
-                         uint32_t lbits, int srcElementBits, int dstElementBits) {
+                         uint32_t lbits, int srcElementBits, int dstElementBits,
+                         bool fromLeft = false) {
     VlQueue<T_Dst> dstQ;
-    VL_REVCOPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
+    VL_REVCOPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits, fromLeft);
     for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
 }
 
