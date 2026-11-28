@@ -8,5 +8,8 @@ module t;
   typedef byte bq_t[$];
   // A cast to a queue is not a constant
   localparam bq_t QP = bq_t'(16'h4142);
-  initial $display("%p", QP);
+  // Nor is a stream into a queue
+  localparam bit [15:0] P = 16'h4142;
+  localparam bq_t SP = {>>{P}};
+  initial $display("%p %p", QP, SP);
 endmodule
