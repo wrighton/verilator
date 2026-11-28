@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_constraint_rand_index_handle_eq_unsup.v:17:18: Unsupported: Randomized index into a non-random array selecting a non-integral value
+   17 |   constraint c {a[k] == h;}
+      |                  ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
