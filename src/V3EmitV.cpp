@@ -1090,6 +1090,15 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     void visit(AstRand* nodep) override {
         emitVerilogFormat(nodep, nodep->emitVerilog(), nodep->seedp());
     }
+    void visit(AstStreamCheck* nodep) override {
+        putfs(nodep, "$stream_check(");
+        if (nodep->fromp()) {
+            iterateConst(nodep->fromp());
+        } else {
+            puts(cvtToStr(nodep->bits()));
+        }
+        puts(");\n");
+    }
     void visit(AstSel* nodep) override {
         const bool svSelectable = VN_IS(nodep->fromp(), VarRef) || VN_IS(nodep->fromp(), VarXRef)
                                   || VN_IS(nodep->fromp(), MemberRef)

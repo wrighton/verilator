@@ -4139,6 +4139,26 @@ void Verilated::queueBoundError(size_t maxSize, size_t attemptedSize) VL_MT_SAFE
     VL_WARN_MT("", 0, "", msg.c_str());
 }
 
+void Verilated::streamSizeWarning(const char* filename, int linenum, uint64_t bits,
+                                  uint64_t minBits, uint64_t maxBits,
+                                  uint64_t unitBits) VL_MT_SAFE {
+    // Slowpath - Called only when a streaming assignment has a stream of the wrong size
+    std::string msg;
+    if (maxBits && bits > maxBits) {
+        msg = "Stream of " + std::to_string(bits) + " bits is wider than its fixed-size target of "
+              + std::to_string(maxBits) + " bits (IEEE 1800-2023 11.4.14).";
+    } else if (bits < minBits) {
+        msg = "Stream target requires " + std::to_string(minBits)
+              + " bits, but the source provides only " + std::to_string(bits)
+              + " bits (IEEE 1800-2023 11.4.14.3).";
+    } else {
+        msg = "Stream target of " + std::to_string(unitBits)
+              + "-bit elements requires a whole number of elements, but the source provides "
+              + std::to_string(bits) + " bits (IEEE 1800-2023 6.24.3, 11.4.14.4).";
+    }
+    VL_WARN_MT(filename, linenum, "", msg.c_str());
+}
+
 void Verilated::scTimePrecisionError(int sc_prec, int vl_prec) VL_MT_SAFE {
     std::ostringstream msg;
     msg << "SystemC's sc_set_time_resolution is 10^-" << sc_prec

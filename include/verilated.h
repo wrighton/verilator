@@ -1324,6 +1324,9 @@ public:
     [[noreturn]] static void nullPointerError(const char* filename, int linenum) VL_MT_SAFE;
     [[noreturn]] static void overWidthError(const char* signame) VL_MT_SAFE;
     static void queueBoundError(size_t maxSize, size_t attemptedSize) VL_MT_SAFE;
+    static void streamSizeWarning(const char* filename, int linenum, uint64_t bits,
+                                  uint64_t minBits, uint64_t maxBits,
+                                  uint64_t unitBits) VL_MT_SAFE;
     [[noreturn]] static void scTimePrecisionError(int sc_prec, int vl_prec) VL_MT_SAFE;
     [[noreturn]] static void scTraceBeforeElaborationError() VL_MT_SAFE;
     [[noreturn]] static void sizeMismatchError() VL_MT_SAFE;

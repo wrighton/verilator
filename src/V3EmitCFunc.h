@@ -559,6 +559,21 @@ public:
         if (descending) puts(")");
     }
 
+    void visit(AstStreamCheck* nodep) override {
+        putns(nodep, "VL_STREAM_CHECK(");
+        if (const AstNodeExpr* const fromp = nodep->fromp()) {
+            puts("(");
+            iterateConst(nodep->fromp());
+            puts(").size(), " + cvtToStr(fromp->dtypep()->skipRefp()->subDTypep()->width()));
+        } else {
+            puts(cvtToStr(nodep->bits()) + ", 1");
+        }
+        puts(", " + cvtToStr(nodep->minBits()) + "ULL");
+        puts(", " + cvtToStr(nodep->maxBits()) + "ULL");
+        puts(", " + cvtToStr(nodep->unitBits()) + "ULL, ");
+        putsQuoted(protect(nodep->fileline()->filename()));
+        puts(", " + cvtToStr(nodep->fileline()->lineno()) + ");\n");
+    }
     void visit(AstCvtArrayToPacked* nodep) override {
         AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefp();
         AstNodeDType* const elemDtp = fromDtp->subDTypep()->skipRefp();

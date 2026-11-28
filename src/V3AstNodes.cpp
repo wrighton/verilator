@@ -4264,6 +4264,18 @@ void AstStop::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isFatal);
     dumpJsonGen(str);
 }
+void AstStreamCheck::dump(std::ostream& str) const {
+    Super::dump(str);
+    str << " bits=" << bits() << " minBits=" << minBits() << " maxBits=" << maxBits()
+        << " unitBits=" << unitBits();
+}
+void AstStreamCheck::dumpJson(std::ostream& str) const {
+    dumpJsonNumFunc(str, bits);
+    dumpJsonNumFunc(str, minBits);
+    dumpJsonNumFunc(str, maxBits);
+    dumpJsonNumFunc(str, unitBits);
+    dumpJsonGen(str);
+}
 void AstStreamDType::dumpSmall(std::ostream& str) const {
     Super::dumpSmall(str);
     str << "stream";

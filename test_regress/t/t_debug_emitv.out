@@ -491,6 +491,10 @@ module t;
             if (((q[$ - 32'h0]) != (q[$ - 32'sh1]))) begin
                 $write("");
             end
+            $stream_check(q);
+            i = { >> 32'h1 {q} };
+            $stream_check(40);
+            { >> 32'h1 {q} } = 40'h0;
             $display("%g", $log10(r));
             $display("%g", $ln(r));
             $display("%g", $exp(r));

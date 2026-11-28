@@ -1304,6 +1304,42 @@ public:
     string emitVerilog() const { return m_isFatal ? "$fatal" : "$stop"; }
     bool isFatal() const { return m_isFatal; }
 };
+class AstStreamCheck final : public AstNodeStmt {
+    // Run-time check of the stream of a streaming assignment: a warning if it is narrower than
+    // minBits(), wider than maxBits() or not a whole number of unitBits() bits, each if nonzero
+    // (IEEE 1800-2023 11.4.14)
+    // @astgen op1 := fromp : Optional[AstNodeExpr]  // Dynamically sized operand streamed
+    const uint32_t m_bits;  // Stream width without fromp()
+    const uint32_t m_minBits;  // Least stream width the assignment needs, or zero
+    const uint32_t m_maxBits;  // Greatest stream width the assignment takes, or zero
+    const uint32_t m_unitBits;  // Width the stream must be a multiple of, or zero
+public:
+    AstStreamCheck(FileLine* fl, AstNodeExpr* fromp, uint32_t bits, uint32_t minBits,
+                   uint32_t maxBits, uint32_t unitBits)
+        : ASTGEN_SUPER_StreamCheck(fl)
+        , m_bits{bits}
+        , m_minBits{minBits}
+        , m_maxBits{maxBits}
+        , m_unitBits{unitBits} {
+        this->fromp(fromp);
+    }
+    ASTGEN_MEMBERS_AstStreamCheck;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+    bool isPredictOptimizable() const override { return false; }
+    bool isPure() override { return false; }  // Warns
+    bool isOutputter() override { return true; }  // Warns
+    bool sameNode(const AstNode* samep) const override {
+        const AstStreamCheck* const asamep = VN_DBG_AS(samep, StreamCheck);
+        return fileline() == samep->fileline() && bits() == asamep->bits()
+               && minBits() == asamep->minBits() && maxBits() == asamep->maxBits()
+               && unitBits() == asamep->unitBits();
+    }
+    uint32_t bits() const { return m_bits; }
+    uint32_t minBits() const { return m_minBits; }
+    uint32_t maxBits() const { return m_maxBits; }
+    uint32_t unitBits() const { return m_unitBits; }
+};
 class AstSystemT final : public AstNodeStmt {
     // $system used as task
     // @astgen op1 := lhsp : AstNodeExpr
