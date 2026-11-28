@@ -69,6 +69,25 @@ module t;
       {>>{w14}} = f7;
       `checkp(w14, "'{'h26f7, 'h10ec}");
     end
+    // From an expression, of the width of its operands
+    begin
+      automatic bit [19:0] p20 = 20'hfabcd;
+      automatic bit [15:0] a16 = 16'h1234;
+      automatic bit [15:0] b16 = 16'hff0f;
+      automatic bit c = 1'b1;
+      automatic bit [4:0] q5[$];
+      automatic bit [7:0] b8[];
+      {<<5{q5}} = {5'h0, 15'h7fff} & p20;
+      `checkp(q5, "'{'hd, 'h1e, 'ha, 'h0}");
+      {>>{q5}} = 20'hfff + p20;
+      `checkp(q5, "'{'h1f, 'he, 'h1e, 'hc}");
+      {>>{b8}} = a16 & b16;
+      `checkp(b8, "'{'h12, 'h4}");
+      {>>{b8}} = c ? a16 : b16;
+      `checkp(b8, "'{'h12, 'h34}");
+      {>>{b8}} = ~a16;
+      `checkp(b8, "'{'hed, 'hcb}");
+    end
     // Also of a multidimensional array, of any range directions, and into a bounded queue
     begin
       automatic byte sda[2:1][-4:-3] = '{'{8'h87, 8'h12}, '{8'h9a, 8'hcf}};
