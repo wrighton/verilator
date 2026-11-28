@@ -2864,12 +2864,19 @@ class ConstraintExprVisitor final : public VNVisitor {
         return selp;
     }
     // The element select of a class handle array variable at a random index whose integral
-    // member refp reads, rand or state, or nullptr
+    // member refp reads, rand or state, or nullptr. Of an array not randomized, whose objects'
+    // members are values, also through member objects of the objects.
     static AstNodeSel* randObjIndexSelp(const AstMemberRef* const refp) {
-        AstNodeSel* const selp = elementSelp(refp->fromp());
+        AstNodeExpr* fromp = refp->fromp();
+        while (const AstMemberRef* const memberp = VN_CAST(fromp, MemberRef)) {
+            fromp = memberp->fromp();
+        }
+        AstNodeSel* const selp = elementSelp(fromp);
         if (!selp || !VN_IS(selp->dtypep()->skipRefp(), ClassRefDType)
             || !VN_IS(selp->fromp(), VarRef) || !isRandIndex(selp->bitp())
-            || !refp->varp()->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            || !refp->varp()->dtypep()->skipRefp()->isIntegralOrPacked()
+            || (fromp != refp->fromp()
+                && VN_AS(selp->fromp(), VarRef)->varp()->rand().isRandomizable())) {
             return nullptr;
         }
         return selp;
@@ -2953,7 +2960,34 @@ class ConstraintExprVisitor final : public VNVisitor {
         int lo;  // Low bound of an unpacked array, else 0
         int selWidth;  // Width of the element index
         int cmpWidth;  // Width at which the index and the element index are compared
+        // Member objects from the objects to the member read, as 'sub' of 'a[k].sub.nr'
+        std::vector<AstVar*> pathVarps{};
     };
+    // The object reached from objp, an object of sel's array, through its path's members
+    static AstNodeExpr* newObjPathp(FileLine* fl, const ObjIndexSel& sel, AstNodeExpr* objp) {
+        for (AstVar* const varp : sel.pathVarps) objp = new AstMemberRef{fl, objp, varp};
+        return objp;
+    }
+    // condp and whether the handle one member varp further along pathp is not null, with
+    // pathp extended to it
+    static AstNodeExpr* newPathStepNonNullp(FileLine* fl, AstNodeExpr* condp, AstNodeExpr*& pathp,
+                                            AstVar* varp) {
+        pathp = new AstMemberRef{fl, pathp, varp};
+        return new AstLogAnd{
+            fl, condp,
+            new AstNeq{fl, pathp->cloneTreePure(false), new AstConst{fl, AstConst::Null{}}}};
+    }
+    // Whether the handles from objp, an object of sel's array, through its path are not null,
+    // the nearest first
+    static AstNodeExpr* newObjPathNonNullp(FileLine* fl, const ObjIndexSel& sel,
+                                           AstNodeExpr* objp) {
+        AstNodeExpr* condp = new AstNeq{fl, objp, new AstConst{fl, AstConst::Null{}}};
+        AstNodeExpr* pathp = objp->cloneTreePure(false);
+        for (AstVar* const varp : sel.pathVarps)
+            condp = newPathStepNonNullp(fl, condp, pathp, varp);
+        VL_DO_DANGLING(pathp->deleteTree(), pathp);
+        return condp;
+    }
     // One iteration of such a loop, for a non-null object
     struct ObjIndexIter final {
         AstNodeStmt* loopp;  // The loop
@@ -3028,11 +3062,9 @@ class ConstraintExprVisitor final : public VNVisitor {
                         : newElementOffsetp(fl, loopVarp, sel.lo, sel.selWidth);
         AstNodeExpr* const elemSelp = newSel(fl, sel.arrayp->cloneTreePure(false), elemIndexp);
         elemSelp->dtypep(sel.elemDtp);
-        AstNodeExpr* const nonNullp
-            = sel.objects
-                  ? static_cast<AstNodeExpr*>(new AstNeq{fl, elemSelp->cloneTree(false),
-                                                         new AstConst{fl, AstConst::Null{}}})
-                  : new AstConst{fl, AstConst::BitTrue{}};
+        AstNodeExpr* const nonNullp = sel.objects
+                                          ? newObjPathNonNullp(fl, sel, elemSelp->cloneTree(false))
+                                          : new AstConst{fl, AstConst::BitTrue{}};
         AstNodeExpr* const loopIndexp
             = sel.assoc ? newCmpIndexp(new AstVarRef{fl, loopVarp, VAccess::READ},
                                        loopVarp->isSigned(), sel.cmpWidth)
@@ -3177,10 +3209,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstCMethodHard* const defaultp
             = new AstCMethodHard{fl, sel.arrayp->cloneTreePure(false), VCMethod::ASSOC_AT_DEFAULT};
         defaultp->dtypeFrom(sel.arrayp->dtypep()->skipRefp()->subDTypep());
-        AstCond* const defaultTextp
-            = new AstCond{fl, new AstNeq{fl, defaultp, new AstConst{fl, AstConst::Null{}}},
-                          new AstConst{fl, AstConst::String{}, "true"},
-                          new AstConst{fl, AstConst::String{}, "false"}};
+        AstCond* const defaultTextp = new AstCond{fl, newObjPathNonNullp(fl, sel, defaultp),
+                                                  new AstConst{fl, AstConst::String{}, "true"},
+                                                  new AstConst{fl, AstConst::String{}, "false"}};
         defaultTextp->dtypeSetString();
         // The select by key assumes the key exists
         AstSFormatF* const textp
@@ -3223,9 +3254,13 @@ class ConstraintExprVisitor final : public VNVisitor {
     // an object if 'validate'.
     bool lowerRandIndexedObjectMember(AstMemberRef* const nodep, const bool validate) {
         FileLine* const fl = nodep->fileline();
-        AstNodeSel* const selp = VN_AS(nodep->fromp(), NodeSel);
+        AstNodeSel* const selp = randObjIndexSelp(nodep);
         AstNodeExpr* const indexp = selp->bitp();
-        const ObjIndexSel sel = newObjIndexSel(fl, selp, true);
+        ObjIndexSel sel = newObjIndexSel(fl, selp, true);
+        for (AstNode* pathp = nodep->fromp(); pathp != selp;
+             pathp = VN_AS(pathp, MemberRef)->fromp()) {
+            sel.pathVarps.insert(sel.pathVarps.begin(), VN_AS(pathp, MemberRef)->varp());
+        }
         const bool arrayRand = VN_AS(sel.arrayp, VarRef)->varp()->rand().isRandomizable();
         // Not yet an index that itself selects through a random index, as an object select,
         // found as the index is formatted, whose own validity would need to be required with
@@ -3260,7 +3295,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstVar* const keysVarp = sel.assoc ? newTextQueueVarp(fl, blockp, "__Vkeys") : nullptr;
         AstVar* const leavesVarp = newTextQueueVarp(fl, blockp, "__Vleaves");
         const ObjIndexIter iter = makeObjIndexLoop(sel);
-        AstMemberRef* const elemp = new AstMemberRef{fl, iter.elemSelp, nodep->varp()};
+        AstMemberRef* const elemp
+            = new AstMemberRef{fl, newObjPathp(fl, sel, iter.elemSelp), nodep->varp()};
         elemp->dtypeFrom(nodep);
         // A state member of each object is its value, as is any member of the objects of a
         // state array, which are not randomized
@@ -3302,12 +3338,12 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstCMethodHard* const atDefaultp = new AstCMethodHard{
                 fl, sel.arrayp->cloneTreePure(false), VCMethod::ASSOC_AT_DEFAULT};
             atDefaultp->dtypeFrom(sel.elemDtp);
-            AstMemberRef* const memberp
-                = new AstMemberRef{fl, atDefaultp->cloneTreePure(false), nodep->varp()};
+            AstMemberRef* const memberp = new AstMemberRef{
+                fl, newObjPathp(fl, sel, atDefaultp->cloneTreePure(false)), nodep->varp()};
             memberp->dtypeFrom(nodep);
-            AstCond* const condp = new AstCond{
-                fl, new AstNeq{fl, atDefaultp, new AstConst{fl, AstConst::Null{}}}, memberp,
-                new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0}};
+            AstCond* const condp
+                = new AstCond{fl, newObjPathNonNullp(fl, sel, atDefaultp), memberp,
+                              new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0}};
             condp->dtypeFrom(nodep);
             nonep = getConstFormat(condp);
         }

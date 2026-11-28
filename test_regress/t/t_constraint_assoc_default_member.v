@@ -29,14 +29,16 @@ class Obj;
   endfunction
 endclass
 
-// Only the default object reads 7
+// Only the default object reads 7, or 9 through its member object
 class WithDefault;
   Obj a[int];
   rand int ai;
   rand int x;
+  rand int y;
   constraint c {
     ai inside {[0 : 9]};
     x == a[ai].nr;
+    y == a[ai].sub.nr;
   }
   function new();
     Obj d = new(7, 9);
@@ -51,9 +53,11 @@ class NoDefault;
   Obj a[int];
   rand int ai;
   rand int x;
+  rand int y;
   constraint c {
     ai inside {[0 : 9]};
     x == a[ai].nr;
+    y == a[ai].sub.nr;
   }
   function new();
     a[3] = new(1, 2);
@@ -72,15 +76,24 @@ module t;
       };
       `checkd(ok, 1);
       `checkd(wd.a.exists(wd.ai), 0);
+      `checkd(wd.y, 9);
+      ok = wd.randomize() with {
+        y == 9;
+      };
+      `checkd(ok, 1);
+      `checkd(wd.a.exists(wd.ai), 0);
+      `checkd(wd.x, 7);
       ok = wd.randomize() with {
         x == 1;
       };
       `checkd(ok, 1);
       `checkd(wd.ai, 3);
+      `checkd(wd.y, 2);
       ok = nd.randomize();
       `checkd(ok, 1);
       `checkd(nd.ai, 3);
       `checkd(nd.x, 1);
+      `checkd(nd.y, 2);
     end
     $write("*-* All Finished *-*\n");
     $finish;
