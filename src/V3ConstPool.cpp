@@ -46,12 +46,18 @@ bool V3ConstPool::equalValue(const AstNode* ap, const AstNode* bp) {
     if (const AstConst* const constp = VN_CAST(ap, Const)) {
         return constp->num().isCaseEq(VN_AS(bp, Const)->num());
     }
-    // Compare unpacked arrays by element values, as equal arrays might differ in their range,
-    // and in which elements are given or defaulted
+    // Compare unpacked arrays by element values, as equal arrays might differ in the bounds of
+    // their range, and in which elements are given or defaulted, but not in its direction, as
+    // references to the entry read its elements in the direction of its own range
     if (const AstConsArray* const aConsp = VN_CAST(ap, ConsArray)) {
         const AstConsArray* const bConsp = VN_AS(bp, ConsArray);
-        const uint64_t size
-            = VN_AS(aConsp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+        const AstUnpackArrayDType* const aDTypep
+            = VN_AS(aConsp->dtypep()->skipRefp(), UnpackArrayDType);
+        if (aDTypep->declRange().ascending()
+            != VN_AS(bConsp->dtypep()->skipRefp(), UnpackArrayDType)->declRange().ascending()) {
+            return false;
+        }
+        const uint64_t size = aDTypep->elementsConst();
         for (uint64_t n = 0; n < size; ++n) {
             if (!equalValue(aConsp->valuep(n), bConsp->valuep(n))) return false;
         }

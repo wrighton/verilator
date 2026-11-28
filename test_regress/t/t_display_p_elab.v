@@ -61,6 +61,15 @@ module t;
   parameter string MDS = $sformatf(">%p<", MD);
   initial `checks(MDS, ">'{'{'h1, 'h2}, '{'h3, 'h4}}<");
 
+  // Parameters of the same elements but ranges of opposite directions each print their own
+  localparam byte PRD[1:0] = '{8'h12, 8'h34};
+  localparam byte PRA[2] = '{8'h34, 8'h12};
+  initial begin
+    string ds;
+    ds = $sformatf(">%p %p<", PRD, PRA);
+    `checks(ds, ">'{'h12, 'h34} '{'h34, 'h12}<");
+  end
+
   typedef struct {byte b[2:1];} sd_t;
   class Cd;
     int a[0:1][2:1];
