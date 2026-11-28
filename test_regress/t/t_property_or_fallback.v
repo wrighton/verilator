@@ -38,7 +38,7 @@ module t (
   assert property (@(posedge clk) disable iff (cyc > END) a |-> (b [*1:2]) or (c ##1 a))
     ++passes[1];
   else ++fails[1];
-  // Known limit: 233 passes and no failure, where attempts pass 200 times and fail once
+  // Attempts pass 200 times and fail once
   assert property (@(posedge clk) disable iff (cyc > END)
       a |-> (##1 b) or (##2 c) or (##3 a) or (##4 b) or (##5 c))
     ++passes[2];
@@ -81,11 +81,11 @@ module t (
       (a ##1 b ##1 a ##1 b ##1 a ##1 b ##1 a ##1 b ##1 a) within (c ##20 c))
     ++passes[10];
   else ++fails[10];
-  // Known limit: 126 passes and no failure, where attempts pass 194 times and fail 7 times
+  // Attempts pass 194 times and fail 7 times
   assert property (@(posedge clk) disable iff (cyc > END) (a |-> ##1 b) or (b |-> ##1 c))
     ++passes[11];
   else ++fails[11];
-  // Known limit: 130 passes and no failure, where attempts pass 186 times and fail 15 times
+  // Attempts pass 186 times and fail 15 times
   assert property (@(posedge clk) disable iff (cyc > END) (a |-> ##1 b) or (c ##1 a))
     ++passes[12];
   else ++fails[12];
@@ -97,7 +97,7 @@ module t (
   assert property (@(posedge clk) disable iff (cyc > END) b or (a |-> ##[1:2] c))
     ++passes[14];
   else ++fails[14];
-  // Known limit: 139 passes and 65 failures, where attempts pass 181 times and fail 20 times
+  // Attempts pass 181 times and fail 20 times
   assert property (@(posedge clk) disable iff (cyc > END) c or (a |-> always [0:2] b))
     ++passes[15];
   else ++fails[15];
@@ -105,7 +105,7 @@ module t (
   assert property (@(posedge clk) disable iff (cyc > END) not ((a ##1 b) or (a ##[2:3] c)))
     ++passes[16];
   else ++fails[16];
-  // Known limit: 77 passes and no failure, where attempts pass 77 times and fail 124 times
+  // Attempts pass 77 times and fail 124 times
   assert property (@(posedge clk) disable iff (cyc > END)
       a |-> (a ##1 b ##1 c ##1 !a ##1 !b ##1 !c ##1 a ##1 b ##1 c ##1 !a ##1 !b ##1 !c ##1 a ##1 b
       ##1 c ##1 !a ##1 !b ##1 !c ##1 a ##1 b ##1 c ##1 !a ##1 !b ##1 !c) or (b ##1 !a ##1 !c ##1 b
@@ -144,7 +144,7 @@ module t (
   assert property (@(posedge clk) disable iff (cyc > END) d or not (a [*2]))
     ++passes[22];
   else ++fails[22];
-  // Known limit: 147 passes and 39 failures, where attempts pass 188 times and fail 13 times
+  // Attempts pass 188 times and fail 13 times
   assert property (@(posedge clk) disable iff (cyc > END) d or (b |-> (always [0:2] c) or e))
     ++passes[23];
   else ++fails[23];
@@ -157,8 +157,8 @@ module t (
       `checkd(fails[0], 0);
       `checkd(passes[1], 204);
       `checkd(fails[1], 0);
-      `checkd(passes[2], 233);
-      `checkd(fails[2], 0);
+      `checkd(passes[2], 200);
+      `checkd(fails[2], 1);
       `checkd(passes[3], 173);
       `checkd(fails[3], 27);
       `checkd(passes[4], 61);
@@ -175,20 +175,20 @@ module t (
       `checkd(fails[9], 45);
       `checkd(passes[10], 26);
       `checkd(fails[10], 48);
-      `checkd(passes[11], 126);
-      `checkd(fails[11], 0);
-      `checkd(passes[12], 130);
-      `checkd(fails[12], 0);
+      `checkd(passes[11], 194);
+      `checkd(fails[11], 7);
+      `checkd(passes[12], 186);
+      `checkd(fails[12], 15);
       `checkd(passes[13], 201);
       `checkd(fails[13], 0);
       `checkd(passes[14], 126);
       `checkd(fails[14], 0);
-      `checkd(passes[15], 139);
-      `checkd(fails[15], 65);
+      `checkd(passes[15], 181);
+      `checkd(fails[15], 20);
       `checkd(passes[16], 96);
       `checkd(fails[16], 96);
       `checkd(passes[17], 77);
-      `checkd(fails[17], 0);
+      `checkd(fails[17], 124);
       `checkd(passes[18], 0);
       `checkd(fails[18], 0);
       `checkd(fails[19], 0);
@@ -197,8 +197,8 @@ module t (
       `checkd(fails[21], 0);
       `checkd(passes[22], 172);
       `checkd(fails[22], 0);
-      `checkd(passes[23], 147);
-      `checkd(fails[23], 39);
+      `checkd(passes[23], 188);
+      `checkd(fails[23], 13);
       $write("*-* All Finished *-*\n");
       $finish;
     end

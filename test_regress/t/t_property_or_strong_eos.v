@@ -29,6 +29,9 @@ module t (
   else $display("EOS_OR_SEQ_PENDING_BAD");
   assert property (@(posedge clk) d or (always [0:3] a))
   else $display("EOS_OR_WEAK_BAD");
+  // Also with an implication operand
+  assert property (@(posedge clk) (a |-> b) or (s_always [0:3] a))
+  else $display("EOS_OR_IMPL");
 
   always @(posedge clk) begin
     cyc <= cyc + 1;
