@@ -3040,71 +3040,6 @@ inline T_Ret VL_REVCLONE_Q(const T_From& from, uint32_t lbits, int srcElementBit
     return ret;
 }
 
-// Helper function to get a bit from a queue at a specific bit index
-template <typename T>
-inline bool VL_GET_QUEUE_BIT(const VlQueue<T>& queue, int srcElementBits, size_t bitIndex) {
-    const size_t elemIdx = bitIndex / srcElementBits;
-    if (VL_UNLIKELY(elemIdx >= queue.size())) return false;
-
-    const T element = queue.at(elemIdx);
-    if (srcElementBits == 1) return element & 1;
-
-    const size_t bitInElem = bitIndex % srcElementBits;
-    const size_t actualBitPos = srcElementBits - 1 - bitInElem;
-    return (element >> actualBitPos) & 1;
-}
-
-// Helper function to set a bit in the destination queue
-template <typename T>
-inline void VL_SET_QUEUE_BIT(VlQueue<T>& queue, int dstElementBits, size_t bitIndex, bool value) {
-    if (dstElementBits == 1) {
-        if (VL_UNLIKELY(bitIndex >= queue.size())) return;
-        queue.atWrite(bitIndex) = value ? 1 : 0;
-    } else {
-        const size_t elemIdx = bitIndex / dstElementBits;
-        if (VL_UNLIKELY(elemIdx >= queue.size())) return;
-        const size_t bitInElem = bitIndex % dstElementBits;
-        const size_t actualBitPos = dstElementBits - 1 - bitInElem;
-        if (value) {
-            queue.atWrite(elemIdx) |= (static_cast<T>(1) << actualBitPos);
-        } else {
-            queue.atWrite(elemIdx) &= ~(static_cast<T>(1) << actualBitPos);
-        }
-    }
-}
-
-// Helper function to get a bit from a VlWide queue at a specific bit index
-template <std::size_t N_Words>
-inline bool VL_GET_QUEUE_BIT(const VlQueue<VlWide<N_Words>>& queue, int srcElementBits,
-                             size_t bitIndex) {
-    const size_t elemIdx = bitIndex / srcElementBits;
-    if (VL_UNLIKELY(elemIdx >= queue.size())) return false;
-
-    const VlWide<N_Words>& element = queue.at(elemIdx);
-    const size_t bitInElem = bitIndex % srcElementBits;
-    const size_t actualBitPos = srcElementBits - 1 - bitInElem;
-
-    return VL_BITISSET_W(element.data(), actualBitPos);
-}
-
-// Helper function to set a bit in a VlWide queue at a specific bit index
-template <std::size_t N_Words>
-inline void VL_SET_QUEUE_BIT(VlQueue<VlWide<N_Words>>& queue, int dstElementBits, size_t bitIndex,
-                             bool value) {
-    const size_t elemIdx = bitIndex / dstElementBits;
-    if (VL_UNLIKELY(elemIdx >= queue.size())) return;
-
-    const size_t bitInElem = bitIndex % dstElementBits;
-    const size_t actualBitPos = dstElementBits - 1 - bitInElem;
-
-    VlWide<N_Words>& element = queue.atWrite(elemIdx);
-    if (value) {
-        VL_ASSIGNBIT_WO(actualBitPos, element);
-    } else {
-        VL_ASSIGNBIT_WI(actualBitPos, element, 0);
-    }
-}
-
 template <typename T>
 inline void VL_ZERO_INIT_QUEUE_ELEM(T& elem) {
     elem = 0;
@@ -3113,6 +3048,148 @@ inline void VL_ZERO_INIT_QUEUE_ELEM(T& elem) {
 template <std::size_t N_Words>
 inline void VL_ZERO_INIT_QUEUE_ELEM(VlWide<N_Words>& elem) {
     for (size_t j = 0; j < N_Words; ++j) { elem.at(j) = 0; }
+}
+
+// Bits [lsb, lsb + n) of a queue element, n at most 64, as the low bits of the result
+template <typename T>
+inline uint64_t _vl_q_elem_bits(const T& elem, int lsb, int n) VL_PURE {
+    return (static_cast<uint64_t>(elem) >> lsb) & VL_MASK_Q(n);
+}
+template <std::size_t N_Words>
+inline uint64_t _vl_q_elem_bits(const VlWide<N_Words>& elem, int lsb, int n) VL_PURE {
+    uint64_t value = 0;
+    for (int got = 0; got < n;) {
+        const int bit = lsb + got;
+        const int take = std::min(VL_EDATASIZE - static_cast<int>(VL_BITBIT_E(bit)), n - got);
+        const uint64_t word = elem[VL_BITWORD_E(bit)] >> VL_BITBIT_E(bit);
+        value |= (word & VL_MASK_Q(take)) << got;
+        got += take;
+    }
+    return value;
+}
+// Set bits [lsb, lsb + n), which are zero, of a queue element to the n bits of 'value'
+template <typename T>
+inline void _vl_q_elem_or_bits(T& elem, int lsb, int /*n*/, uint64_t value) VL_MT_SAFE {
+    elem |= static_cast<T>(value << lsb);
+}
+template <std::size_t N_Words>
+inline void _vl_q_elem_or_bits(VlWide<N_Words>& elem, int lsb, int n, uint64_t value) VL_MT_SAFE {
+    for (int put = 0; put < n;) {
+        const int bit = lsb + put;
+        const int take = std::min(VL_EDATASIZE - static_cast<int>(VL_BITBIT_E(bit)), n - put);
+        elem[VL_BITWORD_E(bit)] |= static_cast<EData>((value >> put) & VL_MASK_Q(take))
+                                   << VL_BITBIT_E(bit);
+        put += take;
+    }
+}
+// Bits [pos, pos + n), n at most 64, of the stream of the 'width'-bit elements of a queue, the
+// leftmost first, as the low bits of the result, the first of them its most significant
+template <typename T>
+inline uint64_t _vl_q_stream_bits(const VlQueue<T>& q, int width, size_t pos, int n) VL_PURE {
+    auto it = q.begin() + static_cast<std::ptrdiff_t>(pos / width);
+    int offset = static_cast<int>(pos % width);
+    uint64_t value = 0;
+    while (n > 0) {
+        const int take = std::min(width - offset, n);
+        value
+            = (take < 64 ? value << take : 0) | _vl_q_elem_bits(*it, width - offset - take, take);
+        ++it;
+        offset = 0;
+        n -= take;
+    }
+    return value;
+}
+// Set bits [pos, pos + n), which are zero, of the stream of the elements of a queue to 'value'
+template <typename T>
+inline void _vl_q_stream_or_bits(VlQueue<T>& q, int width, size_t pos, int n,
+                                 uint64_t value) VL_MT_SAFE {
+    int32_t index = static_cast<int32_t>(pos / width);
+    int offset = static_cast<int>(pos % width);
+    while (n > 0) {
+        const int take = std::min(width - offset, n);
+        n -= take;
+        _vl_q_elem_or_bits(q.atWrite(index), width - offset - take, take,
+                           (value >> n) & VL_MASK_Q(take));
+        ++index;
+        offset = 0;
+    }
+}
+
+// Bits of 'value' in reverse order
+inline uint64_t _vl_bitreverse_q(uint64_t value) VL_PURE {
+    value = ((value >> 1) & 0x5555555555555555ULL) | ((value & 0x5555555555555555ULL) << 1);
+    value = ((value >> 2) & 0x3333333333333333ULL) | ((value & 0x3333333333333333ULL) << 2);
+    value = ((value >> 4) & 0x0f0f0f0f0f0f0f0fULL) | ((value & 0x0f0f0f0f0f0f0f0fULL) << 4);
+    value = ((value >> 8) & 0x00ff00ff00ff00ffULL) | ((value & 0x00ff00ff00ff00ffULL) << 8);
+    value = ((value >> 16) & 0x0000ffff0000ffffULL) | ((value & 0x0000ffff0000ffffULL) << 16);
+    return (value >> 32) | (value << 32);
+}
+// Set the stream bits from 'outPos' of the elements of 'q', which are zero, to the stream bits
+// [start, end) of the elements of 'from', in 64-bit pieces
+template <typename T_Dst, typename T_Src>
+inline void _vl_q_copy_range(VlQueue<T_Dst>& q, int dstElementBits, const VlQueue<T_Src>& from,
+                             int srcElementBits, size_t start, size_t end,
+                             size_t outPos) VL_MT_SAFE {
+    for (size_t pos = start; pos < end;) {
+        const int n = static_cast<int>(std::min<size_t>(64, end - pos));
+        _vl_q_stream_or_bits(q, dstElementBits, outPos, n,
+                             _vl_q_stream_bits(from, srcElementBits, pos, n));
+        pos += n;
+        outPos += n;
+    }
+}
+// Copy the stream of the elements of 'from' into new elements of 'q' (IEEE 1800-2023 11.4.14):
+// with 'lbits' zero, as is; else reversed in blocks of 'lbits' bits from the right, the last
+// block short. A last element not filled has zeros on the right.
+template <typename T_Dst, typename T_Src>
+inline void _vl_copy_q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t lbits,
+                       int srcElementBits, int dstElementBits) VL_MT_SAFE {
+    const size_t srcTotalBits = static_cast<size_t>(from.size()) * srcElementBits;
+    const size_t dstSize = (srcTotalBits + dstElementBits - 1) / dstElementBits;
+    q.renew(dstSize);
+    for (size_t i = 0; i < dstSize; ++i) VL_ZERO_INIT_QUEUE_ELEM(q.atWrite(i));
+    if (srcElementBits == 1 && dstElementBits == 1) {
+        // One bit an element: move the elements, in blocks from the right if reversed
+        const size_t blockBits = (lbits == 0 || lbits >= srcTotalBits) ? srcTotalBits : lbits;
+        size_t outPos = 0;
+        if (blockBits == 1) {
+            for (auto it = from.end(); it != from.begin();) {
+                _vl_q_elem_or_bits(q.atWrite(static_cast<int32_t>(outPos++)), 0, 1,
+                                   _vl_q_elem_bits(*--it, 0, 1));
+            }
+            return;
+        }
+        for (size_t end = srcTotalBits; end > 0;) {
+            const size_t start = end > blockBits ? end - blockBits : 0;
+            const auto endIt = from.begin() + static_cast<std::ptrdiff_t>(end);
+            for (auto it = from.begin() + static_cast<std::ptrdiff_t>(start); it != endIt; ++it) {
+                _vl_q_elem_or_bits(q.atWrite(static_cast<int32_t>(outPos++)), 0, 1,
+                                   _vl_q_elem_bits(*it, 0, 1));
+            }
+            end = start;
+        }
+    } else if (lbits == 0 || lbits >= srcTotalBits) {
+        // One block, as wide as the stream or wider: nothing to reorder
+        _vl_q_copy_range(q, dstElementBits, from, srcElementBits, 0, srcTotalBits, 0);
+    } else if (lbits == 1) {
+        // Every bit reversed, 64 at a time
+        for (size_t outPos = 0; outPos < srcTotalBits;) {
+            const int n = static_cast<int>(std::min<size_t>(64, srcTotalBits - outPos));
+            const uint64_t value
+                = _vl_q_stream_bits(from, srcElementBits, srcTotalBits - outPos - n, n);
+            _vl_q_stream_or_bits(q, dstElementBits, outPos, n,
+                                 _vl_bitreverse_q(value) >> (64 - n));
+            outPos += n;
+        }
+    } else {
+        size_t outPos = 0;
+        for (size_t end = srcTotalBits; end > 0;) {
+            const size_t start = end > lbits ? end - lbits : 0;
+            _vl_q_copy_range(q, dstElementBits, from, srcElementBits, start, end, outPos);
+            outPos += end - start;
+            end = start;
+        }
+    }
 }
 
 // These overloads work for both VlQueue<CData> (and similar) as well
@@ -3125,16 +3202,8 @@ inline void VL_COPY_Q(VlQueue<T>& q, const VlQueue<T>& from, uint32_t /*lbits*/,
         if (VL_UNLIKELY(&q == &from)) return;  // Skip self-assignment when it's truly a no-op
         q = from;
     } else {
-        // Different element bit widths: use streaming conversion
-        VlQueue<T> srcCopy = from;
-        const size_t srcTotalBits = static_cast<size_t>(from.size()) * srcElementBits;
-        const size_t dstSize = (srcTotalBits + dstElementBits - 1) / dstElementBits;
-        q.renew(dstSize);
-        for (size_t i = 0; i < dstSize; ++i) { VL_ZERO_INIT_QUEUE_ELEM(q.atWrite(i)); }
-        for (size_t bitIndex = 0; bitIndex < srcTotalBits; ++bitIndex) {
-            VL_SET_QUEUE_BIT(q, dstElementBits, bitIndex,
-                             VL_GET_QUEUE_BIT(srcCopy, srcElementBits, bitIndex));
-        }
+        // Element widths differ, so the queues are different variables
+        _vl_copy_q(q, from, 0, srcElementBits, dstElementBits);
     }
 }
 
@@ -3144,14 +3213,7 @@ template <typename T_Dst, typename T_Src>
 inline typename std::enable_if<!std::is_same<T_Dst, T_Src>::value>::type
 VL_COPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t /*lbits*/, int srcElementBits,
           int dstElementBits) {
-    const size_t srcTotalBits = static_cast<size_t>(from.size()) * srcElementBits;
-    const size_t dstSize = (srcTotalBits + dstElementBits - 1) / dstElementBits;
-    q.renew(dstSize);
-    for (size_t i = 0; i < dstSize; ++i) { VL_ZERO_INIT_QUEUE_ELEM(q.atWrite(i)); }
-    for (size_t bitIndex = 0; bitIndex < srcTotalBits; ++bitIndex) {
-        VL_SET_QUEUE_BIT(q, dstElementBits, bitIndex,
-                         VL_GET_QUEUE_BIT(from, srcElementBits, bitIndex));
-    }
+    _vl_copy_q(q, from, 0, srcElementBits, dstElementBits);
 }
 
 // This works for both VlQueue<CData> (and similar) as well as VlQueue<VlWide<N>>,
@@ -3159,49 +3221,11 @@ VL_COPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t /*lbits*/, int
 template <typename T_Dst, typename T_Src>
 inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, uint32_t lbits,
                          int srcElementBits, int dstElementBits) {
-    const size_t srcTotalBits = static_cast<size_t>(from.size()) * srcElementBits;
-    const size_t dstSize = (srcTotalBits + dstElementBits - 1) / dstElementBits;
-
-    // Always make a copy to handle the case where q and from are the same queue
-    VlQueue<T_Src> srcCopy = from;
-
-    // Initialize all elements to zero using appropriate method
-    q.renew(dstSize);
-    for (size_t i = 0; i < dstSize; ++i) VL_ZERO_INIT_QUEUE_ELEM(q.atWrite(i));
-
-    if (lbits >= srcTotalBits) {
-        // One block, as wide as the stream or wider: nothing to reorder
-        for (size_t i = 0; i < srcTotalBits; ++i) {
-            VL_SET_QUEUE_BIT(q, dstElementBits, i, VL_GET_QUEUE_BIT(srcCopy, srcElementBits, i));
-        }
-    } else if (lbits == 1) {
-        // Simple bit reversal: write directly to destination
-        for (size_t i = 0; i < srcTotalBits; ++i) {
-            VL_SET_QUEUE_BIT(q, dstElementBits, i,
-                             VL_GET_QUEUE_BIT(srcCopy, srcElementBits, srcTotalBits - 1 - i));
-        }
+    if (VL_UNLIKELY(static_cast<const void*>(&q) == static_cast<const void*>(&from))) {
+        const VlQueue<T_Src> srcCopy = from;
+        _vl_copy_q(q, srcCopy, lbits, srcElementBits, dstElementBits);
     } else {
-        // Generalized block-reversal for lbits > 1:
-        // 1. Reverse all bits using 1-bit blocks
-        // 2. Split into lbits-sized blocks, the last one short
-        // 3. Reverse each lbits-sized block using 1-bit blocks
-        const size_t numCompleteBlocks = srcTotalBits / lbits;
-        const size_t remainderBits = srcTotalBits % lbits;
-        const size_t srcBlocks = numCompleteBlocks + (remainderBits > 0 ? 1 : 0);
-
-        size_t dstBitIndex = 0;
-
-        for (size_t block = 0; block < srcBlocks; ++block) {
-            const size_t blockStart = block * lbits;
-            const size_t bitsToProcess
-                = VL_LIKELY(block < numCompleteBlocks) ? lbits : remainderBits;
-            for (size_t bit = bitsToProcess; bit-- > 0;) {
-                const size_t reversedBitIndex = blockStart + bit;
-                const size_t originalBitIndex = srcTotalBits - 1 - reversedBitIndex;
-                VL_SET_QUEUE_BIT(q, dstElementBits, dstBitIndex++,
-                                 VL_GET_QUEUE_BIT(srcCopy, srcElementBits, originalBitIndex));
-            }
-        }
+        _vl_copy_q(q, from, lbits, srcElementBits, dstElementBits);
     }
 }
 
