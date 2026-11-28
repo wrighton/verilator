@@ -102,6 +102,26 @@ module t;
       `checkh(w12, 12'hdea);
       `checkp(n4, i == 0 ? "'{'hd, 'hb, 'he, 'h0, 'h0}" : "'{'hd, 'hb, 'he, 'h0, 'h1}");
     end
+    // A slice size not dividing the bits: the inverse of the packing slices the value from the
+    // left (IEEE 1800-2023 11.4.14.2, 11.4.14.3)
+    begin
+      automatic bit [2:0] a3;
+      automatic bit [3:0] q4[$];
+      automatic bit [6:0] p7;
+      {<<5{a3, q4}} = 7'b0110110;
+      `checkh(a3, 3'b100);
+      `checkp(q4, "'{'hd}");
+      p7 = {<<5{a3, q4}};
+      `checkh(p7, 7'b0110110);
+    end
+    // Unpacking such a stream takes the leftmost bits of a longer one (IEEE 1800-2023 11.4.14.3)
+    begin
+      automatic bit [15:0] p16;
+      automatic byte q8[$];
+      q8 = '{8'h34, 8'h56};
+      {>>{p16}} = {>>{8'h12, q8}};
+      `checkh(p16, 16'h1234);
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end

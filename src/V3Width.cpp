@@ -511,6 +511,7 @@ class WidthVisitor final : public VNVisitor {
     // Element variables of each interface array split by V3Param, in order (see V3Param),
     // gathered when first selected from
     std::unordered_map<const AstVar*, std::vector<AstVar*>> m_splitIfaceElemVarps;
+    bool m_inDynamicStream = false;  // Widthing the lowering of a stream with dynamic operands
     const AstEnumItem* m_enumItemp = nullptr;  // Current enum item
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstProperty* m_propertyp = nullptr;  // Current property
@@ -4756,6 +4757,8 @@ class WidthVisitor final : public VNVisitor {
     AstNodeStmt* widthDynamicStream(FileLine* const fl, DynamicStream& stream) {
         // Width the statements under a holder, as iterating requires a node with a parent
         AstBegin* const holderp = new AstBegin{fl, "[EditWrapper]", stream.m_stmtsp, false};
+        VL_RESTORER(m_inDynamicStream);
+        m_inDynamicStream = true;
         userIterateAndNext(holderp->stmtsp(), nullptr);
         AstNodeStmt* const stmtsp = holderp->stmtsp()->unlinkFrBackWithNext();
         VL_DO_DANGLING(holderp->deleteTree(), holderp);
@@ -4832,11 +4835,15 @@ class WidthVisitor final : public VNVisitor {
         const int elemWidth = stream.m_width;
         AstVar* const varp = newDynamicStreamTemp(streamp, stream);
         AstNodeExpr* const slicep = streamp->rhsp()->unlinkFrBack();
-        AstNodeExpr* const srcStreamp
-            = VN_IS(streamp, StreamL)
-                  ? static_cast<AstNodeExpr*>(new AstStreamL{fl, srcp, slicep})
-                  : static_cast<AstNodeExpr*>(new AstStreamR{fl, srcp, slicep});
-        addDynamicStreamAssign(stream, new AstVarRef{fl, varp, VAccess::WRITE}, srcStreamp);
+        if (VN_IS(streamp, StreamL)) {
+            // Unpacked into a left stream of the queue, the inverse of the stream's packing
+            // (IEEE 1800-2023 11.4.14.3)
+            addDynamicStreamAssign(
+                stream, new AstStreamL{fl, new AstVarRef{fl, varp, VAccess::WRITE}, slicep}, srcp);
+        } else {
+            addDynamicStreamAssign(stream, new AstVarRef{fl, varp, VAccess::WRITE},
+                                   new AstStreamR{fl, srcp, slicep});
+        }
         AstNodeStmt* const fillp = stream.m_stmtsp;
         stream.m_stmtsp = nullptr;
         // Elements taken by the fixed-size items before and after the first dynamic one
@@ -9861,8 +9868,8 @@ class WidthVisitor final : public VNVisitor {
                 const AstNodeDType* const rhsDtp = nodep->rhsp()->dtypep()->skipRefp();
                 const bool declared
                     = hasDeclaredDType(nodep->lhsp()) && hasDeclaredDType(nodep->rhsp());
-                const bool bothRefs = VN_IS(nodep->lhsp(), NodeVarRef)
-                                      && VN_IS(nodep->rhsp(), NodeVarRef);
+                const bool bothRefs
+                    = VN_IS(nodep->lhsp(), NodeVarRef) && VN_IS(nodep->rhsp(), NodeVarRef);
                 // Other than between variable references, which get full element-type checks,
                 // an aggregate assigned to an integral is reported as such, but a stream target
                 // unpacks the value (IEEE 1800-2023 11.4.14)
@@ -16849,6 +16856,8 @@ public:
     // sized operand fromp if not null, else a stream of 'bits' bits
     void addStreamCheck(AstNodeAssign* nodep, AstNodeExpr* fromp, uint32_t bits, uint32_t minBits,
                         uint32_t maxBits, uint32_t unitBits) {
+        // The lowering of a stream with dynamic operands checks the stream it streams itself
+        if (m_inDynamicStream) return;
         // A procedural assignment is checked by a statement before it, a continuous one by a
         // process beside its own
         AstNode* anchorp = nullptr;
@@ -16860,6 +16869,19 @@ public:
             return;
         }
         queueStreamCheck(anchorp, nodep->fileline(), fromp, bits, minBits, maxBits, unitBits);
+    }
+    // Check at run time the queue of bits a stream of several operands, among which a dynamically
+    // sized one, is streamed into, if sourcep is one (see packDynamicOperands), once filled
+    void addFilledStreamCheck(FileLine* flp, AstNodeExpr* sourcep, uint32_t minBits,
+                              uint32_t maxBits, uint32_t unitBits) {
+        AstExprStmt* const exprStmtp = VN_CAST(sourcep, ExprStmt);
+        // The lowering of a stream with dynamic operands checks the stream it streams itself
+        if (!exprStmtp || m_inDynamicStream) return;
+        AstNodeExpr* const resultp = exprStmtp->resultp();
+        if (!checkedStreamOperand(resultp)) return;
+        AstNodeExpr* const fromp = resultp->cloneTree(false);
+        fromp->didWidth(true);
+        exprStmtp->addStmtsp(new AstStreamCheck{flp, fromp, 0, minBits, maxBits, unitBits});
     }
     // Check the stream of streaming concatenation streamp connected to port pinp at run time,
     // as for the continuous assignment the connection is (IEEE 1800-2023 23.3.3), by a process
@@ -16934,9 +16956,12 @@ public:
             }
             // The stream of a dynamically sized operand is checked at run time, unless the
             // target is a stream, which takes the bits it needs of a longer source
-            if (lwidth != 0 && !VN_IS(nodep->lhsp(), NodeStream)
-                && checkedStreamOperand(streamp->lhsp())) {
-                addStreamCheck(nodep, streamp->lhsp(), 0, 0, lwidth, 0);
+            if (lwidth != 0 && !VN_IS(nodep->lhsp(), NodeStream)) {
+                if (checkedStreamOperand(streamp->lhsp())) {
+                    addStreamCheck(nodep, streamp->lhsp(), 0, 0, lwidth, 0);
+                } else {
+                    addFilledStreamCheck(nodep->fileline(), streamp->lhsp(), 0, lwidth, 0);
+                }
             }
             const AstNodeDType* const srcDTypep = streamp->lhsp()->dtypep()->skipRefp();
             if (lwidth != 0 && srcDTypep->isDynamicallySized()
@@ -17015,6 +17040,10 @@ public:
                 } else if (unitBits) {
                     addStreamCheck(nodep, sourcep, 0, 0, 0, unitBits);
                 }
+            } else if (VN_IS(sourcep, ExprStmt)) {
+                addFilledStreamCheck(nodep->fileline(), sourcep,
+                                     lhsStreamDTypep->isDynamicallySized() ? 0 : lwidth, 0,
+                                     unitBits);
             } else if (unitBits && rwidth % unitBits) {
                 addStreamCheck(nodep, nullptr, rwidth, 0, 0, unitBits);
             }
