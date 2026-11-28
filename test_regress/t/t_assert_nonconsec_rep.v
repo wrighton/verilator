@@ -46,6 +46,11 @@ module t (
   int ticks7 = 0;
   int ticks8 = 0;
   int seen_a = 0;
+  int count_fail16 = 0;
+  int count_fail17 = 0;
+  int count_fail18 = 0;
+  int count_fail19 = 0;
+  int count_fail20 = 0;
 
   // Test: a[=2] |-> b (overlapping implication, 2 non-consecutive occurrences)
   assert property (@(posedge clk) a [= 2] |-> b)
@@ -121,6 +126,40 @@ module t (
     fail_cycs15 <= fail_cycs15 + $sampled(cyc);
   end
 
+  // Test 16: as test 7, through a chain of property instances
+  property p_nc_delay_args(x, y, z);
+    x [= 2] ##1 y |-> z;
+  endproperty
+  property p_nc_delay_chain(x, y, z);
+    p_nc_delay_args(x, y, z);
+  endproperty
+  assert property (@(posedge clk) p_nc_delay_chain(a, b, c))
+  else count_fail16 <= count_fail16 + 1;
+
+  // Tests 17-20: a goto repetition with a cycle delay, through a chain of property instances
+  // and written out
+  property p_goto_delay;
+    a [-> 2] ##1 b |-> c;
+  endproperty
+  property p_goto_delay_chain;
+    p_goto_delay;
+  endproperty
+  assert property (@(posedge clk) p_goto_delay_chain)
+  else count_fail17 <= count_fail17 + 1;
+  assert property (@(posedge clk) a [-> 2] ##1 b |-> c)
+  else count_fail18 <= count_fail18 + 1;
+
+  property p_goto_cons_delay;
+    a [-> 2] |-> ##1 c;
+  endproperty
+  property p_goto_cons_delay_chain;
+    p_goto_cons_delay;
+  endproperty
+  assert property (@(posedge clk) p_goto_cons_delay_chain)
+  else count_fail19 <= count_fail19 + 1;
+  assert property (@(posedge clk) a [-> 2] |-> ##1 c)
+  else count_fail20 <= count_fail20 + 1;
+
   // Tests 12-13: as tests 7 and 1, under a default clocking in another module
   sub_default_clocking u_sub (
       .clk,
@@ -169,6 +208,9 @@ module t (
       `checkd(fail_cycs14, 22 + 23 + 24);
       `checkd(count_fail15, 2);
       `checkd(fail_cycs15, 43 + 44);
+      `checkd(count_fail16, count_fail7);
+      `checkd(count_fail17, count_fail18);
+      `checkd(count_fail19, count_fail20);
       $write("*-* All Finished *-*\n");
       $finish;
     end
