@@ -1200,10 +1200,13 @@ class RandomizeMarkVisitor final : public VNVisitor {
                || VN_IS(dtypep, QueueDType);
     }
     // Whether varp is a fixed-size or dynamic array, or queue, of class handles, or of
-    // fixed-size arrays of them
+    // fixed-size arrays of them, or an associative array of class handles
     static bool isHandleArray(const AstVar* varp) {
         // Elements of inner dynamic arrays or queues are nested accesses, not supported
         const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+        if (VN_IS(dtypep, AssocArrayDType)) {
+            return VN_IS(dtypep->subDTypep()->skipRefp(), ClassRefDType);
+        }
         if (!isIndexedArray(dtypep)) return false;
         dtypep = dtypep->subDTypep()->skipRefp();
         while (VN_IS(dtypep, UnpackArrayDType)) dtypep = dtypep->subDTypep()->skipRefp();
@@ -1276,9 +1279,16 @@ class RandomizeMarkVisitor final : public VNVisitor {
         };
         for (AstConstraint* const constrp : constrps) {
             if (!constrp->itemsp()) continue;
-            // An index for each dimension
+            // An index for each dimension, of an associative array its key
             std::vector<AstVar*> idxVarps;
             AstNode* idxVarsp = nullptr;
+            const AstAssocArrayDType* const assocDtp
+                = VN_CAST(arrVarp->dtypep()->skipRefp(), AssocArrayDType);
+            if (assocDtp) {
+                idxVarps.push_back(
+                    new AstVar{fl, VVarType::BLOCKTEMP, "__Vi", assocDtp->keyDTypep()});
+                idxVarsp = idxVarps.back();
+            }
             for (const AstNodeDType* dtypep = arrVarp->dtypep()->skipRefp();
                  isIndexedArray(dtypep); dtypep = dtypep->subDTypep()->skipRefp()) {
                 idxVarps.push_back(
