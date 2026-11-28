@@ -1,0 +1,5 @@
+%Warning: t/t_stream_dyn_short_warn.v:26: Stream target requires 16 bits, but the source provides only 8 bits (IEEE 1800-2023 11.4.14.3).
+%Warning: t/t_stream_dyn_short_warn.v:28: Stream target of 16-bit elements requires a whole number of elements, but the source provides 24 bits (IEEE 1800-2023 6.24.3, 11.4.14.4).
+%Warning: t/t_stream_dyn_short_warn.v:29: Stream of 16 bits is wider than its fixed-size target of 8 bits (IEEE 1800-2023 11.4.14).
+%Warning: t/t_stream_dyn_short_warn.v:31: Stream target requires 16 bits, but the source provides only 8 bits (IEEE 1800-2023 11.4.14.3).
+*-* All Finished *-*
