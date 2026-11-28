@@ -138,6 +138,16 @@ static AstNodeExpr* newBothp(AstNodeExpr* ap, AstNodeExpr* bp) {
     return andp;
 }
 
+// Whether the handles of the member path objp are not null, outermost first
+static AstNodeExpr* newPathNonNullp(AstNodeExpr* objp) {
+    FileLine* const fl = objp->fileline();
+    AstNeq* const neqp
+        = new AstNeq{fl, objp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
+    neqp->dtypeSetBit();
+    const AstMemberRef* const refp = VN_CAST(objp, MemberRef);
+    return refp ? newBothp(newPathNonNullp(refp->fromp()), neqp) : neqp;
+}
+
 class SmtUtil final {
 public:
     // Walk up the extends chain from classp to find the nearest ancestor (starting
@@ -5573,12 +5583,16 @@ public:
                     AstBegin* const holderp = SmtUtil::newItemsHolderp(
                         constrp->fileline(), constrp->itemsp()->unlinkFrBackWithNext());
                     AstNodeStmt* stmtsp = wrapIfConstraintMode(nodep, constrp, holderp);
-                    // The constraints of objects of inactive handles are not solved
+                    // The constraints of objects of inactive handles are not solved, nor are
+                    // those of the object of a null handle, there being no object (IEEE
+                    // 1800-2023 18.5.8); the objects of an array are checked by element
                     const auto it = m_cloneObjps.find(constrp);
                     if (it != m_cloneObjps.end()) {
-                        if (AstNodeExpr* const activep = newHandlesActivep(it->second.objp)) {
-                            stmtsp = new AstIf{constrp->fileline(), activep, stmtsp};
+                        AstNodeExpr* condp = newHandlesActivep(it->second.objp);
+                        if (!it->second.elemIfp) {
+                            condp = newBothp(newPathNonNullp(it->second.objp), condp);
                         }
+                        if (condp) stmtsp = new AstIf{constrp->fileline(), condp, stmtsp};
                     }
                     taskp->addStmtsp(stmtsp);
                     ConstraintExprVisitor{

@@ -154,10 +154,10 @@ module t;
 
     begin
       automatic NullHolder nh = new;
-      // The constraint mode is not read through the null handle: the call completes as without
-      // a mode, reading a member of the null handle (IEEE 1800-2023 18.5.12)
+      // The constraint mode is not read through the null handle, of no object, so of no
+      // constraints (IEEE 1800-2023 18.5.8)
       randomize_result = nh.randomize();
-      `checkd(randomize_result, 0);
+      `checkd(randomize_result, 1);
       nh.e = new;
       randomize_result = nh.randomize();
       `checkd(randomize_result, 1);
@@ -170,10 +170,10 @@ module t;
     begin
       automatic NullNestHolder nn = new;
       randomize_result = nn.randomize();
-      `checkd(randomize_result, 0);
+      `checkd(randomize_result, 1);
       nn.m = new;
       randomize_result = nn.randomize();
-      `checkd(randomize_result, 0);
+      `checkd(randomize_result, 1);
       nn.m.e = new;
       randomize_result = nn.randomize();
       `checkd(randomize_result, 1);
