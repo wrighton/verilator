@@ -3355,6 +3355,11 @@ class AssertNfaVisitor final : public VNVisitor {
 
     void processAssertion(AstNodeCoverOrAssert* assertp) {
         if (assertp->immediate()) return;
+        // V3Assert counts the attempts of a whole property 'always p' only with p of one tick;
+        // other p are lowered here or in V3AssertPre, each failure of p failing once
+        if (AstPropSpec* const specp = VN_CAST(assertp->propp(), PropSpec)) {
+            if (hasMultiCycleExpr(specp)) specp->wholeAlways(false);
+        }
 
         AstPropSpec* const propp = prepareAssertionProp(assertp);
         if (!propp) return;

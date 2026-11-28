@@ -184,6 +184,7 @@ void V3AssertCommon::reducePlainAlways(AstPropSpec* specp) {
     if (!alwaysp || !alwaysp->isPlainAlways()) return;
     alwaysp->replaceWith(alwaysp->propp()->unlinkFrBack());
     VL_DO_DANGLING(alwaysp->deleteTree(), alwaysp);
+    specp->wholeAlways(true);
     // But an attempt of it holds only if p holds at every later tick, which is not known before
     // the end of simulation, so the pass statements of an assertion of it never run (IEEE
     // 1800-2023 16.14.1)
@@ -397,6 +398,7 @@ class AssertVisitor final : public VNVisitor {
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
     V3UniqueNames m_matchCountNames{"__VnfaRemainingMatchCount"};  // Match replay counter names
+    V3UniqueNames m_alwaysAttemptNames{"__ValwaysAttempts"};  // Whole always attempt counters
     V3UniqueNames m_obsNames{"__VassertObs"};  // Observed deferred assertion temp names
     // Key equality for the delayed value maps. AstNode::sameTree is not enough, as
     // AstVar::sameNode compares only names, and before V3Begin distinct variables in
@@ -1048,10 +1050,12 @@ class AssertVisitor final : public VNVisitor {
         AstNode* propExprp;
         AstNodeExpr* disablep = nullptr;
         AstNodeExpr* matchCountp = nullptr;
+        bool wholeAlways = false;
         if (AstPropSpec* const specp = VN_CAST(nodep->propp(), PropSpec)) {
             propExprp = specp->propp()->unlinkFrBack();
             if (specp->disablep()) disablep = specp->disablep()->unlinkFrBack();
             matchCountp = specp->matchCountp();
+            wholeAlways = specp->wholeAlways();
         } else {
             propExprp = nodep->propp()->unlinkFrBack();
         }
@@ -1087,8 +1091,64 @@ class AssertVisitor final : public VNVisitor {
             replaysp->addNext(loopp);
             passsp = replaysp;
         }
+        // An attempt of a whole property 'always p' starts on every tick and fails on the first
+        // tick from its start where p fails (IEEE 1800-2023 16.12.11). With p of one tick, all
+        // the attempts started since the previous failure fail there, each running the fail
+        // statements (16.14.1). A disable condition disables them all.
+        AstVar* attemptsp = nullptr;
+        if (wholeAlways && failsp && VN_IS(nodep, Assert) && !VN_IS(propExprp, PExpr)) {
+            attemptsp = newModuleTemp(flp, m_alwaysAttemptNames.get(""), m_modp->findUInt32DType(),
+                                      m_modp);
+            const auto newRefp
+                = [&](VAccess access) { return new AstVarRef{flp, attemptsp, access}; };
+            AstLoop* const loopp = new AstLoop{flp};
+            loopp->addStmtsp(new AstLoopTest{flp, loopp, newRefp(VAccess::READ)});
+            loopp->addStmtsp(failsp);
+            loopp->addStmtsp(
+                new AstAssign{flp, newRefp(VAccess::WRITE),
+                              new AstSub{flp, newRefp(VAccess::READ),
+                                         new AstConst{flp, AstConst::WidthedValue{}, 32, 1}}});
+            failsp = loopp;
+        }
         AstNodeStmt* bodysp = assertBody(nodep, propExprp, passsp, failsp);
-        if (disablep) bodysp = new AstIf{flp, new AstLogNot{flp, disablep}, bodysp};
+        if (attemptsp) {
+            AstNodeStmt* const startp
+                = new AstAssign{flp, new AstVarRef{flp, attemptsp, VAccess::WRITE},
+                                new AstAdd{flp, new AstVarRef{flp, attemptsp, VAccess::READ},
+                                           new AstConst{flp, AstConst::WidthedValue{}, 32, 1}}};
+            bodysp = startp->addNext(bodysp);
+        }
+        if (disablep) {
+            // The disable condition also clears the attempts when it holds between ticks
+            // (IEEE 1800-2023 16.12), so a rise of it as a signal does
+            if (attemptsp && !VN_IS(disablep, Const)) {
+                AstVar* const disableVarp
+                    = newModuleTemp(flp, m_alwaysAttemptNames.get("") + "__disable",
+                                    m_modp->findBitDType(), m_modp);
+                // V3Width made it a single bit
+                AstNodeExpr* const disableCondp = disablep->cloneTreePure(false);
+                m_modp->addStmtsp(new AstAlways{
+                    flp, VAlwaysKwd::ALWAYS_COMB, nullptr,
+                    new AstAssign{flp, new AstVarRef{flp, disableVarp, VAccess::WRITE},
+                                  disableCondp}});
+                AstAlways* const clearp = new AstAlways{
+                    flp, VAlwaysKwd::ALWAYS,
+                    new AstSenTree{flp,
+                                   new AstSenItem{flp, VEdgeType::ET_POSEDGE,
+                                                  new AstVarRef{flp, disableVarp, VAccess::READ}}},
+                    new AstAssign{flp, new AstVarRef{flp, attemptsp, VAccess::WRITE},
+                                  new AstConst{flp, AstConst::WidthedValue{}, 32, 0}}};
+                clearp->foreach([](AstNodeVarRef* nodep) {
+                    nodep->fileline()->modifyWarnOff(V3ErrorCode::SYNCASYNCNET, true);
+                });
+                m_modp->addStmtsp(clearp);
+            }
+            bodysp = new AstIf{
+                flp, new AstLogNot{flp, disablep}, bodysp,
+                attemptsp ? new AstAssign{flp, new AstVarRef{flp, attemptsp, VAccess::WRITE},
+                                          new AstConst{flp, AstConst::WidthedValue{}, 32, 0}}
+                          : nullptr};
+        }
         // Add assertOn check last, for better combining
         if (!seqEvent) bodysp = newIfAssertOn(bodysp, nodep->directive(), nodep->userType());
         bodysp->foreach([](AstNodeVarRef* nodep) {

@@ -11,15 +11,38 @@
 
 // A named property whose body is 'always p', instanced as a whole property
 // (IEEE 1800-2023 16.12.11). Each instance is compared with the same assertion
-// written out.
+// written out, whose attempts with a boolean p fail once per attempt, as a model
+// of the attempts gives.
 module t (
   input clk
 );
   int unsigned crc = 32'h1;
   logic a, b, c;
   int cyc = 0;
+  // Attempts of 'always a', 'always b' and 'disable iff (c) always a' started since their previous
+  // failure, and their failures
+  int live_a = 0, live_b = 0, live_dis = 0, exp_a = 0, exp_b = 0, exp_dis = 0;
 
   always @(posedge clk) begin
+    ++live_a;
+    if (!a) begin
+      exp_a += live_a;
+      live_a = 0;
+    end
+    ++live_b;
+    if (!b) begin
+      exp_b += live_b;
+      live_b = 0;
+    end
+    if (c) begin
+      live_dis = 0;
+    end else begin
+      ++live_dis;
+      if (!a) begin
+        exp_dis += live_dis;
+        live_dis = 0;
+      end
+    end
     cyc <= cyc + 1;
     crc <= {crc[30:0], crc[31] ^ crc[21] ^ crc[1] ^ crc[0]};
     a <= crc[0];
@@ -93,15 +116,15 @@ module t (
 
   // Counts read in final (Postponed) to avoid same-timestep races.
   final begin
-    `checkd(fails_alw, ref_fails_alw);
-    `checkd(fails_arg, ref_fails_arg);
+    `checkd(fails_alw, exp_a);
+    `checkd(fails_arg, exp_b);
     `checkd(fails_impl, ref_fails_impl);
-    `checkd(fails_disable, ref_fails_disable);
-    `checkd(fails_clk, ref_fails_arg);
-    `checkd(fails_wrap, ref_fails_alw);
-    `checkd(fails_wrap2, ref_fails_alw);
+    `checkd(fails_disable, exp_dis);
+    `checkd(fails_clk, exp_b);
+    `checkd(fails_wrap, exp_a);
+    `checkd(fails_wrap2, exp_a);
     `checkd(fails_range, ref_fails_range);
-    `checkd(fails_param, ref_fails_alw);
+    `checkd(fails_param, exp_a);
     `checkd(ref_fails_range, 16);
     `checkd(ref_fails_alw, 17);
     `checkd(ref_fails_arg, 19);

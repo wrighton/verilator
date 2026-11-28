@@ -1881,6 +1881,7 @@ class AstPropSpec final : public AstNode {
     // @astgen op4 := matchCountp : Optional[AstNodeExpr] // Cover sequence matches this tick
     VPropStrength m_propStrength = VPropStrength::DEFAULT;
     bool m_fromInstanceChain = false;  // Body of a property instance whose body is an instance
+    bool m_wholeAlways = false;  // Reduced from a whole property 'always p' of one-tick p
 
 public:
     AstPropSpec(FileLine* fl, AstSenItem* sensesp, AstNodeExpr* disablep, AstNodeExpr* propp,
@@ -1900,6 +1901,8 @@ public:
     VPropStrength propStrength() const { return m_propStrength; }
     bool fromInstanceChain() const { return m_fromInstanceChain; }
     void fromInstanceChain(bool flag) { m_fromInstanceChain = flag; }
+    bool wholeAlways() const { return m_wholeAlways; }
+    void wholeAlways(bool flag) { m_wholeAlways = flag; }
 };
 class AstPull final : public AstNode {
     // @astgen op1 := lhsp : AstNodeExpr

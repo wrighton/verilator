@@ -11,9 +11,10 @@
 
 // A whole property 'always p' holds on an attempt only if p holds at every later tick, which is
 // not known before the end of simulation, so its pass statements never run (IEEE 1800-2023
-// 16.12.11, 16.14.1). Its failures are compared with the same property without the 'always'.
-// Nor does an attempt of an implication into an unbounded always pass unless vacuously, nor one
-// of 'always [m:$] p'.
+// 16.12.11, 16.14.1). An attempt starts on every tick and fails on the first tick where p fails,
+// so for a boolean p the attempts started since the previous failure fail there, checked against
+// a model of the attempts. The failures of a sequence p are those of p. Nor does an attempt of an
+// implication into an unbounded always pass unless vacuously, nor one of 'always [m:$] p'.
 module t (
     input clk
 );
@@ -30,6 +31,8 @@ module t (
   int fails[8];
   int ref_fails[3];
   int vacuous = 0;  // Attempts of the implications whose antecedent does not hold
+  // Attempts started since the previous failure, and the failures of the attempts
+  int live = 0, live_dis = 0, exp_fails = 0, exp_fails_dis = 0;
   assert property (@(posedge clk) always a) ++passes[0];
   else ++fails[0];
   assert property (@(posedge clk) always (a ##1 b)) ++passes[1];
@@ -55,6 +58,20 @@ module t (
 
   always @(posedge clk) begin
     if (!b && cyc < 100) ++vacuous;
+    ++live;
+    if (!a) begin
+      exp_fails += live;
+      live = 0;
+    end
+    if (cyc < 5) begin
+      live_dis = 0;
+    end else begin
+      ++live_dis;
+      if (!a) begin
+        exp_fails_dis += live_dis;
+        live_dis = 0;
+      end
+    end
     cyc <= cyc + 1;
     crc <= {crc[62:0], crc[63] ^ crc[2] ^ crc[0]};
     if (cyc == 100) begin
@@ -65,11 +82,13 @@ module t (
       `checkd(passes[5], 24);
       `checkd(passes[6], 21);
       `checkd(passes[7], 0);
-      `checkd(fails[0], ref_fails[0]);
+      `checkd(fails[0], exp_fails);
       `checkd(fails[1], ref_fails[1]);
-      `checkd(fails[2], ref_fails[0]);
-      `checkd(fails[3], ref_fails[0]);
-      `checkd(fails[4], ref_fails[2]);
+      `checkd(fails[2], exp_fails);
+      `checkd(fails[3], exp_fails);
+      `checkd(fails[4], exp_fails_dis);
+      `checkd(ref_fails[0], 27);
+      `checkd(exp_fails, 100);
       $write("*-* All Finished *-*\n");
       $finish;
     end
