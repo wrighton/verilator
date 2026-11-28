@@ -543,6 +543,18 @@ public:
         emitVarDecl(nodep);
     }
 
+    // Emit the source of nodep; a fixed-size one with descending inner dimensions is read with
+    // them reversed, as its outermost dimension is reversed by the conversion if descending
+    void emitArrayToArraySource(const AstCvtArrayToArray* nodep) {
+        const std::string reverseCall
+            = VN_IS(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType)
+                  ? EmitCUtil::unpackReverseCall(nodep->fromp()->dtypep(), true,
+                                                 "VL_UNPACKED_DIRS")
+                  : "";
+        if (!reverseCall.empty()) puts(reverseCall + "(");
+        iterateAndNextConstNull(nodep->fromp());
+        if (!reverseCall.empty()) puts(")");
+    }
     void visit(AstCvtArrayToArray* nodep) override {
         // A descending fixed-size target takes the first element at its highest index
         const std::string reverseCall = VN_IS(nodep->dtypep()->skipRefp(), UnpackArrayDType)
@@ -553,7 +565,7 @@ public:
         puts(nodep->reverse() ? "VL_REVCLONE_Q<" : "VL_CLONE_Q<");
         puts(nodep->dtypep()->cType("", false, false));
         puts(">(");
-        iterateAndNextConstNull(nodep->fromp());
+        emitArrayToArraySource(nodep);
         puts(", ");
         puts(cvtToStr(nodep->blockSize()) + "U");
         puts(", ");
@@ -594,7 +606,8 @@ public:
                     nodep, "Packed width does not fit the result");
         const string packedWidth = cvtToStr(nodep->packedWidth());
         emitOpName(nodep,
-                   "(" + packedWidth + ", %rw, %P, " + EmitCUtil::unpackReverseCall(fromDtp)
+                   "(" + packedWidth + ", %rw, %P, "
+                       + EmitCUtil::unpackReverseCall(fromDtp, false, "VL_UNPACKED_DIRS")
                        + "(%li))",
                    nodep->fromp(), elemDtp, nullptr);
     }
@@ -792,7 +805,8 @@ public:
             puts(", ");
             rhs = false;
             iterateAndNextConstNull(castp->fromp());
-            reverseUnpackCall = EmitCUtil::unpackReverseCall(castp->dtypep());
+            reverseUnpackCall
+                = EmitCUtil::unpackReverseCall(castp->dtypep(), false, "VL_REVERSE_UNPACKED");
         } else if (const AstCvtArrayToArray* const castp
                    = VN_CAST(nodep->rhsp(), CvtArrayToArray)) {
             if (castp->reverse()) {
@@ -803,7 +817,7 @@ public:
             iterateAndNextConstNull(nodep->lhsp());
             puts(", ");
             rhs = false;
-            iterateAndNextConstNull(castp->fromp());
+            emitArrayToArraySource(castp);
             puts(", ");
             puts(cvtToStr(castp->blockSize()) + "U");
             puts(", ");
@@ -812,7 +826,10 @@ public:
             puts(cvtToStr(castp->dstElementBits()));
             if (castp->unpack()) puts(", true");
             // Descending unpacked dest: reverse after copy
-            if (unpackDtp) reverseUnpackCall = EmitCUtil::unpackReverseCall(unpackDtp);
+            if (unpackDtp) {
+                reverseUnpackCall
+                    = EmitCUtil::unpackReverseCall(unpackDtp, false, "VL_REVERSE_UNPACKED");
+            }
         } else if (nodep->isWide() && !unpackDtp && VN_IS(nodep->lhsp(), VarRef)  //
                    && !VN_IS(nodep->rhsp(), CExpr)  //
                    && !VN_IS(nodep->rhsp(), CMethodHard)  //
@@ -868,8 +885,8 @@ public:
         if (decind) ofp()->blockDec();
         puts(";\n");
         if (!reverseUnpackCall.empty()) {
-            iterateAndNextConstNull(nodep->lhsp());
-            puts(" = " + reverseUnpackCall + "(");
+            // In place, as a copy of the array may not fit on the stack
+            puts(reverseUnpackCall + "(");
             iterateAndNextConstNull(nodep->lhsp());
             puts(");\n");
         }

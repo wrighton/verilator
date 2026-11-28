@@ -79,7 +79,8 @@ std::string EmitCMemberGroups::namedPath(const size_t idx) const {
 //######################################################################
 // EmitCUtil implementation
 
-std::string EmitCUtil::unpackReverseCall(const AstNodeDType* dtypep) {
+std::string EmitCUtil::unpackReverseCall(const AstNodeDType* dtypep, bool innerOnly,
+                                         const std::string& func) {
     // C++ unpacked arrays hold each dimension in element order, lowest index first, but
     // streaming (IEEE 1800-2023 11.4.14) and %p (21.2.1.7) are left to right, so every
     // descending dimension must be reversed
@@ -88,13 +89,13 @@ std::string EmitCUtil::unpackReverseCall(const AstNodeDType* dtypep) {
     while (const AstUnpackArrayDType* const adtypep
            = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
         if (!args.empty()) args += ", ";
-        const bool reverse = !adtypep->declRange().ascending();
+        const bool reverse = !adtypep->declRange().ascending() && !(innerOnly && args.empty());
         args += reverse ? "1" : "0";
         if (reverse) usedLength = args.size();
         dtypep = adtypep->subDTypep();
     }
     if (!usedLength) return "";
-    return "VL_CVT_UNPACK_TO_UNPACK<" + args.substr(0, usedLength) + ">";
+    return func + "<" + args.substr(0, usedLength) + ">";
 }
 
 std::string EmitCUtil::toStringCall(const AstNodeDType* dtypep, const std::string& expr) {
