@@ -390,17 +390,11 @@ static AstNodeStmt* newDefaultFailp(FileLine* flp, AstNodeModule* modp, const st
 }
 
 // Prepend stmtsp, the pass actions of attempts passing on a tick when another attempt fails, to
-// the fail action, keeping the default one of an assertion without 'else'
-static void prependFailAction(AstAssert* assertp, AstNodeModule* modp, AstNodeStmt* stmtsp) {
+// the fail action, which finishDirective gave an assertion without 'else'
+static void prependFailAction(AstAssert* assertp, AstNodeStmt* stmtsp) {
+    UASSERT_OBJ(assertp->failsp(), assertp, "Assertion without a fail action");
     if (!assertp->failsGated()) {
-        // Without 'else', a failure calls $error (IEEE 1800-2023 16.14.1), which V3Assert adds
-        // only to an assertion with no fail action
-        AstNodeStmt* failsp = assertp->failsp();
-        if (failsp) {
-            failsp->unlinkFrBackWithNext();
-        } else {
-            failsp = newDefaultFailp(assertp->fileline(), modp, "'assert' failed.");
-        }
+        AstNodeStmt* const failsp = assertp->failsp()->unlinkFrBackWithNext();
         // The fail control applies to the fail action only (IEEE 1800-2023 20.11), so it is
         // gated here instead of by V3Assert
         assertp->addFailsp(newIfAssertFailOn(assertp->controlVarp(), failsp, assertp->directive(),
@@ -8015,7 +8009,7 @@ class AssertNfaVisitor final : public VNVisitor {
         AstNodeStmt* const splitsp
             = newSplitPassActions(assertp, vacuousp, nonvacuousMatchp, m_actionNames);
         // Another attempt failing on the same tick runs the fail action instead
-        prependFailAction(assertp, m_modp, V3AssertCommon::cloneAction(splitsp, m_actionNames));
+        prependFailAction(assertp, V3AssertCommon::cloneAction(splitsp, m_actionNames));
         assertp->addPasssp(splitsp);
     }
 
@@ -8102,8 +8096,11 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     // Run stmtp once per count above one on each tick; the assertion runs it the first time
-    void addActionReplay(AstSenTree* const senTreep, AstNodeExpr* const countp,
-                         AstNodeStmt* stmtp) {
+    static AstAssign* newAccumulatep(FileLine* flp, AstVar* varp, AstNodeExpr* termp) {
+        return new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE},
+                             new AstAdd{flp, new AstVarRef{flp, varp, VAccess::READ}, termp}};
+    }
+    void addActionReplay(AstSenTree* const senTreep, AstNodeExpr* countp, AstNodeStmt* stmtp) {
         FileLine* const flp = stmtp->fileline();
         // Each run is of another attempt, so one that suspends does not hold back the others
         stmtp = V3AssertCommon::newSpawnedAction(stmtp);
@@ -8112,8 +8109,33 @@ class AssertNfaVisitor final : public VNVisitor {
                          m_modp->findBasicDType(VBasicDTypeKwd::UINT32)};
         remainingCountVarp->lifetime(VLifetime::STATIC_EXPLICIT);
         m_modp->addStmtsp(remainingCountVarp);
-        AstNodeStmt* const replayStmtsp
+        // A count summing the threads of many states is added a term at a time, as one deep
+        // sum is costly to compile
+        AstNodeExpr* gatep = nullptr;  // The sum is the count if this holds, as kill ? sum : 0
+        AstNodeExpr* ungatedp = nullptr;  // Count otherwise
+        AstCond* const gatedp = VN_CAST(countp, Cond);
+        if (gatedp && VN_IS(gatedp->thenp(), Add)) {
+            gatep = gatedp->condp()->unlinkFrBack();
+            ungatedp = gatedp->elsep()->unlinkFrBack();
+            countp = gatedp->thenp()->unlinkFrBack();
+            VL_DO_DANGLING(gatedp->deleteTree(), gatedp);
+        }
+        std::vector<AstNodeExpr*> termps;
+        while (AstAdd* const addp = VN_CAST(countp, Add)) {
+            termps.push_back(addp->rhsp()->unlinkFrBack());
+            countp = addp->lhsp()->unlinkFrBack();
+            VL_DO_DANGLING(addp->deleteTree(), addp);
+        }
+        AstNodeStmt* replayStmtsp
             = new AstAssign{flp, new AstVarRef{flp, remainingCountVarp, VAccess::WRITE}, countp};
+        for (auto it = termps.rbegin(); it != termps.rend(); ++it)
+            replayStmtsp->addNext(newAccumulatep(flp, remainingCountVarp, *it));
+        if (gatep) {
+            replayStmtsp = new AstIf{
+                flp, gatep, replayStmtsp,
+                new AstAssign{flp, new AstVarRef{flp, remainingCountVarp, VAccess::WRITE},
+                              ungatedp}};
+        }
         AstLoop* const replayLoopp = new AstLoop{flp};
         replayLoopp->addStmtsp(
             new AstLoopTest{flp, replayLoopp,
@@ -8168,7 +8190,7 @@ class AssertNfaVisitor final : public VNVisitor {
             assertp->addPasssp(ifp);
             // Fail-handler prefix for overlapping instances (IEEE 16.12):
             // fires when reject=1 && match=1 in the same cycle.
-            prependFailAction(assertp, m_modp, V3AssertCommon::cloneAction(ifp, m_actionNames));
+            prependFailAction(assertp, V3AssertCommon::cloneAction(ifp, m_actionNames));
         }
     }
 
@@ -8220,7 +8242,7 @@ class AssertNfaVisitor final : public VNVisitor {
                                                newTypedConstp(flp, countDTypep, 1), newZerop()}},
                         newReplayp(true));
         assertp->addPasssp(firstp);
-        prependFailAction(assertp, m_modp, V3AssertCommon::cloneAction(firstp, m_actionNames));
+        prependFailAction(assertp, V3AssertCommon::cloneAction(firstp, m_actionNames));
     }
 
     void makeActionsReactive(AstNodeCoverOrAssert* assertp, AstSenTree* senTreep) {
@@ -8264,6 +8286,12 @@ class AssertNfaVisitor final : public VNVisitor {
         FileLine* const flp = assertp->fileline();
         AstPropSpec* const propp = VN_AS(assertp->propp(), PropSpec);
         AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
+        // Without 'else', a failure calls $error (IEEE 1800-2023 16.14.1). V3Assert adds it only
+        // to an assertion with no fail action, once per tick, so it is added here first, to be
+        // replayed for each attempt failing, and to take the pass actions put in the fail action.
+        if (assertAssertp && !assertAssertp->failsp()) {
+            assertAssertp->addFailsp(newDefaultFailp(flp, m_modp, "'assert' failed."));
+        }
         if (countsMatches(assertp)) {
             UASSERT_OBJ(matchCountp, assertp, "Cover sequence missing match count");
             VL_DO_DANGLING(outputExprp->deleteTree(), outputExprp);
@@ -8942,9 +8970,8 @@ class AssertNfaVisitor final : public VNVisitor {
             const auto signals
                 = m_loweringp->lowerAttempts(assertp, *treep, senTreep, disableExprp);
             AstNodeExpr* failCountp = signals.threadFailCountp;
-            if (!assertAssertp || !assertAssertp->failsp()) {
-                VL_DO_DANGLING(failCountp->deleteTree(), failCountp);
-            }
+            // An assertion without 'else' gets the default fail action, see finishDirective
+            if (!assertAssertp) VL_DO_DANGLING(failCountp->deleteTree(), failCountp);
             if (coverp) {
                 // A cover counts the attempts succeeding nonvacuously
                 AstNodeExpr* rejectp = signals.requiredStepRejectp;
@@ -9038,8 +9065,17 @@ class AssertNfaVisitor final : public VNVisitor {
             = needMatch && !negated && !parts.isFollowedBy
               && (!parts.hasImplication || vacuousTriggerp || trackAntecedentEnd);
 
-        // The rejected threads of a negated property's operand are passes of the property
-        const bool replayFails = assertAssertp && assertAssertp->failsp() && !negated;
+        // The rejected threads of a negated property's operand are passes of the property. An
+        // assertion without 'else' gets the default fail action, see finishDirective, replayed
+        // as an explicit one is, unless counting the threads failing would evaluate again what
+        // must be evaluated once: a side effect (see SIDEEFFECT), or an s_eventually V3AssertPre
+        // lowers
+        const bool failActions
+            = assertAssertp
+              && (assertAssertp->failsp() || !propp->propp()->exists([](AstNodeExpr* np) {
+                     return !np->isPure() || VN_IS(np, SEventually);
+                 }));
+        const bool replayFails = failActions && !negated;
         const bool replayPasses
             = assertAssertp && assertAssertp->passsp() && !parts.hasImplication && negated;
         const bool replayThreads = replayFails || replayPasses;
@@ -9058,7 +9094,7 @@ class AssertNfaVisitor final : public VNVisitor {
               || ((countAttemptPasses || countCovered) && parts.hasImplication
                   && oneThreadPerConsequent(parts.seqExprp));
         // A match and a vacuous success of its operand on one tick both fail a negated property
-        const bool replaySuccesses = assertAssertp && assertAssertp->failsp() && negated;
+        const bool replaySuccesses = failActions && negated;
         const auto signals
             = m_loweringp->lower(assertp, graph, senTreep, result.finalCondp, disableExprp,
                                  replayThreads, replayThreads, replaySuccesses, exactCounts,
