@@ -385,6 +385,24 @@ module t;
         `checkh(packed_96, 96'h123456_876543_def012_345678);
       end
 
+      // A fixed-size array into a stream of unpacked array targets
+      begin
+        automatic byte src2[2] = '{8'h12, 8'h9a};
+        automatic byte dst2[2];
+        automatic bit [3:0] dst4[4];
+        {>>{dst2}} = src2;
+        `checkh(dst2[0], 8'h12);
+        `checkh(dst2[1], 8'h9a);
+        {<<8{dst2}} = src2;
+        `checkh(dst2[0], 8'h9a);
+        `checkh(dst2[1], 8'h12);
+        {<<4{dst4}} = src2;
+        `checkh(dst4[0], 4'ha);
+        `checkh(dst4[1], 4'h9);
+        `checkh(dst4[2], 4'h2);
+        `checkh(dst4[3], 4'h1);
+      end
+
       // Descending inner dimensions, still streamed left to right
       begin
         automatic logic [1:0] arr_ad [2][1:0];

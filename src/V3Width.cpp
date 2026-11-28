@@ -17300,8 +17300,9 @@ public:
                         rhsp->findBitOrLogicDType(rwidth, rwidth, VSigning::UNSIGNED,
                                                   rhsp->isFourstateOrNoDtype())};
                     nodep->rhsp(new AstSel{rhsp->fileline(), packedp, rwidth - lwidth, lwidth});
-                } else if (lwidth == 0 && rwidth != 0) {
-                    // A dynamically sized target takes all bits of the array
+                } else if (rwidth != 0 && VN_IS(streamp->dtypep(), StreamDType)) {
+                    // A dynamically sized target, or one of unpacked operands, takes all bits of
+                    // the array
                     nodep->rhsp(new AstCvtArrayToPacked{
                         rhsp->fileline(), rhsp,
                         rhsp->findBitOrLogicDType(rwidth, rwidth, VSigning::UNSIGNED,
