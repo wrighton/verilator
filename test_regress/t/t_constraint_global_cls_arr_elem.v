@@ -204,12 +204,13 @@ class MixedHolder;
   constraint c_g {foreach (ms[i]) ms[i].v != 7'd3;}
 endclass
 
-// Below an if, an implication or a foreach whose condition or header reads no such member, only
-// the items on one are ignored
+// Below an if, an implication or a foreach whose condition or header reads no such member, or
+// a foreach over a fixed-size one, only the items on one are ignored
 class NestedItems;
   rand bit [6:0] v;
   rand bit [6:0] w;
   rand bit [6:0] arr[2];
+  rand bit [6:0] m2[2][2];
   constraint ec {
     if (v > 7'd2) {
       w != 7'd3;
@@ -225,6 +226,11 @@ class NestedItems;
     }
     foreach (arr[i]) arr[i] < 7'd100;
     if (arr[0] > 7'd5) {w == 7'd7;}
+    foreach (arr[i]) {
+      w != 7'd10 + 7'(i);
+      arr[i] < 7'd90;
+    }
+    foreach (m2[i, j]) v != 7'd4 + 7'(i + j);
   }
 endclass
 
@@ -466,6 +472,8 @@ module t;
       randomize_result = h.randomize();
       `checkd(randomize_result, 1);
       foreach (h.ns[i]) `checkd(h.ns[i].w != 7'd3 && h.ns[i].w < 7'd50 && h.ns[i].w > 7'd4, 1'b1);
+      foreach (h.ns[i]) `checkd(h.ns[i].w != 7'd10 && h.ns[i].w != 7'd11, 1'b1);
+      foreach (h.ns[i]) `checkd(h.ns[i].v inside {7'd3, [7'd7 : 7'd9]}, 1'b1);
     end
   endtask
 

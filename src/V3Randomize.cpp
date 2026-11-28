@@ -614,7 +614,11 @@ class RandomizeMarkVisitor final : public VNVisitor {
             return !cloneIfp->thensp() && !cloneIfp->elsesp();
         }
         if (const AstConstraintForeach* const foreachp = VN_CAST(origp, ConstraintForeach)) {
-            if (readsNonSolverField(foreachp->headerp())) return true;
+            // Over a fixed-size array the loop does not read the array's values
+            const AstNodeExpr* const fromp = foreachp->headerp()->fromp();
+            const bool fixedFrom
+                = VN_IS(fromp, VarRef) && VN_IS(fromp->dtypep()->skipRefp(), UnpackArrayDType);
+            if (!fixedFrom && readsNonSolverField(foreachp->headerp())) return true;
             AstConstraintForeach* const cloneForeachp = VN_AS(clonep, ConstraintForeach);
             dropNonSolverItems(foreachp->bodyp(), cloneForeachp->bodyp());
             return !cloneForeachp->bodyp();
