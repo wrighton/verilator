@@ -110,6 +110,9 @@ public:
     // end-of-simulation the universal-quantifier window never completed, which is
     // a liveness failure (IEEE 1800-2023 16.12.11 strong semantics).
     bool m_strongPending = false;
+    // With m_strongPending, its threads are each of one match of the antecedent, so with an
+    // antecedent of one match their count is the attempts pending at the end of simulation
+    bool m_pendingAttemptThreads = false;
 
     // CONSTRUCTORS
     explicit SvaStateVertex(V3Graph* graphp)
@@ -2735,6 +2738,8 @@ private:
         SvaStateVertex* const waitRp = scopedCreateVertex();
         waitCp->m_isUnbounded = true;
         waitRp->m_strongPending = nodep->isStrong() && !m_noEosFailure && !m_isNegated;
+        // A match of the antecedent has one thread waiting, as both operands are booleans
+        waitRp->m_pendingAttemptThreads = true;
 
         // Entry and back-loop Links carry no condition; throughout-folding still applies.
         guardedLink(entryVtxp, waitCp, flp);
@@ -6005,12 +6010,21 @@ public:
                                          AstNodeStmt* failp) {
         const std::vector<int> offsets = vertexOffsets(c.graph);
         int maxAge = 0;
-        for (size_t i = 0; i < vtxps.size(); ++i) {
-            const int offset = offsets[vtxps[i]->color()];
+        // The attempts pending in vertices counting them, without a fixed offset
+        AstNodeExpr* countedp = nullptr;
+        std::vector<SvaStateVertex*> agedps;
+        for (SvaStateVertex* const vtxp : vtxps) {
+            const int offset = offsets[vtxp->color()];
+            if (offset < 0 && vtxp->m_pendingAttemptThreads && vtxp->datap()->stateCounts) {
+                countedp = addCountp(c.flp, countedp, regRead(c, vtxp->datap()->stateVarp));
+                continue;
+            }
             if (offset < 0) {
+                if (countedp) VL_DO_DANGLING(countedp->deleteTree(), countedp);
                 return c.exactCounts ? newPendingThreadsFailp(c, vtxps, failp) : nullptr;
             }
             maxAge = std::max(maxAge, offset);
+            agedps.push_back(vtxp);
         }
         FileLine* const flp = c.flp;
         AstNodeDType* const u32p = m_u32DTypep;
@@ -6034,8 +6048,7 @@ public:
                 flp, new AstSel{flp, new AstVarRef{flp, agesp, VAccess::WRITE}, agep, 1},
                 new AstConst{flp, AstConst::BitTrue{}}};
         };
-        for (size_t i = 0; i < vtxps.size(); ++i) {
-            SvaStateVertex* const vtxp = vtxps[i];
+        for (SvaStateVertex* const vtxp : agedps) {
             const int offset = offsets[vtxp->color()];
             // A state or slot holds a thread bit or a thread count
             if (AstVar* const statep = vtxp->datap()->stateVarp) {
@@ -6076,11 +6089,14 @@ public:
                 new AstAdd{flp, new AstVarRef{flp, kp, VAccess::READ}, u32Const(1)}});
             stmtsp->addNext(loopp);
         }
-        // for (remaining = $countones(ages); remaining != 0; --remaining) failp;
+        // for (remaining = $countones(ages) + counted; remaining != 0; --remaining) failp;
         AstVar* const remainingp = newTempp(u32p);
-        stmtsp->addNext(
-            new AstAssign{flp, new AstVarRef{flp, remainingp, VAccess::WRITE},
-                          new AstCountOnes{flp, new AstVarRef{flp, agesp, VAccess::READ}}});
+        stmtsp->addNext(new AstAssign{
+            flp, new AstVarRef{flp, remainingp, VAccess::WRITE},
+            countedp
+                ? addCountp(flp, new AstCountOnes{flp, new AstVarRef{flp, agesp, VAccess::READ}},
+                            countedp)
+                : new AstCountOnes{flp, new AstVarRef{flp, agesp, VAccess::READ}}});
         AstLoop* const loopp = new AstLoop{flp};
         loopp->addStmtsp(new AstLoopTest{
             flp, loopp,
@@ -6255,9 +6271,12 @@ public:
             if (!vtx[i]->datap()->needsReg) continue;
             if (vtx[i] == graph.m_startVertexp || vtx[i]->m_isMatch) continue;
             const std::string varName = baseName + "__s" + std::to_string(i);
+            // A wait of attempts pending at the end of simulation counts them, to fail each
+            const bool counts
+                = exactCounts || (vtx[i]->m_strongPending && vtx[i]->m_pendingAttemptThreads);
             AstVar* const varp = new AstVar{regFlp, VVarType::MODULETEMP, varName,
-                                            exactCounts ? m_u32DTypep : m_modp->findBitDType()};
-            vtx[i]->datap()->stateCounts = exactCounts;
+                                            counts ? m_u32DTypep : m_modp->findBitDType()};
+            vtx[i]->datap()->stateCounts = counts;
             varp->lifetime(VLifetime::STATIC_EXPLICIT);
             m_modp->addStmtsp(varp);
             vtx[i]->datap()->stateVarp = varp;
@@ -9074,6 +9093,17 @@ class AssertNfaVisitor final : public VNVisitor {
                   && oneThreadPerConsequent(parts.seqExprp));
         // A match and a vacuous success of its operand on one tick both fail a negated property
         const bool replaySuccesses = assertAssertp && assertAssertp->failsp() && negated;
+        // An antecedent of several matches, also of an implication in the consequent, starts a
+        // wait for each
+        const auto severalMatches = [](const AstImplication* implp) {
+            return implp->isFollowedBy() || !isBoolean(implp->lhsp());
+        };
+        if ((parts.hasImplication && (parts.isFollowedBy || !isBoolean(parts.triggerExprp)))
+            || parts.seqExprp->exists(severalMatches)) {
+            for (V3GraphVertex& vtxr : graph.m_graph.vertices()) {
+                static_cast<SvaStateVertex&>(vtxr).m_pendingAttemptThreads = false;
+            }
+        }
         const auto signals
             = m_loweringp->lower(assertp, graph, senTreep, result.finalCondp, disableExprp,
                                  replayThreads, replayThreads, replaySuccesses, exactCounts,
