@@ -7214,11 +7214,13 @@ class WidthVisitor final : public VNVisitor {
             newp->withp(withp);
             newp->dtypeFrom(withp ? withp->dtypep() : adtypep->subDTypep());
         } else if (nodep->name() == "min" || nodep->name() == "max" || nodep->name() == "unique") {
+            AstWith* const withp
+                = nodep->name() == "unique"
+                      ? methodWithClause(nodep, false, true, nullptr, adtypep->findStringDType(),
+                                         adtypep->subDTypep())
+                      : methodOrderWithClause(nodep, adtypep->findStringDType(),
+                                              adtypep->subDTypep());
             methodOkArguments(nodep, 0, 0);
-            AstWith* const withp = nodep->name() == "unique"
-                                       ? nullptr
-                                       : methodOrderWithClause(nodep, adtypep->findStringDType(),
-                                                               adtypep->subDTypep());
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
                                       VCMethod::arrayMethod(nodep->name())};
