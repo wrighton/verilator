@@ -431,6 +431,8 @@ class SvaNfaBuilder final {
     // Body of the property, or consequent after an antecedent of a fixed length, so that each of
     // its attempts starts on a tick of its own
     const AstNodeExpr* m_attemptRootp = nullptr;
+    // The whole sequence of the attempts, as `f[*m:$] ##1 g`, lowered by buildUnboundedRepTail
+    const AstSExpr* m_repTailRootp = nullptr;
     bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
     // A cover only records matches, so a pending obligation at $finish is not a failure
     bool m_noEosFailure = false;
@@ -1003,6 +1005,7 @@ class SvaNfaBuilder final {
                 })) {
                 return buildConsRepRangeTail(sexprp, entryVtxp);
             }
+            if (sexprp == m_repTailRootp) return buildUnboundedRepTail(sexprp, entryVtxp);
             VL_RESTORER(m_inSequencePrefix);
             m_inSequencePrefix = true;
             // The empty match is added after the delay, so the first repetition is not required
@@ -1067,6 +1070,34 @@ class SvaNfaBuilder final {
             return result;
         }
         return {currentp, exprp, std::move(rangeMidSources)};
+    }
+
+    // Build the whole sequence of a property's attempts `f[*m:$] ##1 g` as the property
+    // `f[*m] ##1 (f until g)`: from the end of f[*m], each tick matches on g, continues while f
+    // holds, and fails otherwise, which no later match can undo (IEEE 1800-2023 16.9.2,
+    // 16.12.13). Likewise `f[*m:$] ##0 g` is `f[*m-1] ##1 (f until_with (f && g))`. Each
+    // attempt has one thread waiting, so its failure is its own.
+    BuildResult buildUnboundedRepTail(AstSExpr* sexprp, SvaStateVertex* entryVtxp) {
+        FileLine* const flp = sexprp->fileline();
+        const AstSConsRep* const repp = VN_AS(sexprp->preExprp(), SConsRep);
+        const bool fused = getConstUInt(VN_AS(sexprp->delayp(), Delay)->lhsp()) == 0;
+        AstNodeExpr* const fp = repp->exprp();
+        AstNodeExpr* const gp = sexprp->exprp();
+        AstNodeExpr* const endp
+            = fused ? new AstLogAnd{flp, fp->cloneTreePure(false), gp->cloneTreePure(false)}
+                    : gp->cloneTreePure(false);
+        endp->dtypeSetBit();
+        AstNodeExpr* treep
+            = new AstUntil{flp, fp->cloneTreePure(false), endp, /*strong=*/false, fused};
+        treep->dtypeSetBit();
+        const unsigned prefixN = getConstUInt(repp->countp()) - (fused ? 1 : 0);
+        if (prefixN) {
+            treep = new AstSExpr{
+                flp, new AstSConsRep{flp, fp->cloneTreePure(false), new AstConst{flp, prefixN}},
+                new AstDelay{flp, new AstConst{flp, 1U}, /*isCycle=*/true}, treep};
+            treep->dtypeSetBit();
+        }
+        return buildFromLoweringTree(treep, entryVtxp, /*isTopLevelStep=*/true);
     }
 
     // Build a consecutive repetition range followed by a later step in a property
@@ -3383,6 +3414,17 @@ public:
         }
         return treep;
     }
+
+    void repTailRoot(const AstSExpr* sexprp) { m_repTailRootp = sexprp; }
+    // True if sexprp is `f[*m:$] ##1 g` or `f[*m:$] ##0 g`, f and g booleans, m >= 1
+    static bool isUnboundedRepTail(const AstSExpr* sexprp) {
+        const AstSConsRep* const repp = VN_CAST(sexprp->preExprp(), SConsRep);
+        const AstDelay* const delayp = VN_AS(sexprp->delayp(), Delay);
+        return repp && repp->unbounded() && getConstUInt(repp->countp()) >= 1
+               && !repp->exprp()->isMultiCycleSva() && !delayp->isRangeDelay()
+               && getConstUInt(delayp->lhsp()) <= 1 && !sexprp->exprp()->isMultiCycleSva();
+    }
+
     // True if a property has a ranged delay of a multi-cycle sequence of variable length, other
     // than a repetition, outside an antecedent. The NFA lowering rejects each candidate of the
     // range, a thread of the sequence started on one tick of it, rather than an attempt once no
@@ -9000,6 +9042,24 @@ class AssertNfaVisitor final : public VNVisitor {
         }
         return VN_IS(nodep, Until);
     }
+    // The sequence of an assertion's attempts, the consequent of any implications other than
+    // followed-by, if SvaNfaBuilder::buildUnboundedRepTail lowers it, or nullptr
+    static const AstSExpr* repTailRoot(const AstNodeExpr* nodep) {
+        while (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            if (implp->isFollowedBy()) return nullptr;
+            nodep = implp->rhsp();
+        }
+        const AstSExpr* const sexprp = VN_CAST(nodep, SExpr);
+        return sexprp && SvaNfaBuilder::isUnboundedRepTail(sexprp) ? sexprp : nullptr;
+    }
+    // True if each implication of nodep starts at most one thread of the attempt
+    static bool oneThreadPerImplication(const AstNodeExpr* nodep) {
+        while (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            if (!oneThreadPerAttempt(implp->lhsp(), false)) return false;
+            nodep = implp->rhsp();
+        }
+        return true;
+    }
     static bool isBoolean(const AstNodeExpr* nodep) {
         return !nodep->exists([](const AstNodeExpr* exprp) { return exprp->isMultiCycleSva(); });
     }
@@ -9383,6 +9443,8 @@ class AssertNfaVisitor final : public VNVisitor {
         SvaNfaBuilder builder{graph,      m_modp,       m_propTempNames,
                               isCoverSeq, isSeqEvent,   coverp != nullptr,
                               negated,    trackVacuous, isDeclarative};
+        const AstSExpr* const repTailp = negated || coverp ? nullptr : repTailRoot(seqBodyp);
+        builder.repTailRoot(repTailp);
 
         const BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
         V3Stats::addStatSum("Assertions, NFA build nesting depth maxima", builder.maxDepth());
@@ -9450,14 +9512,18 @@ class AssertNfaVisitor final : public VNVisitor {
         // the passing ones of an implication whose consequent has one too.
         // The wait state of an until holds the threads of several attempts, so they are counted,
         // also after an antecedent starting at most one thread of the attempt, a boolean
-        const bool countsConsequent = !parts.hasImplication
-                                      || (isUntilConsequent(seqBodyp) && !parts.isFollowedBy
-                                          && isBoolean(parts.triggerExprp));
+        // So does the sequence lowered as an until, also after antecedents of one match each
+        const bool repTail = repTailp && oneThreadPerImplication(seqBodyp);
+        const bool countsConsequent
+            = !parts.hasImplication
+              || (!parts.isFollowedBy
+                  && ((isUntilConsequent(seqBodyp) && isBoolean(parts.triggerExprp))
+                      || (repTail && oneThreadPerAttempt(parts.triggerExprp, false))));
         // A cover of a property counts its attempts succeeding (IEEE 1800-2023 16.14.3)
         const bool countCovered = coverp && !isCoverSeq && !negated
                                   && (v3Global.opt.coverageUser() || coverp->passsp());
         const bool exactCounts
-            = (replayFails && countsConsequent && oneThreadPerAttempt(seqBodyp, true))
+            = (replayFails && countsConsequent && (repTail || oneThreadPerAttempt(seqBodyp, true)))
               || ((countAttemptPasses || countCovered) && parts.hasImplication
                   && oneThreadPerConsequent(parts.seqExprp));
         // A match and a vacuous success of its operand on one tick both fail a negated property
