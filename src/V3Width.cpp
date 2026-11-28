@@ -368,6 +368,7 @@ class WidthVisitor final : public VNVisitor {
     V3UniqueNames m_insideTempNames;  // For generating unique temporary variable names for
                                       // `inside` expressions
     V3UniqueNames m_bitstreamTempNames;  // Impure values in bit-stream casts
+    V3UniqueNames m_streamWarnedNames;  // State of stream checks warning of a width once
     VMemberMap m_memberMap;  // Member names cached for fast lookup
     std::unordered_map<const AstModport*, std::unordered_set<string>>
         m_modportNames;  // Names listed by each modport
@@ -9590,6 +9591,7 @@ class WidthVisitor final : public VNVisitor {
             VL_RESTORER_COPY(m_enumTempNames);
             VL_RESTORER_COPY(m_insideTempNames);
             VL_RESTORER_COPY(m_bitstreamTempNames);
+            VL_RESTORER_COPY(m_streamWarnedNames);
             VL_RESTORER(m_modep);
             m_modep = nodep;
             // Collect local variables for ASSIGNIN hierarchical reference check
@@ -12478,6 +12480,7 @@ public:
         : m_enumTempNames{"__Venum"}
         , m_insideTempNames{"__VInside"}
         , m_bitstreamTempNames{"__Vbitstream"}
+        , m_streamWarnedNames{"__VstreamWarned"}
         , m_paramsOnly{paramsOnly}
         , m_doGenerate{doGenerate} {}
     AstNode* mainAcceptEdit(AstNode* nodep) {
@@ -12506,12 +12509,26 @@ public:
     }
     // Queue a run-time check of a stream, of dynamically sized operand fromp if not null, else
     // of 'bits' bits, to add before procedural assignment anchorp, else as a process beside
-    // anchorp (see AstStreamCheck)
+    // anchorp (see AstStreamCheck). One evaluated also without a change, of a continuous
+    // assignment or in a combinational process, warns of a width once in a row, by a state of
+    // its own in the instance.
     void queueStreamCheck(AstNode* anchorp, FileLine* flp, AstNodeExpr* fromp, uint32_t bits,
-                          uint32_t minBits, uint32_t maxBits, uint32_t unitBits) {
-        m_streamChecks.emplace_back(
-            anchorp, new AstStreamCheck{flp, fromp ? fromp->cloneTreePure(false) : nullptr, bits,
-                                        minBits, maxBits, unitBits});
+                          uint32_t minBits, uint32_t maxBits, uint32_t unitBits, bool once) {
+        AstStreamCheck* const checkp = new AstStreamCheck{
+            flp, fromp ? fromp->cloneTreePure(false) : nullptr, bits, minBits, maxBits, unitBits};
+        if (once) {
+            AstVar* const varp = new AstVar{flp, VVarType::MODULETEMP,
+                                            m_streamWarnedNames.get(cvtToStr(flp->lineno())),
+                                            checkp->findUInt64DType()};
+            varp->setIgnoreSchedWrite();  // Written only by the check, so no UNOPTFLAT
+            varp->lifetime(VLifetime::STATIC_EXPLICIT);
+            m_modep->addStmtsp(varp);
+            iterate(varp);
+            AstVarRef* const refp = new AstVarRef{flp, varp, VAccess::READWRITE};
+            refp->didWidth(true);
+            checkp->warnedp(refp);
+        }
+        m_streamChecks.emplace_back(anchorp, checkp);
     }
     // Check the stream of streaming assignment nodep at run time: the stream of dynamically
     // sized operand fromp if not null, else a stream of 'bits' bits
@@ -12527,7 +12544,16 @@ public:
         } else {
             return;
         }
-        queueStreamCheck(anchorp, nodep->fileline(), fromp, bits, minBits, maxBits, unitBits);
+        // A combinational process is evaluated also without a change, as a continuous
+        // assignment is
+        const AstAlways* const alwaysp = VN_CAST(m_procedurep, Always);
+        const bool once = anchorp == m_procedurep
+                          || (alwaysp
+                              && (alwaysp->keyword() == VAlwaysKwd::ALWAYS_COMB
+                                  || alwaysp->keyword() == VAlwaysKwd::ALWAYS_LATCH
+                                  || (alwaysp->sentreep() && alwaysp->sentreep()->hasCombo())));
+        queueStreamCheck(anchorp, nodep->fileline(), fromp, bits, minBits, maxBits, unitBits,
+                         once);
     }
     // Check the stream of streaming concatenation streamp connected to port pinp at run time,
     // as for the continuous assignment the connection is (IEEE 1800-2023 23.3.3), by a process
@@ -12539,12 +12565,14 @@ public:
         if (!pinp->modVarp()->direction().isWritable()) {
             // Into an input
             if (checkedStreamOperand(streamp->lhsp())) {
-                queueStreamCheck(m_cellp, pinp->fileline(), streamp->lhsp(), 0, 0, portBits, 0);
+                queueStreamCheck(m_cellp, pinp->fileline(), streamp->lhsp(), 0, 0, portBits, 0,
+                                 true);
             }
         } else if (const int unitBits = dynamicStreamUnitBits(streamp->lhsp()->dtypep())) {
             // From an output, unpacked into whole elements
             if (portBits % unitBits) {
-                queueStreamCheck(m_cellp, pinp->fileline(), nullptr, portBits, 0, 0, unitBits);
+                queueStreamCheck(m_cellp, pinp->fileline(), nullptr, portBits, 0, 0, unitBits,
+                                 true);
             }
         }
     }

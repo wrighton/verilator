@@ -1309,6 +1309,7 @@ class AstStreamCheck final : public AstNodeStmt {
     // minBits(), wider than maxBits() or not a whole number of unitBits() bits, each if nonzero
     // (IEEE 1800-2023 11.4.14)
     // @astgen op1 := fromp : Optional[AstNodeExpr]  // Dynamically sized operand streamed
+    // @astgen op2 := warnedp : Optional[AstNodeExpr]  // State to warn of a width once in a row
     const uint32_t m_bits;  // Stream width without fromp()
     const uint32_t m_minBits;  // Least stream width the assignment needs, or zero
     const uint32_t m_maxBits;  // Greatest stream width the assignment takes, or zero

@@ -560,7 +560,7 @@ public:
     }
 
     void visit(AstStreamCheck* nodep) override {
-        putns(nodep, "VL_STREAM_CHECK(");
+        putns(nodep, nodep->warnedp() ? "VL_STREAM_CHECK_ONCE(" : "VL_STREAM_CHECK(");
         if (const AstNodeExpr* const fromp = nodep->fromp()) {
             puts("(");
             iterateConst(nodep->fromp());
@@ -572,7 +572,12 @@ public:
         puts(", " + cvtToStr(nodep->maxBits()) + "ULL");
         puts(", " + cvtToStr(nodep->unitBits()) + "ULL, ");
         putsQuoted(protect(nodep->fileline()->filename()));
-        puts(", " + cvtToStr(nodep->fileline()->lineno()) + ");\n");
+        puts(", " + cvtToStr(nodep->fileline()->lineno()));
+        if (nodep->warnedp()) {
+            puts(", ");
+            iterateConst(nodep->warnedp());
+        }
+        puts(");\n");
     }
     void visit(AstCvtArrayToPacked* nodep) override {
         AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefp();

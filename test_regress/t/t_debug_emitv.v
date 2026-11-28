@@ -245,6 +245,8 @@ module t (/*AUTOARG*/
 
   int q[$];
   int qb[$ : 3];
+  int stream_cont;
+  assign stream_cont = {>>{q}};  // AstStreamCheck of a continuous assignment
   int assoc[string];
   int assocassoc[string][real];
   int dyn[];

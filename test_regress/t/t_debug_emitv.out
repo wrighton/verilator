@@ -137,6 +137,11 @@ module t;
     int i;
     int q[$];
     int qb[$:32'sh3];
+    int stream_cont;
+    assign stream_cont = { >> 32'h1 {q} };
+    always  begin
+        $stream_check(q);
+    end
     int assoc[string];
     int assocassoc[string][real];
     int dyn[];
@@ -395,7 +400,7 @@ module t;
                 if ((SUB_B !== 2'h1)) begin
                     begin
                         $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", "t/t_debug_emitv.v", 
-                               32'sh1a2, SUB_B, 2'h1);
+                               32'sh1a4, SUB_B, 2'h1);
                         $stop;
                     end
                 end
@@ -1591,6 +1596,7 @@ module t;
         ZERO = 3'h0,
         ONE = 3'h1
     } __Venum_ha0f45658__0;
+    QData __VstreamWarned_249__0;
 endmodule
 class Cls;
     bit cg_clk;

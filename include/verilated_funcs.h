@@ -3256,15 +3256,36 @@ inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_S
     for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
 }
 
-// Warn if a stream of 'elems' elements of 'elemBits' bits is narrower than 'minBits', wider than
-// 'maxBits' or not a whole number of 'unitBits' bits, each if nonzero, as its streaming
-// assignment requires (IEEE 1800-2023 11.4.14)
+// Whether a stream of 'bits' bits is narrower than 'minBits', wider than 'maxBits' or not a whole
+// number of 'unitBits' bits, each if nonzero, which its streaming assignment forbids
+// (IEEE 1800-2023 11.4.14)
+inline bool _vl_stream_size_bad(uint64_t bits, uint64_t minBits, uint64_t maxBits,
+                                uint64_t unitBits) VL_PURE {
+    return bits < minBits || (maxBits && bits > maxBits) || (unitBits && bits % unitBits);
+}
+// Warn if a stream of 'elems' elements of 'elemBits' bits has a size its streaming assignment
+// forbids
 inline void VL_STREAM_CHECK(size_t elems, int elemBits, uint64_t minBits, uint64_t maxBits,
                             uint64_t unitBits, const char* filename, int linenum) VL_MT_SAFE {
     const uint64_t bits = static_cast<uint64_t>(elems) * elemBits;
-    if (VL_UNLIKELY(bits < minBits || (maxBits && bits > maxBits)
-                    || (unitBits && bits % unitBits))) {
+    if (VL_UNLIKELY(_vl_stream_size_bad(bits, minBits, maxBits, unitBits))) {
         Verilated::streamSizeWarning(filename, linenum, bits, minBits, maxBits, unitBits);
+    }
+}
+// Warn as VL_STREAM_CHECK, but of a width only once until the stream fits or its width changes,
+// as a check of a continuous assignment evaluated again without a change; 'warnedBits' is the
+// check's own state, one more than the width last warned of, or zero
+inline void VL_STREAM_CHECK_ONCE(size_t elems, int elemBits, uint64_t minBits, uint64_t maxBits,
+                                 uint64_t unitBits, const char* filename, int linenum,
+                                 QData& warnedBits) VL_MT_SAFE {
+    const uint64_t bits = static_cast<uint64_t>(elems) * elemBits;
+    if (VL_UNLIKELY(_vl_stream_size_bad(bits, minBits, maxBits, unitBits))) {
+        if (warnedBits != bits + 1) {
+            warnedBits = bits + 1;
+            Verilated::streamSizeWarning(filename, linenum, bits, minBits, maxBits, unitBits);
+        }
+    } else if (VL_UNLIKELY(warnedBits)) {
+        warnedBits = 0;
     }
 }
 
