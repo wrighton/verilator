@@ -168,6 +168,20 @@ static AstDelay* getLhsNetDelayRecurse(const AstNodeExpr* const nodep) {
     return nullptr;
 }
 
+// The parent of 'nodep', as AstNode::aboveLoopp, but walking to whichever end of its list is
+// nearer, as the last node of a list also finds it
+static AstNode* aboveNearerp(const AstNode* nodep) {
+    const AstNode* towardHeadp = nodep;
+    const AstNode* towardTailp = nodep;
+    while (true) {
+        if (AstNode* const abovep = towardHeadp->firstAbovep()) return abovep;
+        if (!towardHeadp->backp()) return nullptr;
+        if (!towardTailp->nextp()) return towardTailp->abovep();
+        towardHeadp = towardHeadp->backp();
+        towardTailp = towardTailp->nextp();
+    }
+}
+
 //======================================================================
 // Data type names of classes and interfaces, with the values of their parameters
 
@@ -2441,7 +2455,7 @@ const AstNodeModule* AstNetlist::containingModule(const AstNode* nodep) {
     const auto it = m_containingModules.find(nodep);
     if (it != m_containingModules.end()) return it->second;
     // Only true parents are followed.
-    AstNode* const abovep = nodep->aboveLoopp();
+    AstNode* const abovep = aboveNearerp(nodep);
     const AstNodeModule* const modp = abovep ? containingModule(abovep) : nullptr;
     m_containingModules[nodep] = modp;
     return modp;
