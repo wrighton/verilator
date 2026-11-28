@@ -2046,9 +2046,9 @@ class TristateVisitor final : public TristateBaseVisitor {
         } else {
             checkUnhandled(nodep);
             // Unsupported: A === 3'b000 should compare with the enables, but we don't do
-            // so at present, we only compare if there is a z in the equation.
-            // Otherwise we'd need to attach an enable to every signal, then optimize them
-            // away later when we determine the signal has no tristate
+            // so at present, other than for a tristate variable, we only compare if there is
+            // a z in the equation. Otherwise we'd need to attach an enable to every signal,
+            // then optimize them away later when we determine the signal has no tristate
             iterateChildren(nodep);
             UINFO(9, dbgState() << nodep);
             // Constification always moves const to LHS
@@ -2065,10 +2065,12 @@ class TristateVisitor final : public TristateBaseVisitor {
                 } else {
                     enRhsp = getEnExprBasedOnOriginalp(rhsp);
                 }
+                AstEqCase* const eqp = new AstEqCase{fl, new AstConst{fl, constp->num()}, rhsp};
+                eqp->user2Or(U2_NONGRAPH);  // Enable compared, so not again below
                 AstNodeExpr* newp
                     = new AstLogAnd{fl, new AstEq{fl, VN_AS(constp->user1p(), Const), enRhsp},
                                     // Keep the caseeq if there are X's present
-                                    new AstEqCase{fl, new AstConst{fl, constp->num()}, rhsp}};
+                                    eqp};
                 constp->user1p(nullptr);
                 if (neq) newp = new AstLogNot{fl, newp};
                 UINFO(9, "       newceq " << newp);
@@ -2080,16 +2082,32 @@ class TristateVisitor final : public TristateBaseVisitor {
                 FileLine* const fl = nodep->fileline();
                 constp->unlinkFrBack();
                 AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
+                AstEqCase* const eqp = new AstEqCase{fl, constp, rhsp};
+                eqp->user2Or(U2_NONGRAPH);  // Enable compared, so not again below
                 AstNodeExpr* newp = new AstLogAnd{fl,
                                                   new AstEq{fl, newAllZerosOrOnes(constp, false),
                                                             VN_AS(rhsp->user1p(), NodeExpr)},
                                                   // Keep the caseeq if there are X's present
-                                                  new AstEqCase{fl, constp, rhsp}};
+                                                  eqp};
                 if (neq) newp = new AstLogNot{fl, newp};
                 rhsp->user1p(nullptr);
                 UINFO(9, "       newceq " << newp);
                 UINFOTREE(9, nodep, "", "caseeq-old");
                 UINFOTREE(9, newp, "", "caseeq-new");
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            } else if (constp && !(nodep->user2() & U2_NONGRAPH) && !constp->num().isAnyXZ()
+                       && readsTristateVar(nodep->rhsp())) {
+                // 3'b100 -> ((3'b111 == in__en) && (3'b100 == in)), as z matches only z
+                FileLine* const fl = nodep->fileline();
+                constp->unlinkFrBack();
+                AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
+                AstNodeExpr* newp = new AstLogAnd{fl,
+                                                  new AstEq{fl, newAllZerosOrOnes(constp, true),
+                                                            getEnExprBasedOnOriginalp(rhsp)},
+                                                  AstEq::newTyped(fl, constp, rhsp)};
+                if (neq) newp = new AstLogNot{fl, newp};
+                UINFO(9, "       newceq " << newp);
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
             } else {
@@ -2656,14 +2674,12 @@ class TristateVisitor final : public TristateBaseVisitor {
             flp, new AstEq{flp, newAllZerosOrOnes(condp, true), enp->cloneTreePure(false)},
             AstEq::newTyped(flp, exprp->cloneTreePure(false), condp)};
     }
-    // Make a case statement whose expression reads a tristate variable compare the
-    // expression's enable too, as 'case (1'b1)' with a condition for each item, and the same
-    // in the checks of 'unique' V3Assert made from the items. Not for a port, an interface
-    // variable or a pulled variable, also by a pull in a cell its port connects to, whose enable
-    // can leave out drivers in other modules or the pull.
-    void compareCaseEnables(AstCase* nodep) {
-        AstNodeExpr* const exprp = nodep->exprp();
-        if (!exprp->isPure() || exprp->user1p() || VN_IS(m_modp, Iface)) return;
+    // Whether an expression reads a tristate variable, through selects and extensions, whose
+    // enable can be compared. Not a port, an interface variable or a pulled variable, also by a
+    // pull in a cell its port connects to, whose enable can leave out drivers in other modules
+    // or the pull.
+    bool readsTristateVar(AstNodeExpr* exprp) {
+        if (!exprp->isPure() || exprp->user1p() || VN_IS(m_modp, Iface)) return false;
         const AstNodeExpr* basep = exprp;
         while (true) {
             if (const AstSel* const selp = VN_CAST(basep, Sel)) {
@@ -2677,14 +2693,19 @@ class TristateVisitor final : public TristateBaseVisitor {
             }
         }
         const AstVarRef* const refp = VN_CAST(basep, VarRef);
-        if (!refp || !m_tgraph.isTristate(refp->varp())) return;
+        if (!refp || !m_tgraph.isTristate(refp->varp())) return false;
         AstVar* const varp = refp->varp();
         const AuxAstVar& aux = m_varAux(varp);
         // A pull of a cell's port connected to it is known once graphed, as is its own
-        if (varp->isIO() || aux.pulled || aux.pullp || !aux.bitPulls.empty()
-            || aux.ifaceTristate) {
-            return;
-        }
+        return !varp->isIO() && !aux.pulled && !aux.pullp && aux.bitPulls.empty()
+               && !aux.ifaceTristate;
+    }
+    // Make a case statement whose expression reads a tristate variable compare the
+    // expression's enable too, as 'case (1'b1)' with a condition for each item, and the same
+    // in the checks of 'unique' V3Assert made from the items
+    void compareCaseEnables(AstCase* nodep) {
+        AstNodeExpr* const exprp = nodep->exprp();
+        if (!readsTristateVar(exprp)) return;
         for (const AstCaseItem* itemp = nodep->itemsp(); itemp;
              itemp = VN_AS(itemp->nextp(), CaseItem)) {
             for (const AstNode* condp = itemp->condsp(); condp; condp = condp->nextp()) {
