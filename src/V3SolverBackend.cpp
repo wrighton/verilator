@@ -463,7 +463,7 @@ class RandomSaves final {
             // queue of handles are not kept
             addElements(declClassp, varp, arrDTypep->elementsConst(), elemDTypep->classp(), savep,
                         restorep, discardp);
-        } else {
+        } else if (!holdsClassHandles(dtypep) || isClearable(dtypep)) {
             // A static variable is copied by each object, so whichever objects are null
             AstVar* const copyp = getCreateCopyVarp(declClassp, varp);
             savep->addStmtsp(new AstAssign{fl,
@@ -472,7 +472,42 @@ class RandomSaves final {
             restorep->addStmtsp(
                 new AstAssign{fl, new AstVarRef{fl, declClassp, varp, VAccess::WRITE},
                               new AstVarRef{fl, declClassp, copyp, VAccess::READ}});
+            // A copy holding class handles is emptied when no longer needed, or it would keep
+            // their objects alive, and through a cycle of handles back to the object, the object
+            if (holdsClassHandles(dtypep)) {
+                for (AstTask* const taskp : {restorep, discardp})
+                    taskp->addStmtsp(newClearp(declClassp, copyp, dtypep));
+            }
         }
+        // Other values holding class handles, as structs, are not copied, nor restored
+    }
+    // Whether a value of dtypep holds class handles
+    static bool holdsClassHandles(const AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        if (VN_IS(dtypep, ClassRefDType)) return true;
+        if (const AstNodeUOrStructDType* const sdtypep = VN_CAST(dtypep, NodeUOrStructDType)) {
+            for (const AstMemberDType* itemp = sdtypep->membersp(); itemp;
+                 itemp = VN_AS(itemp->nextp(), MemberDType))
+                if (holdsClassHandles(itemp->subDTypep())) return true;
+            return false;
+        }
+        return dtypep->isNonPackedArray() && holdsClassHandles(dtypep->subDTypep());
+    }
+    // Whether a value of dtypep is emptied by a method
+    static bool isClearable(const AstNodeDType* dtypep) {
+        return VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, QueueDType)
+               || VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, WildcardArrayDType);
+    }
+    // Empty the copy copyp of a value of dtypep
+    static AstNodeStmt* newClearp(AstClass* declClassp, AstVar* copyp,
+                                  const AstNodeDType* dtypep) {
+        FileLine* const fl = copyp->fileline();
+        const bool assoc = VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, WildcardArrayDType);
+        AstCMethodHard* const clearp
+            = new AstCMethodHard{fl, new AstVarRef{fl, declClassp, copyp, VAccess::WRITE},
+                                 assoc ? VCMethod::ASSOC_CLEAR : VCMethod::DYN_CLEAR};
+        clearp->dtypeSetVoid();
+        return clearp->makeStmt();
     }
     void addElements(AstClass* declClassp, AstVar* varp, int elements, AstClass* elemClassp,
                      AstTask* savep, AstTask* restorep, AstTask* discardp) {
