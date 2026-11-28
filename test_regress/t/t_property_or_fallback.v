@@ -128,19 +128,19 @@ module t (
       b ##1 !c ##1 !a ##1 b ##1 !c ##1 !a ##1 b ##1 !c ##1 !a ##1 b ##1 !c ##1 !a ##1 b ##1 !c))
     ++passes[18];
   else ++fails[18];
-  // Known limit: no failure, where attempts fail 30 times. With a pass action or a disable
-  // condition, the 'not' is reported as needing default clocking.
+  // Attempts fail 30 times. With a pass action or a disable condition, the 'not' is reported as
+  // needing default clocking.
   assert property (@(posedge clk) c or not (a ##1 b))
   else ++fails[19];
-  // Known limit: no failure, where attempts fail 38 times. With a pass action or a disable
-  // condition, the 'not' is reported as needing default clocking.
+  // Attempts fail 38 times. With a pass action or a disable condition, the 'not' is reported as
+  // needing default clocking.
   assert property (@(posedge clk) c or not (a ##[1:2] b))
   else ++fails[20];
-  // Known limit: 150 passes and no failure, where attempts pass 156 times and fail 45 times
+  // Attempts pass 156 times and fail 45 times
   assert property (@(posedge clk) disable iff (cyc > END) d or (accept_on(e) a ##1 b))
     ++passes[21];
   else ++fails[21];
-  // Known limit: 172 passes and no failure, where attempts pass 172 times and fail 29 times
+  // Attempts pass 172 times and fail 29 times
   assert property (@(posedge clk) disable iff (cyc > END) d or not (a [*2]))
     ++passes[22];
   else ++fails[22];
@@ -191,12 +191,12 @@ module t (
       `checkd(fails[17], 124);
       `checkd(passes[18], 0);
       `checkd(fails[18], 0);
-      `checkd(fails[19], 0);
-      `checkd(fails[20], 0);
-      `checkd(passes[21], 150);
-      `checkd(fails[21], 0);
+      `checkd(fails[19], 30);
+      `checkd(fails[20], 38);
+      `checkd(passes[21], 156);
+      `checkd(fails[21], 45);
       `checkd(passes[22], 172);
-      `checkd(fails[22], 0);
+      `checkd(fails[22], 29);
       `checkd(passes[23], 188);
       `checkd(fails[23], 13);
       $write("*-* All Finished *-*\n");

@@ -6202,6 +6202,23 @@ class AssertNfaVisitor final : public VNVisitor {
         }
         return (node.lhsp && hasVarLenAnd(*node.lhsp)) || (node.rhsp && hasVarLenAnd(*node.rhsp));
     }
+    // True if the node is a sequence, or an 'or' of sequences
+    static bool isSequenceOr(const SvaAttemptNode& node) {
+        using Kind = SvaAttemptNode::Kind;
+        if (node.kind == Kind::SEQUENCE) return true;
+        return node.kind == Kind::OR && isSequenceOr(*node.lhsp) && isSequenceOr(*node.rhsp);
+    }
+    // True if the tree has a property 'and' or 'or' with an operand not a sequence, as 'not',
+    // whose attempts resolving on one tick the NFA lowering counts once
+    static bool hasPropertyAndOr(const SvaAttemptNode& node) {
+        using Kind = SvaAttemptNode::Kind;
+        if ((node.kind == Kind::AND || node.kind == Kind::OR)
+            && (!isSequenceOr(*node.lhsp) || !isSequenceOr(*node.rhsp))) {
+            return true;
+        }
+        return (node.lhsp && hasPropertyAndOr(*node.lhsp))
+               || (node.rhsp && hasPropertyAndOr(*node.rhsp));
+    }
     // True if the tree has an 'and' of two sequences, whose matches the NFA lowering latches
     // for all the attempts in flight together
     static bool hasSequenceAnd(const SvaAttemptNode& node) {
@@ -6265,7 +6282,8 @@ class AssertNfaVisitor final : public VNVisitor {
         // An implication split by the lengths of its antecedent has a pass of each attempt
         const bool lengthsSplit = treep->lengthsJoin || treep->antSeqp;
         if (!hasVarLenAnd(*treep) && !hasSequenceAnd(*treep)
-            && (cover || !implications || (!other && implications < 2))
+            && (cover || (!implications && !hasPropertyAndOr(*treep))
+                || (!other && implications < 2))
             && (cover || (!isVarLenSequence(*treep) && !lengthsSplit))) {
             return nullptr;
         }
